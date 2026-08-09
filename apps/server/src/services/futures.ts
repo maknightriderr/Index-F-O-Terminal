@@ -6,7 +6,7 @@
 // OI buildup (spec §22).
 // ============================================================
 
-import { calculateDTE } from '@fno/shared';
+import { calculateDTE, CM_SEGMENT, FO_SEGMENT } from '@fno/shared';
 import type { Exchange, FuturesData, FuturesChainResponse } from '@fno/shared';
 import { classifyFuturesOI } from '@fno/analytics';
 import type { MarketDataProvider } from '../providers/interface.js';
@@ -21,7 +21,7 @@ export async function buildFuturesData(
   exchange: Exchange
 ): Promise<FuturesChainResponse> {
   const spotToken = await resolveSpotToken(provider, underlying, exchange);
-  const spotQuotes = await provider.getQuote(exchange, [spotToken], 'LTP');
+  const spotQuotes = await provider.getQuote(CM_SEGMENT[exchange], [spotToken], 'LTP');
   const spotPrice = spotQuotes[0]?.ltp ?? 0;
 
   if (spotPrice <= 0) {
@@ -45,7 +45,7 @@ export async function buildFuturesData(
   }
 
   const tokens = futInstruments.map((i) => i.token);
-  const quotes = await provider.getQuote(exchange, tokens, 'FULL');
+  const quotes = await provider.getQuote(FO_SEGMENT[exchange], tokens, 'FULL');
   const quoteByToken = new Map(quotes.map((q) => [q.token, q]));
 
   const changeOiByToken = new Map<string, number>();

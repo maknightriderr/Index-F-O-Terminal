@@ -150,11 +150,16 @@ export interface MarketDataProvider {
   /** Get option Greeks for an underlying + expiry */
   getOptionGreeks(name: string, expiry: string): Promise<ProviderGreeksData[]>;
 
-  /** Get Last Traded Price for tokens */
-  getLTP(exchange: Exchange, tokens: string[]): Promise<Array<{ token: string; ltp: number }>>;
+  /**
+   * Get Last Traded Price for tokens. Takes an ExchangeSegment (not just
+   * Exchange) because the broker's quote API requires the CM/FO-specific
+   * key (e.g. "NFO" for NSE derivatives, not "NSE") — querying an option
+   * token under the plain cash-market exchange returns nothing.
+   */
+  getLTP(exchangeSegment: ExchangeSegment, tokens: string[]): Promise<Array<{ token: string; ltp: number }>>;
 
-  /** Get full quotes (OI, bid/ask, OHLC) for tokens. Chunked internally if needed. */
-  getQuote(exchange: Exchange, tokens: string[], mode?: QuoteMode): Promise<ProviderQuote[]>;
+  /** Get full quotes (OI, bid/ask, OHLC) for tokens. Chunked internally if needed. Same segment requirement as getLTP. */
+  getQuote(exchangeSegment: ExchangeSegment, tokens: string[], mode?: QuoteMode): Promise<ProviderQuote[]>;
 
   /** Get market status for an exchange */
   getMarketStatus(exchange: Exchange): Promise<MarketStatus>;

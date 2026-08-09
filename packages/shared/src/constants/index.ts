@@ -33,6 +33,23 @@ export const EXCHANGE_SEGMENT_MAP: Record<string, ExchangeSegment> = {
   mcx_fo: 'MCX_FO',
 };
 
+// --- Segment lookup by base exchange ---
+// A quote/spot request needs the CM segment; an option/future contract
+// needs the FO segment — both keyed off the same base Exchange. MCX has
+// no separate cash-market segment in this domain, so both maps agree there.
+
+export const CM_SEGMENT: Record<Exchange, ExchangeSegment> = {
+  NSE: 'NSE_CM',
+  BSE: 'BSE_CM',
+  MCX: 'MCX_FO',
+};
+
+export const FO_SEGMENT: Record<Exchange, ExchangeSegment> = {
+  NSE: 'NSE_FO',
+  BSE: 'BSE_FO',
+  MCX: 'MCX_FO',
+};
+
 // --- Angel One API segment strings ---
 
 export const ANGEL_EXCHANGE_MAP: Record<string, Exchange> = {

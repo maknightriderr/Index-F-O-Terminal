@@ -68,6 +68,17 @@ const WS_MODE_CODES: Record<SubscriptionMode, number> = {
   DEPTH: 4,
 };
 
+// The REST quote API keys `exchangeTokens` by these exchange strings — NOT
+// the same as our plain Exchange type. A derivative token queried under
+// "NSE" (cash market) instead of "NFO" simply returns no data.
+const QUOTE_EXCHANGE_MAP: Record<ExchangeSegment, string> = {
+  NSE_CM: 'NSE',
+  NSE_FO: 'NFO',
+  BSE_CM: 'BSE',
+  BSE_FO: 'BFO',
+  MCX_FO: 'MCX',
+};
+
 // --- Angel One Raw Instrument Shape ---
 
 interface AngelInstrument {
@@ -355,7 +366,7 @@ export class AngelOneProvider implements MarketDataProvider {
   // --- LTP ---
 
   async getLTP(
-    exchange: Exchange,
+    exchangeSegment: ExchangeSegment,
     tokens: string[]
   ): Promise<Array<{ token: string; ltp: number }>> {
     await this.ensureAuthenticated();
@@ -365,7 +376,7 @@ export class AngelOneProvider implements MarketDataProvider {
         '/rest/secure/angelbroking/market/v1/quote/',
         {
           mode: 'LTP',
-          exchangeTokens: { [exchange]: tokens },
+          exchangeTokens: { [QUOTE_EXCHANGE_MAP[exchangeSegment]]: tokens },
         },
         { headers: this.getAuthHeaders() }
       );
@@ -387,7 +398,7 @@ export class AngelOneProvider implements MarketDataProvider {
   // --- Quote (FULL mode: OI, bid/ask, OHLC) ---
 
   async getQuote(
-    exchange: Exchange,
+    exchangeSegment: ExchangeSegment,
     tokens: string[],
     mode: QuoteMode = 'FULL'
   ): Promise<ProviderQuote[]> {
@@ -404,7 +415,7 @@ export class AngelOneProvider implements MarketDataProvider {
           '/rest/secure/angelbroking/market/v1/quote/',
           {
             mode,
-            exchangeTokens: { [exchange]: chunk },
+            exchangeTokens: { [QUOTE_EXCHANGE_MAP[exchangeSegment]]: chunk },
           },
           { headers: this.getAuthHeaders() }
         );
@@ -446,7 +457,7 @@ export class AngelOneProvider implements MarketDataProvider {
           }
         }
       } catch (error: any) {
-        logger.error({ error: error.message, exchange, chunkSize: chunk.length }, 'Quote fetch failed');
+        logger.error({ error: error.message, exchangeSegment, chunkSize: chunk.length }, 'Quote fetch failed');
       }
     }
 

@@ -5,7 +5,8 @@
 import { Router, type Request, type Response } from 'express';
 import { logger } from '../lib/logger.js';
 import type { MarketDataProvider } from '../providers/interface.js';
-import type { CandleInterval } from '@fno/shared';
+import { CM_SEGMENT, FO_SEGMENT } from '@fno/shared';
+import type { CandleInterval, Exchange } from '@fno/shared';
 
 export function createMarketDataRoutes(provider: MarketDataProvider): Router {
   const router = Router();
@@ -35,9 +36,11 @@ export function createMarketDataRoutes(provider: MarketDataProvider): Router {
   router.get('/ltp/:tokens', async (req: Request, res: Response) => {
     try {
       const tokens = req.params.tokens.split(',');
-      const exchange = (req.query.exchange as string) || 'NSE';
+      const exchange = ((req.query.exchange as string) || 'NSE') as Exchange;
+      // Cash-market by default; pass ?segment=fo for option/futures tokens.
+      const segmentMap = req.query.segment === 'fo' ? FO_SEGMENT : CM_SEGMENT;
 
-      const data = await provider.getLTP(exchange as any, tokens);
+      const data = await provider.getLTP(segmentMap[exchange], tokens);
 
       res.json({
         success: true,

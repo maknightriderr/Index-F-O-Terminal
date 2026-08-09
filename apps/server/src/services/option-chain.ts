@@ -12,6 +12,8 @@ import {
   DEFAULT_STRIKE_RANGE,
   KNOWN_INDEX_TOKENS,
   RISK_FREE_RATE,
+  CM_SEGMENT,
+  FO_SEGMENT,
   getATMStrike,
   classifyStrike,
   calculateDTE,
@@ -53,7 +55,7 @@ export async function buildOptionChain(
       : availableExpiries[0];
 
   const spotToken = await resolveSpotToken(provider, underlying, exchange);
-  const spotQuotes = await provider.getQuote(exchange, [spotToken], 'LTP');
+  const spotQuotes = await provider.getQuote(CM_SEGMENT[exchange], [spotToken], 'LTP');
   const spotPrice = spotQuotes[0]?.ltp ?? 0;
 
   if (spotPrice <= 0) {
@@ -102,7 +104,7 @@ export async function buildOptionChain(
   );
 
   const [quotes, greeksData] = await Promise.all([
-    provider.getQuote(exchange, allTokens, 'FULL'),
+    provider.getQuote(FO_SEGMENT[exchange], allTokens, 'FULL'),
     provider.getOptionGreeks(underlying, expiry).catch((err) => {
       logger.warn({ error: err.message, underlying, expiry }, 'Broker Greeks unavailable, using internal engine only');
       return [];

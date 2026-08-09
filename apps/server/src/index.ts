@@ -29,6 +29,11 @@ const subscriptionManager = new SubscriptionManager(provider);
 
 const app = express();
 
+// Railway (and most hosts) sit behind a reverse proxy — trust its single hop
+// so express-rate-limit reads the real client IP from X-Forwarded-For instead
+// of rejecting the header as spoofed.
+app.set('trust proxy', 1);
+
 // --- Middleware ---
 
 app.use(helmet({
