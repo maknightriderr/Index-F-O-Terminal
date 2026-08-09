@@ -135,9 +135,17 @@ export async function buildOptionChain(
     const brokerIv = broker ? Number(broker.iv) : 0;
     const hasBrokerGreeks = !!broker && brokerIv > 0;
 
+    // calculateGreeksFromPrice returns iv as a decimal (0.17 for 17%), matching
+    // the analytics package's internal convention — but broker Greeks and every
+    // consumer of OptionChainLeg.iv (frontend display, ATM-IV -> Expected Move
+    // below) expect a percentage (17.1), matching Angel One's own convention.
+    // Normalize here so both paths agree on the same unit.
     const greeks = hasBrokerGreeks
       ? { delta: Number(broker!.delta), gamma: Number(broker!.gamma), theta: Number(broker!.theta), vega: Number(broker!.vega), iv: brokerIv }
-      : calculateGreeksFromPrice(quote?.ltp ?? 0, spotPrice, strike, tte, optionType, RISK_FREE_RATE);
+      : (() => {
+          const calculated = calculateGreeksFromPrice(quote?.ltp ?? 0, spotPrice, strike, tte, optionType, RISK_FREE_RATE);
+          return { ...calculated, iv: calculated.iv * 100 };
+        })();
 
     return {
       token: inst.token,
