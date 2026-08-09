@@ -7,6 +7,7 @@ import { logger } from '../lib/logger.js';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { CM_SEGMENT, FO_SEGMENT } from '@fno/shared';
 import type { CandleInterval, Exchange } from '@fno/shared';
+import { getLiveIndexQuotes } from '../services/indices.js';
 
 export function createMarketDataRoutes(provider: MarketDataProvider): Router {
   const router = Router();
@@ -25,6 +26,23 @@ export function createMarketDataRoutes(provider: MarketDataProvider): Router {
       res.status(500).json({
         success: false,
         error: { code: 'MARKET_STATUS_FAILED', message: error.message },
+      });
+    }
+  });
+
+  /**
+   * GET /api/market/indices
+   * Live spot quotes for the well-known indices (NIFTY, BANKNIFTY, SENSEX, FINNIFTY, MIDCPNIFTY).
+   */
+  router.get('/indices', async (_req: Request, res: Response) => {
+    try {
+      const data = await getLiveIndexQuotes(provider);
+      res.json({ success: true, data, meta: { timestamp: Date.now(), source: 'LIVE' } });
+    } catch (error: any) {
+      logger.error({ error: error.message }, 'Live index quotes failed');
+      res.status(502).json({
+        success: false,
+        error: { code: 'INDICES_FETCH_FAILED', message: error.message },
       });
     }
   });

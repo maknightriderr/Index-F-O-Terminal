@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useMarketStore, useSystemHealthStore } from '@/stores';
 import { formatIndianNumber, formatPercent, isMarketOpen } from '@fno/shared';
 import type { Exchange } from '@fno/shared';
-import { MOCK_INDICES } from '@/lib/mock-data';
+import { useLiveIndices } from '@/lib/use-live-indices';
 
 export function TopBar() {
   const { selectedExchange } = useMarketStore();
@@ -28,9 +28,9 @@ export function TopBar() {
     return () => clearInterval(timer);
   }, [selectedExchange]);
 
-  // Use mock data for now
-  const nifty = MOCK_INDICES[0];
-  const bankNifty = MOCK_INDICES[1];
+  const { indices, isLive } = useLiveIndices();
+  const nifty = indices.find((i) => i.symbol === 'NIFTY') ?? indices[0];
+  const bankNifty = indices.find((i) => i.symbol === 'BANKNIFTY') ?? indices[1];
 
   return (
     <header className="flex items-center h-12 px-4 bg-[#0d0d14] border-b border-gray-800/50 shrink-0 gap-4">
@@ -61,15 +61,12 @@ export function TopBar() {
         </span>
       </div>
 
-      {/* Data Freshness */}
+      {/* Data Freshness — reflects the REST-polled index quotes (the live
+          mechanism actually in use right now; WS tick display is off, see
+          option-chain/futures pages) rather than WS subscription state. */}
       <div className="flex items-center gap-1.5 text-xs">
-        <span className={`w-2 h-2 rounded-full ${
-          health.dataFreshness.status === 'LIVE' ? 'bg-emerald-400' :
-          health.dataFreshness.status === 'STALE' ? 'bg-yellow-400' : 'bg-red-400'
-        }`} />
-        <span className="text-gray-400">
-          {health.dataFreshness.status === 'LIVE' ? 'Live' : 'Mock Data'}
-        </span>
+        <span className={`w-2 h-2 rounded-full ${isLive ? 'bg-emerald-400' : 'bg-red-400'}`} />
+        <span className="text-gray-400">{isLive ? 'Live' : 'Mock Data'}</span>
       </div>
 
       {/* Clock */}

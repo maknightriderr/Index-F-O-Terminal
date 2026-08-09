@@ -2,22 +2,26 @@
 
 import React from 'react';
 import {
-  MOCK_INDICES,
   MOCK_FNO_SCANNER,
   MOCK_NIFTY_BIAS,
   MOCK_NIFTY_SCORE,
-  MOCK_DATA_LABEL,
 } from '@/lib/mock-data';
+import { useLiveIndices } from '@/lib/use-live-indices';
 import { formatIndianNumber, formatPercent, formatCompact } from '@fno/shared';
 import { OIBadge, BiasBadge, ScoreBadge } from '@/components/common/badges';
 import { AddAssetButton } from '@/components/common/add-asset-button';
 
 export function Dashboard() {
+  const { indices, isLive } = useLiveIndices();
+
   return (
     <div className="p-4 space-y-4 min-h-full">
-      {/* Mock Data Warning */}
+      {/* Mock Data Warning — the scanner and bias/regime cards below are
+          sample data (no signal engine built yet); index prices above them
+          are live once the backend is reachable. */}
       <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg px-4 py-2 text-amber-400 text-xs font-medium">
-        {MOCK_DATA_LABEL}
+        ⚠️ The F&O scanner and market bias/regime below are sample data (not wired to a live signal engine yet).
+        {!isLive && ' Index prices above are also sample data right now — backend unreachable.'}
       </div>
 
       {/* Market Overview Header */}
@@ -28,7 +32,7 @@ export function Dashboard() {
 
       {/* Index Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
-        {MOCK_INDICES.map((index) => (
+        {indices.map((index) => (
           <IndexCard key={index.token} {...index} />
         ))}
       </div>

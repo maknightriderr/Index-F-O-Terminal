@@ -36,24 +36,39 @@ interface MarketDataState {
   setActiveTab: (tab: string) => void;
 }
 
-export const useMarketStore = create<MarketDataState>((set) => ({
-  quotes: {},
-  selectedSymbol: null,
-  selectedExchange: 'NSE',
-  selectedExpiry: null,
-  activeTab: 'dashboard',
+export const useMarketStore = create<MarketDataState>()(
+  persist(
+    (set) => ({
+      quotes: {},
+      selectedSymbol: null,
+      selectedExchange: 'NSE',
+      selectedExpiry: null,
+      activeTab: 'dashboard',
 
-  updateQuote: (token, quote) =>
-    set((state) => ({ quotes: { ...state.quotes, [token]: quote } })),
+      updateQuote: (token, quote) =>
+        set((state) => ({ quotes: { ...state.quotes, [token]: quote } })),
 
-  updateQuotes: (quotes) =>
-    set((state) => ({ quotes: { ...state.quotes, ...quotes } })),
+      updateQuotes: (quotes) =>
+        set((state) => ({ quotes: { ...state.quotes, ...quotes } })),
 
-  setSelectedSymbol: (symbol) => set({ selectedSymbol: symbol }),
-  setSelectedExchange: (exchange) => set({ selectedExchange: exchange }),
-  setSelectedExpiry: (expiry) => set({ selectedExpiry: expiry }),
-  setActiveTab: (tab) => set({ activeTab: tab }),
-}));
+      setSelectedSymbol: (symbol) => set({ selectedSymbol: symbol }),
+      setSelectedExchange: (exchange) => set({ selectedExchange: exchange }),
+      setSelectedExpiry: (expiry) => set({ selectedExpiry: expiry }),
+      setActiveTab: (tab) => set({ activeTab: tab }),
+    }),
+    {
+      name: 'fno-market-selection',
+      // Live tick data shouldn't survive a reload — only the user's
+      // navigation/selection state (what a refresh should restore).
+      partialize: (state) => ({
+        selectedSymbol: state.selectedSymbol,
+        selectedExchange: state.selectedExchange,
+        selectedExpiry: state.selectedExpiry,
+        activeTab: state.activeTab,
+      }),
+    }
+  )
+);
 
 // --- Watchlist Store ---
 

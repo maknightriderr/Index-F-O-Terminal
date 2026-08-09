@@ -5,7 +5,7 @@
 // All API calls go through this module.
 // ============================================================
 
-import type { OptionChain, FuturesChainResponse } from '@fno/shared';
+import type { OptionChain, FuturesChainResponse, MarketQuote } from '@fno/shared';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
@@ -118,6 +118,10 @@ class ApiClient {
 
   async getMarketStatus(exchange = 'NSE') {
     return this.get<any>(`/api/market/status?exchange=${exchange}`);
+  }
+
+  async getIndexQuotes() {
+    return this.get<MarketQuote[]>('/api/market/indices');
   }
 
   async getHistoricalData(token: string, from: string, to: string, exchange = 'NSE', interval = 'ONE_DAY') {
