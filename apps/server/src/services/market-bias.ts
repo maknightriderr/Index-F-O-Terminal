@@ -173,9 +173,11 @@ export async function buildMarketBias(
   // --- Reasoning (built from the actual computed values, not templated) ---
   const reasoning: string[] = [];
   reasoning.push(
-    spot > sessionVwap
+    vwapVote === 1
       ? `Price above VWAP (${fmt(spot)} > ${fmt(sessionVwap)})`
-      : `Price below VWAP (${fmt(spot)} < ${fmt(sessionVwap)})`
+      : vwapVote === -1
+      ? `Price below VWAP (${fmt(spot)} < ${fmt(sessionVwap)})`
+      : `Price near VWAP (${fmt(spot)} ≈ ${fmt(sessionVwap)})`
   );
   reasoning.push(
     st15Direction === st1hDirection
