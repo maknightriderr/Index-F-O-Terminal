@@ -23,6 +23,9 @@ build/
 *.swo
 *~
 
+# Claude Code local settings (personal, machine-specific)
+.claude/settings.local.json
+
 # OS
 .DS_Store
 Thumbs.db
