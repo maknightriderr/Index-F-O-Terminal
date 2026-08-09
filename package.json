@@ -1,0 +1,33 @@
+{
+  "name": "fno-terminal",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "dev:web": "turbo run dev --filter=@fno/web",
+    "dev:server": "turbo run dev --filter=@fno/server",
+    "dev:all": "turbo run dev --parallel",
+    "db:migrate": "turbo run db:migrate --filter=@fno/server",
+    "clean": "turbo run clean && rimraf node_modules"
+  },
+  "devDependencies": {
+    "turbo": "^2.4.0",
+    "rimraf": "^6.0.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "packageManager": "npm@10.0.0",
+  "overrides": {
+    "@types/express": "^4.17.21"
+  }
+}

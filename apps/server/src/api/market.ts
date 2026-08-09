@@ -1,0 +1,129 @@
+// ============================================================
+// API ROUTES — MARKET DATA
+// ============================================================
+
+import { Router, type Request, type Response } from 'express';
+import { logger } from '../lib/logger.js';
+import type { MarketDataProvider } from '../providers/interface.js';
+import type { CandleInterval } from '@fno/shared';
+
+export function createMarketDataRoutes(provider: MarketDataProvider): Router {
+  const router = Router();
+
+  /**
+   * GET /api/market/status
+   * Get market open/close status.
+   */
+  router.get('/status', async (req: Request, res: Response) => {
+    try {
+      const exchange = (req.query.exchange as string) || 'NSE';
+      const status = await provider.getMarketStatus(exchange as any);
+
+      res.json({ success: true, data: status });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'MARKET_STATUS_FAILED', message: error.message },
+      });
+    }
+  });
+
+  /**
+   * GET /api/market/ltp/:tokens
+   * Get latest prices for comma-separated tokens.
+   */
+  router.get('/ltp/:tokens', async (req: Request, res: Response) => {
+    try {
+      const tokens = req.params.tokens.split(',');
+      const exchange = (req.query.exchange as string) || 'NSE';
+
+      const data = await provider.getLTP(exchange as any, tokens);
+
+      res.json({
+        success: true,
+        data,
+        meta: { timestamp: Date.now(), source: 'LIVE' },
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'LTP_FETCH_FAILED', message: error.message },
+      });
+    }
+  });
+
+  /**
+   * GET /api/market/historical/:token
+   * Get historical OHLCV data.
+   */
+  router.get('/historical/:token', async (req: Request, res: Response) => {
+    try {
+      const { token } = req.params;
+      const exchange = (req.query.exchange as string) || 'NSE';
+      const interval = (req.query.interval as CandleInterval) || 'ONE_DAY';
+      const fromDate = req.query.from as string;
+      const toDate = req.query.to as string;
+
+      if (!fromDate || !toDate) {
+        res.status(400).json({
+          success: false,
+          error: { code: 'INVALID_PARAMS', message: 'from and to query params required' },
+        });
+        return;
+      }
+
+      const data = await provider.getHistoricalData({
+        exchange: exchange as any,
+        token,
+        interval,
+        fromDate,
+        toDate,
+      });
+
+      res.json({
+        success: true,
+        data,
+        meta: { count: data.length, timestamp: Date.now(), source: 'HISTORICAL' },
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'HISTORICAL_FETCH_FAILED', message: error.message },
+      });
+    }
+  });
+
+  /**
+   * GET /api/market/greeks/:name
+   * Get option Greeks from provider.
+   */
+  router.get('/greeks/:name', async (req: Request, res: Response) => {
+    try {
+      const { name } = req.params;
+      const expiry = req.query.expiry as string;
+
+      if (!expiry) {
+        res.status(400).json({
+          success: false,
+          error: { code: 'INVALID_PARAMS', message: 'expiry query param required' },
+        });
+        return;
+      }
+
+      const data = await provider.getOptionGreeks(name, expiry);
+
+      res.json({
+        success: true,
+        data,
+        meta: { count: data.length, timestamp: Date.now() },
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'GREEKS_FETCH_FAILED', message: error.message },
+      });
+    }
+  });
+
+  return router;
+}
