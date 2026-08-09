@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { Sidebar } from './sidebar';
 import { TopBar } from './topbar';
+import { AssetTabBar } from './asset-tab-bar';
 import { useUISettingsStore } from '@/stores';
 
 interface AppShellProps {
@@ -25,6 +26,9 @@ export function AppShell({ children }: AppShellProps) {
       <div className="flex flex-col flex-1 min-w-0">
         {/* Top Bar */}
         <TopBar />
+
+        {/* Asset Tabs (only rendered once at least one asset is open) */}
+        <AssetTabBar />
 
         {/* Content */}
         <div className="flex flex-1 min-h-0">

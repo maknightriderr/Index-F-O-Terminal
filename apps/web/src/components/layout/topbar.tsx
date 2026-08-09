@@ -33,40 +33,24 @@ export function TopBar() {
   const bankNifty = indices.find((i) => i.symbol === 'BANKNIFTY') ?? indices[1];
 
   return (
-    <header className="flex items-center h-12 px-4 bg-[#0d0d14] border-b border-gray-800/50 shrink-0 gap-4">
+    <header className="flex items-center h-12 px-4 bg-[#0d0d14]/95 backdrop-blur border-b border-gray-800/50 shrink-0 gap-5 shadow-[0_1px_0_rgba(255,255,255,0.03)]">
       {/* Quick Index Prices */}
-      <div className="flex items-center gap-5">
+      <div className="flex items-center gap-4">
         <IndexChip symbol="NIFTY" price={nifty.ltp} change={nifty.change} changePercent={nifty.changePercent} />
+        <div className="w-px h-5 bg-gray-800" />
         <IndexChip symbol="BANKNIFTY" price={bankNifty.ltp} change={bankNifty.change} changePercent={bankNifty.changePercent} />
       </div>
 
       {/* Spacer */}
       <div className="flex-1" />
 
-      {/* Market Status */}
-      <div className="flex items-center gap-1.5 text-xs">
-        <span className={`w-2 h-2 rounded-full ${marketOpen ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600'}`} />
-        <span className="text-gray-400">
-          {selectedExchange} {marketOpen ? 'Market Open' : 'Market Closed'}
-        </span>
-      </div>
-
-      {/* WebSocket Status */}
-      <div className="flex items-center gap-1.5 text-xs">
-        <span className={`w-2 h-2 rounded-full ${
-          health.websocket.connected ? 'bg-emerald-400' : 'bg-red-400'
-        }`} />
-        <span className="text-gray-400">
-          {health.websocket.connected ? 'WS Connected' : 'WS Disconnected'}
-        </span>
-      </div>
-
-      {/* Data Freshness — reflects the REST-polled index quotes (the live
-          mechanism actually in use right now; WS tick display is off, see
-          option-chain/futures pages) rather than WS subscription state. */}
-      <div className="flex items-center gap-1.5 text-xs">
-        <span className={`w-2 h-2 rounded-full ${isLive ? 'bg-emerald-400' : 'bg-red-400'}`} />
-        <span className="text-gray-400">{isLive ? 'Live' : 'Mock Data'}</span>
+      {/* Status Cluster */}
+      <div className="flex items-center gap-1 bg-gray-900/40 border border-gray-800/50 rounded-full pl-3 pr-1 py-1">
+        <StatusDot label={`${selectedExchange} ${marketOpen ? 'Open' : 'Closed'}`} on={marketOpen} pulse={marketOpen} />
+        <Divider />
+        <StatusDot label={health.websocket.connected ? 'WS' : 'WS Off'} on={health.websocket.connected} />
+        <Divider />
+        <StatusDot label={isLive ? 'Live' : 'Mock'} on={isLive} />
       </div>
 
       {/* Clock */}
@@ -74,6 +58,21 @@ export function TopBar() {
         {currentTime}
       </div>
     </header>
+  );
+}
+
+// --- Status Cluster Helpers ---
+
+function Divider() {
+  return <div className="w-px h-3.5 bg-gray-800 mx-1" />;
+}
+
+function StatusDot({ label, on, pulse }: { label: string; on: boolean; pulse?: boolean }) {
+  return (
+    <div className="flex items-center gap-1.5 text-[11px] px-1">
+      <span className={`w-1.5 h-1.5 rounded-full ${on ? 'bg-emerald-400' : 'bg-gray-600'} ${pulse ? 'animate-pulse' : ''}`} />
+      <span className="text-gray-400">{label}</span>
+    </div>
   );
 }
 
@@ -93,17 +92,17 @@ function IndexChip({
   const isPositive = change >= 0;
 
   return (
-    <div className="flex items-center gap-2 text-xs">
-      <span className="text-gray-400 font-medium">{symbol}</span>
-      <span className="text-gray-100 font-semibold tabular-nums">
+    <div className="flex items-center gap-2.5 text-xs">
+      <span className="text-gray-500 font-semibold tracking-wide">{symbol}</span>
+      <span className="text-gray-50 font-bold tabular-nums text-sm">
         {formatIndianNumber(price, 2)}
       </span>
       <span
-        className={`font-medium tabular-nums ${
-          isPositive ? 'text-emerald-400' : 'text-red-400'
+        className={`font-medium tabular-nums px-1.5 py-0.5 rounded ${
+          isPositive ? 'text-emerald-400 bg-emerald-500/10' : 'text-red-400 bg-red-500/10'
         }`}
       >
-        {isPositive ? '+' : ''}{change.toFixed(2)} ({formatPercent(changePercent)})
+        {isPositive ? '▲' : '▼'} {Math.abs(change).toFixed(2)} ({formatPercent(changePercent)})
       </span>
     </div>
   );

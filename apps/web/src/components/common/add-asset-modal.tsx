@@ -2,7 +2,7 @@
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { api } from '@/lib/api';
-import { useWatchlistStore, useMarketStore } from '@/stores';
+import { useWatchlistStore, useAssetTabsStore } from '@/stores';
 import { generateId } from '@fno/shared';
 import type { Exchange } from '@fno/shared';
 
@@ -20,7 +20,7 @@ export function AddAssetModal({ isOpen, onClose }: AddAssetModalProps) {
   const [selected, setSelected] = useState<any>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const { addItem, activeWatchlistId } = useWatchlistStore();
-  const { setSelectedSymbol, setSelectedExchange, setSelectedExpiry, setActiveTab } = useMarketStore();
+  const { openTab } = useAssetTabsStore();
 
   // Focus input on open
   useEffect(() => {
@@ -60,7 +60,7 @@ export function AddAssetModal({ isOpen, onClose }: AddAssetModalProps) {
     setSelected(item);
   };
 
-  const handleAdd = async () => {
+  const handleAdd = () => {
     if (!selected || !activeWatchlistId) return;
 
     const symbol: string = selected.underlying || selected.symbol || selected.name;
@@ -73,22 +73,10 @@ export function AddAssetModal({ isOpen, onClose }: AddAssetModalProps) {
       sortOrder: 999,
     });
 
-    setSelectedSymbol(symbol);
-    setSelectedExchange(resolvedExchange);
-    setSelectedExpiry(null);
-
-    // Auto-discover derivatives (spec §4): if this underlying has F&O
-    // contracts, jump straight to its option chain; otherwise leave the
-    // user wherever they were — it's still added to the watchlist either way.
-    try {
-      const expiries = await api.getExpiries(symbol, resolvedExchange);
-      if (expiries.length > 0) {
-        setSelectedExpiry(expiries[0]);
-        setActiveTab('option-chain');
-      }
-    } catch {
-      // No live provider session / no F&O contracts for this symbol — non-fatal.
-    }
+    // Opens (or focuses, if already open) a persistent tab for this asset —
+    // its workspace (spot/futures/option chain) auto-discovers expiries and
+    // loads on its own; nothing more to prefetch here.
+    openTab(symbol, resolvedExchange);
 
     onClose();
     setSearchQuery('');

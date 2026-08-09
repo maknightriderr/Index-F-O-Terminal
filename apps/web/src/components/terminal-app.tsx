@@ -3,8 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { AppShell } from '@/components/layout/app-shell';
 import { Dashboard } from '@/components/dashboard';
-import { OptionChainPage } from '@/components/option-chain';
-import { FuturesPage } from '@/components/futures';
+import { AssetWorkspace } from '@/components/asset-workspace';
 import { AddAssetModal } from '@/components/common/add-asset-modal';
 import { useMarketStore, useUISettingsStore, useSystemHealthStore } from '@/stores';
 import { useMarketWebSocket } from '@/lib/ws';
@@ -17,6 +16,8 @@ export function TerminalApp() {
   useMarketWebSocket();
 
   const renderContent = () => {
+    if (activeTab.startsWith('asset:')) return <AssetWorkspace />;
+
     switch (activeTab) {
       case 'dashboard':
         return <Dashboard />;
@@ -24,10 +25,6 @@ export function TerminalApp() {
         return <PlaceholderPage title="Indices" icon="📈" description="Index dashboard with spot, futures, option chain, OI, IV, Greeks, PCR, and market bias." />;
       case 'fno-stocks':
         return <PlaceholderPage title="F&O Stocks" icon="📋" description="F&O stock universe scanner with real-time OI, IV, Greeks, and intelligence scores." />;
-      case 'option-chain':
-        return <OptionChainPage />;
-      case 'futures':
-        return <FuturesPage />;
       case 'oi-intelligence':
         return <PlaceholderPage title="OI Intelligence" icon="🔍" description="OI walls, OI shifts, buildup classification, and unusual activity detection." />;
       case 'iv-greeks':
@@ -73,11 +70,11 @@ export function TerminalApp() {
 function PlaceholderPage({ title, icon, description }: { title: string; icon: string; description: string }) {
   return (
     <div className="flex flex-col items-center justify-center h-full p-8">
-      <div className="text-5xl mb-4">{icon}</div>
+      <div className="text-5xl mb-4 opacity-80">{icon}</div>
       <h2 className="text-xl font-bold text-gray-200 mb-2">{title}</h2>
       <p className="text-sm text-gray-500 max-w-md text-center mb-4">{description}</p>
-      <div className="px-4 py-2 bg-gray-800/50 border border-gray-700/50 rounded-lg text-xs text-gray-400">
-        Coming in Phase 2–6
+      <div className="px-4 py-2 bg-gray-800/50 border border-gray-700/50 rounded-xl text-xs text-gray-400">
+        Not built yet
       </div>
     </div>
   );
@@ -183,7 +180,7 @@ function SystemHealthPage() {
         {services.map((service) => (
           <div
             key={service.name}
-            className="bg-[#12121a] border border-gray-800/50 rounded-lg p-4"
+            className="bg-[#12121a] border border-gray-800/60 rounded-xl shadow-[0_8px_24px_-16px_rgba(0,0,0,0.6)] p-4 hover:border-gray-700/70 transition-colors"
           >
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">

@@ -16,6 +16,7 @@ import type {
   SystemHealth,
   BiasDirection,
   ServiceStatus,
+  Exchange,
 } from '@fno/shared';
 
 // --- Market Data Store ---
@@ -67,6 +68,85 @@ export const useMarketStore = create<MarketDataState>()(
         activeTab: state.activeTab,
       }),
     }
+  )
+);
+
+// --- Asset Tabs Store ---
+// One tab per asset the user has opened via "+ Add Asset" — this is the
+// primary way to view an asset's full workspace (spot/futures/option
+// chain together). Reuses useMarketStore's selectedSymbol/selectedExchange/
+// activeTab as "what's currently on screen": a tab's id (e.g.
+// "asset:NSE:NIFTY") is a valid activeTab value alongside sidebar page ids
+// like "dashboard" — the terminal-app router checks for the "asset:" prefix
+// to decide whether to render a sidebar page or the AssetWorkspace.
+
+export interface AssetTab {
+  id: string;
+  symbol: string;
+  exchange: Exchange;
+}
+
+function assetTabId(symbol: string, exchange: Exchange): string {
+  return `asset:${exchange}:${symbol}`;
+}
+
+interface AssetTabsState {
+  tabs: AssetTab[];
+  /** Opens (or focuses, if already open) a tab for this asset and makes it the active view. */
+  openTab: (symbol: string, exchange: Exchange) => string;
+  /** Switches to an already-open tab without changing the tab list. */
+  switchToTab: (id: string) => void;
+  /** Closes a tab; if it was active, falls back to another open tab or the Dashboard. */
+  closeTab: (id: string) => void;
+}
+
+export const useAssetTabsStore = create<AssetTabsState>()(
+  persist(
+    (set, get) => ({
+      tabs: [],
+
+      openTab: (symbol, exchange) => {
+        const id = assetTabId(symbol, exchange);
+        if (!get().tabs.some((t) => t.id === id)) {
+          set((state) => ({ tabs: [...state.tabs, { id, symbol, exchange }] }));
+        }
+        const market = useMarketStore.getState();
+        market.setSelectedSymbol(symbol);
+        market.setSelectedExchange(exchange);
+        market.setSelectedExpiry(null);
+        market.setActiveTab(id);
+        return id;
+      },
+
+      switchToTab: (id) => {
+        const tab = get().tabs.find((t) => t.id === id);
+        if (!tab) return;
+        const market = useMarketStore.getState();
+        market.setSelectedSymbol(tab.symbol);
+        market.setSelectedExchange(tab.exchange);
+        market.setSelectedExpiry(null);
+        market.setActiveTab(id);
+      },
+
+      closeTab: (id) => {
+        const remaining = get().tabs.filter((t) => t.id !== id);
+        set({ tabs: remaining });
+
+        const market = useMarketStore.getState();
+        if (market.activeTab !== id) return;
+
+        const next = remaining[remaining.length - 1];
+        if (next) {
+          market.setSelectedSymbol(next.symbol);
+          market.setSelectedExchange(next.exchange);
+          market.setSelectedExpiry(null);
+          market.setActiveTab(next.id);
+        } else {
+          market.setActiveTab('dashboard');
+        }
+      },
+    }),
+    { name: 'fno-asset-tabs' }
   )
 );
 

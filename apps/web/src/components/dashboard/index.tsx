@@ -19,7 +19,7 @@ export function Dashboard() {
       {/* Mock Data Warning — the scanner and bias/regime cards below are
           sample data (no signal engine built yet); index prices above them
           are live once the backend is reachable. */}
-      <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg px-4 py-2 text-amber-400 text-xs font-medium">
+      <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2.5 text-amber-400 text-xs font-medium">
         ⚠️ The F&O scanner and market bias/regime below are sample data (not wired to a live signal engine yet).
         {!isLive && ' Index prices above are also sample data right now — backend unreachable.'}
       </div>
@@ -45,7 +45,7 @@ export function Dashboard() {
       </div>
 
       {/* F&O Activity Scanner */}
-      <div className="bg-[#12121a] border border-gray-800/50 rounded-lg overflow-hidden">
+      <div className="bg-[#12121a] border border-gray-800/60 rounded-xl shadow-[0_8px_24px_-16px_rgba(0,0,0,0.6)] overflow-hidden">
         <div className="px-4 py-3 border-b border-gray-800/50 flex items-center justify-between">
           <h2 className="text-sm font-semibold text-gray-200">🔥 F&O Market Activity</h2>
           <div className="flex items-center gap-2">
@@ -165,19 +165,19 @@ function IndexCard({ symbol, ltp, change, changePercent, open, high, low, close 
   const positionInRange = dayRange > 0 ? ((ltp - low) / dayRange) * 100 : 50;
 
   return (
-    <div className="bg-[#12121a] border border-gray-800/50 rounded-lg p-3 hover:border-gray-700/60 transition-colors cursor-pointer group">
+    <div className="bg-[#12121a] border border-gray-800/60 rounded-xl shadow-[0_8px_24px_-16px_rgba(0,0,0,0.6)] p-3.5 hover:border-gray-700/70 hover:-translate-y-0.5 hover:shadow-[0_12px_28px_-14px_rgba(0,0,0,0.7)] transition-all duration-200 cursor-pointer group">
       <div className="flex items-center justify-between mb-2">
-        <span className="text-xs font-medium text-gray-400 group-hover:text-gray-300">{symbol}</span>
-        <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
+        <span className="text-xs font-semibold text-gray-400 group-hover:text-gray-200 transition-colors tracking-wide">{symbol}</span>
+        <span className={`text-xs font-semibold px-1.5 py-0.5 rounded-md ${
           isPositive ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'
         }`}>
           {formatPercent(changePercent)}
         </span>
       </div>
-      <div className="text-xl font-bold tabular-nums text-gray-100 mb-1">
+      <div className="text-2xl font-bold tabular-nums text-gray-50 mb-1">
         {formatIndianNumber(ltp, 2)}
       </div>
-      <div className={`text-xs tabular-nums mb-3 ${isPositive ? 'text-emerald-400' : 'text-red-400'}`}>
+      <div className={`text-xs tabular-nums mb-3 font-medium ${isPositive ? 'text-emerald-400' : 'text-red-400'}`}>
         {isPositive ? '▲' : '▼'} {Math.abs(change).toFixed(2)}
       </div>
       {/* Day Range Bar */}
@@ -186,9 +186,9 @@ function IndexCard({ symbol, ltp, change, changePercent, open, high, low, close 
           <span>L: {formatIndianNumber(low, 2)}</span>
           <span>H: {formatIndianNumber(high, 2)}</span>
         </div>
-        <div className="h-1 bg-gray-800 rounded-full overflow-hidden">
+        <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
           <div
-            className={`h-full rounded-full ${isPositive ? 'bg-emerald-500' : 'bg-red-500'}`}
+            className={`h-full rounded-full ${isPositive ? 'bg-gradient-to-r from-emerald-600 to-emerald-400' : 'bg-gradient-to-r from-red-600 to-red-400'}`}
             style={{ width: `${positionInRange}%` }}
           />
         </div>
@@ -201,7 +201,7 @@ function MarketBiasCard() {
   const bias = MOCK_NIFTY_BIAS;
 
   return (
-    <div className="bg-[#12121a] border border-gray-800/50 rounded-lg p-4">
+    <div className="bg-[#12121a] border border-gray-800/60 rounded-xl shadow-[0_8px_24px_-16px_rgba(0,0,0,0.6)] p-4">
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-sm font-semibold text-gray-200">Market Bias — NIFTY</h3>
         <BiasBadge bias={bias.direction} large />
@@ -247,7 +247,7 @@ function MarketRegimeCard() {
   const info = regimeLabels[regime] || { label: regime, color: 'gray' };
 
   return (
-    <div className="bg-[#12121a] border border-gray-800/50 rounded-lg p-4">
+    <div className="bg-[#12121a] border border-gray-800/60 rounded-xl shadow-[0_8px_24px_-16px_rgba(0,0,0,0.6)] p-4">
       <h3 className="text-sm font-semibold text-gray-200 mb-3">Market Regime</h3>
       <div className={`text-lg font-bold text-${info.color}-400 mb-2`}>{info.label}</div>
       <div className="grid grid-cols-2 gap-3 text-xs">
@@ -295,7 +295,7 @@ function IntelligenceScoreCard() {
   ];
 
   return (
-    <div className="bg-[#12121a] border border-gray-800/50 rounded-lg p-4">
+    <div className="bg-[#12121a] border border-gray-800/60 rounded-xl shadow-[0_8px_24px_-16px_rgba(0,0,0,0.6)] p-4">
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-sm font-semibold text-gray-200">Intelligence Score — NIFTY</h3>
         <ScoreBadge score={score.score} large />
@@ -330,7 +330,7 @@ function ActivityList({
   color: string;
 }) {
   return (
-    <div className="bg-[#12121a] border border-gray-800/50 rounded-lg p-3">
+    <div className="bg-[#12121a] border border-gray-800/60 rounded-xl shadow-[0_8px_24px_-16px_rgba(0,0,0,0.6)] p-3">
       <h3 className="text-xs font-semibold text-gray-300 mb-2">{title}</h3>
       {items.length === 0 ? (
         <div className="text-xs text-gray-600 py-2">No activity</div>
