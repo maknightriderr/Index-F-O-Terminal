@@ -540,7 +540,7 @@ function TradeSetupCard({ setup }: { setup: TradeSetup }) {
         <span className={`text-xs font-bold px-2 py-0.5 rounded ${isCall ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'}`}>
           {setup.side} {formatIndianNumber(setup.strike!, 0)}
         </span>
-        <span className="text-[10px] text-gray-500">R:R {setup.riskReward}</span>
+        <span className="text-[10px] text-gray-500">R:R {setup.riskReward!.toFixed(2)}</span>
       </div>
       <div className="grid grid-cols-3 gap-1.5 text-[11px]">
         <div>
