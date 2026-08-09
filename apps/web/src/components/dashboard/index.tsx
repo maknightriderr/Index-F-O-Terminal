@@ -8,8 +8,10 @@ import {
 } from '@/lib/mock-data';
 import { useLiveIndices } from '@/lib/use-live-indices';
 import { formatIndianNumber, formatPercent, formatCompact } from '@fno/shared';
+import type { Exchange } from '@fno/shared';
 import { OIBadge, BiasBadge, ScoreBadge } from '@/components/common/badges';
 import { AddAssetButton } from '@/components/common/add-asset-button';
+import { useAssetTabsStore } from '@/stores';
 
 export function Dashboard() {
   const { indices, isLive } = useLiveIndices();
@@ -81,6 +83,7 @@ export function Dashboard() {
               {MOCK_FNO_SCANNER.map((stock) => (
                 <tr
                   key={stock.symbol}
+                  onClick={() => useAssetTabsStore.getState().openTab(stock.symbol, 'NSE')}
                   className="border-t border-gray-800/30 hover:bg-gray-800/30 cursor-pointer transition-colors"
                 >
                   <td className="px-4 py-2.5 font-medium text-gray-200">{stock.symbol}</td>
@@ -159,13 +162,17 @@ export function Dashboard() {
 
 // --- Sub-components ---
 
-function IndexCard({ symbol, ltp, change, changePercent, open, high, low, close }: any) {
+function IndexCard({ symbol, exchange, ltp, change, changePercent, open, high, low, close }: any) {
   const isPositive = change >= 0;
   const dayRange = high - low;
   const positionInRange = dayRange > 0 ? ((ltp - low) / dayRange) * 100 : 50;
+  const openTab = useAssetTabsStore((s) => s.openTab);
 
   return (
-    <div className="bg-[#12121a] border border-gray-800/60 rounded-xl shadow-[0_8px_24px_-16px_rgba(0,0,0,0.6)] p-3.5 hover:border-gray-700/70 hover:-translate-y-0.5 hover:shadow-[0_12px_28px_-14px_rgba(0,0,0,0.7)] transition-all duration-200 cursor-pointer group">
+    <div
+      onClick={() => openTab(symbol, exchange as Exchange)}
+      className="bg-[#12121a] border border-gray-800/60 rounded-xl shadow-[0_8px_24px_-16px_rgba(0,0,0,0.6)] p-3.5 hover:border-gray-700/70 hover:-translate-y-0.5 hover:shadow-[0_12px_28px_-14px_rgba(0,0,0,0.7)] transition-all duration-200 cursor-pointer group"
+    >
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs font-semibold text-gray-400 group-hover:text-gray-200 transition-colors tracking-wide">{symbol}</span>
         <span className={`text-xs font-semibold px-1.5 py-0.5 rounded-md ${
@@ -339,6 +346,7 @@ function ActivityList({
           {items.map((s) => (
             <div
               key={s.symbol}
+              onClick={() => useAssetTabsStore.getState().openTab(s.symbol, 'NSE')}
               className="flex items-center justify-between text-xs py-1 hover:bg-gray-800/30 px-1.5 rounded cursor-pointer"
             >
               <span className="text-gray-300 font-medium">{s.symbol}</span>
