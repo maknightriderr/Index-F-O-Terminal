@@ -21,9 +21,16 @@ export async function computeChangeOi(token: string, currentOi: number): Promise
   const key = `oi_baseline:${token}:${day}`;
 
   try {
+    // Only establish a baseline from a real (non-zero) OI reading. A 0
+    // usually means the quote hadn't populated OI yet (e.g. a call that
+    // raced provider auth) — with NX, writing that bogus 0 would lock it
+    // in for the rest of the day, making every later changeOi equal the
+    // full current OI instead of an actual delta.
+    if (currentOi > 0) {
+      await redis.set(key, currentOi, 'EX', BASELINE_TTL_SECONDS, 'NX');
+    }
     // Set only if absent, then read whatever is stored — whether we just set
     // it or a concurrent request beat us to it.
-    await redis.set(key, currentOi, 'EX', BASELINE_TTL_SECONDS, 'NX');
     const stored = await redis.get(key);
     const baseline = stored !== null ? parseInt(stored, 10) : currentOi;
 
