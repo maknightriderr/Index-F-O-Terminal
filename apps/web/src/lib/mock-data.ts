@@ -126,4 +126,5 @@ export const MOCK_NIFTY_SCORE: IntelligenceScore = {
 
 // --- Data Source Label ---
 
-export const MOCK_DATA_LABEL = '⚠️ MOCK DATA — Connect Angel One for live data';
+export const MOCK_DATA_LABEL =
+  '⚠️ MOCK DATA — this overview, the F&O scanner, and market bias/regime are sample data (not wired to a live signal engine yet). Use "+ Add Asset" for real Option Chain / Futures data.';
