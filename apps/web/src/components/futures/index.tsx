@@ -1,18 +1,11 @@
 'use client';
 
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useMarketStore } from '@/stores';
 import { api, ApiError } from '@/lib/api';
-import { useMarketTicks, type WsSubscriptionTarget } from '@/lib/ws';
 import { formatIndianNumber, formatCompact } from '@fno/shared';
-import type { FuturesChainResponse, FuturesData, Exchange, ExchangeSegment, Tick } from '@fno/shared';
+import type { FuturesChainResponse, FuturesData } from '@fno/shared';
 import { OIBadge } from '@/components/common/badges';
-
-const FO_SEGMENT: Record<Exchange, ExchangeSegment> = {
-  NSE: 'NSE_FO',
-  BSE: 'BSE_FO',
-  MCX: 'MCX_FO',
-};
 
 const REFRESH_INTERVAL_MS = 15000;
 
@@ -52,18 +45,11 @@ export function FuturesPage() {
     return () => clearInterval(interval);
   }, [fetchFutures]);
 
-  const wsTargets = useMemo<WsSubscriptionTarget[]>(() => {
-    if (!data) return [];
-    const segment = FO_SEGMENT[data.exchange];
-    return data.contracts.map((c) => ({ token: c.token, exchange: data.exchange, exchangeSegment: segment }));
-  }, [data]);
-
-  const ticks = useMarketTicks(wsTargets);
-
-  const contracts = useMemo(() => {
-    if (!data) return [];
-    return data.contracts.map((c) => mergeTick(c, ticks[c.token]));
-  }, [data, ticks]);
+  // NOTE: live WS tick merging is intentionally disabled — see the same
+  // note in components/option-chain/index.tsx. REST polling above (every
+  // 15s) is the verified-correct data source until the binary tick parser
+  // is fixed.
+  const contracts = data?.contracts ?? [];
 
   if (!selectedSymbol) {
     return (
@@ -147,27 +133,6 @@ export function FuturesPage() {
       )}
     </div>
   );
-}
-
-function mergeTick(contract: FuturesData, tick?: Tick): FuturesData {
-  if (!tick) return contract;
-
-  const futuresPrice = tick.ltp || contract.futuresPrice;
-  const basis = Math.round((futuresPrice - contract.spotPrice) * 100) / 100;
-  const premiumDiscount = contract.spotPrice > 0
-    ? Math.abs(Math.round((basis / contract.spotPrice) * 10000) / 100)
-    : contract.premiumDiscount;
-
-  return {
-    ...contract,
-    futuresPrice,
-    basis,
-    premiumDiscount,
-    premiumDiscountType: basis >= 0 ? 'PREMIUM' : 'DISCOUNT',
-    oi: tick.oi ?? contract.oi,
-    changeOi: tick.changeOi ?? contract.changeOi,
-    volume: tick.volume || contract.volume,
-  };
 }
 
 function ContractCard({ contract }: { contract: FuturesData }) {

@@ -3,16 +3,9 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { useMarketStore } from '@/stores';
 import { api, ApiError } from '@/lib/api';
-import { useMarketTicks, type WsSubscriptionTarget } from '@/lib/ws';
 import { formatIndianNumber, formatCompact } from '@fno/shared';
-import type { OptionChain, OptionChainLeg, Exchange, ExchangeSegment, Tick } from '@fno/shared';
+import type { OptionChain, OptionChainLeg } from '@fno/shared';
 import { OIBadge } from '@/components/common/badges';
-
-const FO_SEGMENT: Record<Exchange, ExchangeSegment> = {
-  NSE: 'NSE_FO',
-  BSE: 'BSE_FO',
-  MCX: 'MCX_FO',
-};
 
 const STRIKE_RANGE_OPTIONS = [5, 10, 15, 20];
 const REFRESH_INTERVAL_MS = 15000;
@@ -53,27 +46,14 @@ export function OptionChainPage() {
     return () => clearInterval(interval);
   }, [fetchChain]);
 
-  const wsTargets = useMemo<WsSubscriptionTarget[]>(() => {
-    if (!chain) return [];
-    const segment = FO_SEGMENT[chain.exchange];
-    const targets: WsSubscriptionTarget[] = [];
-    for (const s of chain.strikes) {
-      if (s.call) targets.push({ token: s.call.token, exchange: chain.exchange, exchangeSegment: segment });
-      if (s.put) targets.push({ token: s.put.token, exchange: chain.exchange, exchangeSegment: segment });
-    }
-    return targets;
-  }, [chain]);
-
-  const ticks = useMarketTicks(wsTargets);
-
-  const strikes = useMemo(() => {
-    if (!chain) return [];
-    return chain.strikes.map((s) => ({
-      ...s,
-      call: s.call ? mergeTick(s.call, ticks[s.call.token]) : null,
-      put: s.put ? mergeTick(s.put, ticks[s.put.token]) : null,
-    }));
-  }, [chain, ticks]);
+  // NOTE: live WS tick merging is intentionally disabled for now — the
+  // server's binary tick parser (Angel One WS v2) has an unverified field
+  // layout (likely int32 where the real protocol uses int64) and was
+  // confirmed producing garbage values live (negative volume, wrong LTP/OI).
+  // REST polling every 15s (above) is verified correct; showing wrong
+  // numbers would be worse than not showing "live" ticks. Re-enable once
+  // the parser is fixed and verified against real captured packets.
+  const strikes = useMemo(() => chain?.strikes ?? [], [chain]);
 
   const maxOi = useMemo(
     () => Math.max(1, ...strikes.flatMap((s) => [s.call?.oi ?? 0, s.put?.oi ?? 0])),
@@ -208,19 +188,6 @@ export function OptionChainPage() {
 }
 
 // --- Helpers ---
-
-function mergeTick(leg: OptionChainLeg, tick?: Tick): OptionChainLeg {
-  if (!tick) return leg;
-  return {
-    ...leg,
-    ltp: tick.ltp || leg.ltp,
-    oi: tick.oi ?? leg.oi,
-    changeOi: tick.changeOi ?? leg.changeOi,
-    volume: tick.volume || leg.volume,
-    bid: tick.bid ?? leg.bid,
-    ask: tick.ask ?? leg.ask,
-  };
-}
 
 function LegCells({
   leg,
