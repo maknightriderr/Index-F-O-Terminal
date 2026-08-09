@@ -8,6 +8,7 @@ import type { MarketDataProvider } from '../providers/interface.js';
 import { CM_SEGMENT, FO_SEGMENT } from '@fno/shared';
 import type { CandleInterval, Exchange } from '@fno/shared';
 import { getLiveIndexQuotes } from '../services/indices.js';
+import { buildMarketBias } from '../services/market-bias.js';
 
 export function createMarketDataRoutes(provider: MarketDataProvider): Router {
   const router = Router();
@@ -110,6 +111,32 @@ export function createMarketDataRoutes(provider: MarketDataProvider): Router {
       res.status(500).json({
         success: false,
         error: { code: 'HISTORICAL_FETCH_FAILED', message: error.message },
+      });
+    }
+  });
+
+  /**
+   * GET /api/market/bias/:symbol
+   * Live market bias, regime, and intelligence score for an underlying —
+   * computed from real technicals + OI + PCR, not sample data.
+   */
+  router.get('/bias/:symbol', async (req: Request, res: Response) => {
+    try {
+      const symbol = req.params.symbol.toUpperCase();
+      const exchange = ((req.query.exchange as string) || 'NSE') as Exchange;
+
+      const result = await buildMarketBias(provider, symbol, exchange);
+
+      res.json({
+        success: true,
+        data: result,
+        meta: { timestamp: Date.now(), source: 'LIVE' },
+      });
+    } catch (error: any) {
+      logger.error({ error: error.message, symbol: req.params.symbol }, 'Market bias build failed');
+      res.status(502).json({
+        success: false,
+        error: { code: 'MARKET_BIAS_FAILED', message: error.message },
       });
     }
   });
