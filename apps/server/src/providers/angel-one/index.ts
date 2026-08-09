@@ -294,8 +294,8 @@ export class AngelOneProvider implements MarketDataProvider {
         i.underlying === underlying &&
         i.exchange === exchange &&
         i.expiry &&
-        (i.instrumentType === 'OPTIDX' || i.instrumentType === 'OPTSTK' ||
-         i.instrumentType === 'FUTIDX' || i.instrumentType === 'FUTSTK')
+        (i.instrumentType === 'OPTIDX' || i.instrumentType === 'OPTSTK' || i.instrumentType === 'OPTFUT' ||
+         i.instrumentType === 'FUTIDX' || i.instrumentType === 'FUTSTK' || i.instrumentType === 'FUTCOM')
       )
       .forEach(i => {
         if (i.expiry) expiries.add(i.expiry);
@@ -520,8 +520,12 @@ export class AngelOneProvider implements MarketDataProvider {
   private mapInstrument(raw: AngelInstrument): Instrument {
     const exchSeg = raw.exch_seg?.toLowerCase() || '';
     const exchange = this.resolveExchange(exchSeg);
-    const segment = exchSeg.includes('fo') ? 'FO' as const : 'CM' as const;
     const instrumentType = this.resolveInstrumentType(raw.instrumenttype, exchSeg);
+    // MCX has no exch_seg CM/FO split the way NSE/BSE do (raw rows just say
+    // "mcx") — segment has to come from the resolved instrument type instead
+    // of string-matching exch_seg, or every MCX future/option gets miscast
+    // as segment "CM"/type "EQ" and silently drops out of every derivative filter.
+    const segment = this.isDerivativeType(instrumentType) ? 'FO' as const : 'CM' as const;
     const underlying = this.resolveUnderlying(raw.symbol, raw.name, instrumentType);
 
     return {
@@ -555,10 +559,19 @@ export class AngelOneProvider implements MarketDataProvider {
     const t = type?.toUpperCase() || '';
     if (t === 'FUTIDX') return 'FUTIDX';
     if (t === 'FUTSTK') return 'FUTSTK';
+    if (t === 'FUTCOM') return 'FUTCOM';
     if (t === 'OPTIDX') return 'OPTIDX';
     if (t === 'OPTSTK') return 'OPTSTK';
+    if (t === 'OPTFUT') return 'OPTFUT'; // MCX commodity options (options on futures)
     if (exchSeg.includes('fo')) return 'FUTSTK'; // default for F&O
     return 'EQ';
+  }
+
+  private isDerivativeType(type: InstrumentType): boolean {
+    return (
+      type === 'FUTIDX' || type === 'FUTSTK' || type === 'FUTCOM' ||
+      type === 'OPTIDX' || type === 'OPTSTK' || type === 'OPTFUT'
+    );
   }
 
   private resolveUnderlying(symbol: string, name: string, type: InstrumentType): string {

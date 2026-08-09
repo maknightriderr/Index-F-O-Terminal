@@ -26,6 +26,8 @@ export function AssetWorkspace() {
   const fetchAll = useCallback(
     async (silent = false) => {
       if (!selectedSymbol) return;
+      const requestSymbol = selectedSymbol;
+      const requestExchange = selectedExchange;
       if (!silent) setLoading(true);
       setError(null);
 
@@ -38,21 +40,41 @@ export function AssetWorkspace() {
         api.getFutures(selectedSymbol, selectedExchange),
       ]);
 
+      // The user may have switched tabs while this request was in flight —
+      // a late response for the asset they left must not overwrite what's
+      // now on screen for the asset they switched to.
+      const current = useMarketStore.getState();
+      if (current.selectedSymbol !== requestSymbol || current.selectedExchange !== requestExchange) {
+        return;
+      }
+
       if (chainResult.status === 'fulfilled') {
         setChain(chainResult.value);
         if (!selectedExpiry) setSelectedExpiry(chainResult.value.expiry);
-      } else if (!silent) {
-        setError(chainResult.reason instanceof ApiError ? chainResult.reason.message : 'Failed to load option chain');
+      } else {
+        setChain(null);
+        if (!silent) setError(chainResult.reason instanceof ApiError ? chainResult.reason.message : 'Failed to load option chain');
       }
 
       if (futuresResult.status === 'fulfilled') {
         setFutures(futuresResult.value);
+      } else {
+        setFutures(null);
       }
 
       if (!silent) setLoading(false);
     },
     [selectedSymbol, selectedExchange, selectedExpiry, strikeRange, setSelectedExpiry]
   );
+
+  // Clear stale data from the previously-active asset immediately on switch,
+  // so a slow or failing fetch for the new asset can't leave the old asset's
+  // option chain on screen under the new asset's header.
+  useEffect(() => {
+    setChain(null);
+    setFutures(null);
+    setError(null);
+  }, [selectedSymbol, selectedExchange]);
 
   useEffect(() => {
     fetchAll();

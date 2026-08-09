@@ -67,7 +67,7 @@ export async function buildOptionChain(
     (i) =>
       i.underlying === underlying &&
       i.exchange === exchange &&
-      (i.instrumentType === 'OPTIDX' || i.instrumentType === 'OPTSTK') &&
+      (i.instrumentType === 'OPTIDX' || i.instrumentType === 'OPTSTK' || i.instrumentType === 'OPTFUT') &&
       i.expiry === expiry &&
       i.strike !== undefined
   );
@@ -237,9 +237,35 @@ export async function resolveSpotToken(
   const known = KNOWN_INDEX_TOKENS[underlying.toUpperCase()];
   if (known) return known;
 
+  // MCX commodities (CRUDEOIL, GOLD, etc.) have no cash/spot instrument at
+  // all — trading is futures/options only. The standard reference price for
+  // their options is the nearest-expiry futures contract, not a spot index.
+  if (exchange === 'MCX') {
+    const nearestFuture = await resolveNearestFuturesContract(provider, underlying, exchange);
+    if (nearestFuture) return nearestFuture.token;
+  }
+
   if (candidates[0]) return candidates[0].token;
 
   throw new Error(`Unable to resolve spot instrument for ${underlying}`);
+}
+
+async function resolveNearestFuturesContract(
+  provider: MarketDataProvider,
+  underlying: string,
+  exchange: Exchange
+): Promise<Instrument | undefined> {
+  const instruments = await provider.getInstrumentMaster();
+  const futures = instruments
+    .filter(
+      (i) =>
+        i.exchange === exchange &&
+        i.instrumentType === 'FUTCOM' &&
+        i.underlying?.toUpperCase() === underlying.toUpperCase() &&
+        i.expiry
+    )
+    .sort((a, b) => (a.expiry! < b.expiry! ? -1 : a.expiry! > b.expiry! ? 1 : 0));
+  return futures[0];
 }
 
 function inferStrikeInterval(sortedStrikes: number[]): number {

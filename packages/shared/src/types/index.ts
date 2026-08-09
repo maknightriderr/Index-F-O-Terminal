@@ -28,8 +28,10 @@ export type InstrumentType =
   | 'INDEX'     // Index
   | 'FUTIDX'    // Index Future
   | 'FUTSTK'    // Stock Future
+  | 'FUTCOM'    // Commodity Future (MCX)
   | 'OPTIDX'    // Index Option
-  | 'OPTSTK';   // Stock Option
+  | 'OPTSTK'    // Stock Option
+  | 'OPTFUT';   // Option on Future — commodity options (MCX)
 
 export type OptionType = 'CE' | 'PE';
 

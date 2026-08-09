@@ -34,7 +34,7 @@ export async function buildFuturesData(
       (i) =>
         i.underlying === underlying &&
         i.exchange === exchange &&
-        (i.instrumentType === 'FUTIDX' || i.instrumentType === 'FUTSTK') &&
+        (i.instrumentType === 'FUTIDX' || i.instrumentType === 'FUTSTK' || i.instrumentType === 'FUTCOM') &&
         !!i.expiry
     )
     .sort((a, b) => new Date(a.expiry!).getTime() - new Date(b.expiry!).getTime())
