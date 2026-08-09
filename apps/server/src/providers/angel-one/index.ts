@@ -521,7 +521,10 @@ export class AngelOneProvider implements MarketDataProvider {
       segment,
       instrumentType,
       underlying,
-      strike: raw.strike ? parseFloat(raw.strike) : undefined,
+      // Angel One encodes strike as actual_price * 100 (e.g. "2260000.000000" for
+      // a 22600 strike); non-option rows (futures/equity) use "-1.000000" as a
+      // sentinel rather than omitting the field, so guard on > 0, not just truthy.
+      strike: raw.strike && parseFloat(raw.strike) > 0 ? parseFloat(raw.strike) / 100 : undefined,
       optionType: this.resolveOptionType(raw.symbol, raw.instrumenttype),
       expiry: raw.expiry ? this.parseExpiry(raw.expiry) : undefined,
       lotSize: parseInt(raw.lotsize) || 1,
