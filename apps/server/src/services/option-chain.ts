@@ -26,6 +26,9 @@ import {
   calculateExpectedMove,
   classifyOptionOI,
   calculateGreeksFromPrice,
+  analyzePositionMomentum,
+  analyzeOiTrap,
+  analyzeTimeDecay,
 } from '@fno/analytics';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { computeChangeOi } from '../lib/oi-baseline.js';
@@ -55,8 +58,13 @@ export async function buildOptionChain(
       : availableExpiries[0];
 
   const spotToken = await resolveSpotToken(provider, underlying, exchange);
-  const spotQuotes = await provider.getQuote(CM_SEGMENT[exchange], [spotToken], 'LTP');
+  const spotQuotes = await provider.getQuote(CM_SEGMENT[exchange], [spotToken], 'OHLC');
   const spotPrice = spotQuotes[0]?.ltp ?? 0;
+  const spotClose = spotQuotes[0]?.close ?? 0;
+  // Compute the % change ourselves rather than trust the provider's
+  // percentChange field — OHLC-mode payloads don't always populate it,
+  // and close/ltp are always present, so this is more reliable.
+  const underlyingChangePercent = spotClose > 0 ? ((spotPrice - spotClose) / spotClose) * 100 : 0;
 
   if (spotPrice <= 0) {
     throw new Error(`Unable to resolve a live spot price for ${underlying}`);
@@ -189,6 +197,10 @@ export async function buildOptionChain(
 
   const expectedMoveDetail = calculateExpectedMove(spotPrice, atmIv, dte, underlying);
 
+  const positionMomentum = analyzePositionMomentum(strikes, underlyingChangePercent);
+  const oiTrap = analyzeOiTrap(strikes, spotPrice);
+  const decay = analyzeTimeDecay(strikes, atmStrike, dte);
+
   return {
     symbol: underlying,
     underlying,
@@ -214,6 +226,9 @@ export async function buildOptionChain(
       upperBound: expectedMoveDetail.upperBound,
       lowerBound: expectedMoveDetail.lowerBound,
     },
+    positionMomentum,
+    oiTrap,
+    decay,
     timestamp: now,
   };
 }

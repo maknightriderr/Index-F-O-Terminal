@@ -19,6 +19,7 @@ import {
   macd,
   bollingerBands,
   getOIDescription,
+  buildTradeSetup,
 } from '@fno/analytics';
 import type {
   Exchange,
@@ -27,6 +28,7 @@ import type {
   MarketRegime,
   BiasDirection,
   OHLCV,
+  TradeSetup,
 } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveSpotToken, buildOptionChain } from './option-chain.js';
@@ -36,6 +38,7 @@ import { logger } from '../lib/logger.js';
 export interface MarketBiasResult {
   bias: MarketBias;
   score: IntelligenceScore;
+  tradeSetup: TradeSetup;
 }
 
 type Vote = -1 | 0 | 1;
@@ -205,7 +208,7 @@ export async function buildMarketBias(
   if (currentFuture) {
     reasoning.push(`${getOIDescription(futuresInterpretation).description} in futures OI`);
   }
-  if (chain) reasoning.push(`ATM IV at ${fmt(atmIvPct)}%`);
+  if (chain && atmIvPct > 0) reasoning.push(`ATM IV at ${fmt(atmIvPct)}%`);
   if (Math.abs(volumeRatio - 1) > 0.3) {
     reasoning.push(`Volume ${volumeRatio > 1 ? 'above' : 'below'} its 20-bar average (${fmt(volumeRatio, 2)}x)`);
   }
@@ -252,7 +255,11 @@ export async function buildMarketBias(
   const futuresOiScore = contribution(futuresOiVote, directionSign);
   const optionsOiScore = contribution(pcrVote, directionSign);
   const pcrScore = clamp(Math.round(50 + (pcr - 1) * 40), 0, 100);
-  const ivScore = clamp(Math.round(100 - atmIvPct * 2.5), 0, 100);
+  // atmIvPct is 0 both when IV is genuinely unresolvable (no chain, no legs
+  // with a broker/calculated IV) and — vanishingly rarely — when it's truly
+  // near-zero; treat it as "unknown" and score neutral rather than a
+  // misleadingly perfect 100.
+  const ivScore = atmIvPct > 0 ? clamp(Math.round(100 - atmIvPct * 2.5), 0, 100) : 50;
 
   const technicalsVote = (rsiVote + macdVote + bollingerVote) / 3;
   const technicalsScore = contribution(technicalsVote, directionSign);
@@ -295,7 +302,11 @@ export async function buildMarketBias(
     timestamp: Date.now(),
   };
 
-  return { bias, score };
+  const tradeSetup: TradeSetup = chain
+    ? buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, chain.expectedMove.points)
+    : { available: false, reason: 'Option chain unavailable for this symbol — cannot size a setup.' };
+
+  return { bias, score, tradeSetup };
 }
 
 // --- Helpers ---

@@ -9,7 +9,7 @@
 // ============================================================
 
 import { RISK_FREE_RATE } from '@fno/shared';
-import type { Greeks, OptionType } from '@fno/shared';
+import type { Greeks, OptionType, OptionChainStrike, DecayAnalysis } from '@fno/shared';
 
 // --- Normal Distribution Helpers ---
 
@@ -253,6 +253,36 @@ export function calculateGreeksFromPrice(
     spotPrice, strikePrice: strikePrice, timeToExpiry,
     riskFreeRate, iv, optionType,
   });
+}
+
+// --- Time Decay Analysis ---
+
+/**
+ * How fast theta is eating premium right now, at the ATM strike (where
+ * theta bites hardest). Speed is classified purely from DTE — decay
+ * accelerates non-linearly into expiry regardless of the underlying,
+ * so DTE alone is a reliable, defensible classifier (no historical
+ * decay-curve data needed).
+ */
+export function analyzeTimeDecay(
+  strikes: OptionChainStrike[],
+  atmStrike: number,
+  dte: number
+): DecayAnalysis {
+  const atmEntry = strikes.find((s) => s.strike === atmStrike);
+
+  const thetaPct = (leg: { theta: number; ltp: number } | null | undefined): number =>
+    leg && leg.ltp > 0 ? clampGreek((leg.theta / leg.ltp) * 100, -100, 0) : 0;
+
+  const speed: DecayAnalysis['speed'] =
+    dte <= 1 ? 'EXTREME' : dte <= 3 ? 'FAST' : dte <= 7 ? 'MODERATE' : 'SLOW';
+
+  return {
+    atmCallThetaPct: thetaPct(atmEntry?.call),
+    atmPutThetaPct: thetaPct(atmEntry?.put),
+    speed,
+    dte,
+  };
 }
 
 // --- Helpers ---

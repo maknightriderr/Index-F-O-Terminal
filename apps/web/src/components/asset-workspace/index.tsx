@@ -3,9 +3,21 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { useMarketStore } from '@/stores';
 import { api, ApiError } from '@/lib/api';
+import { useMarketBias } from '@/lib/use-market-bias';
 import { formatIndianNumber, formatCompact, isMarketOpen } from '@fno/shared';
-import type { Exchange, OptionChain, OptionChainLeg, FuturesChainResponse, FuturesData } from '@fno/shared';
+import type {
+  Exchange,
+  OptionChain,
+  OptionChainLeg,
+  FuturesChainResponse,
+  FuturesData,
+  PositionMomentum,
+  OiTrapAnalysis,
+  DecayAnalysis,
+  TradeSetup,
+} from '@fno/shared';
 import { OIBadge } from '@/components/common/badges';
+import { MarketBiasCard, MarketRegimeCard, IntelligenceScoreCard } from '@/components/common/market-intelligence-cards';
 
 const STRIKE_RANGE_OPTIONS = [5, 10, 15, 20];
 const REFRESH_INTERVAL_MS = 15000;
@@ -17,6 +29,10 @@ const REFRESH_INTERVAL_MS = 15000;
  */
 export function AssetWorkspace() {
   const { selectedSymbol, selectedExchange, selectedExpiry, setSelectedExpiry } = useMarketStore();
+  // Hooks can't be called conditionally, so this runs even before the
+  // "no asset selected" early return below — harmless, just polls NIFTY
+  // until an asset is actually picked.
+  const { bias, score, tradeSetup, isLive: biasLive } = useMarketBias(selectedSymbol || 'NIFTY', selectedExchange || 'NSE');
   const [chain, setChain] = useState<OptionChain | null>(null);
   const [futures, setFutures] = useState<FuturesChainResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -157,17 +173,49 @@ export function AssetWorkspace() {
         <div className="text-sm text-gray-500 py-16 text-center">Loading workspace…</div>
       )}
 
+      {/* Market Intelligence */}
+      <div>
+        <SectionLabel>Market Intelligence</SectionLabel>
+        {!biasLive && (
+          <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2 mb-2 text-amber-400 text-xs font-medium">
+            ⚠️ Live signal engine unreachable — bias/regime/score below are sample data.
+          </div>
+        )}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+          <MarketBiasCard bias={bias} symbol={selectedSymbol} />
+          <MarketRegimeCard bias={bias} />
+          <IntelligenceScoreCard score={score} symbol={selectedSymbol} />
+        </div>
+      </div>
+
+      {/* Option Chain Intelligence */}
+      {chain && (
+        <div>
+          <SectionLabel>Option Chain Intelligence</SectionLabel>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+            <OiTrapCard trap={chain.oiTrap} />
+            <PositionMomentumCard momentum={chain.positionMomentum} />
+            <DecayCard decay={chain.decay} />
+            <TradeSetupCard setup={tradeSetup} />
+          </div>
+        </div>
+      )}
+
       {/* Futures Strip */}
       {futures && futures.contracts.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {futures.contracts.map((c) => (
-            <FuturesCard key={c.symbol} contract={c} />
-          ))}
+        <div>
+          <SectionLabel>Futures</SectionLabel>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {futures.contracts.map((c) => (
+              <FuturesCard key={c.symbol} contract={c} />
+            ))}
+          </div>
         </div>
       )}
 
       {chain && (
-        <>
+        <div className="space-y-3">
+          <SectionLabel>Option Chain</SectionLabel>
           {/* Expiry Tabs */}
           <div className="flex items-center gap-2 flex-wrap">
             {chain.availableExpiries.map((exp) => (
@@ -240,7 +288,7 @@ export function AssetWorkspace() {
               </table>
             </div>
           </div>
-        </>
+        </div>
       )}
     </div>
   );
@@ -371,5 +419,144 @@ function SummaryTile({ label, value, sub, accent }: { label: string; value: stri
       <div className={`text-lg font-bold tabular-nums ${color}`}>{value}</div>
       {sub && <div className="text-[10px] text-gray-500 mt-0.5">{sub}</div>}
     </div>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-2">{children}</div>
+  );
+}
+
+// --- Option Chain Intelligence Cards ---
+
+function IntelCard({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="bg-[#12121a] border border-gray-800/60 rounded-xl p-3.5 shadow-[0_8px_24px_-16px_rgba(0,0,0,0.6)] hover:border-gray-700/70 transition-colors">
+      <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function OiTrapCard({ trap }: { trap: OiTrapAnalysis }) {
+  const active = trap.call.active || trap.put.active;
+  return (
+    <IntelCard title="OI Trapping">
+      <div className="flex items-center gap-2 mb-2">
+        <TrapPill label="Call side" side={trap.call} color="emerald" />
+        <TrapPill label="Put side" side={trap.put} color="red" />
+      </div>
+      <p className={`text-[11px] leading-snug ${active ? 'text-gray-300' : 'text-gray-500'}`}>{trap.summary}</p>
+    </IntelCard>
+  );
+}
+
+function TrapPill({ label, side, color }: { label: string; side: { active: boolean; strike: number | null; strength: number }; color: 'emerald' | 'red' }) {
+  const activeClass = color === 'emerald' ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' : 'bg-red-500/15 text-red-400 border-red-500/30';
+  return (
+    <div className={`flex-1 text-center rounded-lg border px-2 py-1.5 ${side.active ? activeClass : 'bg-gray-800/40 text-gray-500 border-gray-700/40'}`}>
+      <div className="text-[10px] font-medium">{label}</div>
+      <div className="text-xs font-semibold tabular-nums">{side.active ? `${side.strength}` : '—'}</div>
+    </div>
+  );
+}
+
+function PositionMomentumCard({ momentum }: { momentum: PositionMomentum }) {
+  return (
+    <IntelCard title="Position Momentum">
+      <MomentumRow label="Calls" oi={momentum.callOi} oiChange={momentum.callOiChange} activity={momentum.callActivity} />
+      <MomentumRow label="Puts" oi={momentum.putOi} oiChange={momentum.putOiChange} activity={momentum.putActivity} />
+    </IntelCard>
+  );
+}
+
+function MomentumRow({
+  label,
+  oi,
+  oiChange,
+  activity,
+}: {
+  label: string;
+  oi: number;
+  oiChange: number;
+  activity: 'BUILDING' | 'REDUCING' | 'FLAT';
+}) {
+  const activityClass =
+    activity === 'BUILDING' ? 'text-emerald-400 bg-emerald-500/15' : activity === 'REDUCING' ? 'text-red-400 bg-red-500/15' : 'text-gray-400 bg-gray-800/50';
+  return (
+    <div className="flex items-center justify-between text-xs py-1">
+      <span className="text-gray-400 w-10">{label}</span>
+      <span className="text-gray-300 tabular-nums flex-1 text-right pr-2">{formatCompact(oi)}</span>
+      <span className={`tabular-nums pr-2 ${oiChange >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+        {oiChange >= 0 ? '+' : ''}{formatCompact(oiChange)}
+      </span>
+      <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${activityClass}`}>{activity}</span>
+    </div>
+  );
+}
+
+const DECAY_SPEED_CLASS: Record<DecayAnalysis['speed'], string> = {
+  SLOW: 'text-blue-400 bg-blue-500/15',
+  MODERATE: 'text-yellow-400 bg-yellow-500/15',
+  FAST: 'text-orange-400 bg-orange-500/15',
+  EXTREME: 'text-red-400 bg-red-500/15',
+};
+
+function DecayCard({ decay }: { decay: DecayAnalysis }) {
+  return (
+    <IntelCard title="Time Decay">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs text-gray-400">DTE {decay.dte}</span>
+        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${DECAY_SPEED_CLASS[decay.speed]}`}>{decay.speed}</span>
+      </div>
+      <div className="grid grid-cols-2 gap-2 text-xs">
+        <div>
+          <div className="text-gray-500 text-[10px] mb-0.5">ATM Call θ/day</div>
+          <div className="text-red-400 font-medium tabular-nums">{decay.atmCallThetaPct.toFixed(2)}%</div>
+        </div>
+        <div>
+          <div className="text-gray-500 text-[10px] mb-0.5">ATM Put θ/day</div>
+          <div className="text-red-400 font-medium tabular-nums">{decay.atmPutThetaPct.toFixed(2)}%</div>
+        </div>
+      </div>
+    </IntelCard>
+  );
+}
+
+function TradeSetupCard({ setup }: { setup: TradeSetup }) {
+  if (!setup.available) {
+    return (
+      <IntelCard title="Trade Setup">
+        <p className="text-[11px] text-gray-500 leading-snug">{setup.reason}</p>
+      </IntelCard>
+    );
+  }
+
+  const isCall = setup.side === 'CE';
+  return (
+    <IntelCard title="Trade Setup">
+      <div className="flex items-center justify-between mb-2">
+        <span className={`text-xs font-bold px-2 py-0.5 rounded ${isCall ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'}`}>
+          {setup.side} {formatIndianNumber(setup.strike!, 0)}
+        </span>
+        <span className="text-[10px] text-gray-500">R:R {setup.riskReward}</span>
+      </div>
+      <div className="grid grid-cols-3 gap-1.5 text-[11px]">
+        <div>
+          <div className="text-gray-500 text-[10px]">Entry</div>
+          <div className="text-gray-200 font-medium tabular-nums">{setup.entry!.toFixed(2)}</div>
+        </div>
+        <div>
+          <div className="text-gray-500 text-[10px]">SL</div>
+          <div className="text-red-400 font-medium tabular-nums">{setup.stopLoss!.toFixed(2)}</div>
+        </div>
+        <div>
+          <div className="text-gray-500 text-[10px]">Target</div>
+          <div className="text-emerald-400 font-medium tabular-nums">{setup.target!.toFixed(2)}</div>
+        </div>
+      </div>
+      <p className="text-[10px] text-gray-600 mt-2 leading-snug">Heuristic from live data — not investment advice.</p>
+    </IntelCard>
   );
 }

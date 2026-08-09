@@ -206,7 +206,55 @@ export interface OptionChain {
   maxPain: number;
   maxPainDistance: number;
   expectedMove: { points: number; upperBound: number; lowerBound: number };
+  positionMomentum: PositionMomentum;
+  oiTrap: OiTrapAnalysis;
+  decay: DecayAnalysis;
   timestamp: number;
+}
+
+// --- Option Chain Intelligence (trapping / position momentum / decay / trade setup) ---
+
+export type OiSideActivity = 'BUILDING' | 'REDUCING' | 'FLAT';
+
+export interface PositionMomentum {
+  callOi: number;
+  putOi: number;
+  callOiChange: number;
+  putOiChange: number;
+  callInterpretation: OIInterpretation;
+  putInterpretation: OIInterpretation;
+  callActivity: OiSideActivity;
+  putActivity: OiSideActivity;
+}
+
+export interface OiTrapSide {
+  active: boolean;
+  strike: number | null;
+  strength: number; // 0-100
+}
+
+export interface OiTrapAnalysis {
+  call: OiTrapSide;
+  put: OiTrapSide;
+  summary: string;
+}
+
+export interface DecayAnalysis {
+  atmCallThetaPct: number; // % of premium lost per day (negative)
+  atmPutThetaPct: number;
+  speed: 'SLOW' | 'MODERATE' | 'FAST' | 'EXTREME';
+  dte: number;
+}
+
+export interface TradeSetup {
+  available: boolean;
+  side?: OptionType;
+  strike?: number;
+  entry?: number;
+  stopLoss?: number;
+  target?: number;
+  riskReward?: number;
+  reason: string;
 }
 
 // --- Greeks ---

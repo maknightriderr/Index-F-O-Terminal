@@ -5,7 +5,15 @@
 // Uses context-specific logic for futures vs options.
 // ============================================================
 
-import type { OIInterpretation, OptionType } from '@fno/shared';
+import type {
+  OIInterpretation,
+  OptionType,
+  OptionChainStrike,
+  PositionMomentum,
+  OiSideActivity,
+  OiTrapAnalysis,
+  OiTrapSide,
+} from '@fno/shared';
 
 interface OIClassificationInput {
   priceChange: number;
@@ -126,4 +134,110 @@ export function detectUnusualOI(
     score: Math.min(100, Math.abs(zScore) * 25),
     direction: zScore > threshold ? 'HIGH' : zScore < -threshold ? 'LOW' : 'NORMAL',
   };
+}
+
+// --- Position Momentum (which side is building / reducing) ---
+
+/**
+ * Aggregates OI and OI-change across every strike in view, per side, and
+ * classifies each side with the same classifyFuturesOI/classifyOptionOI
+ * logic already used per-leg — no new classification rule, just rolled up.
+ */
+export function analyzePositionMomentum(
+  strikes: OptionChainStrike[],
+  underlyingChangePercent: number
+): PositionMomentum {
+  let callOi = 0;
+  let putOi = 0;
+  let callOiChange = 0;
+  let putOiChange = 0;
+
+  for (const s of strikes) {
+    if (s.call) {
+      callOi += s.call.oi;
+      callOiChange += s.call.changeOi;
+    }
+    if (s.put) {
+      putOi += s.put.oi;
+      putOiChange += s.put.changeOi;
+    }
+  }
+
+  const activityOf = (oiChange: number, totalOi: number): OiSideActivity => {
+    if (totalOi <= 0) return 'FLAT';
+    const pctOfOi = (oiChange / totalOi) * 100;
+    if (pctOfOi > 1) return 'BUILDING';
+    if (pctOfOi < -1) return 'REDUCING';
+    return 'FLAT';
+  };
+
+  return {
+    callOi,
+    putOi,
+    callOiChange,
+    putOiChange,
+    callInterpretation: classifyOptionOI({ priceChange: underlyingChangePercent, oiChange: callOiChange }, 'CE'),
+    putInterpretation: classifyOptionOI({ priceChange: underlyingChangePercent, oiChange: putOiChange }, 'PE'),
+    callActivity: activityOf(callOiChange, callOi),
+    putActivity: activityOf(putOiChange, putOi),
+  };
+}
+
+// --- OI Trapping ---
+
+/**
+ * Flags when spot is pushing through (or sitting right at) the strike
+ * carrying the heaviest OI on a side — the "wall" writers on that side
+ * were leaning on. Call writers profit while spot stays below their
+ * strike; when spot pushes up through it, they're underwater and a
+ * short-covering squeeze can accelerate the move (and symmetrically for
+ * put writers on the downside). This only needs the current chain — no
+ * separate premium-history feed — so it stays reliable even when a
+ * symbol's OI-baseline history is thin (a new listing, first day, etc).
+ */
+export function analyzeOiTrap(strikes: OptionChainStrike[], spotPrice: number): OiTrapAnalysis {
+  let callWall: { strike: number; oi: number } | null = null;
+  let putWall: { strike: number; oi: number } | null = null;
+
+  for (const s of strikes) {
+    if (s.call && (!callWall || s.call.oi > callWall.oi)) callWall = { strike: s.strike, oi: s.call.oi };
+    if (s.put && (!putWall || s.put.oi > putWall.oi)) putWall = { strike: s.strike, oi: s.put.oi };
+  }
+
+  const BREACH_BUFFER_PCT = -0.2; // strike counts as "under pressure" once spot is within 0.2% of it
+
+  const callTrap: OiTrapSide =
+    callWall && callWall.strike > 0
+      ? (() => {
+          const breachPct = ((spotPrice - callWall!.strike) / callWall!.strike) * 100;
+          return breachPct > BREACH_BUFFER_PCT
+            ? { active: true, strike: callWall!.strike, strength: clamp(Math.round(50 + breachPct * 50), 10, 100) }
+            : { active: false, strike: callWall!.strike, strength: 0 };
+        })()
+      : { active: false, strike: null, strength: 0 };
+
+  const putTrap: OiTrapSide =
+    putWall && putWall.strike > 0
+      ? (() => {
+          const breachPct = ((putWall!.strike - spotPrice) / putWall!.strike) * 100;
+          return breachPct > BREACH_BUFFER_PCT
+            ? { active: true, strike: putWall!.strike, strength: clamp(Math.round(50 + breachPct * 50), 10, 100) }
+            : { active: false, strike: putWall!.strike, strength: 0 };
+        })()
+      : { active: false, strike: null, strength: 0 };
+
+  const summary =
+    callTrap.active && putTrap.active
+      ? `Spot is pressuring both the call wall (${callWall!.strike}) and put wall (${putWall!.strike}) — heavy OI writers on both sides are under pressure.`
+      : callTrap.active
+      ? `Call writers concentrated at ${callWall!.strike} are under pressure — a short-covering squeeze can accelerate upside.`
+      : putTrap.active
+      ? `Put writers concentrated at ${putWall!.strike} are under pressure — unwinding can accelerate downside.`
+      : 'No OI wall is currently under pressure — spot sits comfortably between the call and put walls.';
+
+  return { call: callTrap, put: putTrap, summary };
+}
+
+function clamp(n: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, n));
 }
