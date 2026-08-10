@@ -278,7 +278,7 @@ export function AssetWorkspace() {
                         <LegCells leg={s.call} side="call" itm={callItm} maxOi={maxOi} />
                         <td className="text-center px-2 py-1.5">
                           <span className={`inline-block px-2 py-0.5 rounded-md font-bold tabular-nums ${
-                            isAtm ? 'bg-cyan-500/20 text-cyan-300 shadow-[0_0_10px_-2px_rgba(6,182,212,0.6)]' : 'text-gray-200 light:text-slate-800'
+                            isAtm ? 'bg-cyan-500/20 light:bg-cyan-500/15 text-cyan-300 light:text-cyan-700 shadow-[0_0_10px_-2px_rgba(6,182,212,0.6)] light:shadow-none' : 'text-gray-200 light:text-slate-800'
                           }`}>
                             {formatIndianNumber(s.strike, 0)}
                           </span>
