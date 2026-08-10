@@ -323,6 +323,7 @@ export interface FnoScannerRow {
   volume: number;
   futuresOi: number;
   futuresChangeOi: number;
+  futuresChangeOiPercent: number;
   oiInterpretation: OIInterpretation;
   pcr: number;
   atmIv: number;

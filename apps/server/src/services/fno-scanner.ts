@@ -111,6 +111,8 @@ export async function scanFnoUniverse(provider: MarketDataProvider, exchange: Ex
     const futChangePercent = futQuote.close > 0 ? ((futQuote.ltp - futQuote.close) / futQuote.close) * 100 : 0;
     const futuresOi = futQuote.oi ?? 0;
     const futuresChangeOi = await computeChangeOi(futInst.token, futuresOi);
+    const previousOi = futuresOi - futuresChangeOi;
+    const futuresChangeOiPercent = previousOi > 0 ? (futuresChangeOi / previousOi) * 100 : 0;
     const oiInterpretation = classifyFuturesOI({ priceChange: futChangePercent, oiChange: futuresChangeOi });
 
     const pick = pickBySymbol.get(stock.symbol);
@@ -169,6 +171,7 @@ export async function scanFnoUniverse(provider: MarketDataProvider, exchange: Ex
       volume: eqQuote.volume,
       futuresOi,
       futuresChangeOi,
+      futuresChangeOiPercent,
       oiInterpretation,
       pcr,
       atmIv,
