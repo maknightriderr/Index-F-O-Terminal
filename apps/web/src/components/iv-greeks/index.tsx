@@ -6,19 +6,41 @@ import { useAssetTabsStore } from '@/stores';
 import { formatIndianNumber } from '@fno/shared';
 import type { FnoScannerRow } from '@fno/shared';
 import { BiasBadge } from '@/components/common/badges';
+import { FilterPills } from '@/components/common/filter-pills';
+import type { BiasDirection } from '@fno/shared';
 
 type SortKey = 'symbol' | 'price' | 'atmIv' | 'ivRank' | 'ivPercentile' | 'ivSkew' | 'atmGamma' | 'atmTheta' | 'atmVega' | 'pcr';
+type BiasFilter = 'ALL' | BiasDirection;
+type IvRankFilter = 'ALL' | 'HIGH' | 'LOW';
+
+const BIAS_OPTIONS: Array<{ value: BiasFilter; label: string }> = [
+  { value: 'ALL', label: 'All Bias' },
+  { value: 'BULLISH', label: 'Bullish' },
+  { value: 'BEARISH', label: 'Bearish' },
+  { value: 'NEUTRAL', label: 'Neutral' },
+];
+
+const IV_RANK_OPTIONS: Array<{ value: IvRankFilter; label: string }> = [
+  { value: 'ALL', label: 'All IV Rank' },
+  { value: 'HIGH', label: 'High (≥70)' },
+  { value: 'LOW', label: 'Low (≤30)' },
+];
 
 export function IvGreeksPage() {
   const { rows, isLive, loading } = useFnoScanner('NSE');
   const openTab = useAssetTabsStore((s) => s.openTab);
   const [query, setQuery] = useState('');
+  const [biasFilter, setBiasFilter] = useState<BiasFilter>('ALL');
+  const [ivRankFilter, setIvRankFilter] = useState<IvRankFilter>('ALL');
   const [sortKey, setSortKey] = useState<SortKey>('ivRank');
   const [sortDesc, setSortDesc] = useState(true);
 
   const filtered = useMemo(() => {
     const q = query.trim().toUpperCase();
-    const base = q ? rows.filter((r) => r.symbol.includes(q)) : rows;
+    let base = q ? rows.filter((r) => r.symbol.includes(q)) : rows;
+    if (biasFilter !== 'ALL') base = base.filter((r) => r.direction === biasFilter);
+    if (ivRankFilter === 'HIGH') base = base.filter((r) => r.ivRank != null && r.ivRank >= 70);
+    if (ivRankFilter === 'LOW') base = base.filter((r) => r.ivRank != null && r.ivRank <= 30);
     const sorted = [...base].sort((a, b) => {
       const av = a[sortKey];
       const bv = b[sortKey];
@@ -55,7 +77,7 @@ export function IvGreeksPage() {
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-1.5 text-[11px] text-gray-500 light:text-slate-500">
             <span className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
-            {isLive ? `${rows.length} stocks — live` : loading ? 'Loading…' : 'Unreachable'}
+            {isLive ? `${filtered.length} of ${rows.length} stocks` : loading ? 'Loading…' : 'Unreachable'}
           </span>
           <input
             value={query}
@@ -64,6 +86,11 @@ export function IvGreeksPage() {
             className="bg-gray-900/70 light:bg-slate-50 border border-gray-700/60 light:border-slate-200 rounded-lg px-3 py-1.5 text-xs text-gray-200 light:text-slate-800 placeholder-gray-600 light:placeholder-slate-400 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/20 transition-colors w-40"
           />
         </div>
+      </div>
+
+      <div className="flex items-center flex-wrap gap-2">
+        <FilterPills options={BIAS_OPTIONS} value={biasFilter} onChange={setBiasFilter} />
+        <FilterPills options={IV_RANK_OPTIONS} value={ivRankFilter} onChange={setIvRankFilter} />
       </div>
 
       {!isLive && !loading && (
@@ -76,7 +103,11 @@ export function IvGreeksPage() {
         <div className="text-sm text-gray-500 light:text-slate-500 py-16 text-center">Scanning the F&O universe…</div>
       )}
 
-      {rows.length > 0 && (
+      {rows.length > 0 && filtered.length === 0 && (
+        <div className="text-sm text-gray-500 light:text-slate-500 py-16 text-center">No stocks match the current filters.</div>
+      )}
+
+      {filtered.length > 0 && (
         <div className="bg-gradient-to-b from-[#141420] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 rounded-xl overflow-hidden shadow-[0_12px_36px_-16px_rgba(0,0,0,0.8)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.15)]">
           <div className="overflow-x-auto">
             <table className="w-full text-xs">

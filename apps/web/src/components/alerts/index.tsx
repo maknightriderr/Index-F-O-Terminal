@@ -4,21 +4,42 @@ import React, { useMemo, useState } from 'react';
 import { useAlerts } from '@/lib/use-alerts';
 import { relativeTime } from '@/lib/relative-time';
 import { SeverityBadge } from '@/components/common/badges';
+import { FilterPills } from '@/components/common/filter-pills';
 import { useAssetTabsStore } from '@/stores';
 import type { Exchange } from '@fno/shared';
 
-const SEVERITY_FILTERS = ['ALL', 'CRITICAL', 'WARNING', 'INFO'] as const;
-type SeverityFilter = (typeof SEVERITY_FILTERS)[number];
+type SeverityFilter = 'ALL' | 'CRITICAL' | 'WARNING' | 'INFO';
+type TypeFilter = 'ALL' | 'FUTURES_OI_SPIKE' | 'IV_SPIKE' | 'IV_CRUSH' | 'TRADE_SETUP_CLOSED';
+
+const SEVERITY_OPTIONS: Array<{ value: SeverityFilter; label: string }> = [
+  { value: 'ALL', label: 'ALL' },
+  { value: 'CRITICAL', label: 'CRITICAL' },
+  { value: 'WARNING', label: 'WARNING' },
+  { value: 'INFO', label: 'INFO' },
+];
+
+const TYPE_OPTIONS: Array<{ value: TypeFilter; label: string }> = [
+  { value: 'ALL', label: 'All Types' },
+  { value: 'FUTURES_OI_SPIKE', label: 'OI Spike' },
+  { value: 'IV_SPIKE', label: 'IV Spike' },
+  { value: 'IV_CRUSH', label: 'IV Crush' },
+  { value: 'TRADE_SETUP_CLOSED', label: 'Trade Setup' },
+];
 
 export function AlertsPage() {
   const { alerts, isLive, loading } = useAlerts(100);
   const openTab = useAssetTabsStore((s) => s.openTab);
+  const [query, setQuery] = useState('');
   const [severityFilter, setSeverityFilter] = useState<SeverityFilter>('ALL');
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>('ALL');
 
-  const filtered = useMemo(
-    () => (severityFilter === 'ALL' ? alerts : alerts.filter((a) => a.severity === severityFilter)),
-    [alerts, severityFilter]
-  );
+  const filtered = useMemo(() => {
+    const q = query.trim().toUpperCase();
+    let base = q ? alerts.filter((a) => a.symbol.includes(q)) : alerts;
+    if (severityFilter !== 'ALL') base = base.filter((a) => a.severity === severityFilter);
+    if (typeFilter !== 'ALL') base = base.filter((a) => a.type === typeFilter);
+    return base;
+  }, [alerts, query, severityFilter, typeFilter]);
 
   return (
     <div className="p-4 space-y-4 min-h-full">
@@ -33,24 +54,20 @@ export function AlertsPage() {
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-1.5 text-[11px] text-gray-500 light:text-slate-500">
             <span className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
-            {isLive ? 'live' : loading ? 'Loading…' : 'Unreachable'}
+            {isLive ? `${filtered.length} of ${alerts.length}` : loading ? 'Loading…' : 'Unreachable'}
           </span>
-          <div className="flex items-center gap-1 bg-gray-900/40 light:bg-slate-100 border border-gray-800/50 light:border-slate-200 rounded-full p-0.5">
-            {SEVERITY_FILTERS.map((s) => (
-              <button
-                key={s}
-                onClick={() => setSeverityFilter(s)}
-                className={`px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors ${
-                  severityFilter === s
-                    ? 'bg-emerald-500/20 light:bg-emerald-500/15 text-emerald-400 light:text-emerald-700 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.35)]'
-                    : 'text-gray-400 light:text-slate-500 hover:bg-gray-800/60 light:hover:bg-slate-200/70'
-                }`}
-              >
-                {s}
-              </button>
-            ))}
-          </div>
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Filter symbol…"
+            className="bg-gray-900/70 light:bg-slate-50 border border-gray-700/60 light:border-slate-200 rounded-lg px-3 py-1.5 text-xs text-gray-200 light:text-slate-800 placeholder-gray-600 light:placeholder-slate-400 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/20 transition-colors w-40"
+          />
         </div>
+      </div>
+
+      <div className="flex items-center flex-wrap gap-2">
+        <FilterPills options={SEVERITY_OPTIONS} value={severityFilter} onChange={setSeverityFilter} />
+        <FilterPills options={TYPE_OPTIONS} value={typeFilter} onChange={setTypeFilter} />
       </div>
 
       {!isLive && !loading && (
@@ -67,6 +84,10 @@ export function AlertsPage() {
         <div className="text-sm text-gray-500 light:text-slate-500 py-16 text-center">
           No alerts yet. This page fills in as the scanner finds unusual OI/IV activity or a Trade Setup closes.
         </div>
+      )}
+
+      {alerts.length > 0 && filtered.length === 0 && (
+        <div className="text-sm text-gray-500 light:text-slate-500 py-16 text-center">No alerts match the current filters.</div>
       )}
 
       {filtered.length > 0 && (

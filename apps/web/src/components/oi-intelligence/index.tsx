@@ -6,19 +6,43 @@ import { useAssetTabsStore } from '@/stores';
 import { formatIndianNumber, formatPercent, formatCompact } from '@fno/shared';
 import { OIBadge, BiasBadge, ScoreBadge } from '@/components/common/badges';
 import { ActivityList } from '@/components/common/activity-list';
+import { FilterPills } from '@/components/common/filter-pills';
+import type { BiasDirection, OIInterpretation } from '@fno/shared';
 
 type SortKey = 'symbol' | 'price' | 'changePercent' | 'volume' | 'futuresOi' | 'futuresChangeOi' | 'futuresChangeOiPercent' | 'pcr' | 'score';
+type BiasFilter = 'ALL' | BiasDirection;
+type ActivityFilter = 'ALL' | OIInterpretation;
+
+const BIAS_OPTIONS: Array<{ value: BiasFilter; label: string }> = [
+  { value: 'ALL', label: 'All Bias' },
+  { value: 'BULLISH', label: 'Bullish' },
+  { value: 'BEARISH', label: 'Bearish' },
+  { value: 'NEUTRAL', label: 'Neutral' },
+];
+
+const ACTIVITY_OPTIONS: Array<{ value: ActivityFilter; label: string }> = [
+  { value: 'ALL', label: 'All Activity' },
+  { value: 'LONG_BUILDUP', label: 'Long Build' },
+  { value: 'SHORT_BUILDUP', label: 'Short Build' },
+  { value: 'SHORT_COVERING', label: 'Short Cover' },
+  { value: 'LONG_UNWINDING', label: 'Long Unwind' },
+  { value: 'NEUTRAL', label: 'Neutral' },
+];
 
 export function OiIntelligencePage() {
   const { rows, isLive, loading } = useFnoScanner('NSE');
   const openTab = useAssetTabsStore((s) => s.openTab);
   const [query, setQuery] = useState('');
+  const [biasFilter, setBiasFilter] = useState<BiasFilter>('ALL');
+  const [activityFilter, setActivityFilter] = useState<ActivityFilter>('ALL');
   const [sortKey, setSortKey] = useState<SortKey>('futuresChangeOiPercent');
   const [sortDesc, setSortDesc] = useState(true);
 
   const filtered = useMemo(() => {
     const q = query.trim().toUpperCase();
-    const base = q ? rows.filter((r) => r.symbol.includes(q)) : rows;
+    let base = q ? rows.filter((r) => r.symbol.includes(q)) : rows;
+    if (biasFilter !== 'ALL') base = base.filter((r) => r.direction === biasFilter);
+    if (activityFilter !== 'ALL') base = base.filter((r) => r.oiInterpretation === activityFilter);
     const sorted = [...base].sort((a, b) => {
       const av = a[sortKey];
       const bv = b[sortKey];
@@ -60,7 +84,7 @@ export function OiIntelligencePage() {
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-1.5 text-[11px] text-gray-500 light:text-slate-500">
             <span className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
-            {isLive ? `${rows.length} stocks — live` : loading ? 'Loading…' : 'Unreachable'}
+            {isLive ? `${filtered.length} of ${rows.length} stocks` : loading ? 'Loading…' : 'Unreachable'}
           </span>
           <input
             value={query}
@@ -71,6 +95,11 @@ export function OiIntelligencePage() {
         </div>
       </div>
 
+      <div className="flex items-center flex-wrap gap-2">
+        <FilterPills options={BIAS_OPTIONS} value={biasFilter} onChange={setBiasFilter} />
+        <FilterPills options={ACTIVITY_OPTIONS} value={activityFilter} onChange={setActivityFilter} />
+      </div>
+
       {!isLive && !loading && (
         <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2.5 text-amber-400 light:text-amber-700 text-xs font-medium">
           ⚠️ Live scanner unreachable — showing nothing right now. It'll pick back up on the next successful poll.
@@ -79,6 +108,10 @@ export function OiIntelligencePage() {
 
       {loading && rows.length === 0 && (
         <div className="text-sm text-gray-500 light:text-slate-500 py-16 text-center">Scanning the F&O universe…</div>
+      )}
+
+      {rows.length > 0 && filtered.length === 0 && (
+        <div className="text-sm text-gray-500 light:text-slate-500 py-16 text-center">No stocks match the current filters.</div>
       )}
 
       {rows.length > 0 && (
@@ -106,7 +139,7 @@ export function OiIntelligencePage() {
         </div>
       )}
 
-      {rows.length > 0 && (
+      {filtered.length > 0 && (
         <div className="bg-gradient-to-b from-[#141420] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 rounded-xl overflow-hidden shadow-[0_12px_36px_-16px_rgba(0,0,0,0.8)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.15)]">
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
