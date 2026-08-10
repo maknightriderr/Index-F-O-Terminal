@@ -11,11 +11,22 @@ import type { Exchange, FuturesData, FuturesChainResponse } from '@fno/shared';
 import { classifyFuturesOI } from '@fno/analytics';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { computeChangeOi } from '../lib/oi-baseline.js';
+import { cached } from '../lib/cache.js';
 import { resolveSpotToken } from './option-chain.js';
 
 const EXPIRY_LABELS: Array<'current' | 'next' | 'far'> = ['current', 'next', 'far'];
+const FUTURES_CACHE_TTL_SECONDS = 10;
 
 export async function buildFuturesData(
+  provider: MarketDataProvider,
+  underlying: string,
+  exchange: Exchange
+): Promise<FuturesChainResponse> {
+  const cacheKey = `futures:${exchange}:${underlying}`;
+  return cached(cacheKey, FUTURES_CACHE_TTL_SECONDS, () => buildFuturesDataUncached(provider, underlying, exchange));
+}
+
+async function buildFuturesDataUncached(
   provider: MarketDataProvider,
   underlying: string,
   exchange: Exchange

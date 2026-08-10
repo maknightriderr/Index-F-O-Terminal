@@ -32,11 +32,14 @@ import {
 } from '@fno/analytics';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { computeChangeOi } from '../lib/oi-baseline.js';
+import { cached } from '../lib/cache.js';
 import { logger } from '../lib/logger.js';
 
 export interface BuildOptionChainOptions {
   strikeRange?: number; // strikes above/below ATM to include
 }
+
+const CHAIN_CACHE_TTL_SECONDS = 10;
 
 export async function buildOptionChain(
   provider: MarketDataProvider,
@@ -46,7 +49,20 @@ export async function buildOptionChain(
   options: BuildOptionChainOptions = {}
 ): Promise<OptionChain> {
   const strikeRange = options.strikeRange ?? DEFAULT_STRIKE_RANGE;
+  const cacheKey = `chain:${exchange}:${underlying}:${requestedExpiry ?? 'nearest'}:${strikeRange}`;
 
+  return cached(cacheKey, CHAIN_CACHE_TTL_SECONDS, () =>
+    buildOptionChainUncached(provider, underlying, exchange, requestedExpiry, strikeRange)
+  );
+}
+
+async function buildOptionChainUncached(
+  provider: MarketDataProvider,
+  underlying: string,
+  exchange: Exchange,
+  requestedExpiry: string | undefined,
+  strikeRange: number
+): Promise<OptionChain> {
   const availableExpiries = await provider.getExpiries(underlying, exchange);
   if (availableExpiries.length === 0) {
     throw new Error(`No option expiries found for ${underlying} on ${exchange}`);

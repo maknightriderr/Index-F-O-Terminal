@@ -33,7 +33,14 @@ import type {
 import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveSpotToken, buildOptionChain } from './option-chain.js';
 import { buildFuturesData } from './futures.js';
+import { cached } from '../lib/cache.js';
 import { logger } from '../lib/logger.js';
+
+// Angel One rate-limits historical-candle and Greeks requests far more
+// strictly than quotes (a burst of these returns a flat 403) — cache
+// longer than the bias poll interval (60s) so repeat polls for the same
+// symbol reuse the last fetch instead of re-hitting the broker.
+const HISTORICAL_CACHE_TTL_SECONDS = 90;
 
 export interface MarketBiasResult {
   bias: MarketBias;
@@ -55,9 +62,19 @@ export async function buildMarketBias(
   const from15m = formatAngelDateTime(new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000));
   const from1h = formatAngelDateTime(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000));
 
-  const [candles15m, candles1h, chain, futures] = await Promise.all([
-    provider.getHistoricalData({ exchange, token: spotToken, interval: 'FIFTEEN_MINUTE', fromDate: from15m, toDate }),
-    provider.getHistoricalData({ exchange, token: spotToken, interval: 'ONE_HOUR', fromDate: from1h, toDate }),
+  // Angel One's historical-candle endpoint trips a strict per-second limit
+  // (a flat 403) when hit with two concurrent requests — sequence these two
+  // rather than firing them together via Promise.all. Each is still cached
+  // for HISTORICAL_CACHE_TTL_SECONDS, so this only costs the extra
+  // round-trip latency on a cache miss, not on every poll.
+  const candles15m = await cached(`hist:${exchange}:${spotToken}:15m`, HISTORICAL_CACHE_TTL_SECONDS, () =>
+    provider.getHistoricalData({ exchange, token: spotToken, interval: 'FIFTEEN_MINUTE', fromDate: from15m, toDate })
+  );
+  const candles1h = await cached(`hist:${exchange}:${spotToken}:1h`, HISTORICAL_CACHE_TTL_SECONDS, () =>
+    provider.getHistoricalData({ exchange, token: spotToken, interval: 'ONE_HOUR', fromDate: from1h, toDate })
+  );
+
+  const [chain, futures] = await Promise.all([
     buildOptionChain(provider, underlying, exchange).catch((err) => {
       logger.warn({ error: err.message, underlying }, 'Market bias: option chain unavailable, scoring without it');
       return null;
