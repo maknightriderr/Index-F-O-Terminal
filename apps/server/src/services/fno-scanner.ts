@@ -17,7 +17,7 @@
 // ============================================================
 
 import { CM_SEGMENT, FO_SEGMENT, RISK_FREE_RATE, getATMStrike, calculateDTE, yearsToExpiry } from '@fno/shared';
-import type { Exchange, Instrument, OIInterpretation, BiasDirection, FnoScannerRow } from '@fno/shared';
+import type { Exchange, Instrument, OIInterpretation, BiasDirection, FnoScannerRow, Greeks } from '@fno/shared';
 import { classifyFuturesOI, calculateGreeksFromPrice } from '@fno/analytics';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { computeChangeOi } from '../lib/oi-baseline.js';
@@ -100,7 +100,7 @@ export async function scanFnoUniverse(provider: MarketDataProvider, exchange: Ex
   const now = Date.now();
 
   const rows: FnoScannerRow[] = [];
-  const ivInputs: Array<{ symbol: string; atmIv: number }> = [];
+  const ivInputs: Array<{ symbol: string; atmIv: number; ceIv: number; peIv: number; ivSkew: number }> = [];
 
   for (const { stock, inst: futInst } of nearestFutures) {
     const eqQuote = eqByToken.get(stock.eq.token);
@@ -116,6 +116,11 @@ export async function scanFnoUniverse(provider: MarketDataProvider, exchange: Ex
     const pick = pickBySymbol.get(stock.symbol);
     let pcr = 0;
     let atmIv = 0;
+    let ceIv = 0;
+    let peIv = 0;
+    let atmGamma = 0;
+    let atmTheta = 0;
+    let atmVega = 0;
 
     if (pick) {
       let callOi = 0;
@@ -129,20 +134,32 @@ export async function scanFnoUniverse(provider: MarketDataProvider, exchange: Ex
       const atmEntry = pick.strikes.find((s) => s.strike === pick.atmStrike);
       const dte = calculateDTE(pick.expiry);
       const tte = yearsToExpiry(pick.expiry);
-      const ivSamples: number[] = [];
-      for (const [token, type] of [[atmEntry?.call, 'CE'], [atmEntry?.put, 'PE']] as const) {
-        if (!token) continue;
-        const q = optByToken.get(token);
-        if (!q || q.ltp <= 0 || dte <= 0) continue;
-        const greeks = calculateGreeksFromPrice(q.ltp, eqQuote.ltp, pick.atmStrike, tte, type, RISK_FREE_RATE);
-        if (greeks.iv > 0) ivSamples.push(greeks.iv * 100);
+      let callGreeks: Greeks | null = null;
+      let putGreeks: Greeks | null = null;
+      if (dte > 0) {
+        for (const [token, type] of [[atmEntry?.call, 'CE'], [atmEntry?.put, 'PE']] as const) {
+          if (!token) continue;
+          const q = optByToken.get(token);
+          if (!q || q.ltp <= 0) continue;
+          const greeks = calculateGreeksFromPrice(q.ltp, eqQuote.ltp, pick.atmStrike, tte, type, RISK_FREE_RATE);
+          if (greeks.iv <= 0) continue;
+          if (type === 'CE') callGreeks = greeks;
+          else putGreeks = greeks;
+        }
       }
+      ceIv = callGreeks ? callGreeks.iv * 100 : 0;
+      peIv = putGreeks ? putGreeks.iv * 100 : 0;
+      const ivSamples = [ceIv, peIv].filter((v) => v > 0);
       atmIv = ivSamples.length > 0 ? ivSamples.reduce((a, b) => a + b, 0) / ivSamples.length : 0;
+      atmGamma = avgOfDefined(callGreeks?.gamma, putGreeks?.gamma);
+      atmVega = avgOfDefined(callGreeks?.vega, putGreeks?.vega);
+      atmTheta = (callGreeks?.theta ?? 0) + (putGreeks?.theta ?? 0);
     }
 
+    const ivSkew = ceIv > 0 && peIv > 0 ? ceIv - peIv : 0;
     const { direction, confidence, score } = lightweightBias(changePercent, oiInterpretation, pcr);
 
-    if (atmIv > 0) ivInputs.push({ symbol: stock.symbol, atmIv });
+    if (atmIv > 0) ivInputs.push({ symbol: stock.symbol, atmIv, ceIv, peIv, ivSkew });
 
     rows.push({
       symbol: stock.symbol,
@@ -155,7 +172,14 @@ export async function scanFnoUniverse(provider: MarketDataProvider, exchange: Ex
       oiInterpretation,
       pcr,
       atmIv,
+      ceIv,
+      peIv,
+      ivSkew,
       ivRank: null, // filled in below
+      ivPercentile: null, // filled in below
+      atmGamma,
+      atmTheta,
+      atmVega,
       direction,
       confidence,
       score,
@@ -165,10 +189,17 @@ export async function scanFnoUniverse(provider: MarketDataProvider, exchange: Ex
 
   const ivRanks = await computeIvRanks(ivInputs);
   for (const row of rows) {
-    row.ivRank = ivRanks.get(row.symbol) ?? null;
+    const r = ivRanks.get(row.symbol);
+    row.ivRank = r?.ivRank ?? null;
+    row.ivPercentile = r?.ivPercentile ?? null;
   }
 
   return rows.sort((a, b) => b.score - a.score);
+}
+
+function avgOfDefined(a?: number, b?: number): number {
+  if (a != null && b != null) return (a + b) / 2;
+  return a ?? b ?? 0;
 }
 
 // --- Universe indexing ---
@@ -252,8 +283,15 @@ function lightweightBias(
 // symbol per day (checked in bulk below), so intraday scans don't flood
 // the table with noise that would skew the range toward "today only".
 
-async function computeIvRanks(inputs: Array<{ symbol: string; atmIv: number }>): Promise<Map<string, number | null>> {
-  const result = new Map<string, number | null>();
+interface IvRankResult {
+  ivRank: number | null;
+  ivPercentile: number | null;
+}
+
+async function computeIvRanks(
+  inputs: Array<{ symbol: string; atmIv: number; ceIv: number; peIv: number; ivSkew: number }>
+): Promise<Map<string, IvRankResult>> {
+  const result = new Map<string, IvRankResult>();
   if (inputs.length === 0) return result;
 
   try {
@@ -268,32 +306,41 @@ async function computeIvRanks(inputs: Array<{ symbol: string; atmIv: number }>):
     const toInsert = inputs.filter((r) => !already.has(r.symbol));
     if (toInsert.length > 0) {
       await sql`
-        INSERT INTO iv_history ${sql(toInsert.map((r) => ({ time: new Date(), symbol: r.symbol, atm_iv: r.atmIv })))}
+        INSERT INTO iv_history ${sql(toInsert.map((r) => ({
+          time: new Date(),
+          symbol: r.symbol,
+          atm_iv: r.atmIv,
+          ce_iv: r.ceIv || null,
+          pe_iv: r.peIv || null,
+          iv_skew: r.ivSkew || null,
+        })))}
       `;
     }
 
-    const stats = await sql<{ symbol: string; min: string; max: string; count: string }[]>`
-      SELECT symbol, MIN(atm_iv) as min, MAX(atm_iv) as max, COUNT(*) as count
+    const stats = await sql<{ symbol: string; values: string[] }[]>`
+      SELECT symbol, array_agg(atm_iv ORDER BY atm_iv) as values
       FROM iv_history
       WHERE symbol = ANY(${symbols}) AND time > NOW() - INTERVAL '365 days' AND atm_iv IS NOT NULL
       GROUP BY symbol
     `;
-    const statsBySymbol = new Map(stats.map((s) => [s.symbol, s]));
+    const statsBySymbol = new Map(stats.map((s) => [s.symbol, s.values.map(Number)]));
 
     for (const { symbol, atmIv } of inputs) {
-      const s = statsBySymbol.get(symbol);
-      const min = s ? Number(s.min) : NaN;
-      const max = s ? Number(s.max) : NaN;
-      if (!s || Number(s.count) < 2 || max === min) {
-        result.set(symbol, null);
+      const values = statsBySymbol.get(symbol) ?? [];
+      if (values.length < 2) {
+        result.set(symbol, { ivRank: null, ivPercentile: null });
         continue;
       }
-      const rank = ((atmIv - min) / (max - min)) * 100;
-      result.set(symbol, Math.round(Math.max(0, Math.min(100, rank))));
+      const min = values[0];
+      const max = values[values.length - 1];
+      const ivRank = max === min ? null : Math.round(Math.max(0, Math.min(100, ((atmIv - min) / (max - min)) * 100)));
+      const countLE = values.filter((v) => v <= atmIv).length;
+      const ivPercentile = Math.round((countLE / values.length) * 100);
+      result.set(symbol, { ivRank, ivPercentile });
     }
   } catch (err: any) {
     logger.warn({ error: err.message }, 'IV rank batch computation failed — returning nulls');
-    for (const { symbol } of inputs) result.set(symbol, null);
+    for (const { symbol } of inputs) result.set(symbol, { ivRank: null, ivPercentile: null });
   }
 
   return result;

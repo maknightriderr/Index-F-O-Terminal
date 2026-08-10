@@ -326,7 +326,14 @@ export interface FnoScannerRow {
   oiInterpretation: OIInterpretation;
   pcr: number;
   atmIv: number;
+  ceIv: number;
+  peIv: number;
+  ivSkew: number;
   ivRank: number | null;
+  ivPercentile: number | null;
+  atmGamma: number;
+  atmTheta: number;
+  atmVega: number;
   direction: BiasDirection;
   confidence: number;
   score: number;

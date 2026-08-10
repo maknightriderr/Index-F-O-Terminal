@@ -5,6 +5,7 @@ import { AppShell } from '@/components/layout/app-shell';
 import { Dashboard } from '@/components/dashboard';
 import { AssetWorkspace } from '@/components/asset-workspace';
 import { FnoStocksPage } from '@/components/fno-stocks';
+import { IvGreeksPage } from '@/components/iv-greeks';
 import { AddAssetModal } from '@/components/common/add-asset-modal';
 import { useMarketStore, useUISettingsStore, useSystemHealthStore } from '@/stores';
 import { useMarketWebSocket } from '@/lib/ws';
@@ -29,7 +30,7 @@ export function TerminalApp() {
       case 'oi-intelligence':
         return <PlaceholderPage title="OI Intelligence" icon="🔍" description="OI walls, OI shifts, buildup classification, and unusual activity detection." />;
       case 'iv-greeks':
-        return <PlaceholderPage title="IV & Greeks" icon="🔬" description="IV rank, IV percentile, IV skew, IV heatmap, theta decay scanner, gamma engine." />;
+        return <IvGreeksPage />;
       case 'market-scanner':
         return <PlaceholderPage title="Market Scanner" icon="🔥" description="F&O market scanner with unusual activity detection and relative strength." />;
       case 'strategy-scanner':
