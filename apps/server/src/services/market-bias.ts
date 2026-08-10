@@ -32,7 +32,7 @@ import type {
   HistoricalParams,
 } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
-import { resolveSpotToken, buildOptionChain } from './option-chain.js';
+import { resolveSpotToken, resolveNearestFuturesContract, buildOptionChain } from './option-chain.js';
 import { buildFuturesData } from './futures.js';
 import { cached } from '../lib/cache.js';
 import { logger } from '../lib/logger.js';
@@ -57,6 +57,15 @@ export async function buildMarketBias(
   exchange: Exchange
 ): Promise<MarketBiasResult> {
   const spotToken = await resolveSpotToken(provider, underlying, exchange);
+  // MCX's "spot" instrument is a synthetic reference feed (e.g. CRUDEOILCOM)
+  // with live quotes but no historical candle series at all — Angel One
+  // only carries candle history against actual traded contracts. Use the
+  // nearest futures contract for the historical fetch specifically; the
+  // "spot" used throughout this file is the last close of those candles
+  // anyway (see `spot` below), not a separate live quote, so this is a
+  // consistent, coherent substitution rather than a mismatched patch.
+  const historicalToken =
+    exchange === 'MCX' ? (await resolveNearestFuturesContract(provider, underlying, exchange))?.token ?? spotToken : spotToken;
 
   const now = new Date();
   const toDate = formatAngelDateTime(now);
@@ -73,16 +82,16 @@ export async function buildMarketBias(
   const nonEmpty = (candles: OHLCV[]) => candles.length > 0;
 
   const candles15m = await cached(
-    `hist:${exchange}:${spotToken}:15m`,
+    `hist:${exchange}:${historicalToken}:15m`,
     HISTORICAL_CACHE_TTL_SECONDS,
-    () => fetchHistoricalWithRetry(provider, { exchange, token: spotToken, interval: 'FIFTEEN_MINUTE', fromDate: from15m, toDate }),
+    () => fetchHistoricalWithRetry(provider, { exchange, token: historicalToken, interval: 'FIFTEEN_MINUTE', fromDate: from15m, toDate }),
     nonEmpty
   );
   await sleep(1200);
   const candles1h = await cached(
-    `hist:${exchange}:${spotToken}:1h`,
+    `hist:${exchange}:${historicalToken}:1h`,
     HISTORICAL_CACHE_TTL_SECONDS,
-    () => fetchHistoricalWithRetry(provider, { exchange, token: spotToken, interval: 'ONE_HOUR', fromDate: from1h, toDate }),
+    () => fetchHistoricalWithRetry(provider, { exchange, token: historicalToken, interval: 'ONE_HOUR', fromDate: from1h, toDate }),
     nonEmpty
   );
 

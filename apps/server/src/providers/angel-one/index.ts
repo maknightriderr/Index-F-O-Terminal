@@ -549,9 +549,17 @@ export class AngelOneProvider implements MarketDataProvider {
   }
 
   private resolveExchange(exchSeg: string): Exchange {
-    if (exchSeg.startsWith('nse')) return 'NSE';
-    if (exchSeg.startsWith('bse')) return 'BSE';
-    if (exchSeg.startsWith('mcx')) return 'MCX';
+    // Angel One's real exch_seg values (confirmed against a live scrip
+    // master dump): "nse"/"nfo" for NSE cash/F&O, "bse"/"bfo" for BSE
+    // cash/F&O, "mcx" for MCX. Derivatives use an unrelated 2-letter code
+    // ("nfo"/"bfo"), not a "<exchange>_fo" pattern — a naive startsWith
+    // check silently defaulted every BSE derivative (SENSEX/BANKEX
+    // options and futures) to NSE, making them invisible to any query
+    // scoped to exchange=BSE. NSE derivatives happened to still work only
+    // because "nfo" fell through to the same default that happened to be
+    // correct for NSE.
+    if (exchSeg === 'bse' || exchSeg === 'bfo') return 'BSE';
+    if (exchSeg === 'mcx') return 'MCX';
     return 'NSE';
   }
 

@@ -281,7 +281,7 @@ export async function resolveSpotToken(
   throw new Error(`Unable to resolve spot instrument for ${underlying}`);
 }
 
-async function resolveNearestFuturesContract(
+export async function resolveNearestFuturesContract(
   provider: MarketDataProvider,
   underlying: string,
   exchange: Exchange
