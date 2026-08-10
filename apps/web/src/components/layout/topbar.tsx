@@ -6,6 +6,7 @@ import type { ThemeName } from '@/stores';
 import { formatIndianNumber, formatPercent, isMarketOpen } from '@fno/shared';
 import type { Exchange } from '@fno/shared';
 import { useLiveIndices } from '@/lib/use-live-indices';
+import { AlertBell } from './alert-bell';
 
 export function TopBar() {
   const { selectedExchange } = useMarketStore();
@@ -53,6 +54,8 @@ export function TopBar() {
         <Divider />
         <StatusDot label={isLive ? 'Live' : 'Mock'} on={isLive} />
       </div>
+
+      <AlertBell />
 
       <ThemeSwitcher />
 

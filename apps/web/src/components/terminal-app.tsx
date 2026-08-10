@@ -7,6 +7,7 @@ import { AssetWorkspace } from '@/components/asset-workspace';
 import { FnoStocksPage } from '@/components/fno-stocks';
 import { IvGreeksPage } from '@/components/iv-greeks';
 import { OiIntelligencePage } from '@/components/oi-intelligence';
+import { AlertsPage } from '@/components/alerts';
 import { AddAssetModal } from '@/components/common/add-asset-modal';
 import { useMarketStore, useUISettingsStore, useSystemHealthStore } from '@/stores';
 import { useMarketWebSocket } from '@/lib/ws';
@@ -43,7 +44,7 @@ export function TerminalApp() {
       case 'positions':
         return <PlaceholderPage title="Positions" icon="💼" description="Position tracker with portfolio Greeks, P&L, risk metrics, and position simulator." />;
       case 'alerts':
-        return <PlaceholderPage title="Alerts" icon="🔔" description="Real-time alerts for OI spikes, IV changes, support/resistance breaks, and unusual activity." />;
+        return <AlertsPage />;
       case 'ai-assistant':
         return <PlaceholderPage title="AI Assistant" icon="🤖" description="Terminal intelligence powered by live data. Ask about market conditions, signals, and strategies." />;
       case 'system-health':

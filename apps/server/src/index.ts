@@ -19,6 +19,8 @@ import { createInstrumentRoutes } from './api/instruments.js';
 import { createMarketDataRoutes } from './api/market.js';
 import { createOptionChainRoutes } from './api/option-chain.js';
 import { createFuturesRoutes } from './api/futures.js';
+import { createAlertRoutes } from './api/alerts.js';
+import { startAlertScanner } from './services/alerts.js';
 
 // --- Initialize Provider + Subscription Manager ---
 
@@ -71,6 +73,7 @@ app.use('/api/instruments', createInstrumentRoutes(provider));
 app.use('/api/market', createMarketDataRoutes(provider));
 app.use('/api/option-chain', createOptionChainRoutes(provider));
 app.use('/api/futures', createFuturesRoutes(provider));
+app.use('/api/alerts', createAlertRoutes());
 
 // --- Health Check ---
 
@@ -172,6 +175,7 @@ async function authenticateOnBoot(): Promise<void> {
 }
 
 authenticateOnBoot();
+startAlertScanner(provider);
 
 setInterval(() => {
   if (provider.isAuthenticated()) {

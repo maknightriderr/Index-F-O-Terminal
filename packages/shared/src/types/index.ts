@@ -510,7 +510,8 @@ export type SignalType =
   | 'UNUSUAL_VOLUME'
   | 'UNUSUAL_ACTIVITY'
   | 'FUTURES_OI_SPIKE'
-  | 'FUTURES_OI_REVERSAL';
+  | 'FUTURES_OI_REVERSAL'
+  | 'TRADE_SETUP_CLOSED';
 
 export interface Signal {
   id: string;

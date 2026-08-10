@@ -11,6 +11,22 @@
 import React from 'react';
 import type { OIInterpretation, BiasDirection } from '@fno/shared';
 
+const SEVERITY_COLORS: Record<string, string> = {
+  INFO: 'bg-cyan-500/15 text-cyan-400 light:text-cyan-700',
+  WARNING: 'bg-amber-500/15 text-amber-400 light:text-amber-700',
+  CRITICAL: 'bg-red-500/15 text-red-400 light:text-red-700',
+};
+
+export function SeverityBadge({ severity }: { severity: string }) {
+  return (
+    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
+      SEVERITY_COLORS[severity] || SEVERITY_COLORS.INFO
+    }`}>
+      {severity}
+    </span>
+  );
+}
+
 const OI_LABELS: Record<OIInterpretation, { label: string; color: string }> = {
   LONG_BUILDUP: { label: 'Long Build', color: 'text-emerald-400 light:text-emerald-700 bg-emerald-500/10' },
   SHORT_BUILDUP: { label: 'Short Build', color: 'text-red-400 light:text-red-700 bg-red-500/10' },

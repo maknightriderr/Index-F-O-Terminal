@@ -30,6 +30,10 @@ export const config = {
     secret: process.env.JWT_SECRET || 'dev-jwt-secret-change-in-production-min-32-chars',
     expiry: process.env.JWT_EXPIRY || '24h',
   },
+  telegram: {
+    botToken: process.env.TELEGRAM_BOT_TOKEN || '',
+    chatId: process.env.TELEGRAM_CHAT_ID || '',
+  },
   cors: {
     origins: (process.env.CORS_ORIGINS || 'http://localhost:3000').split(','),
   },
