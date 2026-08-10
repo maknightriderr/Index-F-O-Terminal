@@ -54,7 +54,7 @@ export function IvGreeksPage() {
     });
     if (sortDesc) sorted.reverse();
     return sorted;
-  }, [rows, query, sortKey, sortDesc]);
+  }, [rows, query, biasFilter, ivRankFilter, sortKey, sortDesc]);
 
   const toggleSort = (key: SortKey) => {
     if (key === sortKey) {

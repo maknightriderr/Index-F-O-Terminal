@@ -56,7 +56,7 @@ export function OiIntelligencePage() {
     });
     if (sortDesc) sorted.reverse();
     return sorted;
-  }, [rows, query, sortKey, sortDesc]);
+  }, [rows, query, biasFilter, activityFilter, sortKey, sortDesc]);
 
   const toggleSort = (key: SortKey) => {
     if (key === sortKey) {
