@@ -67,11 +67,19 @@ export async function buildMarketBias(
   // rather than firing them together via Promise.all. Each is still cached
   // for HISTORICAL_CACHE_TTL_SECONDS, so this only costs the extra
   // round-trip latency on a cache miss, not on every poll.
-  const candles15m = await cached(`hist:${exchange}:${spotToken}:15m`, HISTORICAL_CACHE_TTL_SECONDS, () =>
-    provider.getHistoricalData({ exchange, token: spotToken, interval: 'FIFTEEN_MINUTE', fromDate: from15m, toDate })
+  const nonEmpty = (candles: OHLCV[]) => candles.length > 0;
+
+  const candles15m = await cached(
+    `hist:${exchange}:${spotToken}:15m`,
+    HISTORICAL_CACHE_TTL_SECONDS,
+    () => provider.getHistoricalData({ exchange, token: spotToken, interval: 'FIFTEEN_MINUTE', fromDate: from15m, toDate }),
+    nonEmpty
   );
-  const candles1h = await cached(`hist:${exchange}:${spotToken}:1h`, HISTORICAL_CACHE_TTL_SECONDS, () =>
-    provider.getHistoricalData({ exchange, token: spotToken, interval: 'ONE_HOUR', fromDate: from1h, toDate })
+  const candles1h = await cached(
+    `hist:${exchange}:${spotToken}:1h`,
+    HISTORICAL_CACHE_TTL_SECONDS,
+    () => provider.getHistoricalData({ exchange, token: spotToken, interval: 'ONE_HOUR', fromDate: from1h, toDate }),
+    nonEmpty
   );
 
   const [chain, futures] = await Promise.all([
