@@ -167,6 +167,10 @@ class ApiClient {
   async getAlerts(limit = 50) {
     return this.get<Alert[]>(`/api/alerts?limit=${limit}`);
   }
+
+  async chatWithAssistant(message: string, history: Array<{ role: 'user' | 'assistant'; content: string }>) {
+    return this.post<{ reply: string }>('/api/ai-assistant/chat', { message, history });
+  }
 }
 
 export class ApiError extends Error {

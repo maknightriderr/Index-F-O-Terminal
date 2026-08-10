@@ -134,7 +134,7 @@ export function StrategyScannerPage() {
                   <th className="text-center px-3 py-2 font-medium">Bias</th>
                   <SortTh label="Score" active={sortKey === 'score'} desc={sortDesc} onClick={() => toggleSort('score')} align="center" />
                   <SortTh label="IV Rank" active={sortKey === 'ivRank'} desc={sortDesc} onClick={() => toggleSort('ivRank')} />
-                  <th className="text-left px-3 py-2 font-medium">Strategy</th>
+                  <th className="text-left px-3 py-2 pl-6 font-medium">Strategy</th>
                   <th className="text-left px-3 py-2 font-medium">Rationale</th>
                 </tr>
               </thead>
@@ -159,7 +159,7 @@ export function StrategyScannerPage() {
                     <td className="text-right px-3 py-2.5 tabular-nums text-gray-400 light:text-slate-500 whitespace-nowrap">
                       {row.ivRank != null ? row.ivRank : '—'}
                     </td>
-                    <td className="px-3 py-2.5 whitespace-nowrap">
+                    <td className="px-3 py-2.5 pl-6 whitespace-nowrap">
                       <div className="font-semibold text-gray-200 light:text-slate-800">{strategy}</div>
                       <div className={`text-[10px] mt-0.5 ${riskProfile === 'DEFINED_RISK' ? 'text-cyan-400 light:text-cyan-700' : 'text-amber-400 light:text-amber-700'}`}>
                         {riskProfile === 'DEFINED_RISK' ? 'Defined risk' : 'Undefined risk'} · {category === 'DIRECTIONAL' ? 'Directional' : 'Premium selling'}

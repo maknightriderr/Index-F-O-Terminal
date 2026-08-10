@@ -34,6 +34,9 @@ export const config = {
     botToken: process.env.TELEGRAM_BOT_TOKEN || '',
     chatId: process.env.TELEGRAM_CHAT_ID || '',
   },
+  anthropic: {
+    apiKey: process.env.ANTHROPIC_API_KEY || '',
+  },
   cors: {
     origins: (process.env.CORS_ORIGINS || 'http://localhost:3000').split(','),
   },

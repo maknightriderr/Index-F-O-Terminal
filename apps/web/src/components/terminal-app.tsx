@@ -9,6 +9,7 @@ import { IvGreeksPage } from '@/components/iv-greeks';
 import { OiIntelligencePage } from '@/components/oi-intelligence';
 import { AlertsPage } from '@/components/alerts';
 import { StrategyScannerPage } from '@/components/strategy-scanner';
+import { AiAssistantPage } from '@/components/ai-assistant';
 import { AddAssetModal } from '@/components/common/add-asset-modal';
 import { useMarketStore, useUISettingsStore, useSystemHealthStore } from '@/stores';
 import { useMarketWebSocket } from '@/lib/ws';
@@ -47,7 +48,7 @@ export function TerminalApp() {
       case 'alerts':
         return <AlertsPage />;
       case 'ai-assistant':
-        return <PlaceholderPage title="AI Assistant" icon="🤖" description="Terminal intelligence powered by live data. Ask about market conditions, signals, and strategies." />;
+        return <AiAssistantPage />;
       case 'system-health':
         return <SystemHealthPage />;
       case 'settings':

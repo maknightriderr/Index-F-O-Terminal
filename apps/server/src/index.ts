@@ -21,6 +21,7 @@ import { createOptionChainRoutes } from './api/option-chain.js';
 import { createFuturesRoutes } from './api/futures.js';
 import { createAlertRoutes } from './api/alerts.js';
 import { startAlertScanner } from './services/alerts.js';
+import { createAiAssistantRoutes } from './api/ai-assistant.js';
 
 // --- Initialize Provider + Subscription Manager ---
 
@@ -74,6 +75,7 @@ app.use('/api/market', createMarketDataRoutes(provider));
 app.use('/api/option-chain', createOptionChainRoutes(provider));
 app.use('/api/futures', createFuturesRoutes(provider));
 app.use('/api/alerts', createAlertRoutes());
+app.use('/api/ai-assistant', createAiAssistantRoutes(provider));
 
 // --- Health Check ---
 
