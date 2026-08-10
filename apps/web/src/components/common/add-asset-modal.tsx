@@ -95,13 +95,13 @@ export function AddAssetModal({ isOpen, onClose }: AddAssetModalProps) {
       />
 
       {/* Modal */}
-      <div className="relative bg-[#12121a] border border-gray-800/50 rounded-xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col">
+      <div className="relative bg-[#12121a] light:bg-white border border-gray-800/50 light:border-slate-200 rounded-xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800/50">
-          <h2 className="text-base font-semibold text-gray-100">+ Add Asset</h2>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800/50 light:border-slate-200">
+          <h2 className="text-base font-semibold text-gray-100 light:text-slate-900">+ Add Asset</h2>
           <button
             onClick={onClose}
-            className="text-gray-500 hover:text-gray-300 text-lg transition-colors"
+            className="text-gray-500 light:text-slate-400 hover:text-gray-300 light:hover:text-slate-600 text-lg transition-colors"
           >
             ✕
           </button>
@@ -109,7 +109,7 @@ export function AddAssetModal({ isOpen, onClose }: AddAssetModalProps) {
 
         {/* Asset Type */}
         <div className="px-5 pt-4 pb-2">
-          <label className="text-xs text-gray-500 mb-2 block">Asset Type</label>
+          <label className="text-xs text-gray-500 light:text-slate-500 mb-2 block">Asset Type</label>
           <div className="flex gap-2">
             {(['INDEX', 'F&O STOCK'] as const).map((type) => (
               <button
@@ -117,8 +117,8 @@ export function AddAssetModal({ isOpen, onClose }: AddAssetModalProps) {
                 onClick={() => setAssetType(type)}
                 className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
                   assetType === type
-                    ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                    : 'bg-gray-800/50 text-gray-400 border border-gray-700/30 hover:bg-gray-800'
+                    ? 'bg-emerald-500/15 text-emerald-400 light:text-emerald-700 border border-emerald-500/30'
+                    : 'bg-gray-800/50 light:bg-slate-100 text-gray-400 light:text-slate-500 border border-gray-700/30 light:border-slate-200 hover:bg-gray-800 light:hover:bg-slate-200'
                 }`}
               >
                 {type}
@@ -129,7 +129,7 @@ export function AddAssetModal({ isOpen, onClose }: AddAssetModalProps) {
 
         {/* Exchange */}
         <div className="px-5 pt-2 pb-2">
-          <label className="text-xs text-gray-500 mb-2 block">Exchange</label>
+          <label className="text-xs text-gray-500 light:text-slate-500 mb-2 block">Exchange</label>
           <div className="flex gap-2">
             {(['NSE', 'BSE', 'MCX'] as const).map((exch) => (
               <button
@@ -137,8 +137,8 @@ export function AddAssetModal({ isOpen, onClose }: AddAssetModalProps) {
                 onClick={() => setExchange(exch)}
                 className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
                   exchange === exch
-                    ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30'
-                    : 'bg-gray-800/50 text-gray-400 border border-gray-700/30 hover:bg-gray-800'
+                    ? 'bg-cyan-500/15 text-cyan-400 light:text-cyan-700 border border-cyan-500/30'
+                    : 'bg-gray-800/50 light:bg-slate-100 text-gray-400 light:text-slate-500 border border-gray-700/30 light:border-slate-200 hover:bg-gray-800 light:hover:bg-slate-200'
                 }`}
               >
                 {exch}
@@ -149,24 +149,24 @@ export function AddAssetModal({ isOpen, onClose }: AddAssetModalProps) {
 
         {/* Search */}
         <div className="px-5 pt-2 pb-3">
-          <label className="text-xs text-gray-500 mb-2 block">Search</label>
+          <label className="text-xs text-gray-500 light:text-slate-500 mb-2 block">Search</label>
           <input
             ref={inputRef}
             type="text"
             value={searchQuery}
             onChange={(e) => handleSearch(e.target.value)}
             placeholder={assetType === 'INDEX' ? 'NIFTY, BANKNIFTY, SENSEX...' : 'RELIANCE, HDFCBANK, INFY...'}
-            className="w-full bg-gray-900/50 border border-gray-700/50 rounded-lg px-4 py-2.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/20 transition-colors"
+            className="w-full bg-gray-900/50 light:bg-slate-50 border border-gray-700/50 light:border-slate-200 rounded-lg px-4 py-2.5 text-sm text-gray-200 light:text-slate-800 placeholder-gray-600 light:placeholder-slate-400 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/20 transition-colors"
           />
         </div>
 
         {/* Results */}
         <div className="flex-1 overflow-y-auto px-5 pb-3 min-h-[120px]">
           {loading && (
-            <div className="text-xs text-gray-500 py-4 text-center">Searching...</div>
+            <div className="text-xs text-gray-500 light:text-slate-500 py-4 text-center">Searching...</div>
           )}
           {!loading && results.length === 0 && searchQuery.length > 0 && (
-            <div className="text-xs text-gray-500 py-4 text-center">
+            <div className="text-xs text-gray-500 light:text-slate-500 py-4 text-center">
               No instruments found for "{searchQuery}"
             </div>
           )}
@@ -179,21 +179,21 @@ export function AddAssetModal({ isOpen, onClose }: AddAssetModalProps) {
                   className={`w-full text-left px-3 py-2.5 rounded-lg text-sm transition-colors ${
                     selected === item
                       ? 'bg-emerald-500/15 border border-emerald-500/30'
-                      : 'hover:bg-gray-800/50'
+                      : 'hover:bg-gray-800/50 light:hover:bg-slate-100'
                   }`}
                 >
                   <div className="flex items-center justify-between">
                     <div>
-                      <span className="text-gray-200 font-medium">
+                      <span className="text-gray-200 light:text-slate-800 font-medium">
                         {item.symbol || item.name}
                       </span>
                       {item.name && item.name !== item.symbol && (
-                        <span className="text-gray-500 text-xs ml-2">
+                        <span className="text-gray-500 light:text-slate-500 text-xs ml-2">
                           {item.name}
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center gap-2 text-xs text-gray-500">
+                    <div className="flex items-center gap-2 text-xs text-gray-500 light:text-slate-500">
                       <span>{item.exchange || exchange}</span>
                       {item.lotSize && (
                         <span>Lot: {item.lotSize}</span>
@@ -201,10 +201,10 @@ export function AddAssetModal({ isOpen, onClose }: AddAssetModalProps) {
                     </div>
                   </div>
                   {selected === item && (
-                    <div className="mt-2 grid grid-cols-3 gap-2 text-[10px] text-gray-500">
-                      <div>Type: <span className="text-gray-400">{item.instrumentType || assetType}</span></div>
-                      <div>Token: <span className="text-gray-400">{item.token || '—'}</span></div>
-                      <div>Segment: <span className="text-gray-400">{item.segment || '—'}</span></div>
+                    <div className="mt-2 grid grid-cols-3 gap-2 text-[10px] text-gray-500 light:text-slate-500">
+                      <div>Type: <span className="text-gray-400 light:text-slate-600">{item.instrumentType || assetType}</span></div>
+                      <div>Token: <span className="text-gray-400 light:text-slate-600">{item.token || '—'}</span></div>
+                      <div>Segment: <span className="text-gray-400 light:text-slate-600">{item.segment || '—'}</span></div>
                     </div>
                   )}
                 </button>
@@ -214,10 +214,10 @@ export function AddAssetModal({ isOpen, onClose }: AddAssetModalProps) {
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-gray-800/50">
+        <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-gray-800/50 light:border-slate-200">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 transition-colors"
+            className="px-4 py-2 text-sm text-gray-400 light:text-slate-500 hover:text-gray-200 light:hover:text-slate-800 transition-colors"
           >
             Cancel
           </button>
@@ -227,7 +227,7 @@ export function AddAssetModal({ isOpen, onClose }: AddAssetModalProps) {
             className={`px-5 py-2 text-sm font-medium rounded-lg transition-colors ${
               selected
                 ? 'bg-emerald-500 text-black hover:bg-emerald-400'
-                : 'bg-gray-800 text-gray-600 cursor-not-allowed'
+                : 'bg-gray-800 light:bg-slate-200 text-gray-600 light:text-slate-400 cursor-not-allowed'
             }`}
           >
             Add to Watchlist

@@ -2,34 +2,74 @@
 
 /* ============================================================
    F&O TERMINAL — GLOBAL STYLES
-   Professional dark-mode trading terminal aesthetic.
+   Multi-theme trading terminal — Dark (default), Light, and
+   System (follows OS). Themed via a `data-theme` attribute on
+   <html>, set by ThemeEffect (components/theme-effect.tsx) from
+   the persisted useUISettingsStore theme value.
+
+   Component classNames use Tailwind's `light:` variant (defined
+   below via @custom-variant) alongside the existing dark-first
+   classes — e.g. `bg-[#12121a] light:bg-white`. Dark stays the
+   unprefixed default so the bulk of the app's existing classes
+   didn't need touching; only light-mode overrides were added.
    ============================================================ */
 
+@custom-variant light (&:where([data-theme="light"], [data-theme="light"] *));
+
 :root {
-  /* Terminal Color Palette */
+  /* Terminal Color Palette (dark — default) */
   --bg-primary: #0a0a0f;
   --bg-secondary: #0d0d14;
   --bg-tertiary: #12121a;
   --bg-elevated: #1a1a24;
-  
+
   --border-primary: rgba(255, 255, 255, 0.06);
   --border-secondary: rgba(255, 255, 255, 0.08);
-  
+
   --text-primary: #e5e7eb;
   --text-secondary: #9ca3af;
   --text-muted: #6b7280;
   --text-dimmed: #4b5563;
-  
+
   --accent-green: #34d399;
   --accent-red: #f87171;
   --accent-yellow: #fbbf24;
   --accent-blue: #60a5fa;
   --accent-cyan: #22d3ee;
   --accent-purple: #a78bfa;
-  
+
   --positive: #34d399;
   --negative: #f87171;
   --neutral: #6b7280;
+}
+
+[data-theme="light"] {
+  --bg-primary: #f8fafc;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #ffffff;
+  --bg-elevated: #f1f5f9;
+
+  --border-primary: rgba(15, 23, 42, 0.08);
+  --border-secondary: rgba(15, 23, 42, 0.12);
+
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --text-dimmed: #94a3b8;
+
+  /* Accent hues stay recognizable (green=bullish, red=bearish, etc)
+     across themes — only darkened slightly where the -400 shades
+     used throughout the app would otherwise wash out on white. */
+  --accent-green: #059669;
+  --accent-red: #dc2626;
+  --accent-yellow: #d97706;
+  --accent-blue: #2563eb;
+  --accent-cyan: #0891b2;
+  --accent-purple: #7c3aed;
+
+  --positive: #059669;
+  --negative: #dc2626;
+  --neutral: #64748b;
 }
 
 /* Base */
@@ -60,12 +100,12 @@ html, body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--border-secondary);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--text-dimmed);
 }
 
 /* Tabular Numbers */
@@ -75,8 +115,8 @@ html, body {
 
 /* Selection */
 ::selection {
-  background: rgba(52, 211, 153, 0.3);
-  color: white;
+  background: color-mix(in srgb, var(--accent-green) 30%, transparent);
+  color: var(--text-primary);
 }
 
 /* Animations */

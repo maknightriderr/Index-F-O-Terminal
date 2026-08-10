@@ -72,9 +72,9 @@ function PlaceholderPage({ title, icon, description }: { title: string; icon: st
   return (
     <div className="flex flex-col items-center justify-center h-full p-8">
       <div className="text-5xl mb-4 opacity-80">{icon}</div>
-      <h2 className="text-xl font-bold text-gray-200 mb-2">{title}</h2>
-      <p className="text-sm text-gray-500 max-w-md text-center mb-4">{description}</p>
-      <div className="px-4 py-2 bg-gray-800/50 border border-gray-700/50 rounded-xl text-xs text-gray-400">
+      <h2 className="text-xl font-bold text-gray-200 light:text-slate-800 mb-2">{title}</h2>
+      <p className="text-sm text-gray-500 light:text-slate-500 max-w-md text-center mb-4">{description}</p>
+      <div className="px-4 py-2 bg-gray-800/50 light:bg-slate-100 border border-gray-700/50 light:border-slate-200 rounded-xl text-xs text-gray-400 light:text-slate-500">
         Not built yet
       </div>
     </div>
@@ -175,28 +175,28 @@ function SystemHealthPage() {
 
   return (
     <div className="p-4 space-y-4">
-      <h1 className="text-lg font-semibold text-gray-100">System Health</h1>
+      <h1 className="text-lg font-semibold text-gray-100 light:text-slate-900">System Health</h1>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
         {services.map((service) => (
           <div
             key={service.name}
-            className="bg-[#12121a] border border-gray-800/60 rounded-xl shadow-[0_8px_24px_-16px_rgba(0,0,0,0.6)] p-4 hover:border-gray-700/70 transition-colors"
+            className="bg-[#12121a] light:bg-white border border-gray-800/60 light:border-slate-200 rounded-xl shadow-[0_8px_24px_-16px_rgba(0,0,0,0.6)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.15)] p-4 hover:border-gray-700/70 light:hover:border-slate-300 transition-colors"
           >
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
                 <span className="text-lg">{service.icon}</span>
-                <span className="text-sm font-medium text-gray-200">{service.name}</span>
+                <span className="text-sm font-medium text-gray-200 light:text-slate-800">{service.name}</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <span className={`w-2 h-2 rounded-full ${statusColors[service.status]}`} />
-                <span className="text-xs text-gray-400">
+                <span className="text-xs text-gray-400 light:text-slate-500">
                   {service.status === 'HEALTHY' ? 'Healthy' :
                    service.status === 'DEGRADED' ? 'Degraded' : 'Down'}
                 </span>
               </div>
             </div>
-            <div className="text-xs text-gray-500">{service.details}</div>
+            <div className="text-xs text-gray-500 light:text-slate-500">{service.details}</div>
           </div>
         ))}
       </div>

@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { Sidebar } from './sidebar';
 import { TopBar } from './topbar';
 import { AssetTabBar } from './asset-tab-bar';
+import { ThemeEffect } from '@/components/theme-effect';
 import { useUISettingsStore } from '@/stores';
 
 interface AppShellProps {
@@ -18,7 +19,8 @@ export function AppShell({ children }: AppShellProps) {
   if (!mounted) return null; // Prevent hydration mismatch with persisted state
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#0a0a0f] text-gray-100 font-sans">
+    <div className="flex h-screen w-screen overflow-hidden bg-[#0a0a0f] light:bg-slate-50 text-gray-100 light:text-slate-900 font-sans">
+      <ThemeEffect />
       {/* Sidebar */}
       <Sidebar />
 

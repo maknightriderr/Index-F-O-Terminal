@@ -262,19 +262,21 @@ export const useSystemHealthStore = create<SystemHealthState>((set) => ({
 
 // --- UI Settings Store ---
 
+export type ThemeName = 'dark' | 'light' | 'system';
+
 interface UISettingsState {
   sidebarOpen: boolean;
   rightPanelOpen: boolean;
   bottomPanelOpen: boolean;
   bottomPanelHeight: number;
-  theme: 'dark' | 'light';
+  theme: ThemeName;
   addAssetModalOpen: boolean;
 
   toggleSidebar: () => void;
   toggleRightPanel: () => void;
   toggleBottomPanel: () => void;
   setBottomPanelHeight: (height: number) => void;
-  setTheme: (theme: 'dark' | 'light') => void;
+  setTheme: (theme: ThemeName) => void;
   openAddAssetModal: () => void;
   closeAddAssetModal: () => void;
 }

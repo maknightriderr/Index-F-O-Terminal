@@ -11,7 +11,7 @@ export function AssetTabBar() {
   if (tabs.length === 0) return null;
 
   return (
-    <div className="flex items-center gap-1.5 h-10 px-3 bg-[#0d0d14]/80 backdrop-blur border-b border-gray-800/50 shrink-0 overflow-x-auto scrollbar-thin">
+    <div className="flex items-center gap-1.5 h-10 px-3 bg-[#0d0d14]/80 light:bg-white/90 backdrop-blur border-b border-gray-800/50 light:border-slate-200 shrink-0 overflow-x-auto scrollbar-thin">
       {tabs.map((tab) => {
         const isActive = activeTab === tab.id;
         return (
@@ -20,11 +20,11 @@ export function AssetTabBar() {
             onClick={() => switchToTab(tab.id)}
             className={`group flex items-center gap-2 pl-3 pr-2 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap shrink-0 transition-all duration-150 ${
               isActive
-                ? 'bg-gradient-to-b from-emerald-500/20 to-emerald-500/10 text-emerald-300 border border-emerald-500/40 shadow-[0_0_0_1px_rgba(16,185,129,0.15),0_2px_8px_-2px_rgba(16,185,129,0.3)]'
-                : 'bg-gray-800/40 text-gray-400 border border-transparent hover:bg-gray-800/70 hover:text-gray-200'
+                ? 'bg-gradient-to-b from-emerald-500/20 to-emerald-500/10 light:from-emerald-500/15 light:to-emerald-500/10 text-emerald-300 light:text-emerald-700 border border-emerald-500/40 shadow-[0_0_0_1px_rgba(16,185,129,0.15),0_2px_8px_-2px_rgba(16,185,129,0.3)]'
+                : 'bg-gray-800/40 light:bg-slate-100 text-gray-400 light:text-slate-600 border border-transparent hover:bg-gray-800/70 light:hover:bg-slate-200 hover:text-gray-200 light:hover:text-slate-900'
             }`}
           >
-            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive ? 'bg-emerald-400' : 'bg-gray-600'}`} />
+            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive ? 'bg-emerald-400' : 'bg-gray-600 light:bg-slate-400'}`} />
             {tab.symbol}
             <span
               role="button"
@@ -33,7 +33,7 @@ export function AssetTabBar() {
                 e.stopPropagation();
                 closeTab(tab.id);
               }}
-              className="ml-0.5 w-4 h-4 flex items-center justify-center rounded text-gray-500 opacity-0 group-hover:opacity-100 hover:bg-gray-700/60 hover:text-gray-200 transition-all"
+              className="ml-0.5 w-4 h-4 flex items-center justify-center rounded text-gray-500 opacity-0 group-hover:opacity-100 hover:bg-gray-700/60 light:hover:bg-slate-300 hover:text-gray-200 light:hover:text-slate-900 transition-all"
             >
               ×
             </span>

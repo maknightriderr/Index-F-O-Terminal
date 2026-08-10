@@ -27,27 +27,27 @@ export function Sidebar() {
 
   return (
     <aside
-      className={`flex flex-col h-full bg-[#0d0d14] border-r border-gray-800/50 transition-all duration-200 ${
+      className={`flex flex-col h-full bg-[#0d0d14] light:bg-white border-r border-gray-800/50 light:border-slate-200 transition-all duration-200 ${
         sidebarOpen ? 'w-56' : 'w-14'
       }`}
     >
       {/* Logo */}
       <div
-        className="flex items-center h-12 px-3 border-b border-gray-800/50 cursor-pointer hover:bg-gray-800/30 transition-colors"
+        className="flex items-center h-12 px-3 border-b border-gray-800/50 light:border-slate-200 cursor-pointer hover:bg-gray-800/30 light:hover:bg-slate-100 transition-colors"
         onClick={toggleSidebar}
       >
         <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-400 to-cyan-500 flex items-center justify-center text-sm font-bold text-black shrink-0 shadow-[0_2px_10px_-2px_rgba(16,185,129,0.5)]">
           F&O
         </div>
         {sidebarOpen && (
-          <span className="ml-2 text-sm font-semibold text-gray-100 truncate tracking-tight">
+          <span className="ml-2 text-sm font-semibold text-gray-100 light:text-slate-900 truncate tracking-tight">
             Terminal
           </span>
         )}
       </div>
 
       {/* Add Asset */}
-      <div className="px-2 py-2 border-b border-gray-800/50">
+      <div className="px-2 py-2 border-b border-gray-800/50 light:border-slate-200">
         <AddAssetButton compact={!sidebarOpen} />
       </div>
 
@@ -61,8 +61,8 @@ export function Sidebar() {
               onClick={() => setActiveTab(item.id)}
               className={`w-full flex items-center px-2.5 py-2 text-sm rounded-lg transition-all duration-150 ${
                 isActive
-                  ? 'bg-gradient-to-r from-emerald-500/15 to-emerald-500/5 text-emerald-300 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.2)]'
-                  : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
+                  ? 'bg-gradient-to-r from-emerald-500/15 to-emerald-500/5 light:from-emerald-500/15 light:to-emerald-500/10 text-emerald-300 light:text-emerald-700 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.2)]'
+                  : 'text-gray-400 light:text-slate-500 hover:text-gray-200 light:hover:text-slate-900 hover:bg-gray-800/50 light:hover:bg-slate-100'
               }`}
               title={!sidebarOpen ? item.label : undefined}
             >
@@ -76,9 +76,9 @@ export function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="border-t border-gray-800/50 px-3 py-2">
+      <div className="border-t border-gray-800/50 light:border-slate-200 px-3 py-2">
         {sidebarOpen && (
-          <div className="text-[10px] text-gray-600 tracking-wide">
+          <div className="text-[10px] text-gray-600 light:text-slate-400 tracking-wide">
             F&O TERMINAL
           </div>
         )}
