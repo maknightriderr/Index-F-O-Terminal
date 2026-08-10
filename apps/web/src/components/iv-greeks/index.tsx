@@ -14,14 +14,14 @@ type BiasFilter = 'ALL' | BiasDirection;
 type IvRankFilter = 'ALL' | 'HIGH' | 'LOW';
 
 const BIAS_OPTIONS: Array<{ value: BiasFilter; label: string }> = [
-  { value: 'ALL', label: 'All Bias' },
+  { value: 'ALL', label: 'All' },
   { value: 'BULLISH', label: 'Bullish' },
   { value: 'BEARISH', label: 'Bearish' },
   { value: 'NEUTRAL', label: 'Neutral' },
 ];
 
 const IV_RANK_OPTIONS: Array<{ value: IvRankFilter; label: string }> = [
-  { value: 'ALL', label: 'All IV Rank' },
+  { value: 'ALL', label: 'All' },
   { value: 'HIGH', label: 'High (≥70)' },
   { value: 'LOW', label: 'Low (≤30)' },
 ];
@@ -88,9 +88,9 @@ export function IvGreeksPage() {
         </div>
       </div>
 
-      <div className="flex items-center flex-wrap gap-2">
-        <FilterPills options={BIAS_OPTIONS} value={biasFilter} onChange={setBiasFilter} />
-        <FilterPills options={IV_RANK_OPTIONS} value={ivRankFilter} onChange={setIvRankFilter} />
+      <div className="flex items-center flex-wrap gap-4">
+        <FilterPills label="Bias" options={BIAS_OPTIONS} value={biasFilter} onChange={setBiasFilter} />
+        <FilterPills label="IV Rank" options={IV_RANK_OPTIONS} value={ivRankFilter} onChange={setIvRankFilter} />
       </div>
 
       {!isLive && !loading && (

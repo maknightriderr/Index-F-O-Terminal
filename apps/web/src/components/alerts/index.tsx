@@ -12,14 +12,14 @@ type SeverityFilter = 'ALL' | 'CRITICAL' | 'WARNING' | 'INFO';
 type TypeFilter = 'ALL' | 'FUTURES_OI_SPIKE' | 'IV_SPIKE' | 'IV_CRUSH' | 'TRADE_SETUP_CLOSED';
 
 const SEVERITY_OPTIONS: Array<{ value: SeverityFilter; label: string }> = [
-  { value: 'ALL', label: 'ALL' },
-  { value: 'CRITICAL', label: 'CRITICAL' },
-  { value: 'WARNING', label: 'WARNING' },
-  { value: 'INFO', label: 'INFO' },
+  { value: 'ALL', label: 'All' },
+  { value: 'CRITICAL', label: 'Critical' },
+  { value: 'WARNING', label: 'Warning' },
+  { value: 'INFO', label: 'Info' },
 ];
 
 const TYPE_OPTIONS: Array<{ value: TypeFilter; label: string }> = [
-  { value: 'ALL', label: 'All Types' },
+  { value: 'ALL', label: 'All' },
   { value: 'FUTURES_OI_SPIKE', label: 'OI Spike' },
   { value: 'IV_SPIKE', label: 'IV Spike' },
   { value: 'IV_CRUSH', label: 'IV Crush' },
@@ -65,9 +65,9 @@ export function AlertsPage() {
         </div>
       </div>
 
-      <div className="flex items-center flex-wrap gap-2">
-        <FilterPills options={SEVERITY_OPTIONS} value={severityFilter} onChange={setSeverityFilter} />
-        <FilterPills options={TYPE_OPTIONS} value={typeFilter} onChange={setTypeFilter} />
+      <div className="flex items-center flex-wrap gap-4">
+        <FilterPills label="Severity" options={SEVERITY_OPTIONS} value={severityFilter} onChange={setSeverityFilter} />
+        <FilterPills label="Type" options={TYPE_OPTIONS} value={typeFilter} onChange={setTypeFilter} />
       </div>
 
       {!isLive && !loading && (

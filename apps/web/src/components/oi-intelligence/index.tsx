@@ -14,14 +14,14 @@ type BiasFilter = 'ALL' | BiasDirection;
 type ActivityFilter = 'ALL' | OIInterpretation;
 
 const BIAS_OPTIONS: Array<{ value: BiasFilter; label: string }> = [
-  { value: 'ALL', label: 'All Bias' },
+  { value: 'ALL', label: 'All' },
   { value: 'BULLISH', label: 'Bullish' },
   { value: 'BEARISH', label: 'Bearish' },
   { value: 'NEUTRAL', label: 'Neutral' },
 ];
 
 const ACTIVITY_OPTIONS: Array<{ value: ActivityFilter; label: string }> = [
-  { value: 'ALL', label: 'All Activity' },
+  { value: 'ALL', label: 'All' },
   { value: 'LONG_BUILDUP', label: 'Long Build' },
   { value: 'SHORT_BUILDUP', label: 'Short Build' },
   { value: 'SHORT_COVERING', label: 'Short Cover' },
@@ -95,9 +95,9 @@ export function OiIntelligencePage() {
         </div>
       </div>
 
-      <div className="flex items-center flex-wrap gap-2">
-        <FilterPills options={BIAS_OPTIONS} value={biasFilter} onChange={setBiasFilter} />
-        <FilterPills options={ACTIVITY_OPTIONS} value={activityFilter} onChange={setActivityFilter} />
+      <div className="flex items-center flex-wrap gap-4">
+        <FilterPills label="Bias" options={BIAS_OPTIONS} value={biasFilter} onChange={setBiasFilter} />
+        <FilterPills label="Activity" options={ACTIVITY_OPTIONS} value={activityFilter} onChange={setActivityFilter} />
       </div>
 
       {!isLive && !loading && (
