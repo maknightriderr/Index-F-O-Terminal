@@ -37,9 +37,9 @@ export function Dashboard() {
       </div>
 
       {/* F&O Activity Scanner */}
-      <div className="bg-[#12121a] border border-gray-800/60 rounded-xl shadow-[0_8px_24px_-16px_rgba(0,0,0,0.6)] overflow-hidden">
-        <div className="px-4 py-3 border-b border-gray-800/50 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-gray-200">🔥 F&O Market Activity</h2>
+      <div className="bg-gradient-to-b from-[#141420] to-[#0d0d14] border border-gray-800/60 rounded-xl shadow-[0_12px_36px_-16px_rgba(0,0,0,0.8)] overflow-hidden">
+        <div className="px-4 py-3 border-b border-gray-800/60 flex items-center justify-between">
+          <h2 className="text-sm font-bold text-gray-200">🔥 F&O Market Activity</h2>
           <div className="flex items-center gap-2">
             <span className="text-xs text-gray-500">Sort by</span>
             <select className="bg-gray-800/50 border border-gray-700/50 rounded px-2 py-1 text-xs text-gray-300">
@@ -161,7 +161,7 @@ function IndexCard({ symbol, exchange, ltp, change, changePercent, open, high, l
   return (
     <div
       onClick={() => openTab(symbol, exchange as Exchange)}
-      className="bg-[#12121a] border border-gray-800/60 rounded-xl shadow-[0_8px_24px_-16px_rgba(0,0,0,0.6)] p-3.5 hover:border-gray-700/70 hover:-translate-y-0.5 hover:shadow-[0_12px_28px_-14px_rgba(0,0,0,0.7)] transition-all duration-200 cursor-pointer group"
+      className="bg-gradient-to-b from-[#151522] to-[#0d0d14] border border-gray-800/60 rounded-xl shadow-[0_8px_28px_-14px_rgba(0,0,0,0.75)] p-3.5 hover:border-gray-700/80 hover:-translate-y-0.5 hover:shadow-[0_16px_40px_-16px_rgba(0,0,0,0.85)] transition-all duration-200 cursor-pointer group"
     >
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs font-semibold text-gray-400 group-hover:text-gray-200 transition-colors tracking-wide">{symbol}</span>
@@ -204,8 +204,8 @@ function ActivityList({
   color: string;
 }) {
   return (
-    <div className="bg-[#12121a] border border-gray-800/60 rounded-xl shadow-[0_8px_24px_-16px_rgba(0,0,0,0.6)] p-3">
-      <h3 className="text-xs font-semibold text-gray-300 mb-2">{title}</h3>
+    <div className="bg-gradient-to-b from-[#151522] to-[#0d0d14] border border-gray-800/60 rounded-xl shadow-[0_8px_28px_-14px_rgba(0,0,0,0.75)] hover:border-gray-700/80 transition-all duration-200 p-3.5">
+      <h3 className="text-xs font-bold text-gray-300 mb-2.5">{title}</h3>
       {items.length === 0 ? (
         <div className="text-xs text-gray-600 py-2">No activity</div>
       ) : (
