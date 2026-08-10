@@ -37,7 +37,7 @@ export function Dashboard() {
       </div>
 
       {/* F&O Activity Scanner — top 8 by score; full universe lives on the F&O Stocks tab */}
-      <div className="bg-gradient-to-b from-[#141420] to-[#0d0d14] border border-gray-800/60 light:border-slate-200 rounded-xl shadow-[0_12px_36px_-16px_rgba(0,0,0,0.8)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.12)] overflow-hidden">
+      <div className="bg-gradient-to-b from-[#141420] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 rounded-xl shadow-[0_12px_36px_-16px_rgba(0,0,0,0.8)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.12)] overflow-hidden">
         <div className="px-4 py-3 border-b border-gray-800/60 light:border-slate-200 flex items-center justify-between">
           <h2 className="text-sm font-bold text-gray-200 light:text-slate-800">🔥 F&O Market Activity <span className="text-gray-500 light:text-slate-500 font-medium">— top movers</span></h2>
           <button
