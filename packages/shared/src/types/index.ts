@@ -255,6 +255,8 @@ export interface TradeSetup {
   target?: number;
   riskReward?: number;
   reason: string;
+  /** When this setup was locked in — stays fixed across polls until SL/target is hit, the day rolls over, or bias reverses. Absent when unavailable. */
+  generatedAt?: number;
 }
 
 // --- Greeks ---

@@ -574,7 +574,12 @@ function TradeSetupCard({ setup }: { setup: TradeSetup }) {
           <div className="text-emerald-400 font-semibold tabular-nums">{setup.target!.toFixed(2)}</div>
         </div>
       </div>
-      <p className="text-[10px] text-gray-600 mt-2.5 leading-snug">Heuristic from live data — not investment advice.</p>
+      <p className="text-[10px] text-gray-600 mt-2.5 leading-snug">
+        Heuristic from live data — not investment advice.
+        {setup.generatedAt && (
+          <> Locked at {new Date(setup.generatedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit' })}, holds until SL/target is hit.</>
+        )}
+      </p>
     </IntelCard>
   );
 }

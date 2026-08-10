@@ -35,7 +35,9 @@ import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveSpotToken, resolveNearestFuturesContract, buildOptionChain } from './option-chain.js';
 import { buildFuturesData } from './futures.js';
 import { cached } from '../lib/cache.js';
+import { redis } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
+import type { OptionChain } from '@fno/shared';
 
 // Angel One rate-limits historical-candle and Greeks requests far more
 // strictly than quotes (a burst of these returns a flat 403) — cache
@@ -341,10 +343,85 @@ export async function buildMarketBias(
   };
 
   const tradeSetup: TradeSetup = chain
-    ? buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, chain.expectedMove.points)
+    ? await resolveStickyTradeSetup(underlying, exchange, chain, direction, confidence)
     : { available: false, reason: 'Option chain unavailable for this symbol — cannot size a setup.' };
 
   return { bias, score, tradeSetup };
+}
+
+// --- Sticky Trade Setup ---
+// Recomputing the setup fresh on every poll made entry/SL/target track the
+// live option premium tick-by-tick — useless as a "setup" since a real
+// trade has fixed levels you watch price move against, not a number that
+// drifts with the market before you've even acted on it. This locks a
+// setup in once generated and only replaces it when it's actually been
+// invalidated: SL or target hit, the read reversed direction, or it's a
+// new trading day (a setup from a prior session is stale regardless of
+// whether its levels were touched).
+
+interface StoredTradeSetup extends TradeSetup {
+  direction: BiasDirection;
+  day: string; // YYYY-MM-DD, IST
+}
+
+async function resolveStickyTradeSetup(
+  underlying: string,
+  exchange: Exchange,
+  chain: OptionChain,
+  direction: BiasDirection,
+  confidence: number
+): Promise<TradeSetup> {
+  const key = `trade_setup:${exchange}:${underlying}`;
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+  let stored: StoredTradeSetup | null = null;
+  try {
+    const raw = await redis.get(key);
+    if (raw) stored = JSON.parse(raw) as StoredTradeSetup;
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying }, 'Sticky trade setup read failed — generating fresh');
+  }
+
+  // Only an actual locked-in setup (available: true) is sticky — an
+  // "unavailable" verdict (neutral bias, low confidence) isn't a position
+  // to protect from re-evaluation, so it re-checks current conditions
+  // every poll like any other live read rather than getting stuck once
+  // confidence happens to dip for one cycle.
+  if (stored?.available && stored.day === today && stored.direction === direction) {
+    const leg = findLeg(chain, stored.strike!, stored.side!);
+    const currentLtp = leg?.ltp;
+    const hitSL = currentLtp != null && currentLtp <= stored.stopLoss!;
+    const hitTarget = currentLtp != null && currentLtp >= stored.target!;
+    if (!hitSL && !hitTarget) return stored;
+  }
+
+  const fresh = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, chain.expectedMove.points);
+
+  if (!fresh.available) {
+    // Clear any previously locked setup now that conditions no longer
+    // support one — otherwise a stale setup from earlier today could
+    // resurface with an outdated entry price if direction swings back.
+    try {
+      await redis.del(key);
+    } catch (err: any) {
+      logger.warn({ error: err.message, underlying }, 'Sticky trade setup clear failed');
+    }
+    return fresh;
+  }
+
+  const toStore: StoredTradeSetup = { ...fresh, direction, day: today, generatedAt: Date.now() };
+  try {
+    await redis.set(key, JSON.stringify(toStore), 'EX', 60 * 60 * 24 * 2);
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying }, 'Sticky trade setup write failed');
+  }
+
+  return toStore;
+}
+
+function findLeg(chain: OptionChain, strike: number, side: 'CE' | 'PE') {
+  const entry = chain.strikes.find((s) => s.strike === strike);
+  return side === 'CE' ? entry?.call : entry?.put;
 }
 
 // --- Helpers ---
