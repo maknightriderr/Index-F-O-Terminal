@@ -29,6 +29,7 @@ import type {
   BiasDirection,
   OHLCV,
   TradeSetup,
+  HistoricalParams,
 } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveSpotToken, buildOptionChain } from './option-chain.js';
@@ -62,23 +63,26 @@ export async function buildMarketBias(
   const from15m = formatAngelDateTime(new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000));
   const from1h = formatAngelDateTime(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000));
 
-  // Angel One's historical-candle endpoint trips a strict per-second limit
-  // (a flat 403) when hit with two concurrent requests — sequence these two
-  // rather than firing them together via Promise.all. Each is still cached
-  // for HISTORICAL_CACHE_TTL_SECONDS, so this only costs the extra
+  // Angel One's historical-candle endpoint trips a strict rate limit (a
+  // flat 403, with getHistoricalData swallowing it and returning [] rather
+  // than throwing) under any real concurrent/rapid load — sequence these
+  // two with a stagger, and retry a 403 once after a beat, rather than
+  // firing them together via Promise.all. Each is still cached for
+  // HISTORICAL_CACHE_TTL_SECONDS on success, so this only costs the extra
   // round-trip latency on a cache miss, not on every poll.
   const nonEmpty = (candles: OHLCV[]) => candles.length > 0;
 
   const candles15m = await cached(
     `hist:${exchange}:${spotToken}:15m`,
     HISTORICAL_CACHE_TTL_SECONDS,
-    () => provider.getHistoricalData({ exchange, token: spotToken, interval: 'FIFTEEN_MINUTE', fromDate: from15m, toDate }),
+    () => fetchHistoricalWithRetry(provider, { exchange, token: spotToken, interval: 'FIFTEEN_MINUTE', fromDate: from15m, toDate }),
     nonEmpty
   );
+  await sleep(1200);
   const candles1h = await cached(
     `hist:${exchange}:${spotToken}:1h`,
     HISTORICAL_CACHE_TTL_SECONDS,
-    () => provider.getHistoricalData({ exchange, token: spotToken, interval: 'ONE_HOUR', fromDate: from1h, toDate }),
+    () => fetchHistoricalWithRetry(provider, { exchange, token: spotToken, interval: 'ONE_HOUR', fromDate: from1h, toDate }),
     nonEmpty
   );
 
@@ -335,6 +339,30 @@ export async function buildMarketBias(
 }
 
 // --- Helpers ---
+
+/**
+ * getHistoricalData already swallows its own errors and resolves to []
+ * rather than throwing (so a 403 looks the same as "no data"). One retry
+ * after a beat is enough to ride out an intermittent rate-limit hit
+ * without turning this into an unbounded retry loop against the broker.
+ */
+async function fetchHistoricalWithRetry(
+  provider: MarketDataProvider,
+  params: HistoricalParams,
+  attempts = 2,
+  delayMs = 1500
+): Promise<OHLCV[]> {
+  for (let i = 0; i < attempts; i++) {
+    const candles = await provider.getHistoricalData(params);
+    if (candles.length > 0) return candles;
+    if (i < attempts - 1) await sleep(delayMs);
+  }
+  return [];
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function extractOHLC(candles: OHLCV[]) {
   return {
