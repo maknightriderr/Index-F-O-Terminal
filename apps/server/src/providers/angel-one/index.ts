@@ -583,17 +583,16 @@ export class AngelOneProvider implements MarketDataProvider {
   }
 
   private resolveUnderlying(symbol: string, name: string, type: InstrumentType): string {
-    if (type === 'EQ' || type === 'INDEX') {
-      // Angel One's scrip master is inconsistent about which field holds the
-      // clean ticker vs. the display name — for indices `symbol` is often the
-      // display name ("Nifty 50") and `name` the ticker ("NIFTY"); for
-      // equities `symbol` often carries a "-EQ" suffix ("RELIANCE-EQ") while
-      // `name` doesn't. `name` is what matches derivative contracts'
-      // underlying (see the regex branch below), so prefer it.
-      return (name || symbol).toUpperCase().replace(/-EQ$/, '');
-    }
-    // For derivatives, extract underlying from symbol
-    // e.g., "NIFTY25AUG24500CE" → "NIFTY"
+    // `name` is a clean underlying ticker across every instrument type in
+    // Angel One's scrip master — confirmed for EQ/INDEX ("RELIANCE-EQ" ->
+    // name "RELIANCE") and for derivatives ("SENSEX26AUGFUT" -> name
+    // "SENSEX"; "RELIANCE29SEP261250CE" -> name "RELIANCE"). Prefer it
+    // over regex-parsing `symbol`, which silently collapses distinct
+    // underlyings that share a prefix — "SENSEX5026AUGFUT" (the SENSEX50
+    // index) regex-extracts to "SENSEX" too, since the parse just stops at
+    // the first digit, which merged SENSEX50's futures into SENSEX's
+    // futures chain. Only fall back to the regex if `name` is ever absent.
+    if (name) return name.toUpperCase().replace(/-EQ$/, '');
     const match = symbol.match(/^([A-Z]+?)(\d|$)/);
     return match ? match[1] : symbol;
   }
