@@ -8,6 +8,7 @@ import { FnoStocksPage } from '@/components/fno-stocks';
 import { IvGreeksPage } from '@/components/iv-greeks';
 import { OiIntelligencePage } from '@/components/oi-intelligence';
 import { AlertsPage } from '@/components/alerts';
+import { StrategyScannerPage } from '@/components/strategy-scanner';
 import { AddAssetModal } from '@/components/common/add-asset-modal';
 import { useMarketStore, useUISettingsStore, useSystemHealthStore } from '@/stores';
 import { useMarketWebSocket } from '@/lib/ws';
@@ -36,7 +37,7 @@ export function TerminalApp() {
       case 'market-scanner':
         return <PlaceholderPage title="Market Scanner" icon="🔥" description="F&O market scanner with unusual activity detection and relative strength." />;
       case 'strategy-scanner':
-        return <PlaceholderPage title="Strategy Scanner" icon="🎯" description="Find best strategies based on market bias, regime, IV, theta, and risk/reward." />;
+        return <StrategyScannerPage />;
       case 'backtesting':
         return <PlaceholderPage title="Backtesting" icon="🧪" description="Backtest strategies with historical data. Equity curve, win rate, profit factor." />;
       case 'market-replay':
