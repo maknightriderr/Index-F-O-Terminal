@@ -313,6 +313,26 @@ export type OIInterpretation =
   | 'PUT_UNWINDING'
   | 'NEUTRAL';
 
+// --- F&O Stock Scanner ---
+
+export interface FnoScannerRow {
+  symbol: string;
+  exchange: Exchange;
+  price: number;
+  changePercent: number;
+  volume: number;
+  futuresOi: number;
+  futuresChangeOi: number;
+  oiInterpretation: OIInterpretation;
+  pcr: number;
+  atmIv: number;
+  ivRank: number | null;
+  direction: BiasDirection;
+  confidence: number;
+  score: number;
+  timestamp: number;
+}
+
 export interface OIAnalysis {
   symbol: string;
   token: string;

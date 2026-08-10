@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { AppShell } from '@/components/layout/app-shell';
 import { Dashboard } from '@/components/dashboard';
 import { AssetWorkspace } from '@/components/asset-workspace';
+import { FnoStocksPage } from '@/components/fno-stocks';
 import { AddAssetModal } from '@/components/common/add-asset-modal';
 import { useMarketStore, useUISettingsStore, useSystemHealthStore } from '@/stores';
 import { useMarketWebSocket } from '@/lib/ws';
@@ -24,7 +25,7 @@ export function TerminalApp() {
       case 'indices':
         return <PlaceholderPage title="Indices" icon="📈" description="Index dashboard with spot, futures, option chain, OI, IV, Greeks, PCR, and market bias." />;
       case 'fno-stocks':
-        return <PlaceholderPage title="F&O Stocks" icon="📋" description="F&O stock universe scanner with real-time OI, IV, Greeks, and intelligence scores." />;
+        return <FnoStocksPage />;
       case 'oi-intelligence':
         return <PlaceholderPage title="OI Intelligence" icon="🔍" description="OI walls, OI shifts, buildup classification, and unusual activity detection." />;
       case 'iv-greeks':

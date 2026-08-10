@@ -5,7 +5,7 @@
 // All API calls go through this module.
 // ============================================================
 
-import type { OptionChain, FuturesChainResponse, MarketQuote, MarketBias, IntelligenceScore, TradeSetup } from '@fno/shared';
+import type { OptionChain, FuturesChainResponse, MarketQuote, MarketBias, IntelligenceScore, TradeSetup, FnoScannerRow } from '@fno/shared';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
@@ -106,6 +106,10 @@ class ApiClient {
 
   async getFnOStocks() {
     return this.get<any[]>('/api/instruments/fno');
+  }
+
+  async getFnoScanner(exchange = 'NSE') {
+    return this.get<FnoScannerRow[]>(`/api/instruments/fno-scanner?exchange=${exchange}`);
   }
 
   async getIndices() {

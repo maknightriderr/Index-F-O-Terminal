@@ -1,0 +1,190 @@
+'use client';
+
+import React, { useMemo, useState } from 'react';
+import { useFnoScanner } from '@/lib/use-fno-scanner';
+import { useAssetTabsStore } from '@/stores';
+import { formatIndianNumber, formatPercent, formatCompact } from '@fno/shared';
+import type { FnoScannerRow } from '@fno/shared';
+import { OIBadge, BiasBadge, ScoreBadge } from '@/components/common/badges';
+
+type SortKey = 'symbol' | 'price' | 'changePercent' | 'volume' | 'futuresOi' | 'futuresChangeOi' | 'pcr' | 'atmIv' | 'ivRank' | 'score';
+
+export function FnoStocksPage() {
+  const { rows, isLive, loading } = useFnoScanner('NSE');
+  const openTab = useAssetTabsStore((s) => s.openTab);
+  const [query, setQuery] = useState('');
+  const [sortKey, setSortKey] = useState<SortKey>('score');
+  const [sortDesc, setSortDesc] = useState(true);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toUpperCase();
+    const base = q ? rows.filter((r) => r.symbol.includes(q)) : rows;
+    const sorted = [...base].sort((a, b) => {
+      const av = a[sortKey];
+      const bv = b[sortKey];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      if (typeof av === 'string' || typeof bv === 'string') {
+        return String(av).localeCompare(String(bv));
+      }
+      return (av as number) - (bv as number);
+    });
+    if (sortDesc) sorted.reverse();
+    return sorted;
+  }, [rows, query, sortKey, sortDesc]);
+
+  const toggleSort = (key: SortKey) => {
+    if (key === sortKey) {
+      setSortDesc((d) => !d);
+    } else {
+      setSortKey(key);
+      setSortDesc(true);
+    }
+  };
+
+  return (
+    <div className="p-4 space-y-4 min-h-full">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-lg font-bold text-gray-100">F&O Stocks</h1>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Live price, futures OI, near-ATM PCR/IV and a lightweight OI+PCR+price bias — every NSE stock with F&O contracts.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="flex items-center gap-1.5 text-[11px] text-gray-500">
+            <span className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600'}`} />
+            {isLive ? `${rows.length} stocks — live` : loading ? 'Loading…' : 'Unreachable'}
+          </span>
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Filter symbol…"
+            className="bg-gray-900/70 border border-gray-700/60 rounded-lg px-3 py-1.5 text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/20 transition-colors w-40"
+          />
+        </div>
+      </div>
+
+      {!isLive && !loading && (
+        <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2.5 text-amber-400 text-xs font-medium">
+          ⚠️ Live scanner unreachable — showing nothing right now. It'll pick back up on the next successful poll.
+        </div>
+      )}
+
+      {loading && rows.length === 0 && (
+        <div className="text-sm text-gray-500 py-16 text-center">Scanning the F&O universe…</div>
+      )}
+
+      {rows.length > 0 && (
+        <div className="bg-gradient-to-b from-[#141420] to-[#0d0d14] border border-gray-800/60 rounded-xl overflow-hidden shadow-[0_12px_36px_-16px_rgba(0,0,0,0.8)]">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-gradient-to-b from-gray-900/90 to-gray-900/60 text-gray-500 uppercase tracking-wider">
+                  <SortTh label="Stock" active={sortKey === 'symbol'} desc={sortDesc} onClick={() => toggleSort('symbol')} align="left" />
+                  <SortTh label="Price" active={sortKey === 'price'} desc={sortDesc} onClick={() => toggleSort('price')} />
+                  <SortTh label="Chg%" active={sortKey === 'changePercent'} desc={sortDesc} onClick={() => toggleSort('changePercent')} />
+                  <SortTh label="Volume" active={sortKey === 'volume'} desc={sortDesc} onClick={() => toggleSort('volume')} />
+                  <SortTh label="Futures OI" active={sortKey === 'futuresOi'} desc={sortDesc} onClick={() => toggleSort('futuresOi')} />
+                  <SortTh label="OI Chg" active={sortKey === 'futuresChangeOi'} desc={sortDesc} onClick={() => toggleSort('futuresChangeOi')} />
+                  <th className="text-left px-3 py-2 font-medium">OI Activity</th>
+                  <SortTh label="PCR" active={sortKey === 'pcr'} desc={sortDesc} onClick={() => toggleSort('pcr')} />
+                  <SortTh label="IV" active={sortKey === 'atmIv'} desc={sortDesc} onClick={() => toggleSort('atmIv')} />
+                  <SortTh label="IV Rank" active={sortKey === 'ivRank'} desc={sortDesc} onClick={() => toggleSort('ivRank')} />
+                  <th className="text-center px-3 py-2 font-medium">Bias</th>
+                  <SortTh label="Score" active={sortKey === 'score'} desc={sortDesc} onClick={() => toggleSort('score')} align="center" />
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((stock) => (
+                  <tr
+                    key={stock.symbol}
+                    onClick={() => openTab(stock.symbol, stock.exchange)}
+                    className="border-t border-gray-800/40 hover:bg-gray-800/30 cursor-pointer transition-colors"
+                  >
+                    <td className="px-4 py-2.5 font-semibold text-gray-200">{stock.symbol}</td>
+                    <td className="text-right px-3 py-2.5 tabular-nums text-gray-200">{formatIndianNumber(stock.price, 2)}</td>
+                    <td className={`text-right px-3 py-2.5 tabular-nums font-medium ${stock.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {formatPercent(stock.changePercent)}
+                    </td>
+                    <td className="text-right px-3 py-2.5 tabular-nums text-gray-400">{formatCompact(stock.volume)}</td>
+                    <td className="text-right px-3 py-2.5 tabular-nums text-gray-400">{formatCompact(stock.futuresOi)}</td>
+                    <td className={`text-right px-3 py-2.5 tabular-nums font-medium ${stock.futuresChangeOi >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {stock.futuresChangeOi >= 0 ? '+' : ''}{formatCompact(stock.futuresChangeOi)}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <OIBadge type={stock.oiInterpretation} />
+                    </td>
+                    <td className={`text-right px-3 py-2.5 tabular-nums ${stock.pcr > 1 ? 'text-emerald-400' : stock.pcr < 0.7 ? 'text-red-400' : 'text-gray-400'}`}>
+                      {stock.pcr > 0 ? stock.pcr.toFixed(2) : '—'}
+                    </td>
+                    <td className="text-right px-3 py-2.5 tabular-nums text-gray-400">
+                      {stock.atmIv > 0 ? `${stock.atmIv.toFixed(1)}%` : '—'}
+                    </td>
+                    <td className="text-right px-3 py-2.5">
+                      {stock.ivRank != null ? <IVRankBar value={stock.ivRank} /> : <span className="text-gray-600">—</span>}
+                    </td>
+                    <td className="text-center px-3 py-2.5">
+                      <BiasBadge bias={stock.direction} />
+                    </td>
+                    <td className="text-center px-3 py-2.5">
+                      <ScoreBadge score={stock.score} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {rows.length > 0 && (
+        <p className="text-[10px] text-gray-600 leading-snug">
+          Bias/Score here are a lighter OI + PCR + price-change composite (no historical technicals) — built for scanning the whole
+          universe fast without hitting Angel One's stricter historical/Greeks rate limits. For a full technical read (RSI, VWAP,
+          Supertrend, ADX) on one stock, open it as a tab. IV Rank needs daily history the terminal only started collecting today,
+          so it reads "—" until at least two days of data exist per stock.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function SortTh({
+  label,
+  active,
+  desc,
+  onClick,
+  align = 'right',
+}: {
+  label: string;
+  active: boolean;
+  desc: boolean;
+  onClick: () => void;
+  align?: 'left' | 'right' | 'center';
+}) {
+  return (
+    <th
+      onClick={onClick}
+      className={`px-3 py-2 font-medium cursor-pointer select-none hover:text-gray-300 transition-colors ${
+        align === 'left' ? 'text-left' : align === 'center' ? 'text-center' : 'text-right'
+      } ${active ? 'text-emerald-400' : ''}`}
+    >
+      {label}
+      {active && <span className="ml-0.5">{desc ? '▾' : '▴'}</span>}
+    </th>
+  );
+}
+
+function IVRankBar({ value }: { value: number }) {
+  const color = value >= 70 ? 'bg-red-500' : value >= 40 ? 'bg-yellow-500' : 'bg-emerald-500';
+  return (
+    <div className="flex items-center gap-1.5 justify-end">
+      <div className="w-12 h-1.5 bg-gray-900/70 rounded-full overflow-hidden">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${value}%` }} />
+      </div>
+      <span className="text-[10px] tabular-nums text-gray-400 w-6 text-right">{value}</span>
+    </div>
+  );
+}

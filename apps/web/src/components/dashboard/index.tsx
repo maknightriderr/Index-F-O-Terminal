@@ -1,27 +1,27 @@
 'use client';
 
 import React from 'react';
-import { MOCK_FNO_SCANNER } from '@/lib/mock-data';
 import { useLiveIndices } from '@/lib/use-live-indices';
+import { useFnoScanner } from '@/lib/use-fno-scanner';
 import { formatIndianNumber, formatPercent, formatCompact } from '@fno/shared';
-import type { Exchange } from '@fno/shared';
+import type { Exchange, FnoScannerRow } from '@fno/shared';
 import { OIBadge, BiasBadge, ScoreBadge } from '@/components/common/badges';
 import { AddAssetButton } from '@/components/common/add-asset-button';
-import { useAssetTabsStore } from '@/stores';
+import { useAssetTabsStore, useMarketStore } from '@/stores';
 
 export function Dashboard() {
   const { indices, isLive: indicesLive } = useLiveIndices();
+  const { rows: fnoRows, isLive: fnoLive } = useFnoScanner('NSE');
+  const setActiveTab = useMarketStore((s) => s.setActiveTab);
+  const topStocks = fnoRows.slice(0, 8);
 
   return (
     <div className="p-4 space-y-4 min-h-full">
-      {/* Mock Data Warning — the F&O scanner table below has no live
-          F&O-wide scanner built yet, so it's always sample data. Market
-          Bias/Regime/Score and full option chain analysis now live inside
-          each asset's own tab (open one via "+ Add Asset"), not here. */}
-      <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2.5 text-amber-400 text-xs font-medium">
-        ⚠️ The F&O Market Activity scanner below is sample data (no F&O-wide scanner built yet).
-        {!indicesLive && ' Index prices above are also sample data right now — backend unreachable.'}
-      </div>
+      {!indicesLive && (
+        <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2.5 text-amber-400 text-xs font-medium">
+          ⚠️ Index prices above are sample data right now — backend unreachable.
+        </div>
+      )}
 
       {/* Market Overview Header */}
       <div className="flex items-center justify-between">
@@ -36,113 +36,113 @@ export function Dashboard() {
         ))}
       </div>
 
-      {/* F&O Activity Scanner */}
+      {/* F&O Activity Scanner — top 8 by score; full universe lives on the F&O Stocks tab */}
       <div className="bg-gradient-to-b from-[#141420] to-[#0d0d14] border border-gray-800/60 rounded-xl shadow-[0_12px_36px_-16px_rgba(0,0,0,0.8)] overflow-hidden">
         <div className="px-4 py-3 border-b border-gray-800/60 flex items-center justify-between">
-          <h2 className="text-sm font-bold text-gray-200">🔥 F&O Market Activity</h2>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-500">Sort by</span>
-            <select className="bg-gray-800/50 border border-gray-700/50 rounded px-2 py-1 text-xs text-gray-300">
-              <option>Intelligence Score</option>
-              <option>OI Change</option>
-              <option>Price Change</option>
-              <option>IV Rank</option>
-              <option>Volume</option>
-            </select>
-          </div>
+          <h2 className="text-sm font-bold text-gray-200">🔥 F&O Market Activity <span className="text-gray-500 font-medium">— top movers</span></h2>
+          <button
+            onClick={() => setActiveTab('fno-stocks')}
+            className="text-[11px] text-emerald-400 hover:text-emerald-300 font-medium transition-colors"
+          >
+            View all {fnoRows.length > 0 ? fnoRows.length : ''} F&O stocks →
+          </button>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="bg-gray-900/50 text-gray-500 uppercase tracking-wider">
-                <th className="text-left px-4 py-2 font-medium">Stock</th>
-                <th className="text-right px-3 py-2 font-medium">Price</th>
-                <th className="text-right px-3 py-2 font-medium">Chg%</th>
-                <th className="text-right px-3 py-2 font-medium">Volume</th>
-                <th className="text-right px-3 py-2 font-medium">Futures OI</th>
-                <th className="text-right px-3 py-2 font-medium">OI Chg</th>
-                <th className="text-left px-3 py-2 font-medium">OI Activity</th>
-                <th className="text-right px-3 py-2 font-medium">PCR</th>
-                <th className="text-right px-3 py-2 font-medium">IV</th>
-                <th className="text-right px-3 py-2 font-medium">IV Rank</th>
-                <th className="text-center px-3 py-2 font-medium">Bias</th>
-                <th className="text-center px-3 py-2 font-medium">Score</th>
-              </tr>
-            </thead>
-            <tbody>
-              {MOCK_FNO_SCANNER.map((stock) => (
-                <tr
-                  key={stock.symbol}
-                  onClick={() => useAssetTabsStore.getState().openTab(stock.symbol, 'NSE')}
-                  className="border-t border-gray-800/30 hover:bg-gray-800/30 cursor-pointer transition-colors"
-                >
-                  <td className="px-4 py-2.5 font-medium text-gray-200">{stock.symbol}</td>
-                  <td className="text-right px-3 py-2.5 tabular-nums text-gray-200">
-                    {formatIndianNumber(stock.price, 2)}
-                  </td>
-                  <td className={`text-right px-3 py-2.5 tabular-nums font-medium ${
-                    stock.change >= 0 ? 'text-emerald-400' : 'text-red-400'
-                  }`}>
-                    {formatPercent(stock.change)}
-                  </td>
-                  <td className="text-right px-3 py-2.5 tabular-nums text-gray-400">
-                    {formatCompact(stock.volume)}
-                  </td>
-                  <td className="text-right px-3 py-2.5 tabular-nums text-gray-400">
-                    {formatCompact(stock.futOI)}
-                  </td>
-                  <td className={`text-right px-3 py-2.5 tabular-nums font-medium ${
-                    stock.changeOI > 0 ? 'text-emerald-400' : 'text-red-400'
-                  }`}>
-                    {stock.changeOI > 0 ? '+' : ''}{formatCompact(stock.changeOI)}
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <OIBadge type={stock.oiType} />
-                  </td>
-                  <td className={`text-right px-3 py-2.5 tabular-nums ${
-                    stock.pcr > 1 ? 'text-emerald-400' : stock.pcr < 0.7 ? 'text-red-400' : 'text-gray-400'
-                  }`}>
-                    {stock.pcr.toFixed(2)}
-                  </td>
-                  <td className="text-right px-3 py-2.5 tabular-nums text-gray-400">
-                    {stock.iv.toFixed(1)}%
-                  </td>
-                  <td className="text-right px-3 py-2.5">
-                    <IVRankBar value={stock.ivRank} />
-                  </td>
-                  <td className="text-center px-3 py-2.5">
-                    <BiasBadge bias={stock.bias} />
-                  </td>
-                  <td className="text-center px-3 py-2.5">
-                    <ScoreBadge score={stock.score} />
-                  </td>
+        {!fnoLive && topStocks.length === 0 ? (
+          <div className="text-sm text-gray-500 py-10 text-center">Scanning the F&O universe…</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-gray-900/50 text-gray-500 uppercase tracking-wider">
+                  <th className="text-left px-4 py-2 font-medium">Stock</th>
+                  <th className="text-right px-3 py-2 font-medium">Price</th>
+                  <th className="text-right px-3 py-2 font-medium">Chg%</th>
+                  <th className="text-right px-3 py-2 font-medium">Volume</th>
+                  <th className="text-right px-3 py-2 font-medium">Futures OI</th>
+                  <th className="text-right px-3 py-2 font-medium">OI Chg</th>
+                  <th className="text-left px-3 py-2 font-medium">OI Activity</th>
+                  <th className="text-right px-3 py-2 font-medium">PCR</th>
+                  <th className="text-right px-3 py-2 font-medium">IV</th>
+                  <th className="text-right px-3 py-2 font-medium">IV Rank</th>
+                  <th className="text-center px-3 py-2 font-medium">Bias</th>
+                  <th className="text-center px-3 py-2 font-medium">Score</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {topStocks.map((stock) => (
+                  <tr
+                    key={stock.symbol}
+                    onClick={() => useAssetTabsStore.getState().openTab(stock.symbol, stock.exchange)}
+                    className="border-t border-gray-800/30 hover:bg-gray-800/30 cursor-pointer transition-colors"
+                  >
+                    <td className="px-4 py-2.5 font-medium text-gray-200">{stock.symbol}</td>
+                    <td className="text-right px-3 py-2.5 tabular-nums text-gray-200">
+                      {formatIndianNumber(stock.price, 2)}
+                    </td>
+                    <td className={`text-right px-3 py-2.5 tabular-nums font-medium ${
+                      stock.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'
+                    }`}>
+                      {formatPercent(stock.changePercent)}
+                    </td>
+                    <td className="text-right px-3 py-2.5 tabular-nums text-gray-400">
+                      {formatCompact(stock.volume)}
+                    </td>
+                    <td className="text-right px-3 py-2.5 tabular-nums text-gray-400">
+                      {formatCompact(stock.futuresOi)}
+                    </td>
+                    <td className={`text-right px-3 py-2.5 tabular-nums font-medium ${
+                      stock.futuresChangeOi >= 0 ? 'text-emerald-400' : 'text-red-400'
+                    }`}>
+                      {stock.futuresChangeOi >= 0 ? '+' : ''}{formatCompact(stock.futuresChangeOi)}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <OIBadge type={stock.oiInterpretation} />
+                    </td>
+                    <td className={`text-right px-3 py-2.5 tabular-nums ${
+                      stock.pcr > 1 ? 'text-emerald-400' : stock.pcr < 0.7 ? 'text-red-400' : 'text-gray-400'
+                    }`}>
+                      {stock.pcr > 0 ? stock.pcr.toFixed(2) : '—'}
+                    </td>
+                    <td className="text-right px-3 py-2.5 tabular-nums text-gray-400">
+                      {stock.atmIv > 0 ? `${stock.atmIv.toFixed(1)}%` : '—'}
+                    </td>
+                    <td className="text-right px-3 py-2.5">
+                      {stock.ivRank != null ? <IVRankBar value={stock.ivRank} /> : <span className="text-gray-600">—</span>}
+                    </td>
+                    <td className="text-center px-3 py-2.5">
+                      <BiasBadge bias={stock.direction} />
+                    </td>
+                    <td className="text-center px-3 py-2.5">
+                      <ScoreBadge score={stock.score} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Top Activity Sections */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
         <ActivityList
           title="🟢 Top Long Buildup"
-          items={MOCK_FNO_SCANNER.filter(s => s.oiType === 'LONG_BUILDUP')}
+          items={fnoRows.filter(s => s.oiInterpretation === 'LONG_BUILDUP').slice(0, 5)}
           color="emerald"
         />
         <ActivityList
           title="🔴 Top Short Buildup"
-          items={MOCK_FNO_SCANNER.filter(s => s.oiType === 'SHORT_BUILDUP')}
+          items={fnoRows.filter(s => s.oiInterpretation === 'SHORT_BUILDUP').slice(0, 5)}
           color="red"
         />
         <ActivityList
           title="🟡 Short Covering"
-          items={MOCK_FNO_SCANNER.filter(s => s.oiType === 'SHORT_COVERING')}
+          items={fnoRows.filter(s => s.oiInterpretation === 'SHORT_COVERING').slice(0, 5)}
           color="yellow"
         />
         <ActivityList
           title="🟡 Long Unwinding"
-          items={MOCK_FNO_SCANNER.filter(s => s.oiType === 'LONG_UNWINDING')}
+          items={fnoRows.filter(s => s.oiInterpretation === 'LONG_UNWINDING').slice(0, 5)}
           color="orange"
         />
       </div>
@@ -200,7 +200,7 @@ function ActivityList({
   color,
 }: {
   title: string;
-  items: typeof MOCK_FNO_SCANNER;
+  items: FnoScannerRow[];
   color: string;
 }) {
   return (
@@ -213,15 +213,15 @@ function ActivityList({
           {items.map((s) => (
             <div
               key={s.symbol}
-              onClick={() => useAssetTabsStore.getState().openTab(s.symbol, 'NSE')}
+              onClick={() => useAssetTabsStore.getState().openTab(s.symbol, s.exchange)}
               className="flex items-center justify-between text-xs py-1 hover:bg-gray-800/30 px-1.5 rounded cursor-pointer"
             >
               <span className="text-gray-300 font-medium">{s.symbol}</span>
               <div className="flex items-center gap-2">
-                <span className={`tabular-nums ${s.change >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {formatPercent(s.change)}
+                <span className={`tabular-nums ${s.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {formatPercent(s.changePercent)}
                 </span>
-                <span className="text-gray-500 tabular-nums">{formatCompact(s.changeOI)}</span>
+                <span className="text-gray-500 tabular-nums">{formatCompact(s.futuresChangeOi)}</span>
               </div>
             </div>
           ))}

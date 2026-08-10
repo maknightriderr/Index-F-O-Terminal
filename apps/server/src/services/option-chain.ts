@@ -299,7 +299,7 @@ export async function resolveNearestFuturesContract(
   return futures[0];
 }
 
-function inferStrikeInterval(sortedStrikes: number[]): number {
+export function inferStrikeInterval(sortedStrikes: number[]): number {
   if (sortedStrikes.length < 2) return 50;
 
   const gapCounts = new Map<number, number>();
