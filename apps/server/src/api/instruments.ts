@@ -127,36 +127,6 @@ export function createInstrumentRoutes(provider: MarketDataProvider): Router {
   });
 
   /**
-   * GET /api/instruments/indices
-   * List indices.
-   */
-  router.get('/indices', async (_req: Request, res: Response) => {
-    try {
-      const instruments = await provider.getInstrumentMaster();
-
-      const indices = instruments
-        .filter(i =>
-          i.instrumentType === 'INDEX' ||
-          i.symbol.includes('NIFTY') && i.segment === 'CM' ||
-          i.symbol.includes('SENSEX') && i.segment === 'CM'
-        )
-        .slice(0, 100);
-
-      res.json({
-        success: true,
-        data: indices,
-        meta: { count: indices.length, timestamp: Date.now() },
-      });
-    } catch (error: any) {
-      logger.error({ error: error.message }, 'Indices list failed');
-      res.status(500).json({
-        success: false,
-        error: { code: 'INDICES_LIST_FAILED', message: error.message },
-      });
-    }
-  });
-
-  /**
    * GET /api/instruments/:symbol
    * Get detailed instrument info.
    */

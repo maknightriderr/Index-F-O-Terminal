@@ -5,6 +5,7 @@ import { AppShell } from '@/components/layout/app-shell';
 import { Dashboard } from '@/components/dashboard';
 import { AssetWorkspace } from '@/components/asset-workspace';
 import { FnoStocksPage } from '@/components/fno-stocks';
+import { IndicesPage } from '@/components/indices';
 import { IvGreeksPage } from '@/components/iv-greeks';
 import { OiIntelligencePage } from '@/components/oi-intelligence';
 import { AlertsPage } from '@/components/alerts';
@@ -28,7 +29,7 @@ export function TerminalApp() {
       case 'dashboard':
         return <Dashboard />;
       case 'indices':
-        return <PlaceholderPage title="Indices" icon="📈" description="Index dashboard with spot, futures, option chain, OI, IV, Greeks, PCR, and market bias." />;
+        return <IndicesPage />;
       case 'fno-stocks':
         return <FnoStocksPage />;
       case 'oi-intelligence':

@@ -18,10 +18,62 @@ const INDEX_LIST: Array<{ symbol: string; exchange: Exchange }> = [
   { symbol: 'MIDCPNIFTY', exchange: 'NSE' },
 ];
 
-export async function getLiveIndexQuotes(provider: MarketDataProvider): Promise<MarketQuote[]> {
+// Every index this terminal has a confirmed, live-quotable token for
+// (see KNOWN_INDEX_TOKENS) — broad market + sectoral on NSE/BSE, plus
+// MCX's commodity benchmark indices. Angel One's own instrument master
+// doesn't reliably flag these as instrumentType 'INDEX' (mixed in with
+// ETFs/EQ rows that merely contain the same name), so this list — like
+// KNOWN_INDEX_TOKENS itself — was built from verified live lookups
+// rather than filtering the raw feed.
+export const ALL_INDEX_LIST: Array<{ symbol: string; exchange: Exchange }> = [
+  ...INDEX_LIST,
+  { symbol: 'NIFTYNEXT50', exchange: 'NSE' },
+  { symbol: 'NIFTY100', exchange: 'NSE' },
+  { symbol: 'NIFTY500', exchange: 'NSE' },
+  { symbol: 'INDIAVIX', exchange: 'NSE' },
+  { symbol: 'NIFTYIT', exchange: 'NSE' },
+  { symbol: 'NIFTYAUTO', exchange: 'NSE' },
+  { symbol: 'NIFTYPHARMA', exchange: 'NSE' },
+  { symbol: 'NIFTYFMCG', exchange: 'NSE' },
+  { symbol: 'NIFTYMETAL', exchange: 'NSE' },
+  { symbol: 'NIFTYREALTY', exchange: 'NSE' },
+  { symbol: 'NIFTYENERGY', exchange: 'NSE' },
+  { symbol: 'NIFTYPSUBANK', exchange: 'NSE' },
+  { symbol: 'NIFTYPVTBANK', exchange: 'NSE' },
+  { symbol: 'NIFTYMEDIA', exchange: 'NSE' },
+  { symbol: 'NIFTYINFRA', exchange: 'NSE' },
+  { symbol: 'BANKEX', exchange: 'BSE' },
+  { symbol: 'BSE100', exchange: 'BSE' },
+  { symbol: 'BSE200', exchange: 'BSE' },
+  { symbol: 'BSE500', exchange: 'BSE' },
+  { symbol: 'BSEMIDCAP', exchange: 'BSE' },
+  { symbol: 'BSESMALLCAP', exchange: 'BSE' },
+  { symbol: 'BSEIT', exchange: 'BSE' },
+  { symbol: 'MCXBULLDEX', exchange: 'MCX' },
+  { symbol: 'MCXMETLDEX', exchange: 'MCX' },
+  { symbol: 'MCXCOMPDEX', exchange: 'MCX' },
+  { symbol: 'MCXCOMPOSITE', exchange: 'MCX' },
+  { symbol: 'MCXCOMDEX', exchange: 'MCX' },
+  { symbol: 'MCXSCOMDEX', exchange: 'MCX' },
+  { symbol: 'MCXCRUDEX', exchange: 'MCX' },
+  { symbol: 'MCXCOPRDEX', exchange: 'MCX' },
+  { symbol: 'MCXSILVDEX', exchange: 'MCX' },
+  { symbol: 'MCXGOLDEX', exchange: 'MCX' },
+  { symbol: 'MCXAGRI', exchange: 'MCX' },
+  { symbol: 'MCXSAGRI', exchange: 'MCX' },
+  { symbol: 'MCXENERGY', exchange: 'MCX' },
+  { symbol: 'MCXSENERGY', exchange: 'MCX' },
+  { symbol: 'MCXMETAL', exchange: 'MCX' },
+  { symbol: 'MCXSMETAL', exchange: 'MCX' },
+];
+
+export async function getLiveIndexQuotes(
+  provider: MarketDataProvider,
+  list: Array<{ symbol: string; exchange: Exchange }> = INDEX_LIST
+): Promise<MarketQuote[]> {
   const byExchange = new Map<Exchange, Array<{ symbol: string; token: string }>>();
 
-  for (const idx of INDEX_LIST) {
+  for (const idx of list) {
     const token = KNOWN_INDEX_TOKENS[idx.symbol];
     if (!token) continue;
     if (!byExchange.has(idx.exchange)) byExchange.set(idx.exchange, []);

@@ -7,7 +7,7 @@ import { logger } from '../lib/logger.js';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { CM_SEGMENT, FO_SEGMENT } from '@fno/shared';
 import type { CandleInterval, Exchange } from '@fno/shared';
-import { getLiveIndexQuotes } from '../services/indices.js';
+import { getLiveIndexQuotes, ALL_INDEX_LIST } from '../services/indices.js';
 import { buildMarketBias } from '../services/market-bias.js';
 
 export function createMarketDataRoutes(provider: MarketDataProvider): Router {
@@ -44,6 +44,25 @@ export function createMarketDataRoutes(provider: MarketDataProvider): Router {
       res.status(502).json({
         success: false,
         error: { code: 'INDICES_FETCH_FAILED', message: error.message },
+      });
+    }
+  });
+
+  /**
+   * GET /api/market/all-indices
+   * Live spot quotes for every index this terminal has a confirmed token
+   * for — broad market + sectoral on NSE/BSE, plus MCX's commodity
+   * benchmark indices. Powers the dedicated Indices tab.
+   */
+  router.get('/all-indices', async (_req: Request, res: Response) => {
+    try {
+      const data = await getLiveIndexQuotes(provider, ALL_INDEX_LIST);
+      res.json({ success: true, data, meta: { timestamp: Date.now(), source: 'LIVE' } });
+    } catch (error: any) {
+      logger.error({ error: error.message }, 'Live all-indices quotes failed');
+      res.status(502).json({
+        success: false,
+        error: { code: 'ALL_INDICES_FETCH_FAILED', message: error.message },
       });
     }
   });

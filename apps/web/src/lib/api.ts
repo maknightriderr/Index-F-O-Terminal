@@ -112,10 +112,6 @@ class ApiClient {
     return this.get<FnoScannerRow[]>(`/api/instruments/fno-scanner?exchange=${exchange}`);
   }
 
-  async getIndices() {
-    return this.get<any[]>('/api/instruments/indices');
-  }
-
   async getExpiries(symbol: string, exchange = 'NSE') {
     return this.get<string[]>(`/api/instruments/expiries/${symbol}?exchange=${exchange}`);
   }
@@ -126,6 +122,10 @@ class ApiClient {
 
   async getIndexQuotes() {
     return this.get<MarketQuote[]>('/api/market/indices');
+  }
+
+  async getAllIndexQuotes() {
+    return this.get<MarketQuote[]>('/api/market/all-indices');
   }
 
   async getHistoricalData(token: string, from: string, to: string, exchange = 'NSE', interval = 'ONE_DAY') {
