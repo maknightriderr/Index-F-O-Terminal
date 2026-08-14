@@ -21,6 +21,7 @@ import { createOptionChainRoutes } from './api/option-chain.js';
 import { createFuturesRoutes } from './api/futures.js';
 import { createAlertRoutes } from './api/alerts.js';
 import { startAlertScanner } from './services/alerts.js';
+import { startPatternScanner } from './services/chart-patterns.js';
 import { createAiAssistantRoutes } from './api/ai-assistant.js';
 
 // --- Initialize Provider + Subscription Manager ---
@@ -182,6 +183,7 @@ async function authenticateOnBoot(): Promise<void> {
 
 authenticateOnBoot();
 startAlertScanner(provider);
+startPatternScanner(provider);
 
 setInterval(() => {
   const { apiKey, clientId, password, totpSecret } = config.angelOne;

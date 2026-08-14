@@ -8,8 +8,8 @@ import type { Exchange, MarketQuote } from '@fno/shared';
 import { Sparkline } from '@/components/common/sparkline';
 import { SkeletonTableRow } from '@/components/common/skeleton';
 import { FilterPills } from '@/components/common/filter-pills';
-import { ScoreBadge } from '@/components/common/badges';
-import { computeIndexStrength } from '@/lib/index-strength';
+import { ScoreBadge, BiasBadge } from '@/components/common/badges';
+import { computeIndexStrength, computeIndexBias } from '@/lib/index-strength';
 import { useAssetTabsStore } from '@/stores';
 
 // Friendlier display names for the compact lookup-key symbols this
@@ -118,7 +118,7 @@ export function IndicesPage() {
           <table className="w-full text-xs">
             <tbody>
               {Array.from({ length: 8 }, (_, i) => (
-                <SkeletonTableRow key={i} cols={7} />
+                <SkeletonTableRow key={i} cols={8} />
               ))}
             </tbody>
           </table>
@@ -158,6 +158,7 @@ function IndexGroup({
             <tr className="bg-gradient-to-b from-gray-900/90 to-gray-900/60 light:from-slate-100 light:to-slate-50 text-gray-500 light:text-slate-500 uppercase tracking-wider">
               <th className="text-left px-4 py-2 font-medium">Index</th>
               <th className="text-center px-3 py-2 font-medium">Strength</th>
+              <th className="text-center px-3 py-2 font-medium">Bias</th>
               <th className="text-right px-3 py-2 font-medium">LTP</th>
               <th className="text-right px-3 py-2 font-medium">Chg</th>
               <th className="text-right px-3 py-2 font-medium">Chg%</th>
@@ -171,6 +172,7 @@ function IndexGroup({
               const dayRange = row.high - row.low;
               const positionInRange = dayRange > 0 ? ((row.ltp - row.low) / dayRange) * 100 : 50;
               const strength = computeIndexStrength(row);
+              const bias = computeIndexBias(strength);
               return (
                 <tr
                   key={row.token}
@@ -180,6 +182,9 @@ function IndexGroup({
                   <td className="px-4 py-2.5 font-semibold text-gray-200 light:text-slate-800 whitespace-nowrap">{labelFor(row.symbol)}</td>
                   <td className="text-center px-3 py-2.5">
                     <ScoreBadge score={strength} />
+                  </td>
+                  <td className="text-center px-3 py-2.5">
+                    <BiasBadge bias={bias} />
                   </td>
                   <td className="text-right px-3 py-2.5 tabular-nums text-gray-200 light:text-slate-800 whitespace-nowrap">{formatIndianNumber(row.ltp, 2)}</td>
                   <td className={`text-right px-3 py-2.5 tabular-nums font-medium whitespace-nowrap ${isPositive ? 'text-emerald-400' : 'text-red-400'}`}>

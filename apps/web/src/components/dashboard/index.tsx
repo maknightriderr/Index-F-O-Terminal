@@ -10,9 +10,11 @@ import { OIBadge, BiasBadge, ScoreBadge } from '@/components/common/badges';
 import { AddAssetButton } from '@/components/common/add-asset-button';
 import { ActivityList } from '@/components/common/activity-list';
 import { TopMoversList } from '@/components/common/top-movers-list';
+import { ChartPatternsPanel } from '@/components/common/chart-patterns-panel';
 import { Sparkline } from '@/components/common/sparkline';
 import { SkeletonTableRow } from '@/components/common/skeleton';
 import { getPriceHistory } from '@/lib/price-history-store';
+import { useChartPatterns } from '@/lib/use-chart-patterns';
 import { useAssetTabsStore, useMarketStore } from '@/stores';
 
 const TOP_MOVERS_COUNT = 5;
@@ -21,6 +23,7 @@ export function Dashboard() {
   const { indices, isLive: indicesLive } = useLiveIndices();
   const { indices: allIndices } = useAllIndices();
   const { rows: fnoRows, isLive: fnoLive } = useFnoScanner('NSE');
+  const { patterns, loading: patternsLoading } = useChartPatterns();
   const setActiveTab = useMarketStore((s) => s.setActiveTab);
   const topStocks = fnoRows.slice(0, 8);
 
@@ -170,6 +173,8 @@ export function Dashboard() {
         <TopMoversList title="📈 Top Stock Gainers" items={stockGainers} accent="emerald" />
         <TopMoversList title="📉 Top Stock Losers" items={stockLosers} accent="red" />
       </div>
+
+      <ChartPatternsPanel patterns={patterns} loading={patternsLoading} />
 
       {/* Top Activity Sections */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">

@@ -10,6 +10,8 @@
 // sits in its own day range (closing near the high = strong).
 // ============================================================
 
+import type { BiasDirection } from '@fno/shared';
+
 export function computeIndexStrength(input: { changePercent: number; ltp: number; high: number; low: number }): number {
   const { changePercent, ltp, high, low } = input;
 
@@ -23,4 +25,13 @@ export function computeIndexStrength(input: { changePercent: number; ltp: number
 
   const strength = 0.5 * positionInRange + 0.5 * changeComponent;
   return Math.round(Math.max(0, Math.min(100, strength)));
+}
+
+// Overall trend/bias as a categorical read of the same strength score —
+// keeps the two in lockstep rather than deriving bias off a separate,
+// possibly-disagreeing calculation.
+export function computeIndexBias(strength: number): BiasDirection {
+  if (strength >= 60) return 'BULLISH';
+  if (strength <= 40) return 'BEARISH';
+  return 'NEUTRAL';
 }

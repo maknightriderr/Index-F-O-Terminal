@@ -341,6 +341,32 @@ export interface FnoScannerRow {
   timestamp: number;
 }
 
+// --- Chart Pattern Detection ---
+
+export type ChartPatternType =
+  | 'DOUBLE_TOP'
+  | 'DOUBLE_BOTTOM'
+  | 'HEAD_AND_SHOULDERS'
+  | 'INVERSE_HEAD_AND_SHOULDERS'
+  | 'ASCENDING_TRIANGLE'
+  | 'DESCENDING_TRIANGLE'
+  | 'SYMMETRIC_TRIANGLE'
+  | 'RISING_WEDGE'
+  | 'FALLING_WEDGE'
+  | 'BULLISH_FLAG'
+  | 'BEARISH_FLAG';
+
+export interface DetectedChartPattern {
+  symbol: string;
+  exchange: Exchange;
+  interval: '15m' | '1h';
+  pattern: ChartPatternType;
+  direction: 'BULLISH' | 'BEARISH';
+  confidence: number; // 0-100
+  detectedAt: number;
+  priceAtDetection: number;
+}
+
 export interface OIAnalysis {
   symbol: string;
   token: string;

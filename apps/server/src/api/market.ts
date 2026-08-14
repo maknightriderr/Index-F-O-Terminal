@@ -9,6 +9,7 @@ import { CM_SEGMENT, FO_SEGMENT } from '@fno/shared';
 import type { CandleInterval, Exchange } from '@fno/shared';
 import { getLiveIndexQuotes, ALL_INDEX_LIST } from '../services/indices.js';
 import { buildMarketBias } from '../services/market-bias.js';
+import { getCachedPatterns } from '../services/chart-patterns.js';
 
 export function createMarketDataRoutes(provider: MarketDataProvider): Router {
   const router = Router();
@@ -64,6 +65,23 @@ export function createMarketDataRoutes(provider: MarketDataProvider): Router {
         success: false,
         error: { code: 'ALL_INDICES_FETCH_FAILED', message: error.message },
       });
+    }
+  });
+
+  /**
+   * GET /api/market/chart-patterns
+   * Cached background-scanned chart patterns (Head & Shoulders, Double
+   * Top/Bottom, Triangles, Wedges, Flags) across 15m/1h, scoped to the
+   * Dashboard's curated indices + current top-8 F&O movers. Updated on
+   * its own ~25-minute cycle by the pattern scanner, not per-request.
+   */
+  router.get('/chart-patterns', async (_req: Request, res: Response) => {
+    try {
+      const data = await getCachedPatterns();
+      res.json({ success: true, data, meta: { timestamp: Date.now(), source: 'CACHED' } });
+    } catch (error: any) {
+      logger.error({ error: error.message }, 'Chart pattern read failed');
+      res.status(502).json({ success: false, error: { code: 'CHART_PATTERNS_FETCH_FAILED', message: error.message } });
     }
   });
 

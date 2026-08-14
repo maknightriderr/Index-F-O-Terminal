@@ -10,7 +10,7 @@ import { KNOWN_INDEX_TOKENS, CM_SEGMENT } from '@fno/shared';
 import type { Exchange, MarketQuote } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 
-const INDEX_LIST: Array<{ symbol: string; exchange: Exchange }> = [
+export const INDEX_LIST: Array<{ symbol: string; exchange: Exchange }> = [
   { symbol: 'NIFTY', exchange: 'NSE' },
   { symbol: 'BANKNIFTY', exchange: 'NSE' },
   { symbol: 'SENSEX', exchange: 'BSE' },

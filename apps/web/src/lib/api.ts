@@ -5,7 +5,7 @@
 // All API calls go through this module.
 // ============================================================
 
-import type { OptionChain, FuturesChainResponse, MarketQuote, MarketBias, IntelligenceScore, TradeSetup, FnoScannerRow, Alert } from '@fno/shared';
+import type { OptionChain, FuturesChainResponse, MarketQuote, MarketBias, IntelligenceScore, TradeSetup, FnoScannerRow, Alert, DetectedChartPattern } from '@fno/shared';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
@@ -126,6 +126,10 @@ class ApiClient {
 
   async getAllIndexQuotes() {
     return this.get<MarketQuote[]>('/api/market/all-indices');
+  }
+
+  async getChartPatterns() {
+    return this.get<DetectedChartPattern[]>('/api/market/chart-patterns');
   }
 
   async getHistoricalData(token: string, from: string, to: string, exchange = 'NSE', interval = 'ONE_DAY') {
