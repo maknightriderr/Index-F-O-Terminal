@@ -52,19 +52,10 @@ export const ALL_INDEX_LIST: Array<{ symbol: string; exchange: Exchange }> = [
   { symbol: 'MCXBULLDEX', exchange: 'MCX' },
   { symbol: 'MCXMETLDEX', exchange: 'MCX' },
   { symbol: 'MCXCOMPDEX', exchange: 'MCX' },
-  { symbol: 'MCXCOMPOSITE', exchange: 'MCX' },
-  { symbol: 'MCXCOMDEX', exchange: 'MCX' },
-  { symbol: 'MCXSCOMDEX', exchange: 'MCX' },
   { symbol: 'MCXCRUDEX', exchange: 'MCX' },
   { symbol: 'MCXCOPRDEX', exchange: 'MCX' },
   { symbol: 'MCXSILVDEX', exchange: 'MCX' },
   { symbol: 'MCXGOLDEX', exchange: 'MCX' },
-  { symbol: 'MCXAGRI', exchange: 'MCX' },
-  { symbol: 'MCXSAGRI', exchange: 'MCX' },
-  { symbol: 'MCXENERGY', exchange: 'MCX' },
-  { symbol: 'MCXSENERGY', exchange: 'MCX' },
-  { symbol: 'MCXMETAL', exchange: 'MCX' },
-  { symbol: 'MCXSMETAL', exchange: 'MCX' },
 ];
 
 export async function getLiveIndexQuotes(

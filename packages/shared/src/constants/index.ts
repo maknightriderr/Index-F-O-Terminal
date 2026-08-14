@@ -93,30 +93,25 @@ export const KNOWN_INDEX_TOKENS: Record<string, string> = {
   NIFTYINFRA: '99926019',
   // BSE — broad market & sectoral
   SENSEX: '99919000',
-  BANKEX: '99919067',
+  BANKEX: '99919012',
   BSE100: '99919002',
   BSE200: '99919003',
   BSE500: '99919004',
   BSEMIDCAP: '99919016',
   BSESMALLCAP: '99919017',
   BSEIT: '99919005',
-  // MCX — commodity benchmark indices
+  // MCX — commodity benchmark indices. Angel One's instrument master lists
+  // several more (MCXCOMDEX, MCXAGRI, MCXENERGY, MCXMETAL, and their "S-"
+  // variants) but those tokens return an all-zero quote — confirmed
+  // live, not just a guess — so they're stale/inactive tickers left out
+  // of KNOWN_INDEX_TOKENS entirely rather than shown as broken rows.
   MCXBULLDEX: '99920005',
   MCXMETLDEX: '99920004',
   MCXCOMPDEX: '99920006',
-  MCXCOMPOSITE: '99920012',
-  MCXCOMDEX: '99920013',
-  MCXSCOMDEX: '99920011',
   MCXCRUDEX: '99920000',
   MCXCOPRDEX: '99920001',
   MCXSILVDEX: '99920002',
   MCXGOLDEX: '99920003',
-  MCXAGRI: '99920014',
-  MCXSAGRI: '99920008',
-  MCXENERGY: '99920015',
-  MCXSENERGY: '99920009',
-  MCXMETAL: '99920016',
-  MCXSMETAL: '99920010',
 };
 
 // --- Known Index Symbols ---
