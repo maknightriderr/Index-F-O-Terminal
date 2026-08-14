@@ -60,14 +60,21 @@ export function classifyFuturesOI(input: OIClassificationInput): OIInterpretatio
  *   OI ↑ → Put Writing (typically bullish signal)
  *   OI ↓ → Put Unwinding
  *
- * Context-specific: Does not blindly apply futures classification.
- * Considers price direction and option type together.
+ * Deliberately OI-direction-only, unlike classifyFuturesOI: `OIInterpretation`
+ * only has one WRITING and one UNWINDING state per side, not a full 4-quadrant
+ * buying/writing/covering/unwinding split, so there's nowhere for a price-
+ * direction read to change the verdict. `priceChange` is accepted (callers
+ * may have it, e.g. the underlying's own move) but intentionally unused —
+ * pass 0 if you don't have it. A true price-aware option-OI signal (mirroring
+ * classifyFuturesOI's 4-quadrant test against the option's own premium
+ * change) would need new OIInterpretation states and is a bigger model
+ * change, not a bug fix.
  */
 export function classifyOptionOI(
   input: OIClassificationInput,
   optionType: OptionType
 ): OIInterpretation {
-  const { priceChange, oiChange } = input;
+  const { oiChange } = input;
 
   const oiUp = oiChange > 0;
   const oiDown = oiChange < 0;

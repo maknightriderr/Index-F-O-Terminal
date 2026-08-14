@@ -496,10 +496,18 @@ function classifyRegime(adxValue: number, st1hDirection: 'UP' | 'DOWN', atrZ: nu
  * low, and for a NEUTRAL overall read, a flat signal scores high while
  * a strong signal either way scores low (it's noise the composite
  * cancelled out).
+ *
+ * Coefficient is 45 (not e.g. 30) so a fully-agreeing or fully-flat
+ * input actually reaches the clamp's own [5,95] bounds — |vote| never
+ * exceeds 1 (it's a raw vote or an average of same-signed ±1 votes), so
+ * 50 ± 1*45 = 5/95 exactly. A smaller coefficient silently compresses
+ * every score into a narrower band than the scale promises (caught by
+ * comparing against lightweightBias's analogous 50 + sum*15 over 3
+ * votes, which does hit its own ±45 bound at full agreement).
  */
 function contribution(vote: number, directionSign: number): number {
-  if (directionSign === 0) return clamp(Math.round(50 - Math.abs(vote) * 20), 5, 95);
-  return clamp(Math.round(50 + vote * directionSign * 30), 5, 95);
+  if (directionSign === 0) return clamp(Math.round(50 - Math.abs(vote) * 45), 5, 95);
+  return clamp(Math.round(50 + vote * directionSign * 45), 5, 95);
 }
 
 function clamp(n: number, min: number, max: number): number {

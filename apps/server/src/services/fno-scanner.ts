@@ -153,9 +153,14 @@ export async function scanFnoUniverse(provider: MarketDataProvider, exchange: Ex
       peIv = putGreeks ? putGreeks.iv * 100 : 0;
       const ivSamples = [ceIv, peIv].filter((v) => v > 0);
       atmIv = ivSamples.length > 0 ? ivSamples.reduce((a, b) => a + b, 0) / ivSamples.length : 0;
+      // All three ATM Greeks represent the same thing: the average/
+      // representative ATM leg, not a 2-leg straddle position — consistent
+      // with how they're displayed side-by-side in the IV & Greeks table.
+      // (strategy-recommender.ts doubles this back to a straddle reading
+      // where it actually needs one.)
       atmGamma = avgOfDefined(callGreeks?.gamma, putGreeks?.gamma);
       atmVega = avgOfDefined(callGreeks?.vega, putGreeks?.vega);
-      atmTheta = (callGreeks?.theta ?? 0) + (putGreeks?.theta ?? 0);
+      atmTheta = avgOfDefined(callGreeks?.theta, putGreeks?.theta);
     }
 
     const ivSkew = ceIv > 0 && peIv > 0 ? ceIv - peIv : 0;

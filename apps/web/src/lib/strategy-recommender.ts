@@ -30,7 +30,10 @@ export function recommendStrategy(row: FnoScannerRow): StrategyRecommendation | 
   const highIv = ivRank != null && ivRank >= IV_HIGH_THRESHOLD;
   const lowIv = ivRank != null && ivRank <= IV_LOW_THRESHOLD;
   const ivKnown = ivRank != null;
-  const thetaNote = atmTheta !== 0 ? ` ATM straddle is bleeding ₹${Math.abs(atmTheta).toFixed(2)}/day.` : '';
+  // atmTheta is a single representative ATM leg (averaged with gamma/vega
+  // upstream in fno-scanner.ts) — a straddle holds one of each side, so its
+  // combined decay is double a single leg's.
+  const thetaNote = atmTheta !== 0 ? ` ATM straddle is bleeding ₹${Math.abs(atmTheta * 2).toFixed(2)}/day.` : '';
 
   if (direction === 'BULLISH') {
     if (highIv) {

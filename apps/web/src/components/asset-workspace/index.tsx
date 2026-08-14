@@ -264,7 +264,7 @@ export function AssetWorkspace() {
                 </thead>
                 <tbody>
                   {strikes.map((s) => {
-                    const isAtm = s.classification === 'ATM';
+                    const isAtm = s.strike === chain.atmStrike;
                     const callItm = s.strike < chain.spotPrice;
                     const putItm = s.strike > chain.spotPrice;
 

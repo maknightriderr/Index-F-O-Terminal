@@ -185,6 +185,11 @@ async function buildOptionChainUncached(
       theta: greeks.theta,
       vega: greeks.vega,
       oiInterpretation: classifyOptionOI({ priceChange: 0, oiChange: changeOi }, optionType),
+      // Calls and puts at the same strike are moneyness-opposite (a strike
+      // below spot is ITM for a call but OTM for the put at that same
+      // strike) — must be classified per-leg with its own optionType, not
+      // once per strike row.
+      moneyness: classifyStrike(strike, spotPrice, optionType, strikeInterval),
       greeksSource: hasBrokerGreeks ? 'BROKER' : 'CALCULATED',
       timestamp: now,
     };
@@ -198,7 +203,6 @@ async function buildOptionChainUncached(
     return {
       strike,
       distanceFromSpot: Math.round((strike - spotPrice) * 100) / 100,
-      classification: classifyStrike(strike, spotPrice, 'CE', strikeInterval),
       call,
       put,
     };

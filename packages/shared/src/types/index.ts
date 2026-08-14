@@ -166,7 +166,6 @@ export interface MarketQuote {
 export interface OptionChainStrike {
   strike: number;
   distanceFromSpot: number;
-  classification: 'ITM' | 'ATM' | 'OTM';
   call: OptionChainLeg | null;
   put: OptionChainLeg | null;
 }
@@ -185,6 +184,10 @@ export interface OptionChainLeg {
   theta: number;
   vega: number;
   oiInterpretation: OIInterpretation;
+  /** ITM/ATM/OTM for THIS leg's own option type — calls and puts at the
+   * same strike are never both ITM or both OTM, so this lives per-leg
+   * rather than once per strike row. */
+  moneyness: 'ITM' | 'ATM' | 'OTM';
   /** Greeks/IV source: broker-provided, or internally calculated when the broker had none. */
   greeksSource: 'BROKER' | 'CALCULATED';
   timestamp: number;
