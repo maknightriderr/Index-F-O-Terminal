@@ -153,7 +153,11 @@ createMarketWebSocketServer(server, subscriptionManager);
 // frontend login flow. If they're present we auth automatically and keep
 // the session alive; if not, REST endpoints that don't need auth still work.
 
-const TOKEN_REFRESH_INTERVAL_MS = 20 * 60 * 60 * 1000; // refresh well before ~24h expiry
+// Shorter than the 24h token expiry so a single silently-failed attempt
+// (Angel One's refresh-token flow can return a non-error "no token" response
+// with no exception to catch) still leaves multiple retries before the
+// session actually lapses, rather than one shot at ~20h with no recovery.
+const TOKEN_REFRESH_INTERVAL_MS = 8 * 60 * 60 * 1000;
 
 async function authenticateOnBoot(): Promise<void> {
   const { apiKey, clientId, password, totpSecret } = config.angelOne;
@@ -180,11 +184,25 @@ authenticateOnBoot();
 startAlertScanner(provider);
 
 setInterval(() => {
-  if (provider.isAuthenticated()) {
-    provider.refreshAuth().catch((err) =>
-      logger.error({ error: err.message }, 'Scheduled Angel One token refresh failed')
-    );
-  }
+  const { apiKey, clientId, password, totpSecret } = config.angelOne;
+  if (!apiKey || !clientId || !password) return;
+
+  // Gating this on isAuthenticated() meant a session that had already
+  // expired (e.g. because the previous scheduled attempt silently failed)
+  // never got retried — isAuthenticated() would just keep returning false
+  // forever. Always attempt something: refresh if the current token is
+  // still technically valid, otherwise a full fresh TOTP login.
+  const reauth = provider.isAuthenticated()
+    ? provider.refreshAuth()
+    : provider.authenticate({ apiKey, clientId, password, totpSecret });
+
+  reauth
+    .then((result) => {
+      if (!result.success) {
+        logger.error({ error: result.error }, 'Scheduled Angel One re-authentication failed');
+      }
+    })
+    .catch((err) => logger.error({ error: err.message }, 'Scheduled Angel One re-authentication threw'));
 }, TOKEN_REFRESH_INTERVAL_MS);
 
 // --- Graceful Shutdown ---

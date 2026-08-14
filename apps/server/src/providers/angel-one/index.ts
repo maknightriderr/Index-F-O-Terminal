@@ -202,7 +202,15 @@ export class AngelOneProvider implements MarketDataProvider {
         };
       }
 
-      return { success: false, error: response.data?.message || 'Token refresh failed' };
+      // Angel One responded (no thrown error) but without a usable token —
+      // e.g. the refresh token itself has expired. This used to return
+      // here silently: no log line, and no fallback, which left the
+      // provider stuck unauthenticated until the process restarted (the
+      // scheduled refresh in index.ts only retries `if isAuthenticated()`,
+      // so a token that's already expired never gets another attempt).
+      // Fall back to a fresh TOTP login exactly like the catch block does.
+      logger.warn({ error: response.data?.message }, 'Angel One token refresh returned no token — falling back to full re-authentication');
+      return this.authenticate(this.credentials);
     } catch (error: any) {
       logger.error({ error: error.message }, 'Angel One token refresh failed');
       // Try full re-authentication
