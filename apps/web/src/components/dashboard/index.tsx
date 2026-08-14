@@ -2,22 +2,33 @@
 
 import React from 'react';
 import { useLiveIndices } from '@/lib/use-live-indices';
+import { useAllIndices } from '@/lib/use-all-indices';
 import { useFnoScanner } from '@/lib/use-fno-scanner';
 import { formatIndianNumber, formatPercent, formatCompact } from '@fno/shared';
 import type { Exchange } from '@fno/shared';
 import { OIBadge, BiasBadge, ScoreBadge } from '@/components/common/badges';
 import { AddAssetButton } from '@/components/common/add-asset-button';
 import { ActivityList } from '@/components/common/activity-list';
+import { TopMoversList } from '@/components/common/top-movers-list';
 import { Sparkline } from '@/components/common/sparkline';
 import { SkeletonTableRow } from '@/components/common/skeleton';
 import { getPriceHistory } from '@/lib/price-history-store';
 import { useAssetTabsStore, useMarketStore } from '@/stores';
 
+const TOP_MOVERS_COUNT = 5;
+
 export function Dashboard() {
   const { indices, isLive: indicesLive } = useLiveIndices();
+  const { indices: allIndices } = useAllIndices();
   const { rows: fnoRows, isLive: fnoLive } = useFnoScanner('NSE');
   const setActiveTab = useMarketStore((s) => s.setActiveTab);
   const topStocks = fnoRows.slice(0, 8);
+
+  const indexGainers = [...allIndices].sort((a, b) => b.changePercent - a.changePercent).slice(0, TOP_MOVERS_COUNT);
+  const indexLosers = [...allIndices].sort((a, b) => a.changePercent - b.changePercent).slice(0, TOP_MOVERS_COUNT);
+  const toMoverItem = (r: (typeof fnoRows)[number]) => ({ symbol: r.symbol, exchange: r.exchange, ltp: r.price, changePercent: r.changePercent });
+  const stockGainers = [...fnoRows].sort((a, b) => b.changePercent - a.changePercent).slice(0, TOP_MOVERS_COUNT).map(toMoverItem);
+  const stockLosers = [...fnoRows].sort((a, b) => a.changePercent - b.changePercent).slice(0, TOP_MOVERS_COUNT).map(toMoverItem);
 
   return (
     <div className="p-4 space-y-4 min-h-full">
@@ -150,6 +161,14 @@ export function Dashboard() {
             </table>
           </div>
         )}
+      </div>
+
+      {/* Top Performing Indices & F&O Stocks */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+        <TopMoversList title="📈 Top Index Gainers" items={indexGainers} accent="emerald" />
+        <TopMoversList title="📉 Top Index Losers" items={indexLosers} accent="red" />
+        <TopMoversList title="📈 Top Stock Gainers" items={stockGainers} accent="emerald" />
+        <TopMoversList title="📉 Top Stock Losers" items={stockLosers} accent="red" />
       </div>
 
       {/* Top Activity Sections */}
