@@ -16,7 +16,13 @@
 import type { OptionChainStrike, OptionType, BiasDirection, TradeSetup } from '@fno/shared';
 
 const SL_PREMIUM_PCT = 0.3; // 30% premium stop — standard retail heuristic for long options
-const MIN_CONFIDENCE = 50;
+// market-bias.ts's direction comes from 6 votes; confidence = % of them
+// agreeing with the verdict, in steps of ~16.7 (15/17/33/50/67/83/95 after
+// clamping). 50 only requires a bare 3-of-6 — indistinguishable from a
+// genuinely contested 3-for/2-against/1-flat split, since confidence counts
+// agreement, not margin over dissent. 65 requires a real supermajority
+// (>=4 of 6 actively agreeing) before a live entry/SL/target gets generated.
+const MIN_CONFIDENCE = 65;
 
 export function buildTradeSetup(
   strikes: OptionChainStrike[],

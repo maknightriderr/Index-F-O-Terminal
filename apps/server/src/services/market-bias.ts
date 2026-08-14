@@ -305,23 +305,45 @@ export async function buildMarketBias(
   const technicalsScore = contribution(technicalsVote, directionSign);
 
   const volumeScore = clamp(Math.round(50 + (volumeRatio - 1) * 50), 0, 100);
-  const oiShiftsScore = clamp(Math.round(50 + Math.min(Math.abs(futuresChangeOiPct), 50)), 0, 100);
-  const relativeStrengthScore = clamp(
-    Math.round(50 + (atrPctNow > 0 ? (todayChangePct / atrPctNow) * 25 : 0)),
-    0,
-    100
-  );
+
+  // How big is the futures OI shift, scaled by whether that shift's own
+  // buildup/unwinding type agrees with the overall direction (futuresOiVote,
+  // already computed above) — a large shift that CONTRADICTS the direction
+  // should score low, not high. (Previously this only looked at magnitude,
+  // so it could only ever read >=50 regardless of which way the OI moved —
+  // an unconditional upward push on `overall` for any symbol with active
+  // futures OI, agreeing or not.)
+  const oiShiftMagnitude = Math.min(Math.abs(futuresChangeOiPct), 50) / 50; // 0..1
+  const oiShiftsScore = contribution(futuresOiVote * oiShiftMagnitude, directionSign);
+
+  // Today's move relative to its own ATR (volatility-normalized momentum),
+  // scored the same agree-high/disagree-low way as every other dimension —
+  // previously this rewarded any positive move and penalized any negative
+  // one regardless of `direction`, so a bounce inside an overall bearish
+  // read scored as if it confirmed a bullish one.
+  const relativeStrengthVote = atrPctNow > 0 ? clamp(todayChangePct / atrPctNow, -1, 1) : 0;
+  const relativeStrengthScore = contribution(relativeStrengthVote, directionSign);
+
+  // Trend conviction (ADX), direction-agnostic by design — a strong trend
+  // is a strong trend whichever way it points. Reported for context (and
+  // because trendScore already folds ADX in as its own strength multiplier)
+  // but deliberately NOT part of `overall`: weighting it in as-is would
+  // reward any strongly-trending symbol regardless of agreement with
+  // `direction`, and making it direction-aware would just re-derive
+  // trendScore's own Supertrend+ADX signal a second time.
   const regimeScore = Math.round(adxNorm * 100);
 
   const overall = Math.round(
-    trendScore * 0.2 +
-      priceActionScore * 0.15 +
-      futuresOiScore * 0.15 +
-      optionsOiScore * 0.15 +
-      pcrScore * 0.1 +
-      ivScore * 0.1 +
-      technicalsScore * 0.1 +
-      volumeScore * 0.05
+    trendScore * 0.18 +
+      priceActionScore * 0.13 +
+      futuresOiScore * 0.13 +
+      optionsOiScore * 0.13 +
+      pcrScore * 0.09 +
+      ivScore * 0.09 +
+      technicalsScore * 0.09 +
+      oiShiftsScore * 0.07 +
+      volumeScore * 0.05 +
+      relativeStrengthScore * 0.04
   );
 
   const score: IntelligenceScore = {

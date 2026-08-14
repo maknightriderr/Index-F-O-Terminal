@@ -110,7 +110,9 @@ export function IntelligenceScoreCard({ score, symbol }: { score: IntelligenceSc
     { label: 'PCR', value: score.pcr },
     { label: 'IV', value: score.iv },
     { label: 'Technicals', value: score.technicals },
+    { label: 'OI Shifts', value: score.oiShifts },
     { label: 'Volume', value: score.volume },
+    { label: 'Rel. Strength', value: score.relativeStrength },
   ];
 
   return (
