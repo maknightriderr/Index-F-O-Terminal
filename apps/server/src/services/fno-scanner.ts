@@ -281,10 +281,20 @@ function lightweightBias(
 // --- IV Rank (persisted daily to Postgres) ---
 // IV Rank needs history, which this terminal has only just started
 // collecting — it reads null (shown as "—") for a symbol until at least
-// two days of snapshots exist, and naturally gets more meaningful as the
-// terminal keeps running day over day. At most one row is written per
-// symbol per day (checked in bulk below), so intraday scans don't flood
-// the table with noise that would skew the range toward "today only".
+// MIN_IV_HISTORY_DAYS snapshots exist, and naturally gets more meaningful
+// as the terminal keeps running day over day. At most one row is written
+// per symbol per day (checked in bulk below), so intraday scans don't
+// flood the table with noise that would skew the range toward "today only".
+//
+// The minimum is 5, not 2: with only 2 data points, (current-min)/(max-min)
+// is mathematically forced to be exactly 0 or 100 for every symbol — every
+// consumer of ivRank (the IV & Greeks / F&O Stocks tables, the Strategy
+// Scanner's high/low-IV branch, the Alerts spike/crush check) would treat
+// that as a genuine extreme and act on it uniformly, which is noise from
+// the sample size, not a real signal. See the IV_SPIKE alert incident this
+// was first caught from.
+
+const MIN_IV_HISTORY_DAYS = 5;
 
 interface IvRankResult {
   ivRank: number | null;
@@ -330,7 +340,7 @@ async function computeIvRanks(
 
     for (const { symbol, atmIv } of inputs) {
       const values = statsBySymbol.get(symbol) ?? [];
-      if (values.length < 2) {
+      if (values.length < MIN_IV_HISTORY_DAYS) {
         result.set(symbol, { ivRank: null, ivPercentile: null });
         continue;
       }

@@ -307,11 +307,11 @@ export function supertrend(
       prevSupertrend = closes[idx] > upperBand ? lowerBand : upperBand;
       prevDirection = closes[idx] > upperBand ? 'UP' : 'DOWN';
     } else {
-      upperBand = basicUpperBand < prevUpperBand || closes[idx - 1 + startIdx] > prevUpperBand
+      upperBand = basicUpperBand < prevUpperBand || closes[idx - 1] > prevUpperBand
         ? basicUpperBand
         : prevUpperBand;
 
-      lowerBand = basicLowerBand > prevLowerBand || closes[idx - 1 + startIdx] < prevLowerBand
+      lowerBand = basicLowerBand > prevLowerBand || closes[idx - 1] < prevLowerBand
         ? basicLowerBand
         : prevLowerBand;
 

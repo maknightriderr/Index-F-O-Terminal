@@ -44,12 +44,6 @@ const SCANNER_CACHE_TTL_SECONDS = 180; // must match instruments.ts's fno-scanne
 const OI_CHANGE_PCT_THRESHOLD = 8;
 const IV_RANK_SPIKE_THRESHOLD = 85;
 const IV_RANK_CRUSH_THRESHOLD = 15;
-// IV Rank is (current - min) / (max - min) over stored history — with only
-// 2 data points that's mathematically forced to be exactly 0 or 100 for
-// EVERY symbol, which would fire an IV_SPIKE/CRUSH "signal" for the entire
-// universe on day two of collecting history. Require enough history for the
-// rank to actually mean something before alerting on it.
-const IV_RANK_MIN_HISTORY_DAYS = 5;
 
 interface StoredTradeSetupSnapshot {
   available: boolean;
@@ -96,7 +90,6 @@ async function checkOiAndIvAlerts(provider: MarketDataProvider): Promise<void> {
   }
 
   const today = istDay();
-  const ivHistoryDepth = await getIvHistoryDepth(rows.map((r) => r.symbol));
 
   for (const row of rows) {
     if (row.futuresOi > 0 && Math.abs(row.futuresChangeOiPercent) >= OI_CHANGE_PCT_THRESHOLD) {
@@ -112,7 +105,7 @@ async function checkOiAndIvAlerts(provider: MarketDataProvider): Promise<void> {
       });
     }
 
-    if (row.ivRank != null && (ivHistoryDepth.get(row.symbol) ?? 0) >= IV_RANK_MIN_HISTORY_DAYS) {
+    if (row.ivRank != null) {
       if (row.ivRank >= IV_RANK_SPIKE_THRESHOLD) {
         await maybeFireDailyAlert({
           dedupeKey: `alert_sent:IV_SPIKE:${row.symbol}:${today}`,
@@ -271,25 +264,6 @@ async function fireAlert(input: {
   if (channels.includes('TELEGRAM')) {
     await sendTelegramMessage(input.message);
   }
-}
-
-async function getIvHistoryDepth(symbols: string[]): Promise<Map<string, number>> {
-  const depth = new Map<string, number>();
-  if (symbols.length === 0) return depth;
-
-  try {
-    const rows = await sql<{ symbol: string; count: string }[]>`
-      SELECT symbol, COUNT(*) as count
-      FROM iv_history
-      WHERE symbol = ANY(${symbols}) AND time > NOW() - INTERVAL '365 days' AND atm_iv IS NOT NULL
-      GROUP BY symbol
-    `;
-    for (const r of rows) depth.set(r.symbol, Number(r.count));
-  } catch (err: any) {
-    logger.warn({ error: err.message }, 'Alert scan: IV history depth check failed — skipping IV alerts this tick');
-  }
-
-  return depth;
 }
 
 // --- Helpers ---
