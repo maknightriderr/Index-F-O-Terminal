@@ -8,6 +8,7 @@ import { formatIndianNumber, formatPercent } from '@fno/shared';
 import type { FnoScannerRow, BiasDirection } from '@fno/shared';
 import { BiasBadge, ScoreBadge } from '@/components/common/badges';
 import { FilterPills } from '@/components/common/filter-pills';
+import { SkeletonTableRow } from '@/components/common/skeleton';
 
 interface Row {
   row: FnoScannerRow;
@@ -115,7 +116,15 @@ export function StrategyScannerPage() {
       )}
 
       {loading && rows.length === 0 && (
-        <div className="text-sm text-gray-500 light:text-slate-500 py-16 text-center">Scanning the F&O universe…</div>
+        <div className="bg-gradient-to-b from-[#141420] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 rounded-xl overflow-hidden shadow-[0_12px_36px_-16px_rgba(0,0,0,0.8)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.15)] p-1">
+          <table className="w-full text-xs">
+            <tbody>
+              {Array.from({ length: 8 }, (_, i) => (
+                <SkeletonTableRow key={i} cols={8} />
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {withStrategy.length > 0 && filtered.length === 0 && (

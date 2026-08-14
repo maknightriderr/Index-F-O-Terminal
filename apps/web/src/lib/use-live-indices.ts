@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
 import { MOCK_INDICES } from './mock-data';
+import { recordPrice } from './price-history-store';
 import type { MarketQuote } from '@fno/shared';
 
 const POLL_INTERVAL_MS = 20000;
@@ -22,6 +23,7 @@ export function useLiveIndices(): { indices: MarketQuote[]; isLive: boolean } {
           if (cancelled || data.length === 0) return;
           setIndices(data);
           setIsLive(true);
+          for (const q of data) recordPrice(q.symbol, q.ltp);
         })
         .catch(() => {
           if (!cancelled) setIsLive(false);

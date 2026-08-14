@@ -123,7 +123,7 @@ export function AssetWorkspace() {
   const marketOpen = isMarketOpen(selectedExchange as Exchange);
 
   return (
-    <div className="p-4 space-y-4 min-h-full">
+    <div className="p-4 space-y-4 min-h-full animate-fade-in">
       {/* Asset Header */}
       <div className="relative overflow-hidden flex items-center justify-between flex-wrap gap-3 px-5 py-4 rounded-2xl bg-gradient-to-br from-[#161624] via-[#12121c] to-[#0d0d14] light:from-white light:via-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 shadow-[0_12px_40px_-18px_rgba(0,0,0,0.8)] light:shadow-[0_4px_20px_-10px_rgba(0,0,0,0.12)]">
         <div className="absolute inset-0 bg-gradient-to-r from-emerald-500/[0.04] via-transparent to-cyan-500/[0.04] pointer-events-none" />
@@ -272,7 +272,7 @@ export function AssetWorkspace() {
                       <tr
                         key={s.strike}
                         className={`border-t border-gray-800/40 light:border-slate-200 hover:bg-gray-800/30 light:hover:bg-slate-100 transition-colors ${
-                          isAtm ? 'bg-gradient-to-r from-cyan-500/[0.08] via-cyan-500/[0.14] to-cyan-500/[0.08] shadow-[inset_0_1px_0_rgba(6,182,212,0.25),inset_0_-1px_0_rgba(6,182,212,0.25)]' : ''
+                          isAtm ? 'bg-gradient-to-r from-cyan-500/[0.08] via-cyan-500/[0.14] to-cyan-500/[0.08] shadow-[inset_0_1px_0_rgba(6,182,212,0.25),inset_0_-1px_0_rgba(6,182,212,0.25)] animate-border-glow' : ''
                         }`}
                       >
                         <LegCells leg={s.call} side="call" itm={callItm} maxOi={maxOi} />
@@ -366,11 +366,12 @@ function LegCells({
   const oiBar = Math.max(2, (leg.oi / maxOi) * 100);
   const ivCalculated = leg.greeksSource === 'CALCULATED';
 
+  const oiBarColor = side === 'call' ? 'bg-emerald-500/60' : 'bg-red-500/60';
   const oiCell = (
     <td className={`text-right px-2 py-1.5 tabular-nums text-gray-300 light:text-slate-700 ${bg}`}>
       <div className="flex items-center justify-end gap-1.5">
-        <div className="w-8 h-1 bg-gray-800 light:bg-slate-200 rounded-full overflow-hidden hidden md:block">
-          <div className="h-full bg-gray-600 light:bg-slate-400 rounded-full" style={{ width: `${oiBar}%` }} />
+        <div className="w-16 h-1.5 bg-gray-800/60 light:bg-slate-200 rounded-full overflow-hidden">
+          <div className={`h-full rounded-full bar-animated ${oiBarColor}`} style={{ width: `${oiBar}%` }} />
         </div>
         {formatCompact(leg.oi)}
       </div>

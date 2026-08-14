@@ -5,6 +5,7 @@ import { useAlerts } from '@/lib/use-alerts';
 import { relativeTime } from '@/lib/relative-time';
 import { SeverityBadge } from '@/components/common/badges';
 import { FilterPills } from '@/components/common/filter-pills';
+import { Skeleton } from '@/components/common/skeleton';
 import { useAssetTabsStore } from '@/stores';
 import type { Exchange } from '@fno/shared';
 
@@ -77,7 +78,17 @@ export function AlertsPage() {
       )}
 
       {loading && alerts.length === 0 && (
-        <div className="text-sm text-gray-500 light:text-slate-500 py-16 text-center">Loading alerts…</div>
+        <div className="bg-gradient-to-b from-[#141420] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 rounded-xl overflow-hidden shadow-[0_12px_36px_-16px_rgba(0,0,0,0.8)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.15)] divide-y divide-gray-800/40 light:divide-slate-100">
+          {Array.from({ length: 6 }, (_, i) => (
+            <div key={i} className="px-4 py-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <Skeleton width="70px" height="14px" />
+                <Skeleton width="50px" height="14px" className="rounded-full" />
+              </div>
+              <Skeleton width="80%" height="11px" />
+            </div>
+          ))}
+        </div>
       )}
 
       {!loading && alerts.length === 0 && isLive && (

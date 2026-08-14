@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { api } from './api';
+import { recordPrice } from './price-history-store';
 import type { FnoScannerRow } from '@fno/shared';
 
 const POLL_INTERVAL_MS = 60000;
@@ -23,6 +24,7 @@ export function useFnoScanner(exchange = 'NSE'): { rows: FnoScannerRow[]; isLive
           setRows(data);
           setIsLive(true);
           setLoading(false);
+          for (const r of data) recordPrice(r.symbol, r.price);
         })
         .catch(() => {
           if (cancelled) return;

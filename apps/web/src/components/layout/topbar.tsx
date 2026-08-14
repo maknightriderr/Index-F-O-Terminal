@@ -1,12 +1,14 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useMarketStore, useSystemHealthStore, useUISettingsStore } from '@/stores';
 import type { ThemeName } from '@/stores';
 import { formatIndianNumber, formatPercent, isMarketOpen } from '@fno/shared';
 import type { Exchange } from '@fno/shared';
 import { useLiveIndices } from '@/lib/use-live-indices';
 import { AlertBell } from './alert-bell';
+import { Sparkline } from '@/components/common/sparkline';
+import { getPriceHistory } from '@/lib/price-history-store';
 
 export function TopBar() {
   const { selectedExchange } = useMarketStore();
@@ -113,7 +115,7 @@ function StatusDot({ label, on, pulse }: { label: string; on: boolean; pulse?: b
   );
 }
 
-// --- Index Chip Component ---
+// --- Index Chip Component (with Sparkline & Flash) ---
 
 function IndexChip({
   symbol,
@@ -127,9 +129,31 @@ function IndexChip({
   changePercent: number;
 }) {
   const isPositive = change >= 0;
+  const prevPriceRef = useRef(price);
+  const [flashClass, setFlashClass] = useState('');
+
+  useEffect(() => {
+    if (prevPriceRef.current !== price) {
+      const direction = price > prevPriceRef.current ? 'animate-flash-green' : 'animate-flash-red';
+      setFlashClass(direction);
+      prevPriceRef.current = price;
+      const timer = setTimeout(() => setFlashClass(''), 600);
+      return () => clearTimeout(timer);
+    }
+  }, [price]);
 
   return (
-    <div className="flex items-center gap-2.5 text-xs">
+    <div className={`flex items-center gap-2 text-xs rounded-md px-1 -mx-1 ${flashClass}`}>
+      <Sparkline
+        data={getPriceHistory(symbol)}
+        symbol={symbol}
+        width={32}
+        height={16}
+        color={isPositive ? '#34d399' : '#f87171'}
+        showArea={false}
+        strokeWidth={1.2}
+        points={20}
+      />
       <span className="text-gray-500 light:text-slate-500 font-semibold tracking-wide">{symbol}</span>
       <span className="text-gray-50 light:text-slate-900 font-bold tabular-nums text-sm">
         {formatIndianNumber(price, 2)}

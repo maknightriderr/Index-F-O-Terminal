@@ -71,16 +71,51 @@ export function TerminalApp() {
   );
 }
 
-// --- Placeholder for upcoming pages ---
+// --- Rich "Coming Soon" Placeholder ---
+
+const PLACEHOLDER_FEATURES: Record<string, string[]> = {
+  'Indices': ['Spot & Futures Overview', 'Live Option Chain', 'OI & IV Analysis', 'Market Bias Signals'],
+  'Market Scanner': ['Unusual Activity Alerts', 'Volume Breakout Detection', 'Relative Strength Ranking', 'Custom Screener Filters'],
+  'Backtesting': ['Strategy Backtester', 'Equity Curve Analysis', 'Win Rate & Profit Factor', 'Drawdown Reports'],
+  'Market Replay': ['Historical Replay Mode', 'Tick-by-Tick Playback', 'Option Chain Replay', 'Signal Overlay'],
+  'Positions': ['Portfolio Dashboard', 'Position Greeks Summary', 'Live P&L Tracking', 'Risk Simulator'],
+  'Settings': ['Broker Configuration', 'Risk Parameters', 'Alert Channels', 'UI Preferences'],
+};
 
 function PlaceholderPage({ title, icon, description }: { title: string; icon: string; description: string }) {
+  const features = PLACEHOLDER_FEATURES[title] || ['Feature 1', 'Feature 2', 'Feature 3', 'Feature 4'];
+
   return (
-    <div className="flex flex-col items-center justify-center h-full p-8">
-      <div className="text-5xl mb-4 opacity-80">{icon}</div>
-      <h2 className="text-xl font-bold text-gray-200 light:text-slate-800 mb-2">{title}</h2>
-      <p className="text-sm text-gray-500 light:text-slate-500 max-w-md text-center mb-4">{description}</p>
-      <div className="px-4 py-2 bg-gray-800/50 light:bg-slate-100 border border-gray-700/50 light:border-slate-200 rounded-xl text-xs text-gray-400 light:text-slate-500">
-        Not built yet
+    <div className="flex flex-col items-center justify-center h-full p-8 animate-fade-in">
+      {/* Main card with animated gradient border */}
+      <div className="gradient-border rounded-2xl max-w-lg w-full">
+        <div className="glass-strong rounded-2xl p-8 text-center">
+          {/* Floating icon */}
+          <div className="text-5xl mb-5 animate-float">{icon}</div>
+
+          <h2 className="text-xl font-bold text-gray-100 light:text-slate-900 mb-2">{title}</h2>
+          <p className="text-sm text-gray-400 light:text-slate-500 max-w-md mx-auto mb-6 leading-relaxed">{description}</p>
+
+          {/* Feature preview grid */}
+          <div className="grid grid-cols-2 gap-2.5 mb-6">
+            {features.map((feature, i) => (
+              <div
+                key={feature}
+                className="flex items-center gap-2 px-3 py-2.5 bg-gray-800/30 light:bg-slate-100 rounded-lg text-left stagger-item"
+                style={{ '--stagger-index': i } as React.CSSProperties}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400/50 shrink-0" />
+                <span className="text-xs text-gray-300 light:text-slate-600">{feature}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Status badge */}
+          <div className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-emerald-500/10 to-cyan-500/10 border border-emerald-500/20 rounded-full">
+            <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse-subtle" />
+            <span className="text-xs font-medium text-gray-300 light:text-slate-600">Coming Soon</span>
+          </div>
+        </div>
       </div>
     </div>
   );

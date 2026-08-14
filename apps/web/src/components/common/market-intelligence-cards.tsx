@@ -137,14 +137,21 @@ export function IntelligenceScoreCard({ score, symbol }: { score: IntelligenceSc
   );
 }
 
+const PROB_BAR_COLORS: Record<string, string> = {
+  emerald: 'bg-emerald-500',
+  gray: 'bg-gray-500',
+  red: 'bg-red-500',
+};
+
 function ProbBar({ label, value, color }: { label: string; value: number; color: string }) {
   return (
     <div className="flex items-center gap-2">
       <span className="text-[10px] text-gray-400 light:text-slate-500 w-12 shrink-0">{label}</span>
       <div className="flex-1 h-2 bg-gray-900/70 light:bg-slate-200 rounded-full overflow-hidden">
-        <div className={`h-full rounded-full bg-${color}-500 transition-all`} style={{ width: `${value}%` }} />
+        <div className={`h-full rounded-full bar-animated ${PROB_BAR_COLORS[color] || 'bg-gray-500'}`} style={{ width: `${value}%` }} />
       </div>
       <span className="text-xs text-gray-200 light:text-slate-800 font-semibold tabular-nums w-8 text-right">{value}%</span>
     </div>
   );
 }
+

@@ -8,6 +8,9 @@ import type { Exchange } from '@fno/shared';
 import { OIBadge, BiasBadge, ScoreBadge } from '@/components/common/badges';
 import { AddAssetButton } from '@/components/common/add-asset-button';
 import { ActivityList } from '@/components/common/activity-list';
+import { Sparkline } from '@/components/common/sparkline';
+import { SkeletonTableRow } from '@/components/common/skeleton';
+import { getPriceHistory } from '@/lib/price-history-store';
 import { useAssetTabsStore, useMarketStore } from '@/stores';
 
 export function Dashboard() {
@@ -19,7 +22,7 @@ export function Dashboard() {
   return (
     <div className="p-4 space-y-4 min-h-full">
       {!indicesLive && (
-        <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2.5 text-amber-400 light:text-amber-700 text-xs font-medium">
+        <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2.5 text-amber-400 light:text-amber-700 text-xs font-medium animate-slide-in">
           ⚠️ Index prices above are sample data right now — backend unreachable.
         </div>
       )}
@@ -32,13 +35,15 @@ export function Dashboard() {
 
       {/* Index Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
-        {indices.map((index) => (
-          <IndexCard key={index.token} {...index} />
+        {indices.map((index, i) => (
+          <div key={index.token} className="stagger-item" style={{ '--stagger-index': i } as React.CSSProperties}>
+            <IndexCard {...index} />
+          </div>
         ))}
       </div>
 
       {/* F&O Activity Scanner — top 8 by score; full universe lives on the F&O Stocks tab */}
-      <div className="bg-gradient-to-b from-[#141420] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 rounded-xl shadow-[0_12px_36px_-16px_rgba(0,0,0,0.8)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.12)] overflow-hidden">
+      <div className="bg-gradient-to-b from-[#141420] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 rounded-xl shadow-[0_12px_36px_-16px_rgba(0,0,0,0.8)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.12)] overflow-hidden animate-fade-in">
         <div className="px-4 py-3 border-b border-gray-800/60 light:border-slate-200 flex items-center justify-between">
           <h2 className="text-sm font-bold text-gray-200 light:text-slate-800">🔥 F&O Market Activity <span className="text-gray-500 light:text-slate-500 font-medium">— top movers</span></h2>
           <button
@@ -49,7 +54,15 @@ export function Dashboard() {
           </button>
         </div>
         {!fnoLive && topStocks.length === 0 ? (
-          <div className="text-sm text-gray-500 light:text-slate-500 py-10 text-center">Scanning the F&O universe…</div>
+          <div className="p-1">
+            <table className="w-full text-xs">
+              <tbody>
+                {Array.from({ length: 5 }, (_, i) => (
+                  <SkeletonTableRow key={i} cols={12} />
+                ))}
+              </tbody>
+            </table>
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
@@ -70,13 +83,28 @@ export function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                {topStocks.map((stock) => (
+                {topStocks.map((stock, idx) => (
                   <tr
                     key={stock.symbol}
                     onClick={() => useAssetTabsStore.getState().openTab(stock.symbol, stock.exchange)}
-                    className="border-t border-gray-800/30 light:border-slate-200 hover:bg-gray-800/30 light:hover:bg-slate-100 cursor-pointer transition-colors"
+                    className="border-t border-gray-800/30 light:border-slate-200 hover:bg-gray-800/30 light:hover:bg-slate-100 cursor-pointer transition-colors stagger-item"
+                    style={{ '--stagger-index': idx } as React.CSSProperties}
                   >
-                    <td className="px-4 py-2.5 font-medium text-gray-200 light:text-slate-800">{stock.symbol}</td>
+                    <td className="px-4 py-2.5 font-medium text-gray-200 light:text-slate-800">
+                      <div className="flex items-center gap-2">
+                        <Sparkline
+                          data={getPriceHistory(stock.symbol)}
+                          symbol={stock.symbol}
+                          width={36}
+                          height={14}
+                          color={stock.changePercent >= 0 ? '#34d399' : '#f87171'}
+                          showArea={false}
+                          strokeWidth={1}
+                          points={16}
+                        />
+                        {stock.symbol}
+                      </div>
+                    </td>
                     <td className="text-right px-3 py-2.5 tabular-nums text-gray-200 light:text-slate-800">
                       {formatIndianNumber(stock.price, 2)}
                     </td>
@@ -172,8 +200,22 @@ function IndexCard({ symbol, exchange, ltp, change, changePercent, open, high, l
           {formatPercent(changePercent)}
         </span>
       </div>
-      <div className="text-2xl font-bold tabular-nums text-gray-50 light:text-slate-900 mb-1">
-        {formatIndianNumber(ltp, 2)}
+      <div className="flex items-end justify-between mb-1">
+        <div className="text-2xl font-bold tabular-nums text-gray-50 light:text-slate-900">
+          {formatIndianNumber(ltp, 2)}
+        </div>
+        {/* Sparkline */}
+        <Sparkline
+          data={getPriceHistory(symbol)}
+          symbol={symbol}
+          width={64}
+          height={24}
+          color={isPositive ? '#34d399' : '#f87171'}
+          showArea={true}
+          strokeWidth={1.3}
+          points={24}
+          className="opacity-80 group-hover:opacity-100 transition-opacity"
+        />
       </div>
       <div className={`text-xs tabular-nums mb-3 font-medium ${isPositive ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700'}`}>
         {isPositive ? '▲' : '▼'} {Math.abs(change).toFixed(2)}
@@ -186,7 +228,7 @@ function IndexCard({ symbol, exchange, ltp, change, changePercent, open, high, l
         </div>
         <div className="h-1.5 bg-gray-800 light:bg-slate-200 rounded-full overflow-hidden">
           <div
-            className={`h-full rounded-full ${isPositive ? 'bg-gradient-to-r from-emerald-600 to-emerald-400' : 'bg-gradient-to-r from-red-600 to-red-400'}`}
+            className={`h-full rounded-full bar-animated ${isPositive ? 'bg-gradient-to-r from-emerald-600 to-emerald-400' : 'bg-gradient-to-r from-red-600 to-red-400'}`}
             style={{ width: `${positionInRange}%` }}
           />
         </div>
@@ -204,10 +246,9 @@ function IVRankBar({ value }: { value: number }) {
   return (
     <div className="flex items-center gap-1.5 justify-end">
       <div className="w-12 h-1.5 bg-gray-800 light:bg-slate-200 rounded-full overflow-hidden">
-        <div className={`h-full rounded-full ${color}`} style={{ width: `${value}%` }} />
+        <div className={`h-full rounded-full bar-animated ${color}`} style={{ width: `${value}%` }} />
       </div>
       <span className="text-[10px] tabular-nums text-gray-400 light:text-slate-500 w-6 text-right">{value}</span>
     </div>
   );
 }
-
