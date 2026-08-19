@@ -10,6 +10,7 @@ import { KNOWN_INDEX_TOKENS, CM_SEGMENT, FO_SEGMENT } from '@fno/shared';
 import type { Exchange, MarketQuote } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveNearestFuturesContract } from './option-chain.js';
+import { logger } from '../lib/logger.js';
 
 export const INDEX_LIST: Array<{ symbol: string; exchange: Exchange }> = [
   { symbol: 'NIFTY', exchange: 'NSE' },
@@ -127,8 +128,13 @@ export async function getMcxCommodityQuotes(provider: MarketDataProvider): Promi
     MCX_COMMODITY_SYMBOLS.map(async (symbol) => {
       try {
         const contract = await resolveNearestFuturesContract(provider, symbol, 'MCX');
-        return contract ? { symbol, token: contract.token } : null;
-      } catch {
+        if (!contract) {
+          logger.warn({ symbol }, 'MCX commodity: no live futures contract found — dropped from Indices');
+          return null;
+        }
+        return { symbol, token: contract.token };
+      } catch (err: any) {
+        logger.warn({ symbol, error: err.message }, 'MCX commodity: contract resolution failed — dropped from Indices');
         return null;
       }
     })
@@ -143,7 +149,10 @@ export async function getMcxCommodityQuotes(provider: MarketDataProvider): Promi
   const results: MarketQuote[] = [];
   for (const entry of entries) {
     const q = quoteByToken.get(entry.token);
-    if (!q || q.ltp <= 0) continue;
+    if (!q || q.ltp <= 0) {
+      logger.warn({ symbol: entry.symbol, token: entry.token }, 'MCX commodity: no live quote (ltp <= 0) — dropped from Indices');
+      continue;
+    }
 
     const change = q.netChange ?? q.ltp - q.close;
     const changePercent = q.percentChange ?? (q.close > 0 ? (change / q.close) * 100 : 0);
