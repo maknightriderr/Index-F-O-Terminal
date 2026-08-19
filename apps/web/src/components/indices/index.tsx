@@ -45,6 +45,14 @@ const INDEX_LABELS: Record<string, string> = {
   MCXCOPRDEX: 'MCX Copper Index',
   MCXSILVDEX: 'MCX Silver Index',
   MCXGOLDEX: 'MCX Gold Index',
+  // These four have no fixed index instrument (see getMcxCommodityQuotes) —
+  // the quote is the nearest-expiry futures contract itself, not a
+  // benchmark index, so the label says so to avoid confusion with the
+  // MCXxxxDEX index rows above.
+  GOLD: 'Gold (Futures)',
+  SILVER: 'Silver (Futures)',
+  CRUDEOIL: 'Crude Oil (Futures)',
+  NATURALGAS: 'Natural Gas (Futures)',
 };
 
 function labelFor(symbol: string): string {

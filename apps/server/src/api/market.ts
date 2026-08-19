@@ -7,7 +7,7 @@ import { logger } from '../lib/logger.js';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { CM_SEGMENT, FO_SEGMENT } from '@fno/shared';
 import type { CandleInterval, Exchange } from '@fno/shared';
-import { getLiveIndexQuotes, ALL_INDEX_LIST } from '../services/indices.js';
+import { getLiveIndexQuotes, getMcxCommodityQuotes, ALL_INDEX_LIST } from '../services/indices.js';
 import { buildMarketBias } from '../services/market-bias.js';
 import { getCachedPatterns } from '../services/chart-patterns.js';
 
@@ -53,12 +53,21 @@ export function createMarketDataRoutes(provider: MarketDataProvider): Router {
    * GET /api/market/all-indices
    * Live spot quotes for every index this terminal has a confirmed token
    * for — broad market + sectoral on NSE/BSE, plus MCX's commodity
-   * benchmark indices. Powers the dedicated Indices tab.
+   * benchmark indices — plus GOLD/SILVER/CRUDEOIL/NATURALGAS's nearest
+   * futures contract as a live reference price (those four have no fixed
+   * index instrument, unlike everything else here). Powers the dedicated
+   * Indices tab.
    */
   router.get('/all-indices', async (_req: Request, res: Response) => {
     try {
-      const data = await getLiveIndexQuotes(provider, ALL_INDEX_LIST);
-      res.json({ success: true, data, meta: { timestamp: Date.now(), source: 'LIVE' } });
+      const [indices, commodities] = await Promise.all([
+        getLiveIndexQuotes(provider, ALL_INDEX_LIST),
+        getMcxCommodityQuotes(provider).catch((err) => {
+          logger.warn({ error: err.message }, 'MCX commodity quotes unavailable this tick');
+          return [];
+        }),
+      ]);
+      res.json({ success: true, data: [...indices, ...commodities], meta: { timestamp: Date.now(), source: 'LIVE' } });
     } catch (error: any) {
       logger.error({ error: error.message }, 'Live all-indices quotes failed');
       res.status(502).json({
