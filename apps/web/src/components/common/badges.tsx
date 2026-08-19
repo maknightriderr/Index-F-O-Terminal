@@ -19,7 +19,7 @@ const SEVERITY_COLORS: Record<string, string> = {
 
 export function SeverityBadge({ severity }: { severity: string }) {
   return (
-    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
+    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium badge-glass ${
       SEVERITY_COLORS[severity] || SEVERITY_COLORS.INFO
     }`}>
       {severity}
@@ -43,7 +43,7 @@ export function OIBadge({ type }: { type: OIInterpretation | string }) {
   const info = OI_LABELS[type as OIInterpretation] || OI_LABELS.NEUTRAL;
 
   return (
-    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${info.color}`}>
+    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium badge-glass ${info.color}`}>
       {info.label}
     </span>
   );
@@ -55,11 +55,18 @@ const BIAS_COLORS: Record<string, string> = {
   NEUTRAL: 'bg-gray-500/15 text-gray-400 light:text-slate-500',
 };
 
+const BIAS_ARROWS: Record<string, string> = {
+  BULLISH: '▲',
+  BEARISH: '▼',
+  NEUTRAL: '—',
+};
+
 export function BiasBadge({ bias, large }: { bias: BiasDirection | string; large?: boolean }) {
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded font-medium ${
+    <span className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded font-medium badge-glass ${
       BIAS_COLORS[bias] || BIAS_COLORS.NEUTRAL
     } ${large ? 'text-sm' : 'text-[10px]'}`}>
+      <span className="text-[8px]">{BIAS_ARROWS[bias] || '—'}</span>
       {bias}
     </span>
   );
@@ -70,8 +77,10 @@ export function ScoreBadge({ score, large }: { score: number; large?: boolean })
                 score >= 40 ? 'text-yellow-400 light:text-yellow-700 bg-yellow-500/15' :
                 'text-red-400 light:text-red-700 bg-red-500/15';
 
+  const glowClass = score >= 70 ? 'badge-glow-emerald' : score <= 20 ? 'badge-glow-red' : '';
+
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded font-bold tabular-nums ${color} ${
+    <span className={`inline-flex items-center px-2 py-0.5 rounded font-bold tabular-nums badge-glass ${color} ${glowClass} ${
       large ? 'text-sm' : 'text-[10px]'
     }`}>
       {score}

@@ -103,27 +103,31 @@ export function Sidebar() {
 
   return (
     <aside
-      className={`flex flex-col h-full bg-[#0d0d14] light:bg-white border-r border-gray-800/50 light:border-slate-200 transition-all duration-200 ${
+      className={`flex flex-col h-full bg-[#0b0b12]/95 light:bg-white/95 backdrop-blur-sm border-r border-gray-800/40 light:border-slate-200 transition-all duration-300 ease-out relative z-[2] ${
         sidebarOpen ? 'w-56' : 'w-14'
       }`}
     >
       {/* Logo */}
       <div
-        className="flex items-center h-12 px-3 border-b border-gray-800/50 light:border-slate-200 cursor-pointer hover:bg-gray-800/30 light:hover:bg-slate-100 transition-colors"
+        className="flex items-center h-12 px-3 border-b border-gray-800/40 light:border-slate-200 cursor-pointer hover:bg-gray-800/20 light:hover:bg-slate-50 transition-colors"
         onClick={toggleSidebar}
       >
-        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-400 to-cyan-500 flex items-center justify-center text-sm font-bold text-black shrink-0 shadow-[0_2px_10px_-2px_rgba(16,185,129,0.5)] animate-gradient-flow" style={{ backgroundSize: '200% 200%' }}>
-          F&O
+        <div className="relative">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-400 via-emerald-500 to-cyan-500 flex items-center justify-center text-sm font-bold text-black shrink-0 shadow-[0_2px_12px_-2px_rgba(16,185,129,0.6)] animate-gradient-flow" style={{ backgroundSize: '200% 200%' }}>
+            F&O
+          </div>
+          {/* Pulsing ring behind logo */}
+          <div className="absolute inset-0 rounded-lg bg-gradient-to-br from-emerald-400/20 to-cyan-500/20 animate-breathe" />
         </div>
         {sidebarOpen && (
-          <span className="ml-2 text-sm font-semibold text-gray-100 light:text-slate-900 truncate tracking-tight">
+          <span className="ml-2.5 text-sm font-semibold text-gray-100 light:text-slate-900 truncate tracking-tight">
             Terminal
           </span>
         )}
       </div>
 
       {/* Add Asset */}
-      <div className="px-2 py-2 border-b border-gray-800/50 light:border-slate-200">
+      <div className="px-2 py-2 border-b border-gray-800/40 light:border-slate-200">
         <AddAssetButton compact={!sidebarOpen} />
       </div>
 
@@ -131,11 +135,13 @@ export function Sidebar() {
       <nav className="flex-1 overflow-y-auto py-2 px-1.5 scrollbar-thin">
         {NAV_SECTIONS.map((section, sIdx) => (
           <div key={section.title}>
-            {/* Section Divider */}
-            {sIdx > 0 && <div className="h-px bg-gray-800/40 light:bg-slate-200 mx-2 my-2" />}
+            {/* Section Divider — gradient fade */}
+            {sIdx > 0 && (
+              <div className="mx-2 my-2.5 h-px bg-gradient-to-r from-emerald-500/15 via-gray-800/40 to-transparent light:from-emerald-500/10 light:via-slate-200 light:to-transparent" />
+            )}
             {/* Section Title */}
             {sidebarOpen && (
-              <div className="px-2.5 pt-2 pb-1.5 text-[9px] font-bold text-gray-600 light:text-slate-400 uppercase tracking-[0.12em]">
+              <div className="px-2.5 pt-2 pb-1.5 text-[9px] font-bold text-gray-600 light:text-slate-400 uppercase tracking-[0.14em]">
                 {section.title}
               </div>
             )}
@@ -146,18 +152,18 @@ export function Sidebar() {
                   <button
                     key={item.id}
                     onClick={() => setActiveTab(item.id)}
-                    className={`sidebar-item relative w-full flex items-center px-2.5 py-2 text-sm rounded-lg transition-all duration-150 ${
+                    className={`sidebar-item relative w-full flex items-center px-2.5 py-2 text-sm rounded-lg transition-all duration-200 ${
                       isActive
-                        ? 'bg-gradient-to-r from-emerald-500/15 to-emerald-500/5 light:from-emerald-500/15 light:to-emerald-500/10 text-emerald-300 light:text-emerald-700 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.2)]'
-                        : 'text-gray-400 light:text-slate-500 hover:text-gray-200 light:hover:text-slate-900 hover:bg-gray-800/50 light:hover:bg-slate-100'
+                        ? 'bg-gradient-to-r from-emerald-500/15 via-emerald-500/8 to-transparent light:from-emerald-500/15 light:to-emerald-500/5 text-emerald-300 light:text-emerald-700 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.2),0_0_12px_-4px_rgba(16,185,129,0.15)]'
+                        : 'text-gray-400 light:text-slate-500 hover:text-gray-200 light:hover:text-slate-900 hover:bg-gray-800/40 light:hover:bg-slate-100 hover:scale-[1.02]'
                     }`}
                   >
                     {/* Active indicator line */}
                     {isActive && (
-                      <div className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
+                      <div className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full bg-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.7),0_0_4px_rgba(16,185,129,0.4)]" />
                     )}
                     <div className="w-7 flex items-center justify-center shrink-0">
-                      <Icon d={ICONS[item.icon] || ICONS.dashboard} className={isActive ? 'text-emerald-400 light:text-emerald-600' : ''} />
+                      <Icon d={ICONS[item.icon] || ICONS.dashboard} className={isActive ? 'text-emerald-400 light:text-emerald-600 drop-shadow-[0_0_4px_rgba(16,185,129,0.4)]' : ''} />
                     </div>
                     {sidebarOpen && (
                       <span className="ml-1 truncate">{item.label}</span>
@@ -175,19 +181,23 @@ export function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="border-t border-gray-800/50 light:border-slate-200 px-3 py-2">
-        {sidebarOpen ? (
-          <div className="flex items-center gap-2">
-            <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            <div className="text-[10px] text-gray-600 light:text-slate-400 tracking-wide">
-              F&O TERMINAL <span className="text-gray-700 light:text-slate-300">v0.1</span>
+      <div className="border-t border-gray-800/40 light:border-slate-200 relative">
+        {/* Gradient accent above footer */}
+        <div className="absolute top-0 left-2 right-2 h-px bg-gradient-to-r from-transparent via-emerald-500/20 to-transparent" />
+        <div className="px-3 py-2.5">
+          {sidebarOpen ? (
+            <div className="flex items-center gap-2">
+              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-breathe" />
+              <div className="text-[10px] text-gray-600 light:text-slate-400 tracking-wide font-medium">
+                F&O TERMINAL <span className="text-gray-700 light:text-slate-300">v0.1</span>
+              </div>
             </div>
-          </div>
-        ) : (
-          <div className="flex justify-center">
-            <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-          </div>
-        )}
+          ) : (
+            <div className="flex justify-center">
+              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-breathe" />
+            </div>
+          )}
+        </div>
       </div>
     </aside>
   );

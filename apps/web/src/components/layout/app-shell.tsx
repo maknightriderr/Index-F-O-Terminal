@@ -19,13 +19,13 @@ export function AppShell({ children }: AppShellProps) {
   if (!mounted) return null; // Prevent hydration mismatch with persisted state
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#0a0a0f] light:bg-slate-50 text-gray-100 light:text-slate-900 font-sans">
+    <div className="noise-overlay ambient-bg flex h-screen w-screen overflow-hidden bg-[#0a0a0f] light:bg-slate-50 text-gray-100 light:text-slate-900 font-sans">
       <ThemeEffect />
       {/* Sidebar */}
       <Sidebar />
 
       {/* Main Content Area */}
-      <div className="flex flex-col flex-1 min-w-0">
+      <div className="flex flex-col flex-1 min-w-0 relative z-[1]">
         {/* Top Bar */}
         <TopBar />
 

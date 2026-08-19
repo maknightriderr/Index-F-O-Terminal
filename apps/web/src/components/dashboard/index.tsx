@@ -36,14 +36,14 @@ export function Dashboard() {
   return (
     <div className="p-4 space-y-4 min-h-full">
       {!indicesLive && (
-        <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2.5 text-amber-400 light:text-amber-700 text-xs font-medium animate-slide-in">
+        <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2.5 text-amber-400 light:text-amber-700 text-xs font-medium animate-slide-in backdrop-blur-sm">
           ⚠️ Index prices above are sample data right now — backend unreachable.
         </div>
       )}
 
       {/* Market Overview Header */}
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-gray-100 light:text-slate-900">Market Overview</h1>
+        <h1 className="text-lg font-semibold text-gray-100 light:text-slate-900 section-header">Market Overview</h1>
         <AddAssetButton />
       </div>
 
@@ -57,12 +57,12 @@ export function Dashboard() {
       </div>
 
       {/* F&O Activity Scanner — top 8 by score; full universe lives on the F&O Stocks tab */}
-      <div className="bg-gradient-to-b from-[#141420] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 rounded-xl shadow-[0_12px_36px_-16px_rgba(0,0,0,0.8)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.12)] overflow-hidden animate-fade-in">
-        <div className="px-4 py-3 border-b border-gray-800/60 light:border-slate-200 flex items-center justify-between">
+      <div className="card-premium card-accent-top animate-fade-in" style={{ '--accent-gradient': 'linear-gradient(90deg, rgba(251, 146, 60, 0.6), rgba(16, 185, 129, 0.4), rgba(6, 182, 212, 0.3))' } as React.CSSProperties}>
+        <div className="px-4 py-3 border-b border-gray-800/40 light:border-slate-200 flex items-center justify-between">
           <h2 className="text-sm font-bold text-gray-200 light:text-slate-800">🔥 F&O Market Activity <span className="text-gray-500 light:text-slate-500 font-medium">— top movers</span></h2>
           <button
             onClick={() => setActiveTab('fno-stocks')}
-            className="text-[11px] text-emerald-400 light:text-emerald-700 hover:text-emerald-300 light:hover:text-emerald-600 font-medium transition-colors"
+            className="text-[11px] text-emerald-400 light:text-emerald-700 hover:text-emerald-300 light:hover:text-emerald-600 font-medium transition-colors hover:underline underline-offset-2"
           >
             View all {fnoRows.length > 0 ? fnoRows.length : ''} F&O stocks →
           </button>
@@ -79,21 +79,21 @@ export function Dashboard() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-xs">
+            <table className="w-full text-xs table-premium">
               <thead>
-                <tr className="bg-gray-900/50 light:bg-slate-100 text-gray-500 light:text-slate-500 uppercase tracking-wider">
-                  <th className="text-left px-4 py-2 font-medium">Stock</th>
-                  <th className="text-right px-3 py-2 font-medium">Price</th>
-                  <th className="text-right px-3 py-2 font-medium">Chg%</th>
-                  <th className="text-right px-3 py-2 font-medium">Volume</th>
-                  <th className="text-right px-3 py-2 font-medium">Futures OI</th>
-                  <th className="text-right px-3 py-2 font-medium">OI Chg</th>
-                  <th className="text-left px-3 py-2 font-medium">OI Activity</th>
-                  <th className="text-right px-3 py-2 font-medium">PCR</th>
-                  <th className="text-right px-3 py-2 font-medium">IV</th>
-                  <th className="text-right px-3 py-2 font-medium">IV Rank</th>
-                  <th className="text-center px-3 py-2 font-medium">Bias</th>
-                  <th className="text-center px-3 py-2 font-medium">Score</th>
+                <tr className="bg-gray-900/40 light:bg-slate-50 text-gray-500 light:text-slate-500 uppercase tracking-wider">
+                  <th className="text-left px-4 py-2.5 font-medium">Stock</th>
+                  <th className="text-right px-3 py-2.5 font-medium">Price</th>
+                  <th className="text-right px-3 py-2.5 font-medium">Chg%</th>
+                  <th className="text-right px-3 py-2.5 font-medium">Volume</th>
+                  <th className="text-right px-3 py-2.5 font-medium">Futures OI</th>
+                  <th className="text-right px-3 py-2.5 font-medium">OI Chg</th>
+                  <th className="text-left px-3 py-2.5 font-medium">OI Activity</th>
+                  <th className="text-right px-3 py-2.5 font-medium">PCR</th>
+                  <th className="text-right px-3 py-2.5 font-medium">IV</th>
+                  <th className="text-right px-3 py-2.5 font-medium">IV Rank</th>
+                  <th className="text-center px-3 py-2.5 font-medium">Bias</th>
+                  <th className="text-center px-3 py-2.5 font-medium">Score</th>
                 </tr>
               </thead>
               <tbody>
@@ -101,7 +101,7 @@ export function Dashboard() {
                   <tr
                     key={stock.symbol}
                     onClick={() => useAssetTabsStore.getState().openTab(stock.symbol, stock.exchange)}
-                    className="border-t border-gray-800/30 light:border-slate-200 hover:bg-gray-800/30 light:hover:bg-slate-100 cursor-pointer transition-colors stagger-item"
+                    className="border-t border-gray-800/20 light:border-slate-100 cursor-pointer transition-all stagger-item"
                     style={{ '--stagger-index': idx } as React.CSSProperties}
                   >
                     <td className="px-4 py-2.5 font-medium text-gray-200 light:text-slate-800">
@@ -214,18 +214,22 @@ function IndexCard({ symbol, exchange, ltp, change, changePercent, open, high, l
   return (
     <div
       onClick={() => openTab(symbol, exchange as Exchange)}
-      className="bg-gradient-to-b from-[#151522] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 rounded-xl shadow-[0_8px_28px_-14px_rgba(0,0,0,0.75)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.12)] p-3.5 hover:border-gray-700/80 light:hover:border-slate-300 hover:-translate-y-0.5 hover:shadow-[0_16px_40px_-16px_rgba(0,0,0,0.85)] transition-all duration-200 cursor-pointer group"
+      className="card-premium card-accent-top p-3.5 hover:-translate-y-1 hover:shadow-[0_1px_0_0_rgba(255,255,255,0.05)_inset,0_20px_56px_-16px_rgba(0,0,0,0.9),0_4px_12px_-2px_rgba(0,0,0,0.5)] cursor-pointer group"
+      style={{ '--accent-gradient': isPositive
+        ? 'linear-gradient(90deg, rgba(16, 185, 129, 0.7), rgba(6, 182, 212, 0.4))'
+        : 'linear-gradient(90deg, rgba(239, 68, 68, 0.7), rgba(251, 146, 60, 0.4))'
+      } as React.CSSProperties}
     >
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs font-semibold text-gray-400 light:text-slate-500 group-hover:text-gray-200 light:group-hover:text-slate-800 transition-colors tracking-wide">{symbol}</span>
-        <span className={`text-xs font-semibold px-1.5 py-0.5 rounded-md ${
+        <span className={`text-xs font-semibold px-1.5 py-0.5 rounded-md badge-glass ${
           isPositive ? 'bg-emerald-500/15 text-emerald-400 light:text-emerald-700' : 'bg-red-500/15 text-red-400 light:text-red-700'
         }`}>
           {formatPercent(changePercent)}
         </span>
       </div>
       <div className="flex items-end justify-between mb-1">
-        <div className="text-2xl font-bold tabular-nums text-gray-50 light:text-slate-900">
+        <div className={`text-2xl font-bold tabular-nums text-gray-50 light:text-slate-900 ${isPositive ? 'text-glow-emerald' : 'text-glow-red'}`}>
           {formatIndianNumber(ltp, 2)}
         </div>
         {/* Sparkline */}
@@ -250,10 +254,15 @@ function IndexCard({ symbol, exchange, ltp, change, changePercent, open, high, l
           <span>L: {formatIndianNumber(low, 2)}</span>
           <span>H: {formatIndianNumber(high, 2)}</span>
         </div>
-        <div className="h-1.5 bg-gray-800 light:bg-slate-200 rounded-full overflow-hidden">
+        <div className="relative h-1.5 bg-gray-800/80 light:bg-slate-200 rounded-full overflow-hidden">
           <div
             className={`h-full rounded-full bar-animated ${isPositive ? 'bg-gradient-to-r from-emerald-600 to-emerald-400' : 'bg-gradient-to-r from-red-600 to-red-400'}`}
             style={{ width: `${positionInRange}%` }}
+          />
+          {/* Glowing dot at current position */}
+          <div
+            className={`absolute top-1/2 -translate-y-1/2 w-2 h-2 rounded-full ${isPositive ? 'bg-emerald-400 shadow-[0_0_6px_rgba(16,185,129,0.6)]' : 'bg-red-400 shadow-[0_0_6px_rgba(239,68,68,0.6)]'} transition-all duration-500`}
+            style={{ left: `calc(${positionInRange}% - 4px)` }}
           />
         </div>
       </div>
@@ -269,7 +278,7 @@ function IVRankBar({ value }: { value: number }) {
 
   return (
     <div className="flex items-center gap-1.5 justify-end">
-      <div className="w-12 h-1.5 bg-gray-800 light:bg-slate-200 rounded-full overflow-hidden">
+      <div className="w-12 h-1.5 bg-gray-800/80 light:bg-slate-200 rounded-full overflow-hidden">
         <div className={`h-full rounded-full bar-animated ${color}`} style={{ width: `${value}%` }} />
       </div>
       <span className="text-[10px] tabular-nums text-gray-400 light:text-slate-500 w-6 text-right">{value}</span>
