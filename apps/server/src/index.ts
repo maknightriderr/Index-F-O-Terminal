@@ -23,6 +23,8 @@ import { createAlertRoutes } from './api/alerts.js';
 import { startAlertScanner } from './services/alerts.js';
 import { startPatternScanner } from './services/chart-patterns.js';
 import { createAiAssistantRoutes } from './api/ai-assistant.js';
+import { createInstitutionalFlowRoutes } from './api/institutional-flow.js';
+import { startInstitutionalFlowScanner } from './services/institutional-flow-scanner.js';
 
 // --- Initialize Provider + Subscription Manager ---
 
@@ -77,6 +79,7 @@ app.use('/api/option-chain', createOptionChainRoutes(provider));
 app.use('/api/futures', createFuturesRoutes(provider));
 app.use('/api/alerts', createAlertRoutes());
 app.use('/api/ai-assistant', createAiAssistantRoutes(provider));
+app.use('/api/institutional-flow', createInstitutionalFlowRoutes(provider));
 
 // --- Health Check ---
 
@@ -184,6 +187,7 @@ async function authenticateOnBoot(): Promise<void> {
 authenticateOnBoot();
 startAlertScanner(provider);
 startPatternScanner(provider);
+startInstitutionalFlowScanner(provider);
 
 setInterval(() => {
   const { apiKey, clientId, password, totpSecret } = config.angelOne;

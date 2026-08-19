@@ -37,7 +37,7 @@ const ICONS: Record<string, string> = {
   'market-scanner': 'M13 2L3 14h9l-1 8 10-12h-9l1-8',
   'strategy-scanner': 'M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z M12 8v8 M8 12h8',
   backtesting:  'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z',
-  'market-replay': 'M1 4v6h6 M23 20v-6h-6 M20.49 9A9 9 0 0 0 5.64 5.64L1 10 M23 14l-4.64 4.36A9 9 0 0 1 3.51 15',
+  'institutional-flow': 'M1 4v6h6 M23 20v-6h-6 M20.49 9A9 9 0 0 0 5.64 5.64L1 10 M23 14l-4.64 4.36A9 9 0 0 1 3.51 15',
   positions:    'M20 7h-9 M14 17H5 M17 17a3 3 0 1 0 0-6 M7 7a3 3 0 1 0 0 6',
   alerts:       'M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9 M13.73 21a2 2 0 0 1-3.46 0',
   'ai-assistant': 'M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1.27A7 7 0 0 1 7.27 19H6a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h-1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z M10 14a1 1 0 1 0 0 2 M14 14a1 1 0 1 0 0 2',
@@ -82,7 +82,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { id: 'strategy-scanner', label: 'Strategy Scanner', icon: 'strategy-scanner' },
       { id: 'backtesting', label: 'Backtesting', icon: 'backtesting' },
-      { id: 'market-replay', label: 'Market Replay', icon: 'market-replay' },
+      { id: 'institutional-flow', label: 'Institutional Flow', icon: 'institutional-flow' },
       { id: 'positions', label: 'Positions', icon: 'positions' },
     ],
   },

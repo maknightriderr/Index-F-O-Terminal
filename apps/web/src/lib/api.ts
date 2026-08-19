@@ -5,7 +5,22 @@
 // All API calls go through this module.
 // ============================================================
 
-import type { OptionChain, FuturesChainResponse, MarketQuote, MarketBias, IntelligenceScore, TradeSetup, FnoScannerRow, Alert, DetectedChartPattern } from '@fno/shared';
+import type {
+  OptionChain,
+  FuturesChainResponse,
+  MarketQuote,
+  MarketBias,
+  IntelligenceScore,
+  TradeSetup,
+  FnoScannerRow,
+  Alert,
+  DetectedChartPattern,
+  InstitutionalFlowSnapshot,
+  NextDayBias,
+  InstitutionalCommentary,
+  InstitutionalFlowPrediction,
+  PredictionAccuracyStats,
+} from '@fno/shared';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
@@ -130,6 +145,26 @@ class ApiClient {
 
   async getChartPatterns() {
     return this.get<DetectedChartPattern[]>('/api/market/chart-patterns');
+  }
+
+  async getInstitutionalSnapshot() {
+    return this.get<InstitutionalFlowSnapshot>('/api/institutional-flow/snapshot');
+  }
+
+  async getNextDayBias() {
+    return this.get<NextDayBias[]>('/api/institutional-flow/next-day-bias');
+  }
+
+  async getInstitutionalCommentary() {
+    return this.get<InstitutionalCommentary>('/api/institutional-flow/commentary');
+  }
+
+  async getPredictionHistory(symbol: string, limit = 30) {
+    return this.get<InstitutionalFlowPrediction[]>(`/api/institutional-flow/predictions?symbol=${symbol}&limit=${limit}`);
+  }
+
+  async getPredictionAccuracy(symbol: string) {
+    return this.get<PredictionAccuracyStats>(`/api/institutional-flow/accuracy?symbol=${symbol}`);
   }
 
   async getHistoricalData(token: string, from: string, to: string, exchange = 'NSE', interval = 'ONE_DAY') {

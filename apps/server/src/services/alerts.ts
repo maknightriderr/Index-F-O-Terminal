@@ -34,6 +34,9 @@ import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 import { sendTelegramMessage, isTelegramConfigured } from '../lib/telegram.js';
 import { scanFnoUniverse } from './fno-scanner.js';
+import { getLiveIndexQuotes } from './indices.js';
+import { buildOptionChain } from './option-chain.js';
+import { INSTITUTIONAL_SYMBOLS } from './institutional-flow.js';
 import type { MarketDataProvider } from '../providers/interface.js';
 import type { AlertChannel, BiasDirection, OptionType, SignalType } from '@fno/shared';
 
@@ -44,6 +47,13 @@ const SCANNER_CACHE_TTL_SECONDS = 180; // must match instruments.ts's fno-scanne
 const OI_CHANGE_PCT_THRESHOLD = 8;
 const IV_RANK_SPIKE_THRESHOLD = 85;
 const IV_RANK_CRUSH_THRESHOLD = 15;
+
+// --- Institutional Flow (Section 8) thresholds ---
+const VIX_SPIKE_LEVEL = 20; // conventional India VIX "elevated" band
+const VIX_SPIKE_DAY_CHANGE_PCT = 10; // a double-digit % move in VIX itself, regardless of level
+const PCR_EXTREME_HIGH = 1.5;
+const PCR_EXTREME_LOW = 0.6;
+const UNUSUAL_ACTIVITY_BUILDUP_SHARE_PCT = 35; // % of the F&O universe on the same side of OI buildup
 
 interface StoredTradeSetupSnapshot {
   available: boolean;
@@ -73,7 +83,85 @@ export function startAlertScanner(provider: MarketDataProvider): void {
 }
 
 async function runAlertScan(provider: MarketDataProvider): Promise<void> {
-  await Promise.all([checkOiAndIvAlerts(provider), checkTradeSetupAlerts()]);
+  await Promise.all([checkOiAndIvAlerts(provider), checkTradeSetupAlerts(), checkInstitutionalFlowAlerts(provider)]);
+}
+
+// --- Institutional Flow (Section 8): VIX spike, PCR extreme, unusual
+// aggregate OI activity — the subset of the requested alert triggers this
+// app can check for real. FII Buying/Selling >₹3,000 Cr triggers are NOT
+// implemented: that needs FII cash-flow data, which isn't connected. ---
+
+async function checkInstitutionalFlowAlerts(provider: MarketDataProvider): Promise<void> {
+  if (!provider.isAuthenticated()) return;
+
+  const today = istDay();
+
+  const vixQuotes = await getLiveIndexQuotes(provider, [{ symbol: 'INDIAVIX', exchange: 'NSE' }]).catch(() => []);
+  const vix = vixQuotes[0];
+  if (vix && (vix.ltp >= VIX_SPIKE_LEVEL || Math.abs(vix.changePercent) >= VIX_SPIKE_DAY_CHANGE_PCT)) {
+    await maybeFireDailyAlert({
+      dedupeKey: `alert_sent:VIX_SPIKE:INDIAVIX:${today}`,
+      symbol: 'INDIAVIX',
+      exchange: 'NSE',
+      alertType: 'VIX_SPIKE',
+      severity: 'WARNING',
+      message: `🌡️ India VIX at ${vix.ltp.toFixed(2)} (${vix.changePercent >= 0 ? '+' : ''}${vix.changePercent.toFixed(2)}% today) — elevated volatility, expect wider intraday swings`,
+      condition: { level: vix.ltp, changePercent: vix.changePercent, levelThreshold: VIX_SPIKE_LEVEL, changeThreshold: VIX_SPIKE_DAY_CHANGE_PCT },
+    });
+  }
+
+  for (const { symbol, exchange } of INSTITUTIONAL_SYMBOLS) {
+    try {
+      const chain = await buildOptionChain(provider, symbol, exchange);
+      if (chain.pcr >= PCR_EXTREME_HIGH || chain.pcr <= PCR_EXTREME_LOW) {
+        await maybeFireDailyAlert({
+          dedupeKey: `alert_sent:PCR_EXTREME:${symbol}:${today}`,
+          symbol,
+          exchange,
+          alertType: 'PCR_EXTREME',
+          severity: 'INFO',
+          message: `⚖️ ${symbol} PCR at ${chain.pcr.toFixed(2)} — ${chain.pcr >= PCR_EXTREME_HIGH ? 'extreme put buildup' : 'extreme call buildup'}, often a contrarian reversal zone`,
+          condition: { pcr: chain.pcr, highThreshold: PCR_EXTREME_HIGH, lowThreshold: PCR_EXTREME_LOW },
+        });
+      }
+    } catch (err: any) {
+      logger.warn({ error: err.message, symbol }, 'Alert scan: PCR extreme check unavailable this tick');
+    }
+  }
+
+  let rows;
+  try {
+    rows = await cached(`fno-scanner:NSE`, SCANNER_CACHE_TTL_SECONDS, () => scanFnoUniverse(provider, 'NSE'));
+  } catch (err: any) {
+    logger.warn({ error: err.message }, 'Alert scan: unusual activity check unavailable this tick');
+    return;
+  }
+  if (rows.length === 0) return;
+
+  const longBuildupShare = (rows.filter((r) => r.oiInterpretation === 'LONG_BUILDUP').length / rows.length) * 100;
+  const shortBuildupShare = (rows.filter((r) => r.oiInterpretation === 'SHORT_BUILDUP').length / rows.length) * 100;
+
+  if (longBuildupShare >= UNUSUAL_ACTIVITY_BUILDUP_SHARE_PCT) {
+    await maybeFireDailyAlert({
+      dedupeKey: `alert_sent:INSTITUTIONAL_ACTIVITY:LONG_BUILDUP:${today}`,
+      symbol: 'NSE_FNO_UNIVERSE',
+      exchange: 'NSE',
+      alertType: 'INSTITUTIONAL_ACTIVITY',
+      severity: 'WARNING',
+      message: `🟢 ${Math.round(longBuildupShare)}% of the F&O universe (${rows.length} stocks) is in long buildup — broad-based bullish futures OI activity`,
+      condition: { longBuildupSharePct: Math.round(longBuildupShare), threshold: UNUSUAL_ACTIVITY_BUILDUP_SHARE_PCT, universeSize: rows.length },
+    });
+  } else if (shortBuildupShare >= UNUSUAL_ACTIVITY_BUILDUP_SHARE_PCT) {
+    await maybeFireDailyAlert({
+      dedupeKey: `alert_sent:INSTITUTIONAL_ACTIVITY:SHORT_BUILDUP:${today}`,
+      symbol: 'NSE_FNO_UNIVERSE',
+      exchange: 'NSE',
+      alertType: 'INSTITUTIONAL_ACTIVITY',
+      severity: 'WARNING',
+      message: `🔴 ${Math.round(shortBuildupShare)}% of the F&O universe (${rows.length} stocks) is in short buildup — broad-based bearish futures OI activity`,
+      condition: { shortBuildupSharePct: Math.round(shortBuildupShare), threshold: UNUSUAL_ACTIVITY_BUILDUP_SHARE_PCT, universeSize: rows.length },
+    });
+  }
 }
 
 // --- OI / IV extremes (universe scan) ---

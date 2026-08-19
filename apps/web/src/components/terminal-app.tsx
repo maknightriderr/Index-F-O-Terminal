@@ -11,6 +11,7 @@ import { OiIntelligencePage } from '@/components/oi-intelligence';
 import { AlertsPage } from '@/components/alerts';
 import { StrategyScannerPage } from '@/components/strategy-scanner';
 import { AiAssistantPage } from '@/components/ai-assistant';
+import { InstitutionalFlowPage } from '@/components/institutional-flow';
 import { AddAssetModal } from '@/components/common/add-asset-modal';
 import { useMarketStore, useUISettingsStore, useSystemHealthStore } from '@/stores';
 import { useMarketWebSocket } from '@/lib/ws';
@@ -42,8 +43,8 @@ export function TerminalApp() {
         return <StrategyScannerPage />;
       case 'backtesting':
         return <PlaceholderPage title="Backtesting" icon="🧪" description="Backtest strategies with historical data. Equity curve, win rate, profit factor." />;
-      case 'market-replay':
-        return <PlaceholderPage title="Market Replay" icon="🔄" description="Replay historical market conditions with spot, futures, option chain, and signals." />;
+      case 'institutional-flow':
+        return <InstitutionalFlowPage />;
       case 'positions':
         return <PlaceholderPage title="Positions" icon="💼" description="Position tracker with portfolio Greeks, P&L, risk metrics, and position simulator." />;
       case 'alerts':
@@ -78,7 +79,6 @@ const PLACEHOLDER_FEATURES: Record<string, string[]> = {
   'Indices': ['Spot & Futures Overview', 'Live Option Chain', 'OI & IV Analysis', 'Market Bias Signals'],
   'Market Scanner': ['Unusual Activity Alerts', 'Volume Breakout Detection', 'Relative Strength Ranking', 'Custom Screener Filters'],
   'Backtesting': ['Strategy Backtester', 'Equity Curve Analysis', 'Win Rate & Profit Factor', 'Drawdown Reports'],
-  'Market Replay': ['Historical Replay Mode', 'Tick-by-Tick Playback', 'Option Chain Replay', 'Signal Overlay'],
   'Positions': ['Portfolio Dashboard', 'Position Greeks Summary', 'Live P&L Tracking', 'Risk Simulator'],
   'Settings': ['Broker Configuration', 'Risk Parameters', 'Alert Channels', 'UI Preferences'],
 };

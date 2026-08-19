@@ -540,7 +540,11 @@ export type SignalType =
   | 'UNUSUAL_ACTIVITY'
   | 'FUTURES_OI_SPIKE'
   | 'FUTURES_OI_REVERSAL'
-  | 'TRADE_SETUP_CLOSED';
+  | 'TRADE_SETUP_CLOSED'
+  | 'VIX_SPIKE'
+  | 'PCR_EXTREME'
+  | 'INSTITUTIONAL_ACTIVITY'
+  | 'NEXT_DAY_BIAS';
 
 export interface Signal {
   id: string;
@@ -815,6 +819,116 @@ export interface HistoricalParams {
   interval: CandleInterval;
   fromDate: string;
   toDate: string;
+}
+
+// --- Institutional Flow ---
+// FII/DII cash flows, participant-wise OI, and FII futures positions come
+// from NSE's own end-of-day reports, not the Angel One API this app is
+// built on — and USDINR/DXY/S&P500/Nasdaq/Dow/GIFT Nifty/Asian markets are
+// outside Angel One's India-only coverage entirely. Every type below is
+// deliberately built only from what's genuinely live (India VIX, PCR,
+// aggregate index/stock futures OI, option OI activity, the existing
+// market-bias engine) — `availableInputs`/`unavailableInputs` disclose
+// exactly which real inputs a given read is/isn't based on, rather than
+// presenting a number as complete when it isn't.
+
+export type SentimentLabel = 'EXTREMELY_BEARISH' | 'BEARISH' | 'NEUTRAL' | 'BULLISH' | 'EXTREMELY_BULLISH';
+
+export interface InstitutionalFlowSnapshot {
+  vix: { value: number; changePercent: number } | null;
+  niftyPcr: number | null;
+  bankNiftyPcr: number | null;
+  indexFuturesLean: Array<{ symbol: string; interpretation: OIInterpretation; changeOiPercent: number }>;
+  stockFuturesBuildup: {
+    longBuildup: number;
+    shortBuildup: number;
+    shortCovering: number;
+    longUnwinding: number;
+    neutral: number;
+    total: number;
+  };
+  // Put/call OI skew across the F&O universe, not confirmed fresh writing
+  // activity specifically (that would need per-stock intraday OI deltas by
+  // leg, which the universe scanner doesn't track) — a real but weaker
+  // signal than Section 2's example implies, named accordingly.
+  optionOiLean: { putHeavyPct: number; callHeavyPct: number; sampledSymbols: number } | null;
+  sentimentScore: number; // 0-100
+  sentimentLabel: SentimentLabel;
+  // How much the available inputs agree with each other (0-100) — distinct
+  // from institutionalConvictionScore, which needs FII/DII/participant data
+  // this app doesn't have and is reported null rather than approximated.
+  confidenceScore: number;
+  institutionalConvictionScore: number | null;
+  sentimentReasoning: string[];
+  availableInputs: string[];
+  unavailableInputs: string[];
+  timestamp: number;
+}
+
+export interface NextDayBias {
+  symbol: string;
+  gapUpProbability: number;
+  gapDownProbability: number;
+  trendDayProbability: number;
+  rangeBoundProbability: number;
+  volatileSessionProbability: number;
+  expectedRangeLow: number;
+  expectedRangeHigh: number;
+  predictedDirection: BiasDirection;
+  confidence: number;
+  reasoning: string[];
+  timestamp: number;
+}
+
+export interface InstitutionalCommentary {
+  oneLineSummary: string;
+  detailedAnalysis: string;
+  bullCase: string;
+  bearCase: string;
+  riskFactors: string[];
+  generatedAt: number;
+}
+
+export interface InstitutionalFlowPrediction {
+  id: string;
+  symbol: string;
+  predictionDate: string; // IST date this prediction targets (the next trading session)
+  createdAt: number;
+  predictedDirection: BiasDirection;
+  gapUpProbability: number;
+  gapDownProbability: number;
+  trendDayProbability: number;
+  rangeBoundProbability: number;
+  volatileSessionProbability: number;
+  predictedRangeLow: number;
+  predictedRangeHigh: number;
+  predictionDayClose: number;
+  resolved: boolean;
+  actualOpen: number | null;
+  actualHigh: number | null;
+  actualLow: number | null;
+  actualClose: number | null;
+  actualGapType: 'GAP_UP' | 'GAP_DOWN' | 'FLAT' | null;
+  actualDirection: BiasDirection | null;
+  directionCorrect: boolean | null;
+  rangeAccurate: boolean | null;
+  forwardReturnPercent: number | null;
+}
+
+export interface PredictionAccuracyWindow {
+  count: number;
+  resolvedCount: number;
+  directionAccuracyPercent: number | null;
+  rangeAccuracyPercent: number | null;
+  avgForwardReturnPercent: number | null;
+}
+
+export interface PredictionAccuracyStats {
+  symbol: string;
+  last7: PredictionAccuracyWindow;
+  last30: PredictionAccuracyWindow;
+  last100: PredictionAccuracyWindow;
+  allTime: PredictionAccuracyWindow;
 }
 
 // --- WebSocket Subscription ---
