@@ -204,6 +204,7 @@ export function calculateIV(
 
   // Initial guess
   let sigma = 0.3; // 30%
+  let converged = false;
 
   for (let i = 0; i < maxIterations; i++) {
     const price = blackScholesPrice({
@@ -214,7 +215,8 @@ export function calculateIV(
     const diff = price - marketPrice;
 
     if (Math.abs(diff) < tolerance) {
-      return sigma;
+      converged = true;
+      break;
     }
 
     // Vega for Newton-Raphson step
@@ -223,11 +225,28 @@ export function calculateIV(
 
     if (vega < 1e-10) break; // Avoid division by zero
 
-    sigma -= diff / vega;
+    // Short-dated options make price-vs-IV highly convex, so an uncapped
+    // diff/vega step can overshoot wildly from a reasonable starting guess
+    // and never recover — observed live producing a "500% IV" on a 5-DTE
+    // near-ATM NIFTY option, which cascaded into an unusable trade-setup
+    // target. Capping the step keeps each iteration a genuine local move
+    // instead of a leap that can only land on a boundary.
+    const step = Math.max(-1, Math.min(1, diff / vega));
+    sigma -= step;
 
     // Keep sigma in reasonable bounds
     if (sigma < 0.001) sigma = 0.001;
-    if (sigma > 5.0) sigma = 5.0; // 500% IV cap
+    if (sigma > 3.0) sigma = 3.0; // 300% IV cap — still generous; genuine 500%+ never happens, only a diverging solver landing there
+  }
+
+  // Never satisfying the tolerance means the loop exhausted its iterations
+  // or bailed on vanishing vega — the result sitting wherever sigma landed
+  // (often a boundary) is not a real market reading. Verify it actually
+  // reprices close to the market price before trusting it; otherwise report
+  // "unresolvable" (0) rather than a plausible-looking number that isn't.
+  if (!converged) {
+    const finalPrice = blackScholesPrice({ spotPrice, strikePrice, timeToExpiry, riskFreeRate, iv: sigma, optionType });
+    if (Math.abs(finalPrice - marketPrice) > marketPrice * 0.05 + tolerance) return 0;
   }
 
   return Math.max(0, sigma);

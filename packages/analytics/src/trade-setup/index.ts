@@ -23,6 +23,13 @@ const SL_PREMIUM_PCT = 0.3; // 30% premium stop — standard retail heuristic fo
 // agreement, not margin over dissent. 65 requires a real supermajority
 // (>=4 of 6 actively agreeing) before a live entry/SL/target gets generated.
 const MIN_CONFIDENCE = 65;
+// A real single-session option target is essentially never several
+// multiples of the entry premium — if the delta × expected-move projection
+// comes out that large, the upstream Greeks/IV data is bad, not the trade.
+// Caught live: a diverging IV solver on a short-dated option produced a
+// "500% IV", inflating this to a ~28x target. Refuse to show it rather than
+// hand out a number nobody should act on.
+const MAX_TARGET_MULTIPLE_OF_ENTRY = 5;
 
 export function buildTradeSetup(
   strikes: OptionChainStrike[],
@@ -57,6 +64,13 @@ export function buildTradeSetup(
   const entry = leg.ltp;
   const stopLoss = round2(entry * (1 - SL_PREMIUM_PCT));
   const target = round2(entry + deltaMove);
+
+  if (target > entry * MAX_TARGET_MULTIPLE_OF_ENTRY) {
+    return {
+      available: false,
+      reason: `Computed target (${target.toFixed(2)}) is implausibly far from entry (${entry.toFixed(2)}) — likely bad upstream Greeks/IV data this tick, not a real setup.`,
+    };
+  }
   const risk = entry - stopLoss;
   const reward = target - entry;
   const riskReward = risk > 0 ? round2(reward / risk) : 0;
