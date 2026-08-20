@@ -6,7 +6,7 @@
 // OI buildup (spec §22).
 // ============================================================
 
-import { calculateDTE, CM_SEGMENT, FO_SEGMENT } from '@fno/shared';
+import { calculateDTE, CM_SEGMENT, FO_SEGMENT, isExpiryActive } from '@fno/shared';
 import type { Exchange, FuturesData, FuturesChainResponse } from '@fno/shared';
 import { classifyFuturesOI } from '@fno/analytics';
 import type { MarketDataProvider } from '../providers/interface.js';
@@ -46,7 +46,7 @@ async function buildFuturesDataUncached(
         i.underlying === underlying &&
         i.exchange === exchange &&
         (i.instrumentType === 'FUTIDX' || i.instrumentType === 'FUTSTK' || i.instrumentType === 'FUTCOM') &&
-        !!i.expiry
+        isExpiryActive(i.expiry)
     )
     .sort((a, b) => new Date(a.expiry!).getTime() - new Date(b.expiry!).getTime())
     .slice(0, 3);

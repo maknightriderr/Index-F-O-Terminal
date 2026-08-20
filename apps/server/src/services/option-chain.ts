@@ -18,6 +18,7 @@ import {
   classifyStrike,
   calculateDTE,
   yearsToExpiry,
+  isExpiryActive,
 } from '@fno/shared';
 import type { Exchange, Instrument, OptionChain, OptionChainStrike, OptionChainLeg, OptionType } from '@fno/shared';
 import {
@@ -290,13 +291,6 @@ export async function resolveNearestFuturesContract(
   underlying: string,
   exchange: Exchange
 ): Promise<Instrument | undefined> {
-  // Angel One's scrip master doesn't drop a contract the instant it expires —
-  // a just-expired row can still be present (and sort first) for a day or
-  // more after its last trading session, with a dead/zero quote. Excluding
-  // anything expired before today (IST) so "nearest" always means the
-  // nearest LIVE contract, not the most recently dead one.
-  const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-
   const instruments = await provider.getInstrumentMaster();
   const futures = instruments
     .filter(
@@ -304,8 +298,7 @@ export async function resolveNearestFuturesContract(
         i.exchange === exchange &&
         i.instrumentType === 'FUTCOM' &&
         i.underlying?.toUpperCase() === underlying.toUpperCase() &&
-        i.expiry &&
-        i.expiry >= todayIST
+        isExpiryActive(i.expiry)
     )
     .sort((a, b) => (a.expiry! < b.expiry! ? -1 : a.expiry! > b.expiry! ? 1 : 0));
   return futures[0];

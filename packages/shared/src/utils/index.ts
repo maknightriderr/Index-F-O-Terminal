@@ -75,6 +75,28 @@ export function yearsToExpiry(expiryDate: string): number {
 }
 
 /**
+ * Today's date in IST as YYYY-MM-DD — the boundary this app uses to decide
+ * whether a listed contract's expiry has already passed.
+ */
+export function todayIST(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+/**
+ * True if a contract's expiry (YYYY-MM-DD) hasn't already passed. Angel
+ * One's scrip master doesn't drop a contract the instant it expires — a
+ * just-expired row can stay listed (with a dead/zero quote) for a day or
+ * more — so any "pick the nearest expiry" selection needs this filter
+ * BEFORE sorting, or it can silently select a dead contract that happens
+ * to sort first. Caught live: this exact gap dropped CRUDEOIL from the
+ * Indices page and, unfiltered elsewhere, could feed stale option/futures
+ * data into PCR, Greeks, and OI reads across the app.
+ */
+export function isExpiryActive(expiry: string | null | undefined): boolean {
+  return !!expiry && expiry >= todayIST();
+}
+
+/**
  * Determine ATM strike from spot price and strike interval.
  */
 export function getATMStrike(spotPrice: number, strikeInterval: number): number {

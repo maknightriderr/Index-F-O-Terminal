@@ -16,7 +16,7 @@
 // to ~40 quote requests instead of thousands.
 // ============================================================
 
-import { CM_SEGMENT, FO_SEGMENT, RISK_FREE_RATE, getATMStrike, calculateDTE, yearsToExpiry } from '@fno/shared';
+import { CM_SEGMENT, FO_SEGMENT, RISK_FREE_RATE, getATMStrike, calculateDTE, yearsToExpiry, isExpiryActive } from '@fno/shared';
 import type { Exchange, Instrument, OIInterpretation, BiasDirection, FnoScannerRow, Greeks } from '@fno/shared';
 import { classifyFuturesOI, calculateGreeksFromPrice } from '@fno/analytics';
 import type { MarketDataProvider } from '../providers/interface.js';
@@ -65,7 +65,7 @@ export async function scanFnoUniverse(provider: MarketDataProvider, exchange: Ex
     const spot = eqByToken.get(s.eq.token)?.ltp;
     if (!spot || spot <= 0) continue;
 
-    const nearestExpiry = [...new Set(s.options.map((o) => o.expiry).filter((e): e is string => !!e))].sort()[0];
+    const nearestExpiry = [...new Set(s.options.map((o) => o.expiry).filter(isExpiryActive))].sort()[0];
     if (!nearestExpiry) continue;
 
     const forExpiry = s.options.filter((o) => o.expiry === nearestExpiry && o.strike !== undefined);
@@ -243,7 +243,7 @@ function buildStockIndex(instruments: Instrument[], exchange: Exchange): StockEn
 
 function nearestExpiryInstrument(instruments: Instrument[]): Instrument | undefined {
   return [...instruments]
-    .filter((i) => i.expiry)
+    .filter((i) => isExpiryActive(i.expiry))
     .sort((a, b) => (a.expiry! < b.expiry! ? -1 : a.expiry! > b.expiry! ? 1 : 0))[0];
 }
 

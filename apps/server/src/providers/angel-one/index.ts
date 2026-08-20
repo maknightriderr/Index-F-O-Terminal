@@ -20,6 +20,7 @@ import type {
   Tick,
   SubscriptionMode,
 } from '@fno/shared';
+import { isExpiryActive } from '@fno/shared';
 import type {
   MarketDataProvider,
   AuthCredentials,
@@ -301,7 +302,7 @@ export class AngelOneProvider implements MarketDataProvider {
       .filter(i =>
         i.underlying === underlying &&
         i.exchange === exchange &&
-        i.expiry &&
+        isExpiryActive(i.expiry) &&
         (i.instrumentType === 'OPTIDX' || i.instrumentType === 'OPTSTK' || i.instrumentType === 'OPTFUT' ||
          i.instrumentType === 'FUTIDX' || i.instrumentType === 'FUTSTK' || i.instrumentType === 'FUTCOM')
       )
