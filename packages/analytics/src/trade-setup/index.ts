@@ -29,7 +29,11 @@ const MIN_CONFIDENCE = 65;
 // Caught live: a diverging IV solver on a short-dated option produced a
 // "500% IV", inflating this to a ~28x target. Refuse to show it rather than
 // hand out a number nobody should act on.
-const MAX_TARGET_MULTIPLE_OF_ENTRY = 5;
+// Exported so callers holding onto a previously-generated TradeSetup (the
+// sticky-setup cache in market-bias.ts) can apply the identical plausibility
+// bar when deciding whether to keep trusting it, rather than a second,
+// possibly-drifting copy of the same threshold.
+export const MAX_TARGET_MULTIPLE_OF_ENTRY = 5;
 
 export function buildTradeSetup(
   strikes: OptionChainStrike[],

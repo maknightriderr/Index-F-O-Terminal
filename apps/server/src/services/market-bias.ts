@@ -20,6 +20,7 @@ import {
   bollingerBands,
   getOIDescription,
   buildTradeSetup,
+  MAX_TARGET_MULTIPLE_OF_ENTRY,
 } from '@fno/analytics';
 import type {
   Exchange,
@@ -458,12 +459,21 @@ async function resolveStickyTradeSetup(
   // to protect from re-evaluation, so it re-checks current conditions
   // every poll like any other live read rather than getting stuck once
   // confidence happens to dip for one cycle.
-  if (stored?.available && stored.day === today && stored.direction === direction) {
-    const leg = findLeg(chain, stored.strike!, stored.side!);
+  // A setup generated before a data-quality fix (e.g. a diverging IV solver
+  // inflating the target) can otherwise stay locked in all day — its target
+  // is unreachable so hitSL/hitTarget below never fires — silently serving
+  // a broken number for the rest of the session. Re-applying the same
+  // plausibility bar buildTradeSetup itself enforces on every read closes
+  // that gap without needing a manual cache clear.
+  const storedIsPlausible =
+    stored?.available && stored.entry != null && stored.target != null && stored.target <= stored.entry * MAX_TARGET_MULTIPLE_OF_ENTRY;
+
+  if (storedIsPlausible && stored!.day === today && stored!.direction === direction) {
+    const leg = findLeg(chain, stored!.strike!, stored!.side!);
     const currentLtp = leg?.ltp;
-    const hitSL = currentLtp != null && currentLtp <= stored.stopLoss!;
-    const hitTarget = currentLtp != null && currentLtp >= stored.target!;
-    if (!hitSL && !hitTarget) return stored;
+    const hitSL = currentLtp != null && currentLtp <= stored!.stopLoss!;
+    const hitTarget = currentLtp != null && currentLtp >= stored!.target!;
+    if (!hitSL && !hitTarget) return stored!;
   }
 
   const fresh = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, chain.expectedMove.points);
