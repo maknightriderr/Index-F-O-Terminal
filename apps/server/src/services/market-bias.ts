@@ -45,6 +45,12 @@ import type { OptionChain } from '@fno/shared';
 // symbol reuse the last fetch instead of re-hitting the broker.
 const HISTORICAL_CACHE_TTL_SECONDS = 90;
 
+// How long a fully-computed bias result stays valid in Redis as a fallback
+// when fresh computation fails (rate-limit, broker downtime, etc.). Long
+// enough that a transient outage never surfaces the "unreachable" banner,
+// short enough that stale data doesn't linger past a trading session.
+const BIAS_RESULT_CACHE_TTL_SECONDS = 5 * 60;
+
 export interface MarketBiasResult {
   bias: MarketBias;
   score: IntelligenceScore;
@@ -57,6 +63,36 @@ export async function buildMarketBias(
   provider: MarketDataProvider,
   underlying: string,
   exchange: Exchange
+): Promise<MarketBiasResult> {
+  const cacheKey = `bias_result:${exchange}:${underlying}`;
+
+  try {
+    return await computeMarketBias(provider, underlying, exchange, cacheKey);
+  } catch (err: any) {
+    // Fresh computation failed — try to return the last successful result
+    // from Redis so the frontend stays on real data instead of falling back
+    // to mocks and showing the "signal engine unreachable" banner.
+    logger.warn({ error: err.message, underlying, exchange }, 'Market bias fresh compute failed, trying cached fallback');
+    try {
+      const stale = await redis.get(cacheKey);
+      if (stale) {
+        const parsed = JSON.parse(stale) as MarketBiasResult;
+        logger.info({ underlying, exchange }, 'Returning cached bias result as fallback');
+        return parsed;
+      }
+    } catch (cacheErr: any) {
+      logger.warn({ error: cacheErr.message, underlying }, 'Bias result cache fallback read failed');
+    }
+    // No cached fallback either — propagate the original error
+    throw err;
+  }
+}
+
+async function computeMarketBias(
+  provider: MarketDataProvider,
+  underlying: string,
+  exchange: Exchange,
+  resultCacheKey: string
 ): Promise<MarketBiasResult> {
   const spotToken = await resolveSpotToken(provider, underlying, exchange);
   // MCX's "spot" instrument is a synthetic reference feed (e.g. CRUDEOILCOM)
@@ -77,7 +113,7 @@ export async function buildMarketBias(
   // Angel One's historical-candle endpoint trips a strict rate limit (a
   // flat 403, with getHistoricalData swallowing it and returning [] rather
   // than throwing) under any real concurrent/rapid load — sequence these
-  // two with a stagger, and retry a 403 once after a beat, rather than
+  // two with a stagger, and retry with exponential backoff, rather than
   // firing them together via Promise.all. Each is still cached for
   // HISTORICAL_CACHE_TTL_SECONDS on success, so this only costs the extra
   // round-trip latency on a cache miss, not on every poll.
@@ -108,8 +144,12 @@ export async function buildMarketBias(
     }),
   ]);
 
+  if (candles15m.length < 5 || candles1h.length < 5) {
+    throw new Error(`Not enough historical candles for ${underlying} to compute market bias (15m: ${candles15m.length}, 1h: ${candles1h.length})`);
+  }
   if (candles15m.length < 20 || candles1h.length < 20) {
-    throw new Error(`Not enough historical candles for ${underlying} to compute market bias`);
+    logger.warn({ underlying, exchange, count15m: candles15m.length, count1h: candles1h.length },
+      'Fewer than ideal candles for market bias — computing with available data');
   }
 
   const c15 = extractOHLC(candles15m);
@@ -368,7 +408,16 @@ export async function buildMarketBias(
     ? await resolveStickyTradeSetup(underlying, exchange, chain, direction, confidence)
     : { available: false, reason: 'Option chain unavailable for this symbol — cannot size a setup.' };
 
-  return { bias, score, tradeSetup };
+  const result: MarketBiasResult = { bias, score, tradeSetup };
+
+  // Persist the successful result as a fallback for future failures
+  try {
+    await redis.set(resultCacheKey, JSON.stringify(result), 'EX', BIAS_RESULT_CACHE_TTL_SECONDS);
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying }, 'Failed to cache bias result for fallback');
+  }
+
+  return result;
 }
 
 // --- Sticky Trade Setup ---
@@ -457,13 +506,18 @@ function findLeg(chain: OptionChain, strike: number, side: 'CE' | 'PE') {
 async function fetchHistoricalWithRetry(
   provider: MarketDataProvider,
   params: HistoricalParams,
-  attempts = 2,
-  delayMs = 1500
+  attempts = 3,
+  initialDelayMs = 1500
 ): Promise<OHLCV[]> {
   for (let i = 0; i < attempts; i++) {
     const candles = await provider.getHistoricalData(params);
     if (candles.length > 0) return candles;
-    if (i < attempts - 1) await sleep(delayMs);
+    if (i < attempts - 1) {
+      // Exponential backoff: 1.5s → 3s → 6s … to ride out rate-limit windows
+      const backoff = initialDelayMs * Math.pow(2, i);
+      logger.debug({ attempt: i + 1, nextRetryMs: backoff, token: params.token }, 'Historical fetch empty, retrying');
+      await sleep(backoff);
+    }
   }
   return [];
 }
