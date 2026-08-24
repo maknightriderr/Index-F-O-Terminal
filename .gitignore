@@ -23,8 +23,8 @@ build/
 *.swo
 *~
 
-# Claude Code local settings (personal, machine-specific)
-.claude/settings.local.json
+# Claude Code local settings
+.claude/
 
 # OS
 .DS_Store

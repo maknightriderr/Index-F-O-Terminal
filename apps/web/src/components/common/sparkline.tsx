@@ -23,6 +23,8 @@ interface SparklineProps {
   color?: string;
   /** If true, fills area under the line with a gradient */
   showArea?: boolean;
+  /** If true, renders a pulsing glowing dot on the latest price point */
+  showEndpointDot?: boolean;
   /** Stroke width */
   strokeWidth?: number;
   /** Number of simulated points (only when data is absent) */
@@ -36,7 +38,6 @@ function mulberry32(seed: number) {
     /* eslint-disable no-param-reassign */
     seed |= 0;
     seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
@@ -52,11 +53,13 @@ function hashString(str: string): number {
 }
 
 function generateSimulatedData(symbol: string, count: number): number[] {
-  const rng = mulberry32(hashString(symbol));
+  let seed = hashString(symbol);
   const data: number[] = [];
-  let value = 50 + rng() * 50;
+  let value = 50 + ((seed % 40) - 20);
   for (let i = 0; i < count; i++) {
-    value += (rng() - 0.48) * 3; // slight upward bias
+    seed = (seed + 0x6d2b79f5) | 0;
+    const rnd = (((seed ^ (seed >>> 15)) >>> 0) % 1000) / 1000;
+    value += (rnd - 0.48) * 3;
     value = Math.max(10, Math.min(100, value));
     data.push(value);
   }
@@ -70,6 +73,7 @@ export function Sparkline({
   height = 28,
   color = '#34d399',
   showArea = true,
+  showEndpointDot = false,
   strokeWidth = 1.5,
   points = 30,
   className = '',
@@ -79,23 +83,29 @@ export function Sparkline({
     [data, symbol, points]
   );
 
-  const path = useMemo(() => {
-    if (values.length < 2) return '';
+  const { path, lastPoint } = useMemo(() => {
+    if (values.length < 2) return { path: '', lastPoint: { x: 0, y: 0 } };
     const min = Math.min(...values);
     const max = Math.max(...values);
     const range = max - min || 1;
-    const padding = 1; // px padding top/bottom
+    const padding = 2; // px padding top/bottom
 
     const xStep = width / (values.length - 1);
     const yScale = (height - padding * 2) / range;
 
-    return values
-      .map((v, i) => {
-        const x = i * xStep;
-        const y = height - padding - (v - min) * yScale;
-        return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
-      })
+    const coords = values.map((v, i) => ({
+      x: i * xStep,
+      y: height - padding - (v - min) * yScale,
+    }));
+
+    const pathStr = coords
+      .map((c, i) => `${i === 0 ? 'M' : 'L'}${c.x.toFixed(1)},${c.y.toFixed(1)}`)
       .join(' ');
+
+    return {
+      path: pathStr,
+      lastPoint: coords[coords.length - 1],
+    };
   }, [values, width, height]);
 
   const areaPath = useMemo(() => {
@@ -104,7 +114,7 @@ export function Sparkline({
     return `${path} L${lastX},${height} L0,${height} Z`;
   }, [path, showArea, values.length, width, height]);
 
-  const gradientId = useMemo(() => `spark-${hashString(symbol + color)}`, [symbol, color]);
+  const gradientId = useMemo(() => `spark-${Math.abs(hashString(symbol + color))}`, [symbol, color]);
 
   return (
     <svg
@@ -117,8 +127,8 @@ export function Sparkline({
       {showArea && (
         <defs>
           <linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity={0.2} />
-            <stop offset="100%" stopColor={color} stopOpacity={0} />
+            <stop offset="0%" stopColor={color} stopOpacity={0.25} />
+            <stop offset="100%" stopColor={color} stopOpacity={0.0} />
           </linearGradient>
         </defs>
       )}
@@ -133,6 +143,25 @@ export function Sparkline({
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+      {showEndpointDot && lastPoint && (
+        <g>
+          <circle
+            cx={lastPoint.x}
+            cy={lastPoint.y}
+            r={2.5}
+            fill={color}
+            className="animate-pulse"
+          />
+          <circle
+            cx={lastPoint.x}
+            cy={lastPoint.y}
+            r={5}
+            fill={color}
+            opacity={0.3}
+          />
+        </g>
+      )}
     </svg>
   );
 }
+
