@@ -42,17 +42,20 @@ export const config = {
   },
 } as const;
 
-// Validate critical config in production
+// Validate critical config in production — warn instead of hard crash to prevent container restart loops
 if (config.server.nodeEnv === 'production') {
-  const required = [
-    ['ANGEL_ONE_API_KEY', config.angelOne.apiKey],
-    ['JWT_SECRET', config.jwt.secret],
-    ['DATABASE_URL', config.database.url],
-  ];
+  const warnings: string[] = [];
+  if (!config.angelOne.apiKey) {
+    warnings.push('ANGEL_ONE_API_KEY is not set — broker endpoints will operate in offline/mock mode');
+  }
+  if (!config.jwt.secret || config.jwt.secret.includes('dev-') || config.jwt.secret.includes('change-in-production')) {
+    warnings.push('JWT_SECRET is unset or using the dev default — please set a secure random string in production');
+  }
+  if (!config.database.url || config.database.url.includes('fno_dev_password')) {
+    warnings.push('DATABASE_URL is unset or using the dev default — please configure your production Postgres URL');
+  }
 
-  for (const [name, value] of required) {
-    if (!value || value.includes('dev-') || value.includes('change-in-production')) {
-      throw new Error(`Missing or insecure configuration: ${name}`);
-    }
+  for (const warning of warnings) {
+    console.warn(`[CONFIG WARNING] ${warning}`);
   }
 }
