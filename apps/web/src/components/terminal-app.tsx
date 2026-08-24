@@ -12,6 +12,7 @@ import { AlertsPage } from '@/components/alerts';
 import { StrategyScannerPage } from '@/components/strategy-scanner';
 import { AiAssistantPage } from '@/components/ai-assistant';
 import { InstitutionalFlowPage } from '@/components/institutional-flow';
+import { BacktestingPage } from '@/components/backtesting';
 import { AddAssetModal } from '@/components/common/add-asset-modal';
 import { useMarketStore, useUISettingsStore, useSystemHealthStore } from '@/stores';
 import { useMarketWebSocket } from '@/lib/ws';
@@ -42,7 +43,7 @@ export function TerminalApp() {
       case 'strategy-scanner':
         return <StrategyScannerPage />;
       case 'backtesting':
-        return <PlaceholderPage title="Backtesting" icon="🧪" description="Backtest strategies with historical data. Equity curve, win rate, profit factor." />;
+        return <BacktestingPage />;
       case 'institutional-flow':
         return <InstitutionalFlowPage />;
       case 'positions':
@@ -78,7 +79,6 @@ export function TerminalApp() {
 const PLACEHOLDER_FEATURES: Record<string, string[]> = {
   'Indices': ['Spot & Futures Overview', 'Live Option Chain', 'OI & IV Analysis', 'Market Bias Signals'],
   'Market Scanner': ['Unusual Activity Alerts', 'Volume Breakout Detection', 'Relative Strength Ranking', 'Custom Screener Filters'],
-  'Backtesting': ['Strategy Backtester', 'Equity Curve Analysis', 'Win Rate & Profit Factor', 'Drawdown Reports'],
   'Positions': ['Portfolio Dashboard', 'Position Greeks Summary', 'Live P&L Tracking', 'Risk Simulator'],
   'Settings': ['Broker Configuration', 'Risk Parameters', 'Alert Channels', 'UI Preferences'],
 };

@@ -931,6 +931,62 @@ export interface PredictionAccuracyStats {
   allTime: PredictionAccuracyWindow;
 }
 
+// --- Backtesting (Trade Setup outcome tracking) ---
+// Every trade setup the market-bias engine actually generates (for
+// whichever symbols get viewed/scanned — this can only track what the
+// system genuinely produced, not backfill history) is persisted and its
+// outcome recorded once resolved: WIN (target hit), LOSS (stop-loss hit),
+// or EXPIRED (day rolled over or the bias reversed before either was
+// hit — inconclusive, not a loss). `outcome: null` means still open.
+
+export type TradeSetupOutcome = 'WIN' | 'LOSS' | 'EXPIRED';
+
+export interface TradeSetupRecord {
+  id: string;
+  symbol: string;
+  exchange: Exchange;
+  generatedAt: number;
+  direction: BiasDirection;
+  confidence: number;
+  side: OptionType;
+  strike: number;
+  entry: number;
+  stopLoss: number;
+  target: number;
+  riskReward: number;
+  reason: string;
+  regime: MarketRegime | null;
+  intelligenceScore: number | null;
+  outcome: TradeSetupOutcome | null;
+  exitPrice: number | null;
+  exitTime: number | null;
+  returnPercent: number | null;
+}
+
+export interface WinRateBucket {
+  period: string; // 'YYYY-MM-DD' | 'YYYY-Www' | 'YYYY-MM' | 'YYYY'
+  total: number;
+  wins: number;
+  losses: number;
+  expired: number;
+  open: number;
+  winRatePercent: number | null; // wins / (wins + losses) — expired/open excluded from the denominator
+  avgReturnPercent: number | null;
+}
+
+export interface SymbolWinRate extends WinRateBucket {
+  symbol: string;
+}
+
+export interface WinRateAnalytics {
+  overall: WinRateBucket;
+  daily: WinRateBucket[];
+  weekly: WinRateBucket[];
+  monthly: WinRateBucket[];
+  yearly: WinRateBucket[];
+  bySymbol: SymbolWinRate[];
+}
+
 // --- WebSocket Subscription ---
 
 export type SubscriptionMode = 'LTP' | 'QUOTE' | 'SNAP_QUOTE' | 'DEPTH';

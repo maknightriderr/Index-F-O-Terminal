@@ -28,6 +28,7 @@ import type {
   IntelligenceScore,
   MarketRegime,
   BiasDirection,
+  OptionType,
   OHLCV,
   TradeSetup,
   HistoricalParams,
@@ -37,6 +38,7 @@ import { resolveSpotToken, resolveNearestFuturesContract, buildOptionChain } fro
 import { buildFuturesData } from './futures.js';
 import { cached } from '../lib/cache.js';
 import { redis } from '../lib/redis.js';
+import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 import type { OptionChain } from '@fno/shared';
 
@@ -406,7 +408,7 @@ async function computeMarketBias(
   };
 
   const tradeSetup: TradeSetup = chain
-    ? await resolveStickyTradeSetup(underlying, exchange, chain, direction, confidence)
+    ? await resolveStickyTradeSetup(underlying, exchange, chain, direction, confidence, regime, overall)
     : { available: false, reason: 'Option chain unavailable for this symbol — cannot size a setup.' };
 
   const result: MarketBiasResult = { bias, score, tradeSetup };
@@ -434,6 +436,7 @@ async function computeMarketBias(
 interface StoredTradeSetup extends TradeSetup {
   direction: BiasDirection;
   day: string; // YYYY-MM-DD, IST
+  signalId?: string; // links to the persisted `signals` row for backtesting (see backtesting.ts)
 }
 
 async function resolveStickyTradeSetup(
@@ -441,7 +444,9 @@ async function resolveStickyTradeSetup(
   exchange: Exchange,
   chain: OptionChain,
   direction: BiasDirection,
-  confidence: number
+  confidence: number,
+  regime: MarketRegime,
+  intelligenceScore: number
 ): Promise<TradeSetup> {
   const key = `trade_setup:${exchange}:${underlying}`;
   const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
@@ -474,6 +479,17 @@ async function resolveStickyTradeSetup(
     const hitSL = currentLtp != null && currentLtp <= stored!.stopLoss!;
     const hitTarget = currentLtp != null && currentLtp >= stored!.target!;
     if (!hitSL && !hitTarget) return stored!;
+
+    // Resolved this tick — record the real outcome for backtesting before
+    // a fresh setup potentially overwrites this Redis key.
+    await recordTradeSetupOutcome(stored!, hitTarget ? 'WIN' : 'LOSS', currentLtp ?? null);
+  } else if (storedIsPlausible && stored?.signalId) {
+    // Was a genuine, plausible setup, but the day rolled over or the bias
+    // reversed before SL/target got hit — inconclusive, not a loss. Still
+    // worth a mark-to-market exit price where we can get one, so it's not
+    // just a blank row in the backtest.
+    const leg = findLeg(chain, stored!.strike!, stored!.side!);
+    await recordTradeSetupOutcome(stored!, 'EXPIRED', leg?.ltp ?? null);
   }
 
   const fresh = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, chain.expectedMove.points);
@@ -490,7 +506,9 @@ async function resolveStickyTradeSetup(
     return fresh;
   }
 
-  const toStore: StoredTradeSetup = { ...fresh, direction, day: today, generatedAt: Date.now() };
+  const signalId = await recordTradeSetupGenerated(underlying, exchange, fresh, direction, confidence, regime, intelligenceScore);
+
+  const toStore: StoredTradeSetup = { ...fresh, direction, day: today, generatedAt: Date.now(), signalId };
   try {
     await redis.set(key, JSON.stringify(toStore), 'EX', 60 * 60 * 24 * 2);
   } catch (err: any) {
@@ -498,6 +516,58 @@ async function resolveStickyTradeSetup(
   }
 
   return toStore;
+}
+
+// --- Backtesting: persist every generated setup, record its outcome ---
+// Reuses the `signals` table (already in the schema, otherwise unused —
+// see database/init/002_schema.sql and institutional-flow-scanner.ts,
+// which reuses it too) rather than a new migration: signal_type
+// 'TRADE_SETUP', the option-specific fields live in `inputs` JSONB, and
+// the outcome gets merged into that same JSONB once resolved.
+
+async function recordTradeSetupGenerated(
+  underlying: string,
+  exchange: Exchange,
+  fresh: TradeSetup & { available: true },
+  direction: BiasDirection,
+  confidence: number,
+  regime: MarketRegime,
+  intelligenceScore: number
+): Promise<string | undefined> {
+  try {
+    const rows = await sql<{ id: string }[]>`
+      INSERT INTO signals (time, symbol, signal_type, direction, confidence, inputs, reasoning, market_regime, intelligence_score)
+      VALUES (
+        NOW(), ${underlying}, 'TRADE_SETUP', ${direction}, ${confidence},
+        ${sql.json({ exchange, side: fresh.side, strike: fresh.strike, entry: fresh.entry, stopLoss: fresh.stopLoss, target: fresh.target, riskReward: fresh.riskReward })},
+        ${fresh.reason}, ${regime}, ${intelligenceScore}
+      )
+      RETURNING id
+    `;
+    return rows[0]?.id;
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying }, 'Backtesting: failed to record generated trade setup');
+    return undefined;
+  }
+}
+
+async function recordTradeSetupOutcome(
+  stored: StoredTradeSetup,
+  outcome: 'WIN' | 'LOSS' | 'EXPIRED',
+  exitPrice: number | null
+): Promise<void> {
+  if (!stored.signalId) return; // pre-dates this feature or failed to record on generation — nothing to update
+  try {
+    const entry = stored.entry ?? 0;
+    const returnPercent = exitPrice != null && entry > 0 ? Math.round(((exitPrice - entry) / entry) * 10000) / 100 : null;
+    await sql`
+      UPDATE signals
+      SET inputs = inputs || ${sql.json({ outcome, exitPrice, exitTime: Date.now() })}, fwd_1d_return = ${returnPercent}
+      WHERE id = ${stored.signalId}
+    `;
+  } catch (err: any) {
+    logger.warn({ error: err.message, signalId: stored.signalId }, 'Backtesting: failed to record trade setup outcome');
+  }
 }
 
 function findLeg(chain: OptionChain, strike: number, side: 'CE' | 'PE') {

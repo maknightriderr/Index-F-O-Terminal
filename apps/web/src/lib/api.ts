@@ -20,6 +20,8 @@ import type {
   InstitutionalCommentary,
   InstitutionalFlowPrediction,
   PredictionAccuracyStats,
+  WinRateAnalytics,
+  TradeSetupRecord,
 } from '@fno/shared';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
@@ -165,6 +167,14 @@ class ApiClient {
 
   async getPredictionAccuracy(symbol: string) {
     return this.get<PredictionAccuracyStats>(`/api/institutional-flow/accuracy?symbol=${symbol}`);
+  }
+
+  async getWinRateAnalytics() {
+    return this.get<WinRateAnalytics>('/api/backtesting/win-rate');
+  }
+
+  async getTradeSetupHistory(limit = 100) {
+    return this.get<TradeSetupRecord[]>(`/api/backtesting/trade-setups?limit=${limit}`);
   }
 
   async getHistoricalData(token: string, from: string, to: string, exchange = 'NSE', interval = 'ONE_DAY') {
