@@ -107,6 +107,7 @@ export class AngelOneProvider implements MarketDataProvider {
   private tokenExpiry: number = 0;
   private instrumentCache: Instrument[] = [];
   private instrumentCacheTime: number = 0;
+  private instrumentCacheInFlight: Promise<Instrument[]> | null = null;
 
   constructor() {
     this.api = axios.create({
@@ -252,21 +253,41 @@ export class AngelOneProvider implements MarketDataProvider {
       return this.instrumentCache;
     }
 
-    try {
-      logger.info('Downloading Angel One scrip master...');
-      const response = await axios.get(SCRIP_MASTER_URL, { timeout: 60000 });
-      const rawInstruments: AngelInstrument[] = response.data;
-
-      logger.info({ count: rawInstruments.length }, 'Scrip master downloaded');
-
-      this.instrumentCache = rawInstruments.map(raw => this.mapInstrument(raw));
-      this.instrumentCacheTime = Date.now();
-
-      return this.instrumentCache;
-    } catch (error: any) {
-      logger.error({ error: error.message }, 'Failed to download scrip master');
-      throw new Error(`Failed to download scrip master: ${error.message}`);
+    // Every call site (option chain, futures, F&O scanner, chart-pattern
+    // scanner, alert scanner, institutional-flow scanner, AI assistant,
+    // live user requests, ...) hits this on a cold/expired cache — right
+    // after boot, several of them land within milliseconds of each other.
+    // Without de-duping, EACH one independently downloaded and parsed the
+    // full ~158k-row scrip master (tens of MB, doubled by the raw JSON
+    // plus the mapped array) — 4-5 concurrent downloads was enough to
+    // exceed the container's memory limit and get OOM-killed in a crash
+    // loop. Sharing one in-flight request means a boot-time stampede costs
+    // the same as a single call.
+    if (this.instrumentCacheInFlight) {
+      return this.instrumentCacheInFlight;
     }
+
+    this.instrumentCacheInFlight = (async () => {
+      try {
+        logger.info('Downloading Angel One scrip master...');
+        const response = await axios.get(SCRIP_MASTER_URL, { timeout: 60000 });
+        const rawInstruments: AngelInstrument[] = response.data;
+
+        logger.info({ count: rawInstruments.length }, 'Scrip master downloaded');
+
+        this.instrumentCache = rawInstruments.map(raw => this.mapInstrument(raw));
+        this.instrumentCacheTime = Date.now();
+
+        return this.instrumentCache;
+      } catch (error: any) {
+        logger.error({ error: error.message }, 'Failed to download scrip master');
+        throw new Error(`Failed to download scrip master: ${error.message}`);
+      } finally {
+        this.instrumentCacheInFlight = null;
+      }
+    })();
+
+    return this.instrumentCacheInFlight;
   }
 
   async searchInstruments(

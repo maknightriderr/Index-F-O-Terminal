@@ -19,7 +19,13 @@ export function calculateExpectedMove(
   symbol: string
 ): ExpectedMove {
   const timeComponent = Math.sqrt(dte / 365);
-  const expectedMove = spotPrice * iv * timeComponent;
+  // Cap at 15% of spot — even extreme IV + long DTE shouldn't produce a
+  // single-expiry expected move larger than this. Catches upstream IV
+  // blowups (e.g. a diverging Newton-Raphson solver returning 500% IV)
+  // that would otherwise inflate trade setup targets to absurd levels.
+  const MAX_MOVE_PCT = 0.15;
+  const rawMove = spotPrice * iv * timeComponent;
+  const expectedMove = Math.min(rawMove, spotPrice * MAX_MOVE_PCT);
 
   return {
     symbol,

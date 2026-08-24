@@ -60,6 +60,13 @@ export function buildTradeSetup(
     return { available: false, reason: `No live ${side} quote at the ATM strike (${atmStrike}) to build a setup from.` };
   }
 
+  // Defense-in-depth: delta must be in [-1, 1]. If upstream sanitization
+  // missed an edge case and a broker-garbage delta leaked through, refuse
+  // to project a target from it rather than handing out a 90x R:R number.
+  if (!isFinite(leg.delta) || Math.abs(leg.delta) > 1) {
+    return { available: false, reason: `ATM ${side} delta (${leg.delta}) is out of range — upstream Greeks data is unreliable this tick.` };
+  }
+
   const deltaMove = Math.abs(leg.delta) * Math.max(expectedMovePoints, 0);
   if (deltaMove <= 0) {
     return { available: false, reason: `No usable delta/expected-move data at the ATM strike (${atmStrike}) to project a target.` };

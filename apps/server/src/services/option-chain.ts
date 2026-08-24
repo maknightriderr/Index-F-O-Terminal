@@ -158,18 +158,28 @@ async function buildOptionChainUncached(
     const changeOi = changeOiByToken.get(inst.token) ?? 0;
 
     const brokerIv = broker ? Number(broker.iv) : 0;
-    const hasBrokerGreeks = !!broker && brokerIv > 0;
+    // Broker Greeks must pass a plausibility check before we trust them —
+    // Angel One's optionGreek endpoint can return garbage (delta >> 1,
+    // extreme IV, NaN) for illiquid options, near-zero-DTE, or when their
+    // own solver glitches. sanitizeBrokerGreeks() returns null when the
+    // data is too far off to clamp, and we fall back to the internal BS
+    // engine which has its own clamping built in.
+    const sanitized = !!broker && brokerIv > 0
+      ? sanitizeBrokerGreeks(
+          { delta: Number(broker.delta), gamma: Number(broker.gamma), theta: Number(broker.theta), vega: Number(broker.vega), iv: brokerIv },
+          optionType
+        )
+      : null;
 
     // calculateGreeksFromPrice returns iv as a decimal (0.17 for 17%), matching
     // the analytics package's internal convention — but broker Greeks and every
     // consumer of OptionChainLeg.iv (frontend display, ATM-IV -> Expected Move
     // below) expect a percentage (17.1), matching Angel One's own convention.
     // Normalize here so both paths agree on the same unit.
-    const greeks = hasBrokerGreeks
-      ? { delta: Number(broker!.delta), gamma: Number(broker!.gamma), theta: Number(broker!.theta), vega: Number(broker!.vega), iv: brokerIv }
-      : (() => {
+    const greeks = sanitized
+      ?? (() => {
           const calculated = calculateGreeksFromPrice(quote?.ltp ?? 0, spotPrice, strike, tte, optionType, RISK_FREE_RATE);
-          return { ...calculated, iv: calculated.iv * 100 };
+          return { delta: calculated.delta, gamma: calculated.gamma, theta: calculated.theta, vega: calculated.vega, iv: calculated.iv * 100 };
         })();
 
     return {
@@ -191,7 +201,7 @@ async function buildOptionChainUncached(
       // strike) — must be classified per-leg with its own optionType, not
       // once per strike row.
       moneyness: classifyStrike(strike, spotPrice, optionType, strikeInterval),
-      greeksSource: hasBrokerGreeks ? 'BROKER' : 'CALCULATED',
+      greeksSource: sanitized ? 'BROKER' : 'CALCULATED',
       timestamp: now,
     };
   };
@@ -323,4 +333,53 @@ export function inferStrikeInterval(sortedStrikes: number[]): number {
     }
   }
   return bestGap;
+}
+
+// --- Broker Greeks Validation ---
+// Angel One's optionGreek endpoint can return out-of-range values (delta > 1,
+// NaN, extreme IV) for illiquid options, near-zero-DTE strikes, or when their
+// own solver glitches. The internal BS engine (calculateGreeksFromPrice)
+// already clamps everything, but broker values bypass that. This function
+// validates and clamps, returning null if the data is too broken to salvage
+// — the caller then falls back to the internal engine.
+
+interface BrokerGreeksInput {
+  delta: number;
+  gamma: number;
+  theta: number;
+  vega: number;
+  iv: number; // percentage, e.g. 17.1 for 17.1%
+}
+
+const MIN_BROKER_IV_PCT = 0.5;   // 0.5% — anything below is almost certainly noise
+const MAX_BROKER_IV_PCT = 500;   // 500% — even the most volatile meme stock shouldn't exceed this
+
+function sanitizeBrokerGreeks(
+  raw: BrokerGreeksInput,
+  optionType: OptionType
+): BrokerGreeksInput | null {
+  // If any value is NaN or Infinity, the entire set is unreliable
+  const vals = [raw.delta, raw.gamma, raw.theta, raw.vega, raw.iv];
+  if (vals.some((v) => !isFinite(v) || isNaN(v))) return null;
+
+  // IV must be in a sane percentage range — if not, the rest of the
+  // Greeks derived from it are equally suspect
+  if (raw.iv < MIN_BROKER_IV_PCT || raw.iv > MAX_BROKER_IV_PCT) return null;
+
+  // Clamp delta per option type:
+  // CE delta ∈ [0, 1], PE delta ∈ [-1, 0]
+  const delta = optionType === 'CE'
+    ? Math.max(0, Math.min(1, raw.delta))
+    : Math.max(-1, Math.min(0, raw.delta));
+
+  // Gamma is always non-negative (same for both CE and PE)
+  const gamma = Math.max(0, raw.gamma);
+
+  // Theta is always non-positive for long options
+  const theta = Math.min(0, raw.theta);
+
+  // Vega is always non-negative
+  const vega = Math.max(0, raw.vega);
+
+  return { delta, gamma, theta, vega, iv: raw.iv };
 }

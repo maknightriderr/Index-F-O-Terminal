@@ -151,6 +151,12 @@ export async function scanFnoUniverse(provider: MarketDataProvider, exchange: Ex
       }
       ceIv = callGreeks ? callGreeks.iv * 100 : 0;
       peIv = putGreeks ? putGreeks.iv * 100 : 0;
+      // Newton-Raphson can converge to extreme values for illiquid / deep-OTM
+      // options — cap at 500% so downstream IV rank / display doesn't get
+      // poisoned by a solver artefact.
+      const MAX_SANE_IV_PCT = 500;
+      if (ceIv > MAX_SANE_IV_PCT) ceIv = 0;
+      if (peIv > MAX_SANE_IV_PCT) peIv = 0;
       const ivSamples = [ceIv, peIv].filter((v) => v > 0);
       atmIv = ivSamples.length > 0 ? ivSamples.reduce((a, b) => a + b, 0) / ivSamples.length : 0;
       // All three ATM Greeks represent the same thing: the average/
