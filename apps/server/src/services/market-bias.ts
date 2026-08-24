@@ -528,7 +528,12 @@ async function resolveStickyTradeSetup(
 async function recordTradeSetupGenerated(
   underlying: string,
   exchange: Exchange,
-  fresh: TradeSetup & { available: true },
+  // Caller has already checked fresh.available === true, but TradeSetup is
+  // a flat interface (not a discriminated union), so that check narrows
+  // fresh.available itself, not the type of `fresh` as a whole — side/
+  // strike/etc. stay optional at the type level even though they're always
+  // populated together with `available: true` at runtime.
+  fresh: TradeSetup,
   direction: BiasDirection,
   confidence: number,
   regime: MarketRegime,
