@@ -36,6 +36,7 @@ import type {
 import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveSpotToken, resolveNearestFuturesContract, buildOptionChain } from './option-chain.js';
 import { buildFuturesData } from './futures.js';
+import { scanFnoUniverse } from './fno-scanner.js';
 import { cached } from '../lib/cache.js';
 import { redis } from '../lib/redis.js';
 import { sql } from '../lib/db.js';
@@ -53,6 +54,11 @@ const HISTORICAL_CACHE_TTL_SECONDS = 90;
 // enough that a transient outage never surfaces the "unreachable" banner,
 // short enough that stale data doesn't linger past a trading session.
 const BIAS_RESULT_CACHE_TTL_SECONDS = 5 * 60;
+
+// Must match instruments.ts/alerts.ts's fno-scanner cache TTL — same key,
+// shared cache, so this just reads whatever the universe scan last cached
+// rather than triggering its own fetch.
+const SCANNER_CACHE_TTL_SECONDS = 180;
 
 export interface MarketBiasResult {
   bias: MarketBias;
@@ -408,7 +414,7 @@ async function computeMarketBias(
   };
 
   const tradeSetup: TradeSetup = chain
-    ? await resolveStickyTradeSetup(underlying, exchange, chain, direction, confidence, regime, overall)
+    ? await resolveStickyTradeSetup(provider, underlying, exchange, chain, direction, confidence, regime, overall)
     : { available: false, reason: 'Option chain unavailable for this symbol — cannot size a setup.' };
 
   const result: MarketBiasResult = { bias, score, tradeSetup };
@@ -421,6 +427,26 @@ async function computeMarketBias(
   }
 
   return result;
+}
+
+// IV Rank is only computed for the ~200-stock NSE F&O universe scan (see
+// fno-scanner.ts's computeIvRanks) — not available for indices (NIFTY/
+// BANKNIFTY) or MCX/BSE symbols. Reuses the same cached scan alerts.ts and
+// institutional-flow.ts already read, so this never triggers an extra fetch
+// on top of the regular 180s universe poll. Returns null (unknown) rather
+// than throwing when the symbol isn't in that scan or the scan itself fails
+// — buildTradeSetup treats null as "don't gate," preserving today's
+// behavior for symbols outside IV Rank's coverage.
+async function lookupIvRank(provider: MarketDataProvider, exchange: Exchange, underlying: string): Promise<number | null> {
+  if (exchange !== 'NSE') return null;
+  try {
+    const rows = await cached('fno-scanner:NSE', SCANNER_CACHE_TTL_SECONDS, () => scanFnoUniverse(provider, 'NSE'));
+    const row = rows.find((r) => r.symbol === underlying);
+    return row?.ivRank ?? null;
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying }, 'IV Rank lookup failed for trade setup — proceeding ungated');
+    return null;
+  }
 }
 
 // --- Sticky Trade Setup ---
@@ -440,6 +466,7 @@ interface StoredTradeSetup extends TradeSetup {
 }
 
 async function resolveStickyTradeSetup(
+  provider: MarketDataProvider,
   underlying: string,
   exchange: Exchange,
   chain: OptionChain,
@@ -492,7 +519,8 @@ async function resolveStickyTradeSetup(
     await recordTradeSetupOutcome(stored!, 'EXPIRED', leg?.ltp ?? null);
   }
 
-  const fresh = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, chain.expectedMove.points);
+  const ivRank = await lookupIvRank(provider, exchange, underlying);
+  const fresh = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, chain.expectedMove.points, ivRank);
 
   if (!fresh.available) {
     // Clear any previously locked setup now that conditions no longer

@@ -10,7 +10,7 @@
 // point for which strategy shape fits the current bias + IV regime.
 // ============================================================
 
-import type { FnoScannerRow } from '@fno/shared';
+import { IV_RANK_HIGH_THRESHOLD, IV_RANK_LOW_THRESHOLD, type FnoScannerRow } from '@fno/shared';
 
 export type StrategyCategory = 'DIRECTIONAL' | 'NEUTRAL';
 export type RiskProfile = 'DEFINED_RISK' | 'UNDEFINED_RISK';
@@ -22,8 +22,8 @@ export interface StrategyRecommendation {
   rationale: string;
 }
 
-const IV_HIGH_THRESHOLD = 60;
-const IV_LOW_THRESHOLD = 40;
+const IV_HIGH_THRESHOLD = IV_RANK_HIGH_THRESHOLD;
+const IV_LOW_THRESHOLD = IV_RANK_LOW_THRESHOLD;
 
 export function recommendStrategy(row: FnoScannerRow): StrategyRecommendation | null {
   const { direction, score, ivRank, atmTheta, pcr } = row;

@@ -13,7 +13,7 @@
 // numbers were derived so it can be checked, not just trusted.
 // ============================================================
 
-import type { OptionChainStrike, OptionType, BiasDirection, TradeSetup } from '@fno/shared';
+import { IV_RANK_HIGH_THRESHOLD, type OptionChainStrike, type OptionType, type BiasDirection, type TradeSetup } from '@fno/shared';
 
 const SL_PREMIUM_PCT = 0.3; // 30% premium stop — standard retail heuristic for long options
 // market-bias.ts's direction comes from 6 votes; confidence = % of them
@@ -40,7 +40,8 @@ export function buildTradeSetup(
   atmStrike: number,
   direction: BiasDirection,
   confidence: number,
-  expectedMovePoints: number
+  expectedMovePoints: number,
+  ivRank: number | null = null
 ): TradeSetup {
   if (direction === 'NEUTRAL') {
     return { available: false, reason: 'Market bias is neutral — no high-conviction directional setup right now.' };
@@ -49,6 +50,20 @@ export function buildTradeSetup(
     return {
       available: false,
       reason: `Bias confidence (${confidence}/100) is below the ${MIN_CONFIDENCE} threshold needed for a setup — signals are too mixed.`,
+    };
+  }
+  // A naked long option is a bad trade in a high-IV regime regardless of
+  // directional conviction — you're paying rich premium that mean-reverts
+  // against you even if the direction call is right. Strategy Scanner
+  // already reaches this conclusion independently (recommends selling
+  // premium / spreads above this same threshold); without this gate,
+  // Trade Setup would contradict it on the same symbol at the same time.
+  // Only gates when ivRank is actually known — indices/MCX symbols outside
+  // the F&O universe scan pass ivRank=null and keep today's behavior.
+  if (ivRank != null && ivRank >= IV_RANK_HIGH_THRESHOLD) {
+    return {
+      available: false,
+      reason: `IV Rank (${ivRank.toFixed(0)}) is elevated (>=${IV_RANK_HIGH_THRESHOLD}) — a naked long option is a poor risk here since rich premium can mean-revert against you even if the direction call is right. Check Strategy Scanner for a premium-selling / spread setup instead.`,
     };
   }
 

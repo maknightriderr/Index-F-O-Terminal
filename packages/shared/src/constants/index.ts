@@ -196,3 +196,13 @@ export const DEFAULT_RISK_CONFIG = {
 // --- Risk-Free Rate (for Black-Scholes) ---
 
 export const RISK_FREE_RATE = 0.07; // 7% — RBI repo rate approximation
+
+// --- IV Rank Bands ---
+// Single source of truth for "is this option's premium rich or cheap
+// relative to its own recent range" — shared between the Strategy
+// Scanner (which recommends selling premium above this) and the Trade
+// Setup engine (which refuses to propose a naked long above this), so
+// the two features can't independently drift into contradicting each
+// other on the same symbol.
+export const IV_RANK_HIGH_THRESHOLD = 60;
+export const IV_RANK_LOW_THRESHOLD = 40;
