@@ -13,6 +13,7 @@ import { ActivityList } from '@/components/common/activity-list';
 import { TopMoversList } from '@/components/common/top-movers-list';
 import { Sparkline } from '@/components/common/sparkline';
 import { SkeletonTableRow } from '@/components/common/skeleton';
+import { ChartPatternsPanel } from '@/components/common/chart-patterns-panel';
 import { getPriceHistory } from '@/lib/price-history-store';
 import { useChartPatterns } from '@/lib/use-chart-patterns';
 import { useAssetTabsStore, useMarketStore } from '@/stores';
