@@ -178,7 +178,7 @@ export function calculateGreeks(input: BSInput): Greeks {
 }
 
 /**
- * Calculate implied volatility using Newton-Raphson method.
+ * Calculate implied volatility via bisection.
  * Returns IV as decimal (e.g., 0.20 for 20%).
  */
 export function calculateIV(
@@ -202,54 +202,49 @@ export function calculateIV(
 
   if (marketPrice < intrinsic * 0.99) return 0; // Below intrinsic
 
-  // Initial guess
-  let sigma = 0.3; // 30%
-  let converged = false;
+  // Bisection over [SIGMA_MIN, SIGMA_MAX] — option price is strictly
+  // monotonically increasing in sigma, so bisection is guaranteed to
+  // converge whenever the market price actually falls inside the bracket.
+  // This used to be Newton-Raphson, which had two distinct live failure
+  // modes: it could diverge to an absurd boundary value on highly-convex
+  // short-dated options (a "500% IV" observed live on a 5-DTE near-ATM
+  // NIFTY option), and — found while investigating an implausible
+  // BANKNIFTY trade-setup target — it can get stuck in a stable 2-point
+  // oscillation (sigma bouncing between ~0.006 and ~1.006 every iteration,
+  // forever) whenever the true solution sits in a near-zero-vega region,
+  // which a perfectly ordinary 34-DTE ATM option with ~8-9% IV did here.
+  // Bisection has neither failure mode: slower per-iteration, but
+  // unconditionally stable, at the cost this codebase can easily afford.
+  const SIGMA_MIN = 0.001;
+  const SIGMA_MAX = 3.0; // 300% IV cap — still generous; genuine 500%+ never happens, only a diverging solver landing there
+
+  const priceAt = (sigma: number) =>
+    blackScholesPrice({ spotPrice, strikePrice, timeToExpiry, riskFreeRate, iv: sigma, optionType });
+
+  const priceLo = priceAt(SIGMA_MIN);
+  const priceHi = priceAt(SIGMA_MAX);
+
+  // Market price falls outside what any IV in [0.1%, 300%] could produce —
+  // not a resolvable IV, an upstream data issue (stale/bad quote), so report
+  // "unresolvable" (0) rather than a plausible-looking number that isn't.
+  if (marketPrice <= priceLo || marketPrice >= priceHi) return 0;
+
+  let lo = SIGMA_MIN;
+  let hi = SIGMA_MAX;
 
   for (let i = 0; i < maxIterations; i++) {
-    const price = blackScholesPrice({
-      spotPrice, strikePrice, timeToExpiry,
-      riskFreeRate, iv: sigma, optionType,
-    });
+    const mid = (lo + hi) / 2;
+    const diff = priceAt(mid) - marketPrice;
 
-    const diff = price - marketPrice;
-
-    if (Math.abs(diff) < tolerance) {
-      converged = true;
-      break;
-    }
-
-    // Vega for Newton-Raphson step
-    const { d1 } = calcD1D2(spotPrice, strikePrice, timeToExpiry, riskFreeRate, sigma);
-    const vega = spotPrice * Math.sqrt(timeToExpiry) * normalPDF(d1);
-
-    if (vega < 1e-10) break; // Avoid division by zero
-
-    // Short-dated options make price-vs-IV highly convex, so an uncapped
-    // diff/vega step can overshoot wildly from a reasonable starting guess
-    // and never recover — observed live producing a "500% IV" on a 5-DTE
-    // near-ATM NIFTY option, which cascaded into an unusable trade-setup
-    // target. Capping the step keeps each iteration a genuine local move
-    // instead of a leap that can only land on a boundary.
-    const step = Math.max(-1, Math.min(1, diff / vega));
-    sigma -= step;
-
-    // Keep sigma in reasonable bounds
-    if (sigma < 0.001) sigma = 0.001;
-    if (sigma > 3.0) sigma = 3.0; // 300% IV cap — still generous; genuine 500%+ never happens, only a diverging solver landing there
+    if (Math.abs(diff) < tolerance) return mid;
+    if (diff > 0) hi = mid; else lo = mid;
   }
 
-  // Never satisfying the tolerance means the loop exhausted its iterations
-  // or bailed on vanishing vega — the result sitting wherever sigma landed
-  // (often a boundary) is not a real market reading. Verify it actually
-  // reprices close to the market price before trusting it; otherwise report
-  // "unresolvable" (0) rather than a plausible-looking number that isn't.
-  if (!converged) {
-    const finalPrice = blackScholesPrice({ spotPrice, strikePrice, timeToExpiry, riskFreeRate, iv: sigma, optionType });
-    if (Math.abs(finalPrice - marketPrice) > marketPrice * 0.05 + tolerance) return 0;
-  }
-
-  return Math.max(0, sigma);
+  // Ran out of iterations before hitting the price tolerance exactly — the
+  // bracket has still shrunk to within (SIGMA_MAX-SIGMA_MIN)/2^maxIterations,
+  // far tighter than any real use needs, so the midpoint is a safe result
+  // rather than a failure.
+  return (lo + hi) / 2;
 }
 
 /**
@@ -267,6 +262,23 @@ export function calculateGreeksFromPrice(
     marketPrice, spotPrice, strikePrice,
     timeToExpiry, riskFreeRate, optionType
   );
+
+  // calculateIV returns exactly 0 as its own "could not resolve" sentinel
+  // whenever timeToExpiry > 0 (see its own early-returns) — never a genuine
+  // market reading, since a live option with real time value essentially
+  // never has true 0% IV. Feeding that sentinel into calculateGreeks would
+  // hit its near-zero-IV edge case (meant for genuinely at-expiry-like
+  // conditions) and fabricate a confidently wrong hard ITM/OTM delta of 1
+  // or 0 instead of "no data" — this is exactly what produced a delta of
+  // 1.00 on an ordinary near-ATM BANKNIFTY option and roughly doubled its
+  // trade-setup target. Report honest zeros so callers (e.g. Trade Setup's
+  // delta-move guard) correctly treat this leg as having no usable Greeks.
+  // (timeToExpiry <= 0 is excluded — that's genuine expiry, where
+  // calculateGreeks's own zero-DTE branch computing a hard ITM/OTM delta
+  // is correct, not a failure.)
+  if (timeToExpiry > 0 && iv <= 0) {
+    return { delta: 0, gamma: 0, theta: 0, vega: 0, iv: 0 };
+  }
 
   return calculateGreeks({
     spotPrice, strikePrice: strikePrice, timeToExpiry,
