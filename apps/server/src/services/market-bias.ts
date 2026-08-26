@@ -20,7 +20,7 @@ import {
   bollingerBands,
   getOIDescription,
   buildTradeSetup,
-  MAX_TARGET_MULTIPLE_OF_ENTRY,
+  MAX_RISK_REWARD,
 } from '@fno/analytics';
 import type {
   Exchange,
@@ -506,14 +506,16 @@ async function resolveStickyTradeSetup(
   // to protect from re-evaluation, so it re-checks current conditions
   // every poll like any other live read rather than getting stuck once
   // confidence happens to dip for one cycle.
-  // A setup generated before a data-quality fix (e.g. a diverging IV solver
-  // inflating the target) can otherwise stay locked in all day — its target
-  // is unreachable so hitSL/hitTarget below never fires — silently serving
-  // a broken number for the rest of the session. Re-applying the same
-  // plausibility bar buildTradeSetup itself enforces on every read closes
-  // that gap without needing a manual cache clear.
+  // A setup generated before a data-quality fix (e.g. a diverging or
+  // oscillating IV solver inflating the target) can otherwise stay locked
+  // in all day — its target is unreachable so hitSL/hitTarget below never
+  // fires — silently serving a broken number for the rest of the session.
+  // Re-applying the same R:R plausibility bar buildTradeSetup itself
+  // enforces on every read closes that gap without needing a manual cache
+  // clear — this is what lets a fix land and immediately self-heal any
+  // setup already sitting in Redis, not just new ones generated after.
   const storedIsPlausible =
-    stored?.available && stored.entry != null && stored.target != null && stored.target <= stored.entry * MAX_TARGET_MULTIPLE_OF_ENTRY;
+    stored?.available && stored.riskReward != null && stored.riskReward <= MAX_RISK_REWARD;
 
   if (storedIsPlausible && stored!.day === today) {
     // SL/target are about the option's own price, not the current bias
