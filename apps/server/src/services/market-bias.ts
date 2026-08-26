@@ -60,6 +60,18 @@ const BIAS_RESULT_CACHE_TTL_SECONDS = 5 * 60;
 // rather than triggering its own fetch.
 const SCANNER_CACHE_TTL_SECONDS = 180;
 
+// The 6-vote direction read (VWAP/RSI/Supertrend×2/futures OI/PCR) has no
+// hysteresis — a single vote crossing its threshold (e.g. spot ticking
+// across the VWAP band, or RSI drifting from 46 to 44) can flip the
+// composite direction from one 60s poll to the next. Without this, a
+// freshly-locked setup could get marked EXPIRED and wiped out within a
+// minute of being generated on nothing more than noise, even though the
+// underlying read reverts right back next poll. Requiring the reversal to
+// hold for this many *consecutive* polls (~3 min at the frontend's 60s
+// poll interval) before actually invalidating a sticky setup filters that
+// noise out while still reacting to a real, sustained reversal.
+const REVERSAL_CONFIRM_POLLS = 3;
+
 export interface MarketBiasResult {
   bias: MarketBias;
   score: IntelligenceScore;
@@ -463,7 +475,10 @@ interface StoredTradeSetup extends TradeSetup {
   direction: BiasDirection;
   day: string; // YYYY-MM-DD, IST
   signalId?: string; // links to the persisted `signals` row for backtesting (see backtesting.ts)
+  reversalStreak?: number; // consecutive polls the bias has read opposite to `direction` — see REVERSAL_CONFIRM_POLLS
 }
+
+const STICKY_TRADE_SETUP_TTL_SECONDS = 60 * 60 * 24 * 2;
 
 async function resolveStickyTradeSetup(
   provider: MarketDataProvider,
@@ -500,21 +515,52 @@ async function resolveStickyTradeSetup(
   const storedIsPlausible =
     stored?.available && stored.entry != null && stored.target != null && stored.target <= stored.entry * MAX_TARGET_MULTIPLE_OF_ENTRY;
 
-  if (storedIsPlausible && stored!.day === today && stored!.direction === direction) {
+  if (storedIsPlausible && stored!.day === today) {
+    // SL/target are about the option's own price, not the current bias
+    // read — check them first and unconditionally, so a real win/loss is
+    // never masked by a same-tick direction flicker.
     const leg = findLeg(chain, stored!.strike!, stored!.side!);
     const currentLtp = leg?.ltp;
     const hitSL = currentLtp != null && currentLtp <= stored!.stopLoss!;
     const hitTarget = currentLtp != null && currentLtp >= stored!.target!;
-    if (!hitSL && !hitTarget) return stored!;
 
-    // Resolved this tick — record the real outcome for backtesting before
-    // a fresh setup potentially overwrites this Redis key.
-    await recordTradeSetupOutcome(stored!, hitTarget ? 'WIN' : 'LOSS', currentLtp ?? null);
+    if (hitSL || hitTarget) {
+      await recordTradeSetupOutcome(stored!, hitTarget ? 'WIN' : 'LOSS', currentLtp ?? null);
+      // falls through to fresh generation below
+    } else if (stored!.direction === direction) {
+      // Bias still agrees with the locked setup — fully sticky. Clear any
+      // reversal streak that had started building from an earlier blip,
+      // since the reversal didn't hold.
+      if (!stored!.reversalStreak) return stored!;
+      const reset: StoredTradeSetup = { ...stored!, reversalStreak: 0 };
+      try {
+        await redis.set(key, JSON.stringify(reset), 'EX', STICKY_TRADE_SETUP_TTL_SECONDS);
+      } catch (err: any) {
+        logger.warn({ error: err.message, underlying }, 'Sticky trade setup reversal-streak reset failed');
+      }
+      return reset;
+    } else {
+      // Bias has flipped this poll — don't tear down the setup on a single
+      // noisy reading. Require the reversal to hold for REVERSAL_CONFIRM_POLLS
+      // consecutive polls before treating it as real.
+      const streak = (stored!.reversalStreak ?? 0) + 1;
+      if (streak < REVERSAL_CONFIRM_POLLS) {
+        const bumped: StoredTradeSetup = { ...stored!, reversalStreak: streak };
+        try {
+          await redis.set(key, JSON.stringify(bumped), 'EX', STICKY_TRADE_SETUP_TTL_SECONDS);
+        } catch (err: any) {
+          logger.warn({ error: err.message, underlying }, 'Sticky trade setup reversal-streak write failed');
+        }
+        return bumped;
+      }
+      // Reversal confirmed across enough polls — inconclusive, not a loss.
+      // Still worth a mark-to-market exit price where we can get one, so
+      // it's not just a blank row in the backtest.
+      await recordTradeSetupOutcome(stored!, 'EXPIRED', currentLtp ?? null);
+    }
   } else if (storedIsPlausible && stored?.signalId) {
-    // Was a genuine, plausible setup, but the day rolled over or the bias
-    // reversed before SL/target got hit — inconclusive, not a loss. Still
-    // worth a mark-to-market exit price where we can get one, so it's not
-    // just a blank row in the backtest.
+    // Day rolled over — a setup from a prior session is unconditionally
+    // stale regardless of direction, no debounce needed.
     const leg = findLeg(chain, stored!.strike!, stored!.side!);
     await recordTradeSetupOutcome(stored!, 'EXPIRED', leg?.ltp ?? null);
   }
@@ -538,7 +584,7 @@ async function resolveStickyTradeSetup(
 
   const toStore: StoredTradeSetup = { ...fresh, direction, day: today, generatedAt: Date.now(), signalId };
   try {
-    await redis.set(key, JSON.stringify(toStore), 'EX', 60 * 60 * 24 * 2);
+    await redis.set(key, JSON.stringify(toStore), 'EX', STICKY_TRADE_SETUP_TTL_SECONDS);
   } catch (err: any) {
     logger.warn({ error: err.message, underlying }, 'Sticky trade setup write failed');
   }
