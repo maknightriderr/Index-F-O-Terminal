@@ -341,6 +341,8 @@ export interface FnoScannerRow {
   direction: BiasDirection;
   confidence: number;
   score: number;
+  /** Today's changePercent minus NIFTY's own changePercent — positive means this stock is outperforming the index today, not just moving with it. */
+  relativeStrength: number;
   timestamp: number;
 }
 

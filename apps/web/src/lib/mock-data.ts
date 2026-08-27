@@ -54,7 +54,12 @@ export const MOCK_INDICES: MarketQuote[] = [
 
 // --- Mock F&O Scanner Data (Full typed FnoScannerRow universe) ---
 
-export const MOCK_FNO_SCANNER_ROWS: FnoScannerRow[] = [
+// A plausible flat NIFTY change% for this mock session — relativeStrength
+// below is derived from it rather than hand-picked per row, so it stays
+// internally consistent with each row's own changePercent.
+const MOCK_NIFTY_CHANGE_PERCENT = 0.55;
+
+const MOCK_FNO_SCANNER_ROWS_BASE: Omit<FnoScannerRow, 'relativeStrength'>[] = [
   {
     symbol: 'RELIANCE', exchange: 'NSE', price: 2945.80, changePercent: 1.82, volume: 8524000,
     futuresOi: 15240000, futuresChangeOi: 580000, futuresChangeOiPercent: 3.96,
@@ -168,6 +173,11 @@ export const MOCK_FNO_SCANNER_ROWS: FnoScannerRow[] = [
     direction: 'BULLISH', confidence: 68, score: 73, timestamp: Date.now(),
   },
 ];
+
+export const MOCK_FNO_SCANNER_ROWS: FnoScannerRow[] = MOCK_FNO_SCANNER_ROWS_BASE.map((r) => ({
+  ...r,
+  relativeStrength: Math.round((r.changePercent - MOCK_NIFTY_CHANGE_PERCENT) * 100) / 100,
+}));
 
 export const MOCK_FNO_SCANNER = MOCK_FNO_SCANNER_ROWS.map((r) => ({
   symbol: r.symbol,

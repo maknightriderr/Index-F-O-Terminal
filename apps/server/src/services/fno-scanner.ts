@@ -16,7 +16,7 @@
 // to ~40 quote requests instead of thousands.
 // ============================================================
 
-import { CM_SEGMENT, FO_SEGMENT, RISK_FREE_RATE, getATMStrike, calculateDTE, yearsToExpiry, isExpiryActive } from '@fno/shared';
+import { CM_SEGMENT, FO_SEGMENT, RISK_FREE_RATE, KNOWN_INDEX_TOKENS, getATMStrike, calculateDTE, yearsToExpiry, isExpiryActive } from '@fno/shared';
 import type { Exchange, Instrument, OIInterpretation, BiasDirection, FnoScannerRow, Greeks } from '@fno/shared';
 import { classifyFuturesOI, calculateGreeksFromPrice } from '@fno/analytics';
 import type { MarketDataProvider } from '../providers/interface.js';
@@ -45,6 +45,24 @@ export async function scanFnoUniverse(provider: MarketDataProvider, exchange: Ex
   // Round 1: every stock's cash-market quote (price, change%, volume).
   const eqQuotes = await provider.getQuote(CM_SEGMENT[exchange], stocks.map((s) => s.eq.token), 'FULL');
   const eqByToken = new Map(eqQuotes.map((q) => [q.token, q]));
+
+  // One extra quote for the whole scan (not per-stock) — NIFTY's own
+  // today's change%, the baseline every stock's relative strength is
+  // measured against. A stock up 2% while NIFTY is up 3% is actually
+  // underperforming despite the green number; relative strength is what
+  // separates "moving with the market" from a genuine standout.
+  const niftyToken = KNOWN_INDEX_TOKENS.NIFTY;
+  let niftyChangePercent = 0;
+  if (exchange === 'NSE' && niftyToken) {
+    try {
+      const [niftyQuote] = await provider.getQuote(CM_SEGMENT.NSE, [niftyToken], 'FULL');
+      if (niftyQuote && niftyQuote.close > 0) {
+        niftyChangePercent = ((niftyQuote.ltp - niftyQuote.close) / niftyQuote.close) * 100;
+      }
+    } catch (err: any) {
+      logger.warn({ error: err.message }, 'F&O scanner: NIFTY baseline quote failed — relative strength will read as raw changePercent');
+    }
+  }
 
   // Round 2: each stock's nearest-expiry futures contract.
   const nearestFutures = stocks
@@ -197,6 +215,7 @@ export async function scanFnoUniverse(provider: MarketDataProvider, exchange: Ex
       direction,
       confidence,
       score,
+      relativeStrength: Math.round((changePercent - niftyChangePercent) * 100) / 100,
       timestamp: now,
     });
   }
