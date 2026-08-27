@@ -192,11 +192,11 @@ function extractTag(xml: string, tag: string): string | null {
 
 function decodeHtmlEntities(text: string): string {
   return text
-    .replace(/&nbsp;/g, ' ')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&apos;/g, "'")
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&'); // must run last, so a genuinely double-escaped "&amp;lt;" decodes to the literal text "&lt;" rather than being mis-decoded straight through to "<"
+    .replace(/&amp;/g, '&') // must run before &nbsp; below, not after: the RSS source XML-escapes its embedded HTML once, so an original "&nbsp;" separator arrives here as "&amp;nbsp;" — &nbsp; never appears literally until &amp; has been decoded first. (And &amp; itself must still run after quot/lt/gt/etc, so a genuinely double-escaped "&amp;lt;" resolves to the literal text "&lt;" rather than being mis-decoded straight through to "<".)
+    .replace(/&nbsp;/g, ' ');
 }
