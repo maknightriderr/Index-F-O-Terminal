@@ -128,8 +128,14 @@ function bucketBy(records: TradeSetupRecord[], keyFn: (r: TradeSetupRecord) => s
     .sort((a, b) => (a.period < b.period ? 1 : -1)); // newest period first
 }
 
-export async function getWinRateAnalytics(): Promise<WinRateAnalytics> {
-  const all = await getTradeSetupHistory();
+// Intraday and Positional setups have fundamentally different risk
+// profiles (30% vs 40% SL, session-length vs weeks-long holds) — blending
+// them into one set of win-rate stats muddies both once Positional trades
+// accumulate. `modeFilter` scopes the whole computation to one mode;
+// omitted (or 'ALL') keeps the original combined view.
+export async function getWinRateAnalytics(modeFilter?: TradingMode | 'ALL'): Promise<WinRateAnalytics> {
+  const everything = await getTradeSetupHistory();
+  const all = !modeFilter || modeFilter === 'ALL' ? everything : everything.filter((r) => r.mode === modeFilter);
 
   const bySymbolMap = new Map<string, TradeSetupRecord[]>();
   for (const r of all) {
@@ -147,6 +153,8 @@ export async function getWinRateAnalytics(): Promise<WinRateAnalytics> {
     monthly: bucketBy(all, (r) => istDateString(r.generatedAt).slice(0, 7)),
     yearly: bucketBy(all, (r) => istDateString(r.generatedAt).slice(0, 4)),
     bySymbol,
+    intradayCount: everything.filter((r) => r.mode === 'INTRADAY').length,
+    positionalCount: everything.filter((r) => r.mode === 'POSITIONAL').length,
   };
 }
 

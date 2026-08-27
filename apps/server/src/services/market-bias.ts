@@ -387,7 +387,24 @@ async function computeMarketBias(
   const regime = classifyRegime(adxValue, st1hDirection, atrPctZ);
 
   // --- Reasoning (built from the actual computed values, not templated) ---
+  // Ordered by priority, not computation order — the frontend card only
+  // shows the first 9 lines, so event-based signals that only fire when
+  // something specific happened (divergence, candlestick reversals) go
+  // first, ahead of always-present baseline readings (VWAP, RSI level)
+  // that would otherwise crowd them out every time. Found in a re-audit:
+  // pivots/divergence/candlePattern were pushed last and were getting cut
+  // off almost every time there was a full chain + futures + IV read.
   const reasoning: string[] = [];
+  if (rsiDivergence.signal !== 'NONE') {
+    reasoning.push(
+      `${rsiDivergence.signal === 'BEARISH' ? 'Bearish' : 'Bullish'} RSI divergence — price ${rsiDivergence.signal === 'BEARISH' ? 'made a higher high' : 'made a lower low'} while RSI weakened (${fmt(rsiDivergence.rsiSwing!.first, 0)} → ${fmt(rsiDivergence.rsiSwing!.second, 0)})`
+    );
+  }
+  if (candlePattern) {
+    reasoning.push(
+      `${candlePattern.pattern.replace(/_/g, ' ').toLowerCase()} candle (${candlePattern.direction.toLowerCase()}) on the latest 15m bar`
+    );
+  }
   reasoning.push(
     vwapVote === 1
       ? `Price above VWAP (${fmt(spot)} > ${fmt(sessionVwap)})`
@@ -415,6 +432,13 @@ async function computeMarketBias(
   );
   if (putWall) reasoning.push(`Put OI concentration at ${fmt(putWall.strike, 0)} (support)`);
   if (callWall) reasoning.push(`Call OI build-up at ${fmt(callWall.strike, 0)} (resistance)`);
+  if (pivots) {
+    reasoning.push(
+      spot > pivots.pp
+        ? `Above prior-session pivot (${fmt(spot)} > PP ${fmt(pivots.pp)}) — R1 ${fmt(pivots.r1)}, S1 ${fmt(pivots.s1)}`
+        : `Below prior-session pivot (${fmt(spot)} < PP ${fmt(pivots.pp)}) — R1 ${fmt(pivots.r1)}, S1 ${fmt(pivots.s1)}`
+    );
+  }
   if (chain) {
     reasoning.push(
       `PCR at ${fmt(pcr)} — ${pcr > 1.1 ? 'moderately bullish' : pcr < 0.85 ? 'moderately bearish' : 'neutral'}`
@@ -423,15 +447,15 @@ async function computeMarketBias(
   if (currentFuture) {
     reasoning.push(`${getOIDescription(futuresInterpretation).description} in futures OI`);
   }
+  if (chain?.gammaExposure && chain.gammaExposure.regime !== 'NEUTRAL') {
+    reasoning.push(
+      `Net ${chain.gammaExposure.regime === 'LONG_GAMMA' ? 'positive' : 'negative'} GEX — dealers likely ${chain.gammaExposure.regime === 'LONG_GAMMA' ? 'dampening moves (range-bound bias)' : 'amplifying moves (trend-following bias)'}${chain.gammaExposure.gammaWallStrike != null ? `, largest concentration at ${fmt(chain.gammaExposure.gammaWallStrike, 0)}` : ''}`
+    );
+  }
   if (chain && atmIvPct > 0) reasoning.push(`ATM IV at ${fmt(atmIvPct)}%`);
   if (ivVsHv.spreadPct != null && ivVsHv.reading !== 'FAIR') {
     reasoning.push(
       `IV ${ivVsHv.reading === 'RICH' ? 'richer' : 'cheaper'} than realized volatility (HV ${fmt(hvPct!, 1)}%, IV ${ivVsHv.spreadPct > 0 ? '+' : ''}${fmt(ivVsHv.spreadPct, 0)}% vs it) — ${ivVsHv.reading === 'RICH' ? 'favors selling' : 'favors buying'} premium`
-    );
-  }
-  if (chain?.gammaExposure && chain.gammaExposure.regime !== 'NEUTRAL') {
-    reasoning.push(
-      `Net ${chain.gammaExposure.regime === 'LONG_GAMMA' ? 'positive' : 'negative'} GEX — dealers likely ${chain.gammaExposure.regime === 'LONG_GAMMA' ? 'dampening moves (range-bound bias)' : 'amplifying moves (trend-following bias)'}${chain.gammaExposure.gammaWallStrike != null ? `, largest concentration at ${fmt(chain.gammaExposure.gammaWallStrike, 0)}` : ''}`
     );
   }
   if (Math.abs(volumeRatio - 1) > 0.3) {
@@ -439,23 +463,6 @@ async function computeMarketBias(
   }
   if (st15JustFlipped && !volumeConfirms) {
     reasoning.push(`Supertrend 15m just flipped ${st15Direction === 'UP' ? 'bullish' : 'bearish'} but volume (${fmt(volumeRatio, 2)}x) hasn't confirmed it — vote withheld`);
-  }
-  if (pivots) {
-    reasoning.push(
-      spot > pivots.pp
-        ? `Above prior-session pivot (${fmt(spot)} > PP ${fmt(pivots.pp)}) — R1 ${fmt(pivots.r1)}, S1 ${fmt(pivots.s1)}`
-        : `Below prior-session pivot (${fmt(spot)} < PP ${fmt(pivots.pp)}) — R1 ${fmt(pivots.r1)}, S1 ${fmt(pivots.s1)}`
-    );
-  }
-  if (rsiDivergence.signal !== 'NONE') {
-    reasoning.push(
-      `${rsiDivergence.signal === 'BEARISH' ? 'Bearish' : 'Bullish'} RSI divergence — price ${rsiDivergence.signal === 'BEARISH' ? 'made a higher high' : 'made a lower low'} while RSI weakened (${fmt(rsiDivergence.rsiSwing!.first, 0)} → ${fmt(rsiDivergence.rsiSwing!.second, 0)})`
-    );
-  }
-  if (candlePattern) {
-    reasoning.push(
-      `${candlePattern.pattern.replace(/_/g, ' ').toLowerCase()} candle (${candlePattern.direction.toLowerCase()}) on the latest 15m bar`
-    );
   }
 
   const bias: MarketBias = {

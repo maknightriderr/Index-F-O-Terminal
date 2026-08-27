@@ -15,8 +15,12 @@ const PERIOD_LABELS: Record<PeriodTab, string> = {
   yearly: 'Year-wise',
 };
 
+type ModeFilter = 'ALL' | 'INTRADAY' | 'POSITIONAL';
+const MODE_FILTER_LABELS: Record<ModeFilter, string> = { ALL: 'All', INTRADAY: 'Intraday', POSITIONAL: 'Positional' };
+
 export function BacktestingPage() {
-  const { analytics, history, loading, isLive } = useBacktesting();
+  const [modeFilter, setModeFilter] = useState<ModeFilter>('ALL');
+  const { analytics, history, loading, isLive } = useBacktesting(modeFilter);
   const [periodTab, setPeriodTab] = useState<PeriodTab>('daily');
   const openTab = useAssetTabsStore((s) => s.openTab);
 
@@ -29,11 +33,41 @@ export function BacktestingPage() {
             Win-rate analysis of every trade setup the system has actually generated — captured live, not simulated. Coverage grows with what gets viewed/scanned; there's no way to backfill history.
           </p>
         </div>
-        <span className="flex items-center gap-1.5 text-[11px] text-gray-500 light:text-slate-500">
-          <span className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
-          {isLive ? 'Live' : loading ? 'Loading…' : 'Unreachable'}
-        </span>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-0.5 bg-gray-800/60 light:bg-slate-200/60 rounded-lg p-0.5" role="group" aria-label="Filter by trading mode">
+            {(Object.keys(MODE_FILTER_LABELS) as ModeFilter[]).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setModeFilter(m)}
+                title={
+                  m === 'ALL'
+                    ? 'Intraday and Positional setups combined — different risk profiles, mixing them can muddy the win rate'
+                    : m === 'INTRADAY'
+                    ? `Intraday only (${analytics?.intradayCount ?? 0} setups)`
+                    : `Positional only (${analytics?.positionalCount ?? 0} setups)`
+                }
+                className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wide transition-colors ${
+                  modeFilter === m
+                    ? 'bg-emerald-500/90 text-white'
+                    : 'text-gray-400 light:text-slate-500 hover:text-gray-200 light:hover:text-slate-700'
+                }`}
+              >
+                {MODE_FILTER_LABELS[m]}
+              </button>
+            ))}
+          </div>
+          <span className="flex items-center gap-1.5 text-[11px] text-gray-500 light:text-slate-500">
+            <span className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
+            {isLive ? 'Live' : loading ? 'Loading…' : 'Unreachable'}
+          </span>
+        </div>
       </div>
+      {analytics && (analytics.intradayCount > 0 && analytics.positionalCount > 0) && modeFilter === 'ALL' && (
+        <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl px-4 py-2 text-blue-400 light:text-blue-700 text-xs">
+          ℹ️ Showing Intraday ({analytics.intradayCount}) and Positional ({analytics.positionalCount}) combined — they have different SL sizing and hold times. Use the filter above to separate them.
+        </div>
+      )}
 
       {!isLive && !loading && (
         <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2.5 text-amber-400 light:text-amber-700 text-xs font-medium">

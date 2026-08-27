@@ -5,6 +5,7 @@
 import { Router, type Request, type Response } from 'express';
 import { logger } from '../lib/logger.js';
 import { getTradeSetupHistory, getWinRateAnalytics } from '../services/backtesting.js';
+import type { TradingMode } from '@fno/shared';
 
 export function createBacktestingRoutes(): Router {
   const router = Router();
@@ -14,9 +15,11 @@ export function createBacktestingRoutes(): Router {
    * Day/week/month/year win-rate breakdown, overall, and per-symbol —
    * built entirely from trade setups the system has actually generated.
    */
-  router.get('/win-rate', async (_req: Request, res: Response) => {
+  router.get('/win-rate', async (req: Request, res: Response) => {
     try {
-      const data = await getWinRateAnalytics();
+      const modeParam = (req.query.mode as string || '').toUpperCase();
+      const mode: TradingMode | 'ALL' = modeParam === 'INTRADAY' || modeParam === 'POSITIONAL' ? modeParam : 'ALL';
+      const data = await getWinRateAnalytics(mode);
       res.json({ success: true, data, meta: { timestamp: Date.now(), source: 'LIVE' } });
     } catch (error: any) {
       logger.error({ error: error.message }, 'Win-rate analytics fetch failed');

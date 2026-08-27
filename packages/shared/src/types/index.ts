@@ -1062,6 +1062,9 @@ export interface WinRateAnalytics {
   monthly: WinRateBucket[];
   yearly: WinRateBucket[];
   bySymbol: SymbolWinRate[];
+  /** Total setup counts by mode across ALL history (unaffected by whichever mode filter scoped the rest of this response) — lets the UI show "12 Intraday / 3 Positional" regardless of which one is currently selected. */
+  intradayCount: number;
+  positionalCount: number;
 }
 
 // --- WebSocket Subscription ---

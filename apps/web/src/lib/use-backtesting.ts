@@ -6,7 +6,7 @@ import type { WinRateAnalytics, TradeSetupRecord } from '@fno/shared';
 
 const POLL_INTERVAL_MS = 120000; // win-rate stats only change as setups resolve — no need for fast polling
 
-export function useBacktesting(): {
+export function useBacktesting(mode: 'ALL' | 'INTRADAY' | 'POSITIONAL' = 'ALL'): {
   analytics: WinRateAnalytics | null;
   history: TradeSetupRecord[];
   loading: boolean;
@@ -20,11 +20,14 @@ export function useBacktesting(): {
   useEffect(() => {
     let cancelled = false;
     const poll = () => {
-      Promise.all([api.getWinRateAnalytics(), api.getTradeSetupHistory(200)])
+      Promise.all([api.getWinRateAnalytics(mode), api.getTradeSetupHistory(200)])
         .then(([winRate, setups]) => {
           if (cancelled) return;
           setAnalytics(winRate);
-          setHistory(setups);
+          // History is always the full, unfiltered list from the API — filter
+          // client-side so the "Recent Trade Setups" table stays in sync with
+          // the selected mode without a second round-trip per toggle.
+          setHistory(mode === 'ALL' ? setups : setups.filter((s) => s.mode === mode));
           setIsLive(true);
           setLoading(false);
         })
@@ -40,7 +43,7 @@ export function useBacktesting(): {
       cancelled = true;
       clearInterval(interval);
     };
-  }, []);
+  }, [mode]);
 
   return { analytics, history, loading, isLive };
 }
