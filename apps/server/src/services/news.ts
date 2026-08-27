@@ -153,16 +153,18 @@ function parseRssXml(xml: string): NewsArticle[] {
     // since we show source separately.
     const cleanTitle = title.replace(/ - [^-]+$/, '').trim();
 
-    // The description from Google News RSS is typically HTML with a link —
-    // extract just the text for a clean snippet.
+    // The <description> Google News RSS gives us is HTML *entity-encoded*
+    // (e.g. "&lt;a href=...&gt;Title&lt;/a&gt;"), not literal markup — so
+    // entities must be decoded FIRST and the now-literal tags stripped
+    // SECOND. Doing it in the other order (as this used to) is a no-op on
+    // the tag-strip (no literal '<' exists yet to match) and then the
+    // entity-decode step turns "&lt;a href=...&gt;" right back into a
+    // literal "<a href=...>" tag, so raw HTML leaked straight into the
+    // snippet shown to the user instead of being stripped.
     const snippet = description
-      ? description
-          .replace(/<[^>]*>/g, '') // strip HTML tags
-          .replace(/&amp;/g, '&')
-          .replace(/&lt;/g, '<')
-          .replace(/&gt;/g, '>')
-          .replace(/&quot;/g, '"')
-          .replace(/&#39;/g, "'")
+      ? decodeHtmlEntities(description)
+          .replace(/<[^>]*>/g, ' ') // strip now-literal HTML tags (space, not '', so adjacent tags don't glue words together)
+          .replace(/\s+/g, ' ')
           .trim()
           .slice(0, 200)
       : '';
@@ -172,7 +174,7 @@ function parseRssXml(xml: string): NewsArticle[] {
       url: url.trim(),
       source: source ? decodeHtmlEntities(source) : 'Unknown',
       publishedAt: pubDate ? new Date(pubDate).toISOString() : new Date().toISOString(),
-      snippet: decodeHtmlEntities(snippet),
+      snippet,
     });
   }
 
@@ -190,10 +192,11 @@ function extractTag(xml: string, tag: string): string | null {
 
 function decodeHtmlEntities(text: string): string {
   return text
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
-    .replace(/&apos;/g, "'");
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&'); // must run last, so a genuinely double-escaped "&amp;lt;" decodes to the literal text "&lt;" rather than being mis-decoded straight through to "<"
 }
