@@ -65,6 +65,22 @@ const VIX_BASELINE = 15;
 const VIX_SL_SENSITIVITY = 15; // every this-many points of VIX above baseline adds another 100% to the SL widening factor
 const MAX_SL_PREMIUM_PCT = 0.7;
 
+// A 0-DTE (or 1-DTE) option's premium swings ±50-100% routinely on gamma
+// alone as dealers hedge into the close — a stop sized for a normal T-3/T-5
+// day gets stopped out by ordinary expiry-day noise, not because the thesis
+// was wrong. Stacks with (and is still bounded by) the VIX widening above.
+const EXPIRY_DAY_MAX_DTE = 1;
+const EXPIRY_DAY_SL_WIDEN_FACTOR = 1.5;
+
+// Bid-ask spread as a % of mid premium. Above this on the ATM leg, the quote
+// is too thin to trust an entry/SL/target off of — refuse the setup rather
+// than size a "trade" around a price nobody could actually get filled at.
+// Spreads (multi-leg) only warn (below), never gate — a 4-leg Iron Condor
+// gated on the SAME threshold as a single ATM leg would refuse almost every
+// symbol outside NIFTY/BANKNIFTY.
+const MAX_ATM_SPREAD_PCT = 5;
+const SPREAD_LEG_WARN_PCT = 3;
+
 // --- Spread construction constants ---
 // Strike offsets are in ARRAY POSITIONS within the strikes list (already
 // sorted by consecutive available strikes), not fixed price distances —
@@ -89,7 +105,8 @@ export function buildTradeSetup(
   expectedMovePoints: number,
   ivRank: number | null = null,
   slPremiumPct: number = DEFAULT_SL_PREMIUM_PCT,
-  vix: number | null = null
+  vix: number | null = null,
+  dte: number | null = null
 ): TradeSetup {
   if (confidence < MIN_CONFIDENCE) {
     return {
@@ -102,7 +119,7 @@ export function buildTradeSetup(
 
   if (direction === 'NEUTRAL') {
     if (highIv) {
-      return buildIronCondor(strikes, atmStrike, confidence, ivRank!);
+      return withDteNote(buildIronCondor(strikes, atmStrike, confidence, ivRank!), dte);
     }
     return { available: false, reason: 'Market bias is neutral — no high-conviction directional setup right now.' };
   }
@@ -119,16 +136,28 @@ export function buildTradeSetup(
   // recommendation to align with.
   if (ivRank != null) {
     if (direction === 'BULLISH') {
-      return highIv
-        ? buildBullPutSpread(strikes, atmStrike, confidence, ivRank)
-        : buildBullCallSpread(strikes, atmStrike, confidence, ivRank);
+      return withDteNote(
+        highIv
+          ? buildBullPutSpread(strikes, atmStrike, confidence, ivRank)
+          : buildBullCallSpread(strikes, atmStrike, confidence, ivRank),
+        dte
+      );
     }
-    return highIv
-      ? buildBearCallSpread(strikes, atmStrike, confidence, ivRank)
-      : buildBearPutSpread(strikes, atmStrike, confidence, ivRank);
+    return withDteNote(
+      highIv
+        ? buildBearCallSpread(strikes, atmStrike, confidence, ivRank)
+        : buildBearPutSpread(strikes, atmStrike, confidence, ivRank),
+      dte
+    );
   }
 
-  return buildNakedLong(strikes, atmStrike, direction, side, confidence, expectedMovePoints, slPremiumPct, vix);
+  return buildNakedLong(strikes, atmStrike, direction, side, confidence, expectedMovePoints, slPremiumPct, vix, dte);
+}
+
+/** Appends "DTE {n}" to an available setup's reason — shared by every dispatch branch so callers can see how much time the structure has to work, without threading dte through each individual spread builder. */
+function withDteNote(setup: TradeSetup, dte: number | null): TradeSetup {
+  if (!setup.available || dte == null) return setup;
+  return { ...setup, reason: `${setup.reason} DTE ${dte}.` };
 }
 
 // ============================================================
@@ -143,7 +172,8 @@ function buildNakedLong(
   confidence: number,
   expectedMovePoints: number,
   slPremiumPct: number,
-  vix: number | null
+  vix: number | null,
+  dte: number | null = null
 ): TradeSetup {
   const atmEntry = strikes.find((s) => s.strike === atmStrike);
   const leg = side === 'CE' ? atmEntry?.call : atmEntry?.put;
@@ -164,6 +194,21 @@ function buildNakedLong(
     return { available: false, reason: `No usable delta/expected-move data at the ATM strike (${atmStrike}) to project a target.` };
   }
 
+  // Liquidity gate: refuse to size a setup off a quote nobody could actually
+  // trade at. Only gates when the broker is actually publishing a two-sided
+  // market (bid and ask both > 0) — if depth data is simply absent, fall
+  // through to the LTP-only behavior below rather than blocking every setup
+  // on symbols the depth feed doesn't cover.
+  const hasQuote = leg.bid > 0 && leg.ask > 0;
+  const mid = hasQuote ? (leg.bid + leg.ask) / 2 : leg.ltp;
+  const atmSpreadPct = hasQuote ? ((leg.ask - leg.bid) / mid) * 100 : null;
+  if (atmSpreadPct != null && atmSpreadPct > MAX_ATM_SPREAD_PCT) {
+    return {
+      available: false,
+      reason: `ATM ${side} ${atmStrike} bid-ask spread (${atmSpreadPct.toFixed(1)}% of mid) is too wide to trade — likely illiquid this tick.`,
+    };
+  }
+
   // Widen the stop for an elevated-VIX regime — the same option swings
   // further on ordinary noise alone when VIX is high, so a calm-market
   // stop gets hit prematurely. Never tightens below the base for VIX<=15,
@@ -176,7 +221,21 @@ function buildNakedLong(
     vixNote = ` (widened from ${Math.round(slPremiumPct * 100)}% for VIX ${vix.toFixed(1)})`;
   }
 
-  const entry = leg.ltp;
+  // Further widen on expiry day (or the day before) — 0/1-DTE gamma makes
+  // the base+VIX stop too tight regardless of VIX level, since the swings
+  // are structural (dealer hedging into the close), not just volatility.
+  let expiryNote = '';
+  if (dte != null && dte <= EXPIRY_DAY_MAX_DTE) {
+    const widened = Math.min(effectiveSlPct * EXPIRY_DAY_SL_WIDEN_FACTOR, MAX_SL_PREMIUM_PCT);
+    if (widened > effectiveSlPct) {
+      expiryNote = ` (further widened for ${dte}-DTE expiry-day gamma)`;
+      effectiveSlPct = widened;
+    }
+  }
+
+  // Mid-price entry — more realistic than LTP, which can be stale on a thin
+  // book and far from where an order would actually fill.
+  const entry = round2(mid);
   const stopLoss = round2(entry * (1 - effectiveSlPct));
   const target = round2(entry + deltaMove);
   const risk = entry - stopLoss;
@@ -200,9 +259,10 @@ function buildNakedLong(
     target,
     riskReward,
     reason:
-      `${direction} bias at ${confidence}/100 confidence — ATM ${side} ${atmStrike} @ ${entry.toFixed(2)}. ` +
+      `${direction} bias at ${confidence}/100 confidence — ATM ${side} ${atmStrike} @ ${entry.toFixed(2)}${hasQuote ? ' (bid-ask mid)' : ''}. ` +
       `Target ${target.toFixed(2)} from delta (${leg.delta.toFixed(2)}) × IV-implied expected move (${expectedMovePoints.toFixed(0)} pts). ` +
-      `SL ${stopLoss.toFixed(2)} — a ${Math.round(effectiveSlPct * 100)}% premium stop${vixNote}.`,
+      `SL ${stopLoss.toFixed(2)} — a ${Math.round(effectiveSlPct * 100)}% premium stop${vixNote}${expiryNote}.` +
+      (dte != null ? ` DTE ${dte}.` : ''),
   };
 }
 
@@ -216,9 +276,27 @@ function strikeAtOffset(strikes: OptionChainStrike[], atmStrike: number, offset:
   return strikes[atmIdx + offset];
 }
 
-function legLtp(entry: OptionChainStrike | undefined, side: OptionType): number | null {
+interface LegPricing {
+  /** Bid-ask mid when the broker publishes a two-sided market, else LTP. */
+  premium: number;
+  /** Bid-ask spread as % of mid — null when depth data isn't available (falls back to LTP, ungated). */
+  spreadPct: number | null;
+}
+
+function legPricing(entry: OptionChainStrike | undefined, side: OptionType): LegPricing | null {
   const leg = side === 'CE' ? entry?.call : entry?.put;
-  return leg && leg.ltp > 0 ? leg.ltp : null;
+  if (!leg || leg.ltp <= 0) return null;
+  const hasQuote = leg.bid > 0 && leg.ask > 0;
+  const mid = hasQuote ? (leg.bid + leg.ask) / 2 : leg.ltp;
+  return { premium: round2(mid), spreadPct: hasQuote ? ((leg.ask - leg.bid) / mid) * 100 : null };
+}
+
+/** Slippage warning appended to a spread's reason when any leg's own bid-ask spread is wide — spreads never gate on this (unlike the naked long's ATM gate), since gating a 4-leg structure on a single-leg threshold would refuse almost every symbol outside NIFTY/BANKNIFTY. */
+function slippageNote(legs: LegPricing[]): string {
+  const widest = Math.max(...legs.map((l) => l.spreadPct ?? 0));
+  return widest > SPREAD_LEG_WARN_PCT
+    ? ` Slippage warning: widest leg's bid-ask spread is ${widest.toFixed(1)}% of its premium — expect a worse fill than the quoted mid.`
+    : '';
 }
 
 function unavailableSpread(strategy: string, reason: string): TradeSetup {
@@ -239,11 +317,13 @@ function buildDebitSpread(
   const sellEntry = strikeAtOffset(strikes, buyStrikeEntry.strike, sellOffset);
   if (!sellEntry) return unavailableSpread(strategy, 'not enough strikes in the chain to build the far leg.');
 
-  const buyPremium = legLtp(buyStrikeEntry, side);
-  const sellPremium = legLtp(sellEntry, side);
-  if (buyPremium == null || sellPremium == null) {
+  const buyPricing = legPricing(buyStrikeEntry, side);
+  const sellPricing = legPricing(sellEntry, side);
+  if (!buyPricing || !sellPricing) {
     return unavailableSpread(strategy, `no live ${side} quote at one of the required strikes.`);
   }
+  const buyPremium = buyPricing.premium;
+  const sellPremium = sellPricing.premium;
 
   const netPremium = round2(buyPremium - sellPremium);
   if (netPremium <= 0) {
@@ -278,7 +358,8 @@ function buildDebitSpread(
     reason:
       `${direction} bias at ${confidence}/100 confidence, IV Rank ${ivRank} not elevated — ${strategy}: buy ${side} ${buyStrikeEntry.strike} @ ${buyPremium.toFixed(2)}, ` +
       `sell ${side} ${sellEntry.strike} @ ${sellPremium.toFixed(2)}. Net debit ${netPremium.toFixed(2)}. ` +
-      `Max profit ${maxProfit.toFixed(2)}, max loss ${maxLoss.toFixed(2)}, breakeven ${breakeven.toFixed(2)}.`,
+      `Max profit ${maxProfit.toFixed(2)}, max loss ${maxLoss.toFixed(2)}, breakeven ${breakeven.toFixed(2)}.` +
+      slippageNote([buyPricing, sellPricing]),
   };
 }
 
@@ -296,11 +377,13 @@ function buildCreditSpread(
   const buyEntry = strikeAtOffset(strikes, sellStrikeEntry.strike, buyOffset);
   if (!buyEntry) return unavailableSpread(strategy, 'not enough strikes in the chain to build the protective leg.');
 
-  const sellPremium = legLtp(sellStrikeEntry, side);
-  const buyPremium = legLtp(buyEntry, side);
-  if (sellPremium == null || buyPremium == null) {
+  const sellPricing = legPricing(sellStrikeEntry, side);
+  const buyPricing = legPricing(buyEntry, side);
+  if (!sellPricing || !buyPricing) {
     return unavailableSpread(strategy, `no live ${side} quote at one of the required strikes.`);
   }
+  const sellPremium = sellPricing.premium;
+  const buyPremium = buyPricing.premium;
 
   const netPremium = round2(buyPremium - sellPremium); // negative: a credit
   const creditReceived = round2(-netPremium);
@@ -336,7 +419,8 @@ function buildCreditSpread(
     reason:
       `${direction} bias at ${confidence}/100 confidence, IV Rank ${ivRank} elevated — ${strategy}: sell ${side} ${sellStrikeEntry.strike} @ ${sellPremium.toFixed(2)}, ` +
       `buy ${side} ${buyEntry.strike} @ ${buyPremium.toFixed(2)} for protection. Net credit ${creditReceived.toFixed(2)}. ` +
-      `Max profit ${maxProfit.toFixed(2)}, max loss ${maxLoss.toFixed(2)}, breakeven ${breakeven.toFixed(2)}.`,
+      `Max profit ${maxProfit.toFixed(2)}, max loss ${maxLoss.toFixed(2)}, breakeven ${breakeven.toFixed(2)}.` +
+      slippageNote([sellPricing, buyPricing]),
   };
 }
 
@@ -375,13 +459,17 @@ function buildIronCondor(strikes: OptionChainStrike[], atmStrike: number, confid
     return unavailableSpread(strategy, 'not enough strikes on both sides of the chain to build all four legs.');
   }
 
-  const callShortPremium = legLtp(callShortEntry, 'CE');
-  const callLongPremium = legLtp(callLongEntry, 'CE');
-  const putShortPremium = legLtp(putShortEntry, 'PE');
-  const putLongPremium = legLtp(putLongEntry, 'PE');
-  if (callShortPremium == null || callLongPremium == null || putShortPremium == null || putLongPremium == null) {
+  const callShortPricing = legPricing(callShortEntry, 'CE');
+  const callLongPricing = legPricing(callLongEntry, 'CE');
+  const putShortPricing = legPricing(putShortEntry, 'PE');
+  const putLongPricing = legPricing(putLongEntry, 'PE');
+  if (!callShortPricing || !callLongPricing || !putShortPricing || !putLongPricing) {
     return unavailableSpread(strategy, 'no live quote at one of the four required strikes.');
   }
+  const callShortPremium = callShortPricing.premium;
+  const callLongPremium = callLongPricing.premium;
+  const putShortPremium = putShortPricing.premium;
+  const putLongPremium = putLongPricing.premium;
 
   const netPremium = round2(callLongPremium + putLongPremium - callShortPremium - putShortPremium); // negative: a credit
   const creditReceived = round2(-netPremium);
@@ -422,7 +510,8 @@ function buildIronCondor(strikes: OptionChainStrike[], atmStrike: number, confid
     reason:
       `NEUTRAL bias at ${confidence}/100 confidence, IV Rank ${ivRank} elevated — Iron Condor: sell CE ${callShortEntry.strike} / buy CE ${callLongEntry.strike}, ` +
       `sell PE ${putShortEntry.strike} / buy PE ${putLongEntry.strike}. Net credit ${creditReceived.toFixed(2)}. ` +
-      `Max profit ${maxProfit.toFixed(2)}, max loss ${maxLoss.toFixed(2)}, range ${breakevenLower.toFixed(2)}–${breakevenUpper.toFixed(2)}.`,
+      `Max profit ${maxProfit.toFixed(2)}, max loss ${maxLoss.toFixed(2)}, range ${breakevenLower.toFixed(2)}–${breakevenUpper.toFixed(2)}.` +
+      slippageNote([callShortPricing, callLongPricing, putShortPricing, putLongPricing]),
   };
 }
 

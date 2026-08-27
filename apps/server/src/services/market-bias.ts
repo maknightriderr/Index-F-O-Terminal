@@ -41,8 +41,9 @@ import type {
   TradeSetup,
   HistoricalParams,
   TradingMode,
+  GammaExposureRegime,
 } from '@fno/shared';
-import { KNOWN_INDEX_TOKENS, CM_SEGMENT } from '@fno/shared';
+import { KNOWN_INDEX_TOKENS, CM_SEGMENT, calculateDTE } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveSpotToken, resolveNearestFuturesContract, buildOptionChain } from './option-chain.js';
 import { buildFuturesData } from './futures.js';
@@ -197,8 +198,16 @@ async function computeMarketBias(
     nonEmpty
   );
 
+  // IV Rank is looked up here (not later, inside resolveStickyTradeSetup as
+  // before) because it now also decides WHICH expiry to build the chain
+  // against for POSITIONAL mode — see resolveTargetExpiry. Independent of
+  // the chain itself (reads the cached F&O-universe scan), so hoisting it
+  // costs nothing extra on the common (INTRADAY) path.
+  const ivRank = await lookupIvRank(provider, exchange, underlying);
+  const targetExpiry = await resolveTargetExpiry(provider, underlying, exchange, mode, ivRank);
+
   const [chain, futures] = await Promise.all([
-    buildOptionChain(provider, underlying, exchange).catch((err) => {
+    buildOptionChain(provider, underlying, exchange, targetExpiry).catch((err) => {
       logger.warn({ error: err.message, underlying }, 'Market bias: option chain unavailable, scoring without it');
       return null;
     }),
@@ -383,8 +392,8 @@ async function computeMarketBias(
   const agreementCount = direction === 'BULLISH' ? votesFor : direction === 'BEARISH' ? votesAgainst : votesFlat;
   const confidence = clamp(Math.round((agreementCount / total) * 100), 15, 95);
 
-  // --- Regime: trend strength (ADX) + direction (Supertrend 1H) + volatility (ATR z-score) ---
-  const regime = classifyRegime(adxValue, st1hDirection, atrPctZ);
+  // --- Regime: trend strength (ADX) + direction (Supertrend 1H) + volatility (ATR z-score), overridden by expiry-day gamma when DTE<=1 ---
+  const regime = classifyRegime(adxValue, st1hDirection, atrPctZ, chain?.dte ?? null, chain?.gammaExposure?.regime ?? null);
 
   // --- Reasoning (built from the actual computed values, not templated) ---
   // Ordered by priority, not computation order — the frontend card only
@@ -395,6 +404,11 @@ async function computeMarketBias(
   // pivots/divergence/candlePattern were pushed last and were getting cut
   // off almost every time there was a full chain + futures + IV read.
   const reasoning: string[] = [];
+  if (regime === 'EXPIRY_GAMMA' && chain) {
+    reasoning.push(
+      `Expiry day (DTE ${chain.dte}) with ${chain.gammaExposure.regime === 'LONG_GAMMA' ? 'positive' : 'negative'} GEX — dealer hedging can pin or whipsaw price independent of the underlying trend; SL widened for expiry-day gamma risk.`
+    );
+  }
   if (rsiDivergence.signal !== 'NONE') {
     reasoning.push(
       `${rsiDivergence.signal === 'BEARISH' ? 'Bearish' : 'Bullish'} RSI divergence — price ${rsiDivergence.signal === 'BEARISH' ? 'made a higher high' : 'made a lower low'} while RSI weakened (${fmt(rsiDivergence.rsiSwing!.first, 0)} → ${fmt(rsiDivergence.rsiSwing!.second, 0)})`
@@ -504,6 +518,7 @@ async function computeMarketBias(
       netGex: chain?.gammaExposure.netGex ?? null,
       gammaRegime: chain?.gammaExposure.regime ?? null,
       gammaWallStrike: chain?.gammaExposure.gammaWallStrike ?? null,
+      dte: chain?.dte ?? null,
     },
     timestamp: Date.now(),
   };
@@ -606,7 +621,7 @@ async function computeMarketBias(
   };
 
   const tradeSetup: TradeSetup = chain
-    ? await resolveStickyTradeSetup(provider, underlying, exchange, chain, direction, confidence, regime, overall, mode)
+    ? await resolveStickyTradeSetup(provider, underlying, exchange, chain, direction, confidence, regime, overall, mode, ivRank)
     : { available: false, reason: 'Option chain unavailable for this symbol — cannot size a setup.' };
 
   const result: MarketBiasResult = { bias, score, tradeSetup };
@@ -638,6 +653,51 @@ async function lookupIvRank(provider: MarketDataProvider, exchange: Exchange, un
   } catch (err: any) {
     logger.warn({ error: err.message, underlying }, 'IV Rank lookup failed for trade setup — proceeding ungated');
     return null;
+  }
+}
+
+// A POSITIONAL naked long (ivRank unknown — indices/MCX/stocks outside the
+// F&O universe scan) needs runway: 15-30 DTE gives the thesis time to play
+// out before theta/vega bleed the premium regardless of direction. A
+// POSITIONAL credit spread (ivRank known) wants the OPPOSITE — 7-14 DTE —
+// since the short leg's accelerating theta decay into expiry IS the edge; a
+// far-dated credit spread just sits there collecting little while tying up
+// margin. INTRADAY always keeps the nearest (highest-gamma, tightest-spread)
+// weekly regardless of ivRank — a same-session hold never reaches either
+// tradeoff. Returns undefined (nearest/default) when no expiry falls close
+// enough to be worth deviating from the weekly, or when expiry data can't
+// be fetched — resolveStickyTradeSetup's caller already treats undefined as
+// "use the default chain."
+const POSITIONAL_SPREAD_DTE_RANGE: [number, number] = [7, 14];
+const POSITIONAL_NAKED_LONG_DTE_RANGE: [number, number] = [15, 30];
+
+async function resolveTargetExpiry(
+  provider: MarketDataProvider,
+  underlying: string,
+  exchange: Exchange,
+  mode: TradingMode,
+  ivRank: number | null
+): Promise<string | undefined> {
+  if (mode !== 'POSITIONAL') return undefined;
+  try {
+    const expiries = await provider.getExpiries(underlying, exchange);
+    if (expiries.length === 0) return undefined;
+
+    const [minDte, maxDte] = ivRank != null ? POSITIONAL_SPREAD_DTE_RANGE : POSITIONAL_NAKED_LONG_DTE_RANGE;
+    const targetDte = (minDte + maxDte) / 2;
+    const withDte = expiries.map((expiry) => ({ expiry, dte: calculateDTE(expiry) })).filter((x) => x.dte >= 0);
+    if (withDte.length === 0) return undefined;
+
+    // Prefer an expiry actually inside the target band; if none exists
+    // (e.g. only weekly + far-monthly are listed), fall back to whichever
+    // available expiry is closest to the band's midpoint rather than
+    // refusing to deviate from the nearest weekly at all.
+    const inRange = withDte.filter((x) => x.dte >= minDte && x.dte <= maxDte);
+    const pool = inRange.length > 0 ? inRange : withDte;
+    return pool.reduce((best, cur) => (Math.abs(cur.dte - targetDte) < Math.abs(best.dte - targetDte) ? cur : best)).expiry;
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying }, 'Positional expiry selection failed — falling back to nearest/default expiry');
+    return undefined;
   }
 }
 
@@ -706,7 +766,8 @@ async function resolveStickyTradeSetup(
   confidence: number,
   regime: MarketRegime,
   intelligenceScore: number,
-  mode: TradingMode = 'INTRADAY'
+  mode: TradingMode = 'INTRADAY',
+  ivRank: number | null = null
 ): Promise<TradeSetup> {
   const isPositional = mode === 'POSITIONAL';
   const setupTtl = isPositional ? STICKY_TRADE_SETUP_TTL_SECONDS_POSITIONAL : STICKY_TRADE_SETUP_TTL_SECONDS;
@@ -877,12 +938,14 @@ async function resolveStickyTradeSetup(
     await recordTradeSetupOutcome(stored!, 'EXPIRED', currentExitValue(chain, stored!));
   }
 
-  const [ivRank, vix] = await Promise.all([
-    lookupIvRank(provider, exchange, underlying),
-    lookupIndiaVix(provider, exchange),
-  ]);
+  // ivRank is now passed in by the caller (computeMarketBias hoisted the
+  // lookup so it could also pick this chain's expiry for POSITIONAL mode —
+  // see resolveTargetExpiry) rather than looked up fresh here, so the same
+  // value drives both decisions instead of two reads of a cache that could
+  // in principle refresh in between.
+  const vix = await lookupIndiaVix(provider, exchange);
   const slPremiumPct = isPositional ? POSITIONAL_SL_PREMIUM_PCT : undefined;
-  const fresh = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, chain.expectedMove.points, ivRank, slPremiumPct, vix);
+  const fresh = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, chain.expectedMove.points, ivRank, slPremiumPct, vix, chain.dte);
 
   if (!fresh.available) {
     // Clear any previously locked setup now that conditions no longer
@@ -1101,7 +1164,23 @@ function zScore(value: number, series: number[]): number {
   return std > 0 ? (value - mean) / std : 0;
 }
 
-function classifyRegime(adxValue: number, st1hDirection: 'UP' | 'DOWN', atrZ: number): MarketRegime {
+// DTE<=1 with non-neutral GEX overrides the ADX/Supertrend trend read —
+// dealer hedging flows into an imminent expiry can pin or whipsaw price in
+// ways that have nothing to do with the underlying trend (a "strong" ADX
+// reading into expiry is often just the pin/unwind, not a real trend), so
+// this is checked first, ahead of the ADX bands below.
+const EXPIRY_GAMMA_MAX_DTE = 1;
+
+function classifyRegime(
+  adxValue: number,
+  st1hDirection: 'UP' | 'DOWN',
+  atrZ: number,
+  dte: number | null,
+  gexRegime: GammaExposureRegime | null
+): MarketRegime {
+  if (dte != null && dte <= EXPIRY_GAMMA_MAX_DTE && gexRegime != null && gexRegime !== 'NEUTRAL') {
+    return 'EXPIRY_GAMMA';
+  }
   if (adxValue >= 25) return st1hDirection === 'UP' ? 'STRONG_BULL_TREND' : 'STRONG_BEAR_TREND';
   if (adxValue >= 18) return st1hDirection === 'UP' ? 'WEAK_BULL_TREND' : 'WEAK_BEAR_TREND';
   if (atrZ > 1) return 'HIGH_VOLATILITY';
