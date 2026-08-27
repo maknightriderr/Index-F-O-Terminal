@@ -556,7 +556,16 @@ interface StoredTradeSetup extends TradeSetup {
   day: string; // YYYY-MM-DD, IST
   signalId?: string; // links to the persisted `signals` row for backtesting (see backtesting.ts)
   reversalStreak?: number; // consecutive polls the bias has read opposite to `direction` — see REVERSAL_CONFIRM_POLLS
+  initialStopLoss?: number; // the SL at generation time, fixed — `stopLoss` itself trails upward as price moves favorably, this is what "1x/2x initial risk" is measured against
 }
+
+// A fixed 30%-of-entry SL gives back a lot of a real trending move waiting
+// for it to get hit. Once price has moved 1x the initial risk in favor,
+// trail the stop to breakeven; once it's moved 2x, trail to lock in 1x
+// risk worth of profit. Only ever ratchets toward the current price —
+// never loosens back down.
+const TRAIL_TO_BREAKEVEN_AT_R = 1;
+const TRAIL_LOCK_PROFIT_AT_R = 2;
 
 const STICKY_TRADE_SETUP_TTL_SECONDS = 60 * 60 * 24 * 2;
 
@@ -603,11 +612,54 @@ async function resolveStickyTradeSetup(
     // never masked by a same-tick direction flicker.
     const leg = findLeg(chain, stored!.strike!, stored!.side!);
     const currentLtp = leg?.ltp;
+
+    // Trailing stop — ratchet stopLoss up as price moves favorably,
+    // measured against the ORIGINAL risk (entry - initialStopLoss), which
+    // stays fixed even as stopLoss itself trails. Setups persisted before
+    // this field existed have no initialStopLoss and simply don't trail —
+    // no backfill needed, they behave exactly as they did before.
+    if (currentLtp != null && stored!.initialStopLoss != null && stored!.entry != null) {
+      const initialRisk = stored!.entry - stored!.initialStopLoss;
+      if (initialRisk > 0) {
+        const profit = currentLtp - stored!.entry;
+        const trailTarget =
+          profit >= TRAIL_LOCK_PROFIT_AT_R * initialRisk
+            ? stored!.entry + initialRisk
+            : profit >= TRAIL_TO_BREAKEVEN_AT_R * initialRisk
+            ? stored!.entry
+            : null;
+        if (trailTarget != null && trailTarget > stored!.stopLoss!) {
+          const newStopLoss = round2(trailTarget);
+          const trailNote =
+            newStopLoss >= stored!.entry + initialRisk
+              ? `SL trailed to ${newStopLoss.toFixed(2)} — 1x initial risk locked in.`
+              : `SL trailed to breakeven (${newStopLoss.toFixed(2)}).`;
+          stored = { ...stored!, stopLoss: newStopLoss, reason: `${stored!.reason} ${trailNote}` };
+          try {
+            await redis.set(key, JSON.stringify(stored), 'EX', STICKY_TRADE_SETUP_TTL_SECONDS);
+          } catch (err: any) {
+            logger.warn({ error: err.message, underlying }, 'Sticky trade setup trailing-stop write failed');
+          }
+        }
+      }
+    }
+
     const hitSL = currentLtp != null && currentLtp <= stored!.stopLoss!;
     const hitTarget = currentLtp != null && currentLtp >= stored!.target!;
 
     if (hitSL || hitTarget) {
-      await recordTradeSetupOutcome(stored!, hitTarget ? 'WIN' : 'LOSS', currentLtp ?? null);
+      // A stop trailed up to or past entry that then gets hit locked in a
+      // real (or breakeven) result, not a loss — only an SL still below
+      // entry (never trailed, or a shallow trail that didn't reach it) is
+      // a genuine loss.
+      const outcome: 'WIN' | 'LOSS' | 'EXPIRED' = hitTarget
+        ? 'WIN'
+        : stored!.stopLoss! > stored!.entry!
+        ? 'WIN'
+        : stored!.stopLoss! === stored!.entry!
+        ? 'EXPIRED'
+        : 'LOSS';
+      await recordTradeSetupOutcome(stored!, outcome, currentLtp ?? null);
       // falls through to fresh generation below
     } else if (stored!.direction === direction) {
       // Bias still agrees with the locked setup — fully sticky. Clear any
@@ -664,7 +716,7 @@ async function resolveStickyTradeSetup(
 
   const signalId = await recordTradeSetupGenerated(underlying, exchange, fresh, direction, confidence, regime, intelligenceScore);
 
-  const toStore: StoredTradeSetup = { ...fresh, direction, day: today, generatedAt: Date.now(), signalId };
+  const toStore: StoredTradeSetup = { ...fresh, direction, day: today, generatedAt: Date.now(), signalId, initialStopLoss: fresh.stopLoss };
   try {
     await redis.set(key, JSON.stringify(toStore), 'EX', STICKY_TRADE_SETUP_TTL_SECONDS);
   } catch (err: any) {
@@ -844,6 +896,10 @@ function contribution(vote: number, directionSign: number): number {
 
 function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, n));
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
 
 function fmt(n: number, decimals = 2): string {
