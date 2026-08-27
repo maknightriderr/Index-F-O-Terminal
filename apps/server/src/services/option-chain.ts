@@ -296,6 +296,22 @@ export async function resolveSpotToken(
   underlying: string,
   exchange: Exchange
 ): Promise<string> {
+  // MCX commodities (CRUDEOIL, GOLD, etc.) have no cash/spot instrument at
+  // all — trading is futures/options only. The standard reference price for
+  // their options is the nearest-expiry futures contract, not a spot index.
+  // MUST be checked before the EQ/INDEX search below: Angel One's
+  // instrument master carries a phantom "CRUDEOILCOM"-style reference
+  // instrument for MCX commodities classified as instrumentType 'EQ' even
+  // though it isn't a real tradeable spot — confirmed live, its quote
+  // doesn't track the actual futures market (a persistent ~25pt gap from
+  // the real nearest-future's price on CRUDEOIL). The EQ/INDEX match below
+  // was matching that phantom instrument and returning it immediately,
+  // never reaching this MCX branch at all.
+  if (exchange === 'MCX') {
+    const nearestFuture = await resolveNearestFuturesContract(provider, underlying, exchange);
+    if (nearestFuture) return nearestFuture.token;
+  }
+
   const candidates = await provider.searchInstruments(underlying, exchange, 'CM');
   const exact = candidates.find(
     (i) =>
@@ -307,14 +323,6 @@ export async function resolveSpotToken(
 
   const known = KNOWN_INDEX_TOKENS[underlying.toUpperCase()];
   if (known) return known;
-
-  // MCX commodities (CRUDEOIL, GOLD, etc.) have no cash/spot instrument at
-  // all — trading is futures/options only. The standard reference price for
-  // their options is the nearest-expiry futures contract, not a spot index.
-  if (exchange === 'MCX') {
-    const nearestFuture = await resolveNearestFuturesContract(provider, underlying, exchange);
-    if (nearestFuture) return nearestFuture.token;
-  }
 
   if (candidates[0]) return candidates[0].token;
 
