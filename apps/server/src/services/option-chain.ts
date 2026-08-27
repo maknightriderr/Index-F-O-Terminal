@@ -75,10 +75,7 @@ async function buildOptionChainUncached(
       ? requestedExpiry
       : availableExpiries[0];
 
-  const spotToken = await resolveSpotToken(provider, underlying, exchange);
-  const spotQuotes = await provider.getQuote(CM_SEGMENT[exchange], [spotToken], 'OHLC');
-  const spotPrice = spotQuotes[0]?.ltp ?? 0;
-  const spotClose = spotQuotes[0]?.close ?? 0;
+  const { ltp: spotPrice, close: spotClose } = await getSpotQuote(provider, underlying, exchange);
   // Compute the % change ourselves rather than trust the provider's
   // percentChange field — OHLC-mode payloads don't always populate it,
   // and close/ltp are always present, so this is more reliable.
@@ -268,6 +265,31 @@ async function buildOptionChainUncached(
 }
 
 // --- Helpers ---
+
+// option-chain.ts and futures.ts each independently resolved + fetched the
+// spot quote for the same underlying, under separate cache keys — found
+// live on MCX CRUDEOIL, where the Asset Workspace header (from the option
+// chain response) and the Futures panel's "Current Month" price could
+// visibly disagree by ~20 points, since each was serving whatever it had
+// cached up to CHAIN_CACHE_TTL_SECONDS/FUTURES_CACHE_TTL_SECONDS (10s)
+// apart on a moving contract. Sharing one cached quote here — read by
+// both — means the two nearly-simultaneous requests the frontend fires
+// (Promise.allSettled in fetchAll) almost always land on the exact same
+// cached value instead of two independently-fetched ticks.
+const SPOT_QUOTE_CACHE_TTL_SECONDS = 5;
+
+export async function getSpotQuote(
+  provider: MarketDataProvider,
+  underlying: string,
+  exchange: Exchange
+): Promise<{ token: string; ltp: number; close: number }> {
+  const cacheKey = `spot-quote:${exchange}:${underlying}`;
+  return cached(cacheKey, SPOT_QUOTE_CACHE_TTL_SECONDS, async () => {
+    const spotToken = await resolveSpotToken(provider, underlying, exchange);
+    const [quote] = await provider.getQuote(CM_SEGMENT[exchange], [spotToken], 'OHLC');
+    return { token: spotToken, ltp: quote?.ltp ?? 0, close: quote?.close ?? 0 };
+  });
+}
 
 export async function resolveSpotToken(
   provider: MarketDataProvider,

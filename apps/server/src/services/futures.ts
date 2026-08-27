@@ -6,13 +6,13 @@
 // OI buildup (spec §22).
 // ============================================================
 
-import { calculateDTE, CM_SEGMENT, FO_SEGMENT, isExpiryActive } from '@fno/shared';
+import { calculateDTE, FO_SEGMENT, isExpiryActive } from '@fno/shared';
 import type { Exchange, FuturesData, FuturesChainResponse } from '@fno/shared';
 import { classifyFuturesOI } from '@fno/analytics';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { computeChangeOi } from '../lib/oi-baseline.js';
 import { cached } from '../lib/cache.js';
-import { resolveSpotToken } from './option-chain.js';
+import { getSpotQuote } from './option-chain.js';
 
 const EXPIRY_LABELS: Array<'current' | 'next' | 'far'> = ['current', 'next', 'far'];
 const FUTURES_CACHE_TTL_SECONDS = 10;
@@ -31,9 +31,12 @@ async function buildFuturesDataUncached(
   underlying: string,
   exchange: Exchange
 ): Promise<FuturesChainResponse> {
-  const spotToken = await resolveSpotToken(provider, underlying, exchange);
-  const spotQuotes = await provider.getQuote(CM_SEGMENT[exchange], [spotToken], 'LTP');
-  const spotPrice = spotQuotes[0]?.ltp ?? 0;
+  // Shares option-chain.ts's cached spot quote rather than fetching its
+  // own — found live that two independent fetches for the same
+  // underlying (on separate cache keys) could show the header price and
+  // the "Current Month" futures price a few seconds apart on a moving
+  // contract, visibly disagreeing on screen for no real reason.
+  const { ltp: spotPrice } = await getSpotQuote(provider, underlying, exchange);
 
   if (spotPrice <= 0) {
     throw new Error(`Unable to resolve a live spot price for ${underlying}`);
