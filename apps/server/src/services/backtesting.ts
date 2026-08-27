@@ -20,6 +20,7 @@ import type {
   SymbolWinRate,
   WinRateAnalytics,
   TradingMode,
+  SpreadLeg,
 } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
@@ -52,11 +53,23 @@ function toTradeSetupRecord(row: SignalRow): TradeSetupRecord {
     generatedAt: new Date(row.time).getTime(),
     direction: row.direction,
     confidence: Number(row.confidence),
-    side: inputs.side as OptionType,
-    strike: Number(inputs.strike ?? 0),
-    entry: Number(inputs.entry ?? 0),
-    stopLoss: Number(inputs.stopLoss ?? 0),
-    target: Number(inputs.target ?? 0),
+    // Absent on records from before the multi-leg spread builder shipped —
+    // those were all naked longs, so that's the correct default, not
+    // "unknown".
+    structureType: (inputs.structureType as 'NAKED_LONG' | 'SPREAD') ?? 'NAKED_LONG',
+    strategy: inputs.strategy ?? null,
+    legs: (inputs.legs as SpreadLeg[]) ?? null,
+    netPremium: inputs.netPremium ?? null,
+    maxProfit: inputs.maxProfit ?? null,
+    maxLoss: inputs.maxLoss ?? null,
+    breakeven: inputs.breakeven ?? null,
+    breakevenLower: inputs.breakevenLower ?? null,
+    breakevenUpper: inputs.breakevenUpper ?? null,
+    side: (inputs.side as OptionType) ?? null,
+    strike: inputs.strike != null ? Number(inputs.strike) : null,
+    entry: inputs.entry != null ? Number(inputs.entry) : null,
+    stopLoss: inputs.stopLoss != null ? Number(inputs.stopLoss) : null,
+    target: inputs.target != null ? Number(inputs.target) : null,
     riskReward: Number(inputs.riskReward ?? 0),
     reason: row.reasoning ?? '',
     regime: (row.market_regime as MarketRegime) ?? null,

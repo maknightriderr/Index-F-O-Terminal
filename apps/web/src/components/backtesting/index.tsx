@@ -262,28 +262,40 @@ function TradeSetupHistoryTable({ history, loading, onOpen }: { history: TradeSe
               <tr className="text-gray-500 light:text-slate-500 uppercase tracking-wider text-[10px]">
                 <th className="text-left px-2 py-1.5 font-medium">Generated</th>
                 <th className="text-left px-2 py-1.5 font-medium">Symbol</th>
-                <th className="text-center px-2 py-1.5 font-medium">Side</th>
-                <th className="text-right px-2 py-1.5 font-medium">Strike</th>
+                <th className="text-left px-2 py-1.5 font-medium">Structure</th>
                 <th className="text-right px-2 py-1.5 font-medium">Entry</th>
-                <th className="text-right px-2 py-1.5 font-medium">SL</th>
-                <th className="text-right px-2 py-1.5 font-medium">Target</th>
+                <th className="text-right px-2 py-1.5 font-medium">Risk</th>
+                <th className="text-right px-2 py-1.5 font-medium">Reward</th>
                 <th className="text-right px-2 py-1.5 font-medium">R:R</th>
                 <th className="text-center px-2 py-1.5 font-medium">Outcome</th>
                 <th className="text-right px-2 py-1.5 font-medium">Return</th>
               </tr>
             </thead>
             <tbody>
-              {history.map((r) => (
+              {history.map((r) => {
+                const isSpread = r.structureType === 'SPREAD';
+                return (
                 <tr key={r.id} onClick={() => onOpen(r.symbol)} className="border-t border-gray-800/40 light:border-slate-200 hover:bg-gray-800/30 light:hover:bg-slate-100 cursor-pointer transition-colors">
                   <td className="px-2 py-2 text-gray-400 light:text-slate-500 whitespace-nowrap">
                     {new Date(r.generatedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
                   </td>
                   <td className="px-2 py-2 font-semibold text-gray-200 light:text-slate-800">{r.symbol}</td>
-                  <td className="text-center px-2 py-2 font-medium">{r.side}</td>
-                  <td className="text-right px-2 py-2 tabular-nums text-gray-300 light:text-slate-700">{formatIndianNumber(r.strike, 0)}</td>
-                  <td className="text-right px-2 py-2 tabular-nums text-gray-300 light:text-slate-700">{r.entry.toFixed(2)}</td>
-                  <td className="text-right px-2 py-2 tabular-nums text-red-400/80">{r.stopLoss.toFixed(2)}</td>
-                  <td className="text-right px-2 py-2 tabular-nums text-emerald-400/80">{r.target.toFixed(2)}</td>
+                  <td className="px-2 py-2 text-gray-300 light:text-slate-700 whitespace-nowrap">
+                    {isSpread
+                      ? <>{r.strategy}<span className="text-gray-500 light:text-slate-400"> ({r.legs?.map((l) => `${l.action[0]}${l.strike}`).join('/')})</span></>
+                      : <>{r.side} {formatIndianNumber(r.strike ?? 0, 0)}</>}
+                  </td>
+                  <td className="text-right px-2 py-2 tabular-nums text-gray-300 light:text-slate-700">
+                    {isSpread
+                      ? `${r.netPremium != null && r.netPremium < 0 ? 'Credit ' : 'Debit '}${Math.abs(r.netPremium ?? 0).toFixed(2)}`
+                      : (r.entry ?? 0).toFixed(2)}
+                  </td>
+                  <td className="text-right px-2 py-2 tabular-nums text-red-400/80">
+                    {isSpread ? (r.maxLoss ?? 0).toFixed(2) : (r.stopLoss ?? 0).toFixed(2)}
+                  </td>
+                  <td className="text-right px-2 py-2 tabular-nums text-emerald-400/80">
+                    {isSpread ? (r.maxProfit ?? 0).toFixed(2) : (r.target ?? 0).toFixed(2)}
+                  </td>
                   <td className="text-right px-2 py-2 tabular-nums text-gray-400 light:text-slate-500">{r.riskReward.toFixed(2)}</td>
                   <td className="text-center px-2 py-2">
                     <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${r.outcome ? OUTCOME_STYLE[r.outcome] : 'text-cyan-400 bg-cyan-500/10'}`}>
@@ -294,7 +306,8 @@ function TradeSetupHistoryTable({ history, loading, onOpen }: { history: TradeSe
                     {r.returnPercent != null ? `${r.returnPercent >= 0 ? '+' : ''}${r.returnPercent.toFixed(2)}%` : '—'}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

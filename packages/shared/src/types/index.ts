@@ -249,17 +249,45 @@ export interface DecayAnalysis {
   dte: number;
 }
 
+export interface SpreadLeg {
+  action: 'BUY' | 'SELL';
+  side: OptionType;
+  strike: number;
+  /** Premium at generation time — fixed, like a naked long's `entry`, not re-priced on every poll. */
+  premium: number;
+}
+
 export interface TradeSetup {
   available: boolean;
+  reason: string;
+  /** When this setup was locked in — stays fixed across polls until SL/target is hit, the day rolls over, or bias reverses. Absent when unavailable. */
+  generatedAt?: number;
+
+  /** 'SPREAD' when Strategy Recommender's own IV-regime logic calls for a defined-risk multi-leg structure instead of a naked long — absent (or 'NAKED_LONG') for the single-leg case. */
+  structureType?: 'NAKED_LONG' | 'SPREAD';
+
+  // --- Naked long (structureType undefined or 'NAKED_LONG') ---
   side?: OptionType;
   strike?: number;
   entry?: number;
   stopLoss?: number;
   target?: number;
+
+  // --- Spread (structureType === 'SPREAD') ---
+  /** e.g. "Bull Call Spread", "Iron Condor" — matches Strategy Recommender's naming for the same regime. */
+  strategy?: string;
+  legs?: SpreadLeg[];
+  /** Cost to enter: positive = debit paid, negative = credit received. */
+  netPremium?: number;
+  maxProfit?: number;
+  maxLoss?: number;
+  breakeven?: number;
+  /** Iron Condor only — two breakevens instead of one. */
+  breakevenLower?: number;
+  breakevenUpper?: number;
+
+  /** Reward:risk — maxProfit/maxLoss for a spread, (target-entry)/(entry-stopLoss) for a naked long. Meaningful for display either way. */
   riskReward?: number;
-  reason: string;
-  /** When this setup was locked in — stays fixed across polls until SL/target is hit, the day rolls over, or bias reverses. Absent when unavailable. */
-  generatedAt?: number;
 }
 
 // --- Greeks ---
@@ -961,11 +989,22 @@ export interface TradeSetupRecord {
   generatedAt: number;
   direction: BiasDirection;
   confidence: number;
-  side: OptionType;
-  strike: number;
-  entry: number;
-  stopLoss: number;
-  target: number;
+  /** 'SPREAD' when this was a defined-risk multi-leg structure instead of a naked long — records before the multi-leg builder shipped default to 'NAKED_LONG'. */
+  structureType: 'NAKED_LONG' | 'SPREAD';
+  strategy: string | null;
+  legs: SpreadLeg[] | null;
+  netPremium: number | null;
+  maxProfit: number | null;
+  maxLoss: number | null;
+  breakeven: number | null;
+  breakevenLower: number | null;
+  breakevenUpper: number | null;
+  // --- Naked-long-only fields — null for a SPREAD record ---
+  side: OptionType | null;
+  strike: number | null;
+  entry: number | null;
+  stopLoss: number | null;
+  target: number | null;
   riskReward: number;
   reason: string;
   regime: MarketRegime | null;

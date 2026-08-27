@@ -574,6 +574,51 @@ function TradeSetupCard({ setup }: { setup: TradeSetup }) {
     );
   }
 
+  const lockedNote = setup.generatedAt && (
+    <> Locked at {new Date(setup.generatedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit' })}, holds until target/stop is hit.</>
+  );
+
+  if (setup.structureType === 'SPREAD') {
+    const isCredit = (setup.netPremium ?? 0) < 0;
+    return (
+      <IntelCard title="Trade Setup" accent="emerald">
+        <div className="flex items-center justify-between mb-2.5">
+          <span className="text-xs font-bold px-2 py-1 rounded-md bg-cyan-500/15 text-cyan-400 shadow-[0_0_10px_-2px_rgba(34,211,238,0.4)]">
+            {setup.strategy}
+          </span>
+          <span className="text-[10px] text-gray-400 light:text-slate-500 font-medium">R:R {setup.riskReward!.toFixed(2)}</span>
+        </div>
+        <div className="text-[10px] text-gray-500 light:text-slate-500 mb-2 leading-snug">
+          {setup.legs?.map((l) => `${l.action} ${l.side} ${formatIndianNumber(l.strike, 0)} @ ${l.premium.toFixed(2)}`).join(' · ')}
+        </div>
+        <div className="grid grid-cols-3 gap-1.5 text-[11px]">
+          <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
+            <div className="text-gray-500 light:text-slate-500 text-[10px]">Net {isCredit ? 'Credit' : 'Debit'}</div>
+            <div className="text-gray-200 light:text-slate-800 font-semibold tabular-nums">{Math.abs(setup.netPremium ?? 0).toFixed(2)}</div>
+          </div>
+          <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
+            <div className="text-gray-500 light:text-slate-500 text-[10px]">Max Loss</div>
+            <div className="text-red-400 font-semibold tabular-nums">{setup.maxLoss!.toFixed(2)}</div>
+          </div>
+          <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
+            <div className="text-gray-500 light:text-slate-500 text-[10px]">Max Profit</div>
+            <div className="text-emerald-400 font-semibold tabular-nums">{setup.maxProfit!.toFixed(2)}</div>
+          </div>
+        </div>
+        <div className="text-[10px] text-gray-500 light:text-slate-500 mt-1.5">
+          {setup.breakevenLower != null && setup.breakevenUpper != null
+            ? `Breakeven range ${formatIndianNumber(setup.breakevenLower, 0)}–${formatIndianNumber(setup.breakevenUpper, 0)}`
+            : setup.breakeven != null
+            ? `Breakeven ${formatIndianNumber(setup.breakeven, 0)}`
+            : null}
+        </div>
+        <p className="text-[10px] text-gray-600 mt-2.5 leading-snug">
+          Defined-risk spread — matches Strategy Scanner's IV-regime call for this symbol.{lockedNote}
+        </p>
+      </IntelCard>
+    );
+  }
+
   const isCall = setup.side === 'CE';
   return (
     <IntelCard title="Trade Setup" accent="emerald">
@@ -598,10 +643,7 @@ function TradeSetupCard({ setup }: { setup: TradeSetup }) {
         </div>
       </div>
       <p className="text-[10px] text-gray-600 mt-2.5 leading-snug">
-        Heuristic from live data — not investment advice.
-        {setup.generatedAt && (
-          <> Locked at {new Date(setup.generatedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit' })}, holds until SL/target is hit.</>
-        )}
+        Heuristic from live data — not investment advice.{lockedNote}
       </p>
     </IntelCard>
   );

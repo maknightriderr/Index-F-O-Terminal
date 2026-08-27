@@ -24,6 +24,7 @@ import {
   getOIDescription,
   buildTradeSetup,
   MAX_RISK_REWARD,
+  evaluateSpreadProgress,
 } from '@fno/analytics';
 import type {
   Exchange,
@@ -37,6 +38,7 @@ import type {
   HistoricalParams,
   TradingMode,
 } from '@fno/shared';
+import { KNOWN_INDEX_TOKENS, CM_SEGMENT } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveSpotToken, resolveNearestFuturesContract, buildOptionChain } from './option-chain.js';
 import { buildFuturesData } from './futures.js';
@@ -599,6 +601,27 @@ async function lookupIvRank(provider: MarketDataProvider, exchange: Exchange, un
   }
 }
 
+// VIX-adjusted SL sizing needs India VIX's current level — one quote,
+// cached briefly (VIX doesn't need sub-minute freshness for this purpose,
+// and this avoids an extra broker round-trip on every single poll). Only
+// meaningful for NSE; MCX/BSE symbols keep the base SL unadjusted.
+const VIX_CACHE_TTL_SECONDS = 60;
+
+async function lookupIndiaVix(provider: MarketDataProvider, exchange: Exchange): Promise<number | null> {
+  if (exchange !== 'NSE') return null;
+  const token = KNOWN_INDEX_TOKENS.INDIAVIX;
+  if (!token) return null;
+  try {
+    return await cached(`quote:india-vix`, VIX_CACHE_TTL_SECONDS, async () => {
+      const [quote] = await provider.getQuote(CM_SEGMENT.NSE, [token], 'FULL');
+      return quote && quote.ltp > 0 ? quote.ltp : null;
+    });
+  } catch (err: any) {
+    logger.warn({ error: err.message }, 'India VIX lookup failed for trade setup SL sizing — proceeding unadjusted');
+    return null;
+  }
+}
+
 // --- Sticky Trade Setup ---
 // Recomputing the setup fresh on every poll made entry/SL/target track the
 // live option premium tick-by-tick — useless as a "setup" since a real
@@ -675,67 +698,97 @@ async function resolveStickyTradeSetup(
   // enforces on every read closes that gap without needing a manual cache
   // clear — this is what lets a fix land and immediately self-heal any
   // setup already sitting in Redis, not just new ones generated after.
+  // The R:R cap only makes sense for a naked long, whose target comes from
+  // a delta×expected-move projection that can run away on bad upstream
+  // data — a spread's max profit/loss are geometrically bounded by real
+  // strike widths and real current premiums, so it's sanity-checked by
+  // requiring positive maxProfit/maxLoss instead.
   const storedIsPlausible =
-    stored?.available && stored.riskReward != null && stored.riskReward <= MAX_RISK_REWARD;
+    stored?.available &&
+    (stored.structureType === 'SPREAD'
+      ? stored.maxProfit != null && stored.maxProfit > 0 && stored.maxLoss != null && stored.maxLoss > 0
+      : stored.riskReward != null && stored.riskReward <= MAX_RISK_REWARD);
 
   // A positional hold is meant to run days/weeks — unlike intraday, a
   // calendar-day change alone shouldn't invalidate it, only SL/target
   // being hit or a confirmed reversal should. Intraday keeps requiring
   // same-day, matching its "roll over every session" design.
   if (storedIsPlausible && (isPositional || stored!.day === today)) {
-    // SL/target are about the option's own price, not the current bias
-    // read — check them first and unconditionally, so a real win/loss is
-    // never masked by a same-tick direction flicker.
-    const leg = findLeg(chain, stored!.strike!, stored!.side!);
-    const currentLtp = leg?.ltp;
+    const isSpread = stored!.structureType === 'SPREAD';
+    let currentValue: number | null = null;
+    let hitSL: boolean;
+    let hitTarget: boolean;
 
-    // Trailing stop — ratchet stopLoss up as price moves favorably,
-    // measured against the ORIGINAL risk (entry - initialStopLoss), which
-    // stays fixed even as stopLoss itself trails. Setups persisted before
-    // this field existed have no initialStopLoss and simply don't trail —
-    // no backfill needed, they behave exactly as they did before.
-    if (currentLtp != null && stored!.initialStopLoss != null && stored!.entry != null) {
-      const initialRisk = stored!.entry - stored!.initialStopLoss;
-      if (initialRisk > 0) {
-        const profit = currentLtp - stored!.entry;
-        const trailTarget =
-          profit >= TRAIL_LOCK_PROFIT_AT_R * initialRisk
-            ? stored!.entry + initialRisk
-            : profit >= TRAIL_TO_BREAKEVEN_AT_R * initialRisk
-            ? stored!.entry
-            : null;
-        if (trailTarget != null && trailTarget > stored!.stopLoss!) {
-          const newStopLoss = round2(trailTarget);
-          const trailNote =
-            newStopLoss >= stored!.entry + initialRisk
-              ? `SL trailed to ${newStopLoss.toFixed(2)} — 1x initial risk locked in.`
-              : `SL trailed to breakeven (${newStopLoss.toFixed(2)}).`;
-          stored = { ...stored!, stopLoss: newStopLoss, reason: `${stored!.reason} ${trailNote}` };
-          try {
-            await redis.set(key, JSON.stringify(stored), 'EX', setupTtl);
-          } catch (err: any) {
-            logger.warn({ error: err.message, underlying }, 'Sticky trade setup trailing-stop write failed');
+    if (isSpread && stored!.legs) {
+      // A spread's SL/target are fixed fractions of max profit/max loss —
+      // no trailing-stop this pass (the naked long's premium-based trail
+      // doesn't translate directly to a multi-leg position's P&L; a
+      // reasonable further refinement, not built here).
+      const legPrices = stored!.legs.map((l) => ({ action: l.action, price: findLeg(chain, l.strike, l.side)?.ltp ?? null }));
+      const progress = evaluateSpreadProgress(legPrices, stored!.netPremium!, stored!.maxProfit!, stored!.maxLoss!);
+      currentValue = progress.currentValue;
+      hitSL = progress.hitStop;
+      hitTarget = progress.hitTarget;
+    } else {
+      // SL/target are about the option's own price, not the current bias
+      // read — check them first and unconditionally, so a real win/loss is
+      // never masked by a same-tick direction flicker.
+      const leg = findLeg(chain, stored!.strike!, stored!.side!);
+      const currentLtp = leg?.ltp ?? null;
+      currentValue = currentLtp;
+
+      // Trailing stop — naked long only. Ratchet stopLoss up as price
+      // moves favorably, measured against the ORIGINAL risk (entry -
+      // initialStopLoss), which stays fixed even as stopLoss itself
+      // trails. Setups persisted before this field existed have no
+      // initialStopLoss and simply don't trail — no backfill needed,
+      // they behave exactly as they did before.
+      if (currentLtp != null && stored!.initialStopLoss != null && stored!.entry != null) {
+        const initialRisk = stored!.entry - stored!.initialStopLoss;
+        if (initialRisk > 0) {
+          const profit = currentLtp - stored!.entry;
+          const trailTarget =
+            profit >= TRAIL_LOCK_PROFIT_AT_R * initialRisk
+              ? stored!.entry + initialRisk
+              : profit >= TRAIL_TO_BREAKEVEN_AT_R * initialRisk
+              ? stored!.entry
+              : null;
+          if (trailTarget != null && trailTarget > stored!.stopLoss!) {
+            const newStopLoss = round2(trailTarget);
+            const trailNote =
+              newStopLoss >= stored!.entry + initialRisk
+                ? `SL trailed to ${newStopLoss.toFixed(2)} — 1x initial risk locked in.`
+                : `SL trailed to breakeven (${newStopLoss.toFixed(2)}).`;
+            stored = { ...stored!, stopLoss: newStopLoss, reason: `${stored!.reason} ${trailNote}` };
+            try {
+              await redis.set(key, JSON.stringify(stored), 'EX', setupTtl);
+            } catch (err: any) {
+              logger.warn({ error: err.message, underlying }, 'Sticky trade setup trailing-stop write failed');
+            }
           }
         }
       }
-    }
 
-    const hitSL = currentLtp != null && currentLtp <= stored!.stopLoss!;
-    const hitTarget = currentLtp != null && currentLtp >= stored!.target!;
+      hitSL = currentLtp != null && currentLtp <= stored!.stopLoss!;
+      hitTarget = currentLtp != null && currentLtp >= stored!.target!;
+    }
 
     if (hitSL || hitTarget) {
       // A stop trailed up to or past entry that then gets hit locked in a
       // real (or breakeven) result, not a loss — only an SL still below
       // entry (never trailed, or a shallow trail that didn't reach it) is
-      // a genuine loss.
+      // a genuine loss. Spreads have no trailing, so a stop hit is always
+      // a real loss and a target hit is always a real win.
       const outcome: 'WIN' | 'LOSS' | 'EXPIRED' = hitTarget
         ? 'WIN'
+        : isSpread
+        ? 'LOSS'
         : stored!.stopLoss! > stored!.entry!
         ? 'WIN'
         : stored!.stopLoss! === stored!.entry!
         ? 'EXPIRED'
         : 'LOSS';
-      await recordTradeSetupOutcome(stored!, outcome, currentLtp ?? null);
+      await recordTradeSetupOutcome(stored!, outcome, currentValue);
       // falls through to fresh generation below
     } else if (stored!.direction === direction) {
       // Bias still agrees with the locked setup — fully sticky. Clear any
@@ -768,18 +821,20 @@ async function resolveStickyTradeSetup(
       // Reversal confirmed across enough polls — inconclusive, not a loss.
       // Still worth a mark-to-market exit price where we can get one, so
       // it's not just a blank row in the backtest.
-      await recordTradeSetupOutcome(stored!, 'EXPIRED', currentLtp ?? null);
+      await recordTradeSetupOutcome(stored!, 'EXPIRED', currentValue);
     }
   } else if (storedIsPlausible && stored?.signalId) {
     // Day rolled over — a setup from a prior session is unconditionally
     // stale regardless of direction, no debounce needed.
-    const leg = findLeg(chain, stored!.strike!, stored!.side!);
-    await recordTradeSetupOutcome(stored!, 'EXPIRED', leg?.ltp ?? null);
+    await recordTradeSetupOutcome(stored!, 'EXPIRED', currentExitValue(chain, stored!));
   }
 
-  const ivRank = await lookupIvRank(provider, exchange, underlying);
+  const [ivRank, vix] = await Promise.all([
+    lookupIvRank(provider, exchange, underlying),
+    lookupIndiaVix(provider, exchange),
+  ]);
   const slPremiumPct = isPositional ? POSITIONAL_SL_PREMIUM_PCT : undefined;
-  const fresh = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, chain.expectedMove.points, ivRank, slPremiumPct);
+  const fresh = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, chain.expectedMove.points, ivRank, slPremiumPct, vix);
 
   if (!fresh.available) {
     // Clear any previously locked setup now that conditions no longer
@@ -837,7 +892,32 @@ async function recordTradeSetupGenerated(
       INSERT INTO signals (time, symbol, signal_type, direction, confidence, inputs, reasoning, market_regime, intelligence_score)
       VALUES (
         NOW(), ${underlying}, 'TRADE_SETUP', ${direction}, ${confidence},
-        ${sql.json({ exchange, mode, side: fresh.side, strike: fresh.strike, entry: fresh.entry, stopLoss: fresh.stopLoss, target: fresh.target, riskReward: fresh.riskReward })},
+        ${sql.json(
+          // sql.json()'s JSONValue type doesn't structurally accept a
+          // nested typed array like SpreadLeg[] (readonly index-signature
+          // friction in its type definition, not a real data issue — this
+          // is plain JSON-serializable data) — cast at the boundary rather
+          // than fighting the ORM's type for every field.
+          {
+            exchange,
+            mode,
+            structureType: fresh.structureType ?? 'NAKED_LONG',
+            side: fresh.side,
+            strike: fresh.strike,
+            entry: fresh.entry,
+            stopLoss: fresh.stopLoss,
+            target: fresh.target,
+            riskReward: fresh.riskReward,
+            strategy: fresh.strategy,
+            legs: fresh.legs,
+            netPremium: fresh.netPremium,
+            maxProfit: fresh.maxProfit,
+            maxLoss: fresh.maxLoss,
+            breakeven: fresh.breakeven,
+            breakevenLower: fresh.breakevenLower,
+            breakevenUpper: fresh.breakevenUpper,
+          } as any
+        )},
         ${fresh.reason}, ${regime}, ${intelligenceScore}
       )
       RETURNING id
@@ -852,15 +932,26 @@ async function recordTradeSetupGenerated(
 async function recordTradeSetupOutcome(
   stored: StoredTradeSetup,
   outcome: 'WIN' | 'LOSS' | 'EXPIRED',
-  exitPrice: number | null
+  exitValue: number | null
 ): Promise<void> {
   if (!stored.signalId) return; // pre-dates this feature or failed to record on generation — nothing to update
   try {
-    const entry = stored.entry ?? 0;
-    const returnPercent = exitPrice != null && entry > 0 ? Math.round(((exitPrice - entry) / entry) * 10000) / 100 : null;
+    // A naked long's return% is the % change in the option's own premium.
+    // A spread has no single "entry price" to measure against that way —
+    // maxLoss (the capital genuinely at risk) is the meaningful reference,
+    // so a spread's return% is P&L as a % of that risk instead.
+    let returnPercent: number | null = null;
+    if (exitValue != null) {
+      if (stored.structureType === 'SPREAD' && stored.maxLoss != null && stored.maxLoss > 0 && stored.netPremium != null) {
+        const pnl = exitValue - stored.netPremium;
+        returnPercent = Math.round((pnl / stored.maxLoss) * 10000) / 100;
+      } else if (stored.entry != null && stored.entry > 0) {
+        returnPercent = Math.round(((exitValue - stored.entry) / stored.entry) * 10000) / 100;
+      }
+    }
     await sql`
       UPDATE signals
-      SET inputs = inputs || ${sql.json({ outcome, exitPrice, exitTime: Date.now() })}, fwd_1d_return = ${returnPercent}
+      SET inputs = inputs || ${sql.json({ outcome, exitPrice: exitValue, exitTime: Date.now() })}, fwd_1d_return = ${returnPercent}
       WHERE id = ${stored.signalId}
     `;
   } catch (err: any) {
@@ -871,6 +962,17 @@ async function recordTradeSetupOutcome(
 function findLeg(chain: OptionChain, strike: number, side: 'CE' | 'PE') {
   const entry = chain.strikes.find((s) => s.strike === strike);
   return side === 'CE' ? entry?.call : entry?.put;
+}
+
+/** Mark-to-market value of a stored setup right now — a single leg's LTP for a naked long, or the net cost-to-close for a spread. Null if any required leg's quote is currently unavailable. */
+function currentExitValue(chain: OptionChain, stored: StoredTradeSetup): number | null {
+  if (stored.structureType === 'SPREAD' && stored.legs) {
+    const prices = stored.legs.map((l) => findLeg(chain, l.strike, l.side)?.ltp ?? null);
+    if (prices.some((p) => p == null)) return null;
+    return round2(stored.legs.reduce((sum, l, i) => sum + (l.action === 'BUY' ? prices[i]! : -prices[i]!), 0));
+  }
+  if (stored.strike == null || !stored.side) return null;
+  return findLeg(chain, stored.strike, stored.side)?.ltp ?? null;
 }
 
 // --- Helpers ---
