@@ -43,15 +43,26 @@ async function buildFuturesDataUncached(
   }
 
   const instruments = await provider.getInstrumentMaster();
+  // Underlying match (case-insensitive) and sort comparison (string, not
+  // Date) deliberately mirror resolveNearestFuturesContract in
+  // option-chain.ts exactly — found live that this file's own
+  // case-sensitive match / Date-based sort could pick a DIFFERENT
+  // "nearest" contract than resolveSpotToken resolves to for MCX, so the
+  // Futures panel's "Current Month" price and the header's spot price
+  // (same instrument, by MCX having no separate cash contract) came from
+  // two genuinely different contracts rather than just two stale quotes
+  // of the same one. Matching the exact selection logic here — not just
+  // comparing tokens after independently picking — is what guarantees
+  // they can't diverge.
   const futInstruments = instruments
     .filter(
       (i) =>
-        i.underlying === underlying &&
+        i.underlying?.toUpperCase() === underlying.toUpperCase() &&
         i.exchange === exchange &&
         (i.instrumentType === 'FUTIDX' || i.instrumentType === 'FUTSTK' || i.instrumentType === 'FUTCOM') &&
         isExpiryActive(i.expiry)
     )
-    .sort((a, b) => new Date(a.expiry!).getTime() - new Date(b.expiry!).getTime())
+    .sort((a, b) => (a.expiry! < b.expiry! ? -1 : a.expiry! > b.expiry! ? 1 : 0))
     .slice(0, 3);
 
   if (futInstruments.length === 0) {
