@@ -486,6 +486,15 @@ export type MarketRegime =
 
 export type BiasDirection = 'BULLISH' | 'BEARISH' | 'NEUTRAL';
 
+/**
+ * INTRADAY (default): 15m/1h candles, tighter RSI bands, faster Supertrend,
+ * a 30%-of-entry SL — tuned for same-session moves.
+ * POSITIONAL: 1h/Daily candles, wider RSI bands (higher conviction bar),
+ * slower Supertrend, a wider SL — tuned for a multi-day/week hold where a
+ * same-session-tuned stop would get shaken out by ordinary daily noise.
+ */
+export type TradingMode = 'INTRADAY' | 'POSITIONAL';
+
 export interface MarketBias {
   symbol: string;
   direction: BiasDirection;

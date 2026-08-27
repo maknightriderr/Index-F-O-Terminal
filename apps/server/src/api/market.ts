@@ -6,7 +6,7 @@ import { Router, type Request, type Response } from 'express';
 import { logger } from '../lib/logger.js';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { CM_SEGMENT, FO_SEGMENT } from '@fno/shared';
-import type { CandleInterval, Exchange } from '@fno/shared';
+import type { CandleInterval, Exchange, TradingMode } from '@fno/shared';
 import { getLiveIndexQuotes, getMcxCommodityQuotes, ALL_INDEX_LIST } from '../services/indices.js';
 import { buildMarketBias } from '../services/market-bias.js';
 import { getCachedPatterns } from '../services/chart-patterns.js';
@@ -170,8 +170,10 @@ export function createMarketDataRoutes(provider: MarketDataProvider): Router {
     try {
       const symbol = req.params.symbol.toUpperCase();
       const exchange = ((req.query.exchange as string) || 'NSE') as Exchange;
+      const modeParam = (req.query.mode as string || '').toUpperCase();
+      const mode: TradingMode = modeParam === 'POSITIONAL' ? 'POSITIONAL' : 'INTRADAY';
 
-      const result = await buildMarketBias(provider, symbol, exchange);
+      const result = await buildMarketBias(provider, symbol, exchange, mode);
 
       res.json({
         success: true,

@@ -203,9 +203,9 @@ class ApiClient {
     return this.get<FuturesChainResponse>(`/api/futures/${symbol}?exchange=${exchange}`);
   }
 
-  async getMarketBias(symbol: string, exchange = 'NSE') {
+  async getMarketBias(symbol: string, exchange = 'NSE', mode: 'INTRADAY' | 'POSITIONAL' = 'INTRADAY') {
     return this.get<{ bias: MarketBias; score: IntelligenceScore; tradeSetup: TradeSetup }>(
-      `/api/market/bias/${symbol}?exchange=${exchange}`
+      `/api/market/bias/${symbol}?exchange=${exchange}&mode=${mode}`
     );
   }
 

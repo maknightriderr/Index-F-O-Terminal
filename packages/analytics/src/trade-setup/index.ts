@@ -15,7 +15,14 @@
 
 import { IV_RANK_HIGH_THRESHOLD, type OptionChainStrike, type OptionType, type BiasDirection, type TradeSetup } from '@fno/shared';
 
-const SL_PREMIUM_PCT = 0.3; // 30% premium stop — standard retail heuristic for long options
+// 30% premium stop for an intraday hold — standard retail heuristic for
+// long options. A positional hold (days/weeks) needs a wider stop since
+// the same option's premium ordinarily swings further over that horizon
+// on theta/vega alone; a 30% stop tuned for same-session moves would get
+// shaken out by routine day-to-day noise long before the thesis actually
+// played out. Caller passes the mode-appropriate value; this default
+// covers the (more common) unspecified/intraday case.
+const DEFAULT_SL_PREMIUM_PCT = 0.3;
 // market-bias.ts's direction comes from 6 votes; confidence = % of them
 // agreeing with the verdict, in steps of ~16.7 (15/17/33/50/67/83/95 after
 // clamping). 50 only requires a bare 3-of-6 — indistinguishable from a
@@ -48,7 +55,8 @@ export function buildTradeSetup(
   direction: BiasDirection,
   confidence: number,
   expectedMovePoints: number,
-  ivRank: number | null = null
+  ivRank: number | null = null,
+  slPremiumPct: number = DEFAULT_SL_PREMIUM_PCT
 ): TradeSetup {
   if (direction === 'NEUTRAL') {
     return { available: false, reason: 'Market bias is neutral — no high-conviction directional setup right now.' };
@@ -95,7 +103,7 @@ export function buildTradeSetup(
   }
 
   const entry = leg.ltp;
-  const stopLoss = round2(entry * (1 - SL_PREMIUM_PCT));
+  const stopLoss = round2(entry * (1 - slPremiumPct));
   const target = round2(entry + deltaMove);
   const risk = entry - stopLoss;
   const reward = target - entry;
@@ -119,7 +127,7 @@ export function buildTradeSetup(
     reason:
       `${direction} bias at ${confidence}/100 confidence — ATM ${side} ${atmStrike} @ ${entry.toFixed(2)}. ` +
       `Target ${target.toFixed(2)} from delta (${leg.delta.toFixed(2)}) × IV-implied expected move (${expectedMovePoints.toFixed(0)} pts). ` +
-      `SL ${stopLoss.toFixed(2)} — a ${Math.round(SL_PREMIUM_PCT * 100)}% premium stop.`,
+      `SL ${stopLoss.toFixed(2)} — a ${Math.round(slPremiumPct * 100)}% premium stop.`,
   };
 }
 

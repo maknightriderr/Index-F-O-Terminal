@@ -35,6 +35,7 @@ import type {
   OHLCV,
   TradeSetup,
   HistoricalParams,
+  TradingMode,
 } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveSpotToken, resolveNearestFuturesContract, buildOptionChain } from './option-chain.js';
@@ -86,12 +87,17 @@ type Vote = -1 | 0 | 1;
 export async function buildMarketBias(
   provider: MarketDataProvider,
   underlying: string,
-  exchange: Exchange
+  exchange: Exchange,
+  mode: TradingMode = 'INTRADAY'
 ): Promise<MarketBiasResult> {
-  const cacheKey = `bias_result:${exchange}:${underlying}`;
+  // Mode-scoped — INTRADAY and POSITIONAL are different reads (different
+  // candle timeframes, thresholds, SL sizing) for the same symbol, not
+  // variations of the same one, so they need their own cache slot rather
+  // than overwriting each other.
+  const cacheKey = `bias_result:${exchange}:${underlying}:${mode}`;
 
   try {
-    return await computeMarketBias(provider, underlying, exchange, cacheKey);
+    return await computeMarketBias(provider, underlying, exchange, cacheKey, mode);
   } catch (err: any) {
     // Fresh computation failed — try to return the last successful result
     // from Redis so the frontend stays on real data instead of falling back
@@ -116,8 +122,11 @@ async function computeMarketBias(
   provider: MarketDataProvider,
   underlying: string,
   exchange: Exchange,
-  resultCacheKey: string
+  resultCacheKey: string,
+  mode: TradingMode = 'INTRADAY'
 ): Promise<MarketBiasResult> {
+  const isPositional = mode === 'POSITIONAL';
+
   const spotToken = await resolveSpotToken(provider, underlying, exchange);
   // MCX's "spot" instrument is a synthetic reference feed (e.g. CRUDEOILCOM)
   // with live quotes but no historical candle series at all — Angel One
@@ -131,8 +140,23 @@ async function computeMarketBias(
 
   const now = new Date();
   const toDate = formatAngelDateTime(now);
-  const from15m = formatAngelDateTime(new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000));
-  const from1h = formatAngelDateTime(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000));
+
+  // NOTE on naming below: the variables `candles15m`/`c15`/`rsi15`/`st15`
+  // etc. keep their INTRADAY names throughout this function for the "short"
+  // timeframe tier even in POSITIONAL mode, where they actually hold 1H
+  // candles (and `candles1h`/`c1h`/`st1h` hold Daily) — a full rename
+  // wasn't worth the risk of touching every line of a heavily-audited
+  // function for a cosmetic-only change. `shortInterval`/`longInterval`
+  // below are the actual source of truth for what each tier means.
+  const shortInterval = isPositional ? 'ONE_HOUR' : 'FIFTEEN_MINUTE';
+  const longInterval = isPositional ? 'ONE_DAY' : 'ONE_HOUR';
+  const shortIntervalKey = isPositional ? '1h' : '15m';
+  const longIntervalKey = isPositional ? '1d' : '1h';
+  // Positional needs much deeper history: enough 1H bars to make Supertrend/
+  // RSI/ADX meaningful over weeks (not just days), and enough daily bars
+  // (~1.5yr) for a 26/9 MACD and 14-period ADX/ATR to have real warmup.
+  const from15m = formatAngelDateTime(new Date(now.getTime() - (isPositional ? 60 : 10) * 24 * 60 * 60 * 1000));
+  const from1h = formatAngelDateTime(new Date(now.getTime() - (isPositional ? 540 : 30) * 24 * 60 * 60 * 1000));
 
   // Angel One's historical-candle endpoint trips a strict rate limit (a
   // flat 403, with getHistoricalData swallowing it and returning [] rather
@@ -144,16 +168,16 @@ async function computeMarketBias(
   const nonEmpty = (candles: OHLCV[]) => candles.length > 0;
 
   const candles15m = await cached(
-    `hist:${exchange}:${historicalToken}:15m`,
+    `hist:${exchange}:${historicalToken}:${shortIntervalKey}`,
     HISTORICAL_CACHE_TTL_SECONDS,
-    () => fetchHistoricalWithRetry(provider, { exchange, token: historicalToken, interval: 'FIFTEEN_MINUTE', fromDate: from15m, toDate }),
+    () => fetchHistoricalWithRetry(provider, { exchange, token: historicalToken, interval: shortInterval, fromDate: from15m, toDate }),
     nonEmpty
   );
   await sleep(1200);
   const candles1h = await cached(
-    `hist:${exchange}:${historicalToken}:1h`,
+    `hist:${exchange}:${historicalToken}:${longIntervalKey}`,
     HISTORICAL_CACHE_TTL_SECONDS,
-    () => fetchHistoricalWithRetry(provider, { exchange, token: historicalToken, interval: 'ONE_HOUR', fromDate: from1h, toDate }),
+    () => fetchHistoricalWithRetry(provider, { exchange, token: historicalToken, interval: longInterval, fromDate: from1h, toDate }),
     nonEmpty
   );
 
@@ -218,7 +242,11 @@ async function computeMarketBias(
         )
       : null;
 
-  const st15 = supertrend(c15.highs, c15.lows, c15.closes, 10, 3);
+  // Positional uses a less sensitive multiplier (2 vs 3) on daily bars —
+  // audit-recommended for a slower-turning trend filter appropriate to a
+  // multi-day/week hold, vs the more reactive intraday setting.
+  const stMultiplier = isPositional ? 2 : 3;
+  const st15 = supertrend(c15.highs, c15.lows, c15.closes, 10, stMultiplier);
   const st15Direction = st15.direction[st15.direction.length - 1] ?? 'UP';
   // Did the 15m Supertrend flip on this specific bar, or is it continuing
   // an already-established trend? A flip is a "breakout" moment that
@@ -228,7 +256,7 @@ async function computeMarketBias(
   const st15JustFlipped = st15Direction !== st15PrevDirection;
 
   // --- 1h signals ---
-  const st1h = supertrend(c1h.highs, c1h.lows, c1h.closes, 10, 3);
+  const st1h = supertrend(c1h.highs, c1h.lows, c1h.closes, 10, stMultiplier);
   const st1hDirection = st1h.direction[st1h.direction.length - 1] ?? 'UP';
 
   const adx1h = adx(c1h.highs, c1h.lows, c1h.closes, 14);
@@ -279,8 +307,14 @@ async function computeMarketBias(
   const VOLUME_CONFIRM_THRESHOLD = 1.2;
   const volumeConfirms = volumeRatio >= VOLUME_CONFIRM_THRESHOLD;
 
+  // Positional requires a higher-conviction RSI reading (60/40 vs 55/45) —
+  // a multi-day hold shouldn't be triggered by the same mild RSI lean
+  // that's meaningful for an intraday scalp.
+  const rsiBullThreshold = isPositional ? 60 : 55;
+  const rsiBearThreshold = isPositional ? 40 : 45;
+
   const vwapVote: Vote = spot > sessionVwap * 1.0005 ? 1 : spot < sessionVwap * 0.9995 ? -1 : 0;
-  const rsiVote: Vote = rsi15 > 55 ? 1 : rsi15 < 45 ? -1 : 0;
+  const rsiVote: Vote = rsi15 > rsiBullThreshold ? 1 : rsi15 < rsiBearThreshold ? -1 : 0;
   const st15Vote: Vote = st15JustFlipped && !volumeConfirms ? 0 : st15Direction === 'UP' ? 1 : -1;
   const st1hVote: Vote = st1hDirection === 'UP' ? 1 : -1;
   const futuresOiVote: Vote =
@@ -323,19 +357,21 @@ async function computeMarketBias(
       ? `Price below VWAP (${fmt(spot)} < ${fmt(sessionVwap)})`
       : `Price near VWAP (${fmt(spot)} ≈ ${fmt(sessionVwap)})`
   );
+  const shortLabel = isPositional ? '1H' : '15m';
+  const longLabel = isPositional ? 'Daily' : '1H';
   reasoning.push(
     st15Direction === st1hDirection
-      ? `Supertrend ${st15Direction === 'UP' ? 'bullish' : 'bearish'} on 15m and 1H`
-      : `Supertrend ${st15Direction === 'UP' ? 'bullish' : 'bearish'} on 15m, ${st1hDirection === 'UP' ? 'bullish' : 'bearish'} on 1H — mixed`
+      ? `Supertrend ${st15Direction === 'UP' ? 'bullish' : 'bearish'} on ${shortLabel} and ${longLabel}`
+      : `Supertrend ${st15Direction === 'UP' ? 'bullish' : 'bearish'} on ${shortLabel}, ${st1hDirection === 'UP' ? 'bullish' : 'bearish'} on ${longLabel} — mixed`
   );
   reasoning.push(
-    rsi15 >= 70
+    rsi15 >= rsiBullThreshold + 15
       ? `RSI at ${fmt(rsi15, 0)} — overbought`
-      : rsi15 <= 30
+      : rsi15 <= rsiBearThreshold - 15
       ? `RSI at ${fmt(rsi15, 0)} — oversold`
-      : rsi15 > 55
+      : rsi15 > rsiBullThreshold
       ? `RSI at ${fmt(rsi15, 0)} — bullish but not overbought`
-      : rsi15 < 45
+      : rsi15 < rsiBearThreshold
       ? `RSI at ${fmt(rsi15, 0)} — bearish but not oversold`
       : `RSI at ${fmt(rsi15, 0)} — neutral`
   );
@@ -506,7 +542,7 @@ async function computeMarketBias(
   };
 
   const tradeSetup: TradeSetup = chain
-    ? await resolveStickyTradeSetup(provider, underlying, exchange, chain, direction, confidence, regime, overall)
+    ? await resolveStickyTradeSetup(provider, underlying, exchange, chain, direction, confidence, regime, overall, mode)
     : { available: false, reason: 'Option chain unavailable for this symbol — cannot size a setup.' };
 
   const result: MarketBiasResult = { bias, score, tradeSetup };
@@ -568,6 +604,13 @@ const TRAIL_TO_BREAKEVEN_AT_R = 1;
 const TRAIL_LOCK_PROFIT_AT_R = 2;
 
 const STICKY_TRADE_SETUP_TTL_SECONDS = 60 * 60 * 24 * 2;
+const STICKY_TRADE_SETUP_TTL_SECONDS_POSITIONAL = 60 * 60 * 24 * 30; // a positional hold is meant to run days/weeks, not roll over after 2 days
+
+// 40% for a positional hold vs the 30% intraday default — the same option's
+// premium ordinarily swings further over a multi-day/week horizon on
+// theta/vega alone, so a same-session-tuned stop would get shaken out by
+// routine noise long before the thesis played out.
+const POSITIONAL_SL_PREMIUM_PCT = 0.4;
 
 async function resolveStickyTradeSetup(
   provider: MarketDataProvider,
@@ -577,9 +620,16 @@ async function resolveStickyTradeSetup(
   direction: BiasDirection,
   confidence: number,
   regime: MarketRegime,
-  intelligenceScore: number
+  intelligenceScore: number,
+  mode: TradingMode = 'INTRADAY'
 ): Promise<TradeSetup> {
-  const key = `trade_setup:${exchange}:${underlying}`;
+  const isPositional = mode === 'POSITIONAL';
+  const setupTtl = isPositional ? STICKY_TRADE_SETUP_TTL_SECONDS_POSITIONAL : STICKY_TRADE_SETUP_TTL_SECONDS;
+  // Mode-scoped key — INTRADAY and POSITIONAL setups for the same symbol
+  // are entirely different positions (different SL%, different expected
+  // holding period), not variations of one setup, so they can't share a
+  // Redis slot.
+  const key = `trade_setup:${exchange}:${underlying}:${mode}`;
   const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
   let stored: StoredTradeSetup | null = null;
@@ -606,7 +656,11 @@ async function resolveStickyTradeSetup(
   const storedIsPlausible =
     stored?.available && stored.riskReward != null && stored.riskReward <= MAX_RISK_REWARD;
 
-  if (storedIsPlausible && stored!.day === today) {
+  // A positional hold is meant to run days/weeks — unlike intraday, a
+  // calendar-day change alone shouldn't invalidate it, only SL/target
+  // being hit or a confirmed reversal should. Intraday keeps requiring
+  // same-day, matching its "roll over every session" design.
+  if (storedIsPlausible && (isPositional || stored!.day === today)) {
     // SL/target are about the option's own price, not the current bias
     // read — check them first and unconditionally, so a real win/loss is
     // never masked by a same-tick direction flicker.
@@ -636,7 +690,7 @@ async function resolveStickyTradeSetup(
               : `SL trailed to breakeven (${newStopLoss.toFixed(2)}).`;
           stored = { ...stored!, stopLoss: newStopLoss, reason: `${stored!.reason} ${trailNote}` };
           try {
-            await redis.set(key, JSON.stringify(stored), 'EX', STICKY_TRADE_SETUP_TTL_SECONDS);
+            await redis.set(key, JSON.stringify(stored), 'EX', setupTtl);
           } catch (err: any) {
             logger.warn({ error: err.message, underlying }, 'Sticky trade setup trailing-stop write failed');
           }
@@ -668,7 +722,7 @@ async function resolveStickyTradeSetup(
       if (!stored!.reversalStreak) return stored!;
       const reset: StoredTradeSetup = { ...stored!, reversalStreak: 0 };
       try {
-        await redis.set(key, JSON.stringify(reset), 'EX', STICKY_TRADE_SETUP_TTL_SECONDS);
+        await redis.set(key, JSON.stringify(reset), 'EX', setupTtl);
       } catch (err: any) {
         logger.warn({ error: err.message, underlying }, 'Sticky trade setup reversal-streak reset failed');
       }
@@ -681,7 +735,7 @@ async function resolveStickyTradeSetup(
       if (streak < REVERSAL_CONFIRM_POLLS) {
         const bumped: StoredTradeSetup = { ...stored!, reversalStreak: streak };
         try {
-          await redis.set(key, JSON.stringify(bumped), 'EX', STICKY_TRADE_SETUP_TTL_SECONDS);
+          await redis.set(key, JSON.stringify(bumped), 'EX', setupTtl);
         } catch (err: any) {
           logger.warn({ error: err.message, underlying }, 'Sticky trade setup reversal-streak write failed');
         }
@@ -700,7 +754,8 @@ async function resolveStickyTradeSetup(
   }
 
   const ivRank = await lookupIvRank(provider, exchange, underlying);
-  const fresh = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, chain.expectedMove.points, ivRank);
+  const slPremiumPct = isPositional ? POSITIONAL_SL_PREMIUM_PCT : undefined;
+  const fresh = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, chain.expectedMove.points, ivRank, slPremiumPct);
 
   if (!fresh.available) {
     // Clear any previously locked setup now that conditions no longer
@@ -718,7 +773,7 @@ async function resolveStickyTradeSetup(
 
   const toStore: StoredTradeSetup = { ...fresh, direction, day: today, generatedAt: Date.now(), signalId, initialStopLoss: fresh.stopLoss };
   try {
-    await redis.set(key, JSON.stringify(toStore), 'EX', STICKY_TRADE_SETUP_TTL_SECONDS);
+    await redis.set(key, JSON.stringify(toStore), 'EX', setupTtl);
   } catch (err: any) {
     logger.warn({ error: err.message, underlying }, 'Sticky trade setup write failed');
   }

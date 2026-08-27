@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { api } from './api';
 import { MOCK_NIFTY_BIAS, MOCK_NIFTY_SCORE } from './mock-data';
-import type { MarketBias, IntelligenceScore, TradeSetup } from '@fno/shared';
+import type { MarketBias, IntelligenceScore, TradeSetup, TradingMode } from '@fno/shared';
 
 const POLL_INTERVAL_MS = 60000;
 
@@ -29,7 +29,8 @@ const NO_SETUP: TradeSetup = { available: false, reason: 'Live signal engine unr
  */
 export function useMarketBias(
   symbol: string,
-  exchange: string
+  exchange: string,
+  mode: TradingMode = 'INTRADAY'
 ): { bias: MarketBias; score: IntelligenceScore; tradeSetup: TradeSetup; isLive: boolean } {
   const [bias, setBias] = useState<MarketBias>(MOCK_NIFTY_BIAS);
   const [score, setScore] = useState<IntelligenceScore>(MOCK_NIFTY_SCORE);
@@ -41,12 +42,12 @@ export function useMarketBias(
 
   useEffect(() => {
     let cancelled = false;
-    // Reset live tracking when symbol changes
+    // Reset live tracking when symbol or mode changes
     hasReceivedLive.current = false;
 
     const fetchBias = async () => {
       try {
-        const data = await api.getMarketBias(symbol, exchange);
+        const data = await api.getMarketBias(symbol, exchange, mode);
         if (cancelled) return;
         setBias(data.bias);
         setScore(data.score);
@@ -59,7 +60,7 @@ export function useMarketBias(
         try {
           await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
           if (cancelled) return;
-          const data = await api.getMarketBias(symbol, exchange);
+          const data = await api.getMarketBias(symbol, exchange, mode);
           if (cancelled) return;
           setBias(data.bias);
           setScore(data.score);
@@ -84,7 +85,7 @@ export function useMarketBias(
       cancelled = true;
       clearInterval(interval);
     };
-  }, [symbol, exchange]);
+  }, [symbol, exchange, mode]);
 
   return { bias, score, tradeSetup, isLive };
 }

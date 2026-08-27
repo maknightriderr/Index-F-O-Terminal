@@ -29,10 +29,11 @@ const REFRESH_INTERVAL_MS = 15000;
  */
 export function AssetWorkspace() {
   const { selectedSymbol, selectedExchange, selectedExpiry, setSelectedExpiry } = useMarketStore();
+  const [biasMode, setBiasMode] = useState<'INTRADAY' | 'POSITIONAL'>('INTRADAY');
   // Hooks can't be called conditionally, so this runs even before the
   // "no asset selected" early return below — harmless, just polls NIFTY
   // until an asset is actually picked.
-  const { bias, score, tradeSetup, isLive: biasLive } = useMarketBias(selectedSymbol || 'NIFTY', selectedExchange || 'NSE');
+  const { bias, score, tradeSetup, isLive: biasLive } = useMarketBias(selectedSymbol || 'NIFTY', selectedExchange || 'NSE', biasMode);
   const [chain, setChain] = useState<OptionChain | null>(null);
   const [futures, setFutures] = useState<FuturesChainResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -176,7 +177,28 @@ export function AssetWorkspace() {
 
       {/* Market Intelligence */}
       <div>
-        <SectionLabel icon="🧠">Market Intelligence</SectionLabel>
+        <div className="flex items-start gap-3">
+          <div className="flex-1 min-w-0">
+            <SectionLabel icon="🧠">Market Intelligence</SectionLabel>
+          </div>
+          <div className="flex items-center gap-0.5 bg-gray-800/60 light:bg-slate-200/60 rounded-lg p-0.5 shrink-0" role="group" aria-label="Trading mode">
+            {(['INTRADAY', 'POSITIONAL'] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setBiasMode(m)}
+                title={m === 'INTRADAY' ? '15m/1H candles, 30% SL — tuned for same-session moves' : '1H/Daily candles, wider SL — tuned for a multi-day/week hold'}
+                className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wide transition-colors ${
+                  biasMode === m
+                    ? 'bg-emerald-500/90 text-white'
+                    : 'text-gray-400 light:text-slate-500 hover:text-gray-200 light:hover:text-slate-700'
+                }`}
+              >
+                {m === 'INTRADAY' ? 'Intraday' : 'Positional'}
+              </button>
+            ))}
+          </div>
+        </div>
         {!biasLive && (
           <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2 mb-2 text-amber-400 text-xs font-medium">
             ⚠️ Live signal engine unreachable — bias/regime/score below are sample data.
