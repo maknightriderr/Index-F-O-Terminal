@@ -363,6 +363,17 @@ export class AngelOneProvider implements MarketDataProvider {
         }));
       }
 
+      // Angel One returned HTTP 200 but application-level status:false —
+      // this branch previously discarded response.data.message/errorcode
+      // entirely, so a real broker-side rejection (rate limit, expired
+      // session, invalid token, concurrent-session conflict — SmartAPI only
+      // allows one active session per login) looked identical in our logs
+      // to "market genuinely has no candles for this window," making a
+      // live outage undiagnosable from the logs alone.
+      logger.warn(
+        { params, apiMessage: response.data?.message, apiErrorCode: response.data?.errorcode, apiStatus: response.data?.status },
+        'Historical data request returned no candles — broker responded but reported failure'
+      );
       return [];
     } catch (error: any) {
       logger.error({ error: error.message, params }, 'Historical data fetch failed');
@@ -485,6 +496,15 @@ export class AngelOneProvider implements MarketDataProvider {
               timestamp: Date.now(),
             });
           }
+        } else {
+          // Same class of gap as getHistoricalData above — HTTP 200 with
+          // status:false silently produced zero quotes for this chunk with
+          // no trace of why (rate limit vs expired/kicked session vs a
+          // genuinely bad token list).
+          logger.warn(
+            { exchangeSegment, chunkSize: chunk.length, apiMessage: response.data?.message, apiErrorCode: response.data?.errorcode, apiStatus: response.data?.status },
+            'Quote request returned no data — broker responded but reported failure'
+          );
         }
       } catch (error: any) {
         logger.error({ error: error.message, exchangeSegment, chunkSize: chunk.length }, 'Quote fetch failed');
