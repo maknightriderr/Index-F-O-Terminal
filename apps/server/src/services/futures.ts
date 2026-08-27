@@ -36,7 +36,7 @@ async function buildFuturesDataUncached(
   // underlying (on separate cache keys) could show the header price and
   // the "Current Month" futures price a few seconds apart on a moving
   // contract, visibly disagreeing on screen for no real reason.
-  const { ltp: spotPrice } = await getSpotQuote(provider, underlying, exchange);
+  const { token: spotToken, ltp: spotPrice } = await getSpotQuote(provider, underlying, exchange);
 
   if (spotPrice <= 0) {
     throw new Error(`Unable to resolve a live spot price for ${underlying}`);
@@ -74,7 +74,13 @@ async function buildFuturesDataUncached(
 
   const contracts: FuturesData[] = futInstruments.map((inst, idx) => {
     const quote = quoteByToken.get(inst.token);
-    const futuresPrice = quote?.ltp ?? 0;
+    // MCX has no separate cash instrument — resolveSpotToken resolves to
+    // this exact nearest-future contract, so its "own" quote and the
+    // shared spot quote are the identical instrument. Use the shared
+    // value directly here rather than the batch quote fetched moments
+    // apart above, so the Futures panel can't show a different tick for
+    // the same contract than the header does.
+    const futuresPrice = inst.token === spotToken ? spotPrice : quote?.ltp ?? 0;
     const basis = Math.round((futuresPrice - spotPrice) * 100) / 100;
     const premiumDiscountPct = spotPrice > 0 ? Math.round((basis / spotPrice) * 10000) / 100 : 0;
     const changeOi = changeOiByToken.get(inst.token) ?? 0;
