@@ -60,7 +60,7 @@ export function NewsPanel({ symbol }: { symbol: string }) {
       )}
 
       {!loading && !error && articles && articles.length > 0 && (
-        <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
+        <div className="space-y-2.5 max-h-[calc(100vh-220px)] overflow-y-auto pr-1">
           {articles.map((a) => (
             <a
               key={a.url}

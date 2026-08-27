@@ -212,116 +212,124 @@ export function AssetWorkspace() {
         </div>
       </div>
 
-      {/* News */}
-      <div>
-        <SectionLabel icon="📰">News</SectionLabel>
-        <NewsPanel symbol={selectedSymbol} />
-      </div>
-
-      {/* Option Chain Intelligence */}
-      {chain && (
-        <div>
-          <SectionLabel icon="🔬">Option Chain Intelligence</SectionLabel>
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-            <OiTrapCard trap={chain.oiTrap} />
-            <PositionMomentumCard momentum={chain.positionMomentum} />
-            <DecayCard decay={chain.decay} />
-            <TradeSetupCard setup={tradeSetup} />
-          </div>
-        </div>
-      )}
-
-      {/* Futures Strip */}
-      {futures && futures.contracts.length > 0 && (
-        <div>
-          <SectionLabel icon="📅">Futures</SectionLabel>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {futures.contracts.map((c) => (
-              <FuturesCard key={c.symbol} contract={c} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {chain && (
-        <div className="space-y-3">
-          <SectionLabel icon="⛓️">Option Chain</SectionLabel>
-          {/* Expiry Tabs */}
-          <div className="flex items-center gap-2 flex-wrap">
-            {chain.availableExpiries.map((exp) => (
-              <button
-                key={exp}
-                onClick={() => setSelectedExpiry(exp)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-150 ${
-                  exp === chain.expiry
-                    ? 'bg-gradient-to-b from-cyan-500/25 to-cyan-500/10 light:from-cyan-500/15 light:to-cyan-500/10 text-cyan-300 light:text-cyan-700 border border-cyan-500/40 shadow-[0_2px_8px_-2px_rgba(6,182,212,0.35)]'
-                    : 'bg-gray-800/40 light:bg-slate-100 text-gray-400 light:text-slate-500 border border-transparent hover:bg-gray-800/70 light:hover:bg-slate-200 hover:text-gray-200 light:hover:text-slate-800'
-                }`}
-              >
-                {exp}
-              </button>
-            ))}
-          </div>
-
-          {/* Summary Strip */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <SummaryTile label="PCR (OI)" value={chain.pcrDetail.oiPCR.toFixed(2)}
-              accent={chain.pcrDetail.oiPCR > 1 ? 'emerald' : chain.pcrDetail.oiPCR < 0.7 ? 'red' : 'gray'} />
-            <SummaryTile label="Max Pain" value={formatIndianNumber(chain.maxPain, 0)}
-              sub={`${chain.maxPainDistance >= 0 ? '+' : ''}${chain.maxPainDistance.toFixed(0)} from spot`} />
-            <SummaryTile label="Expected Move" value={`±${formatIndianNumber(chain.expectedMove.points, 0)}`}
-              sub={`${formatIndianNumber(chain.expectedMove.lowerBound, 0)} – ${formatIndianNumber(chain.expectedMove.upperBound, 0)}`} />
-            <SummaryTile label="ATM Strike" value={formatIndianNumber(chain.atmStrike, 0)}
-              sub={`Interval ${chain.strikeInterval}`} />
-          </div>
-
-          {/* Chain Table */}
-          <div className="bg-gradient-to-b from-[#141420] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 rounded-xl overflow-hidden shadow-[0_12px_36px_-16px_rgba(0,0,0,0.8)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.12)]">
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="bg-gradient-to-b from-gray-900/90 to-gray-900/60 light:from-slate-100 light:to-slate-100 text-gray-400 light:text-slate-500 uppercase tracking-wider">
-                    <th colSpan={8} className="text-center px-2 py-2 font-bold text-emerald-400/90 light:text-emerald-700 border-r border-gray-800/60 light:border-slate-200">Calls</th>
-                    <th className="text-center px-2 py-2 font-medium">Strike</th>
-                    <th colSpan={8} className="text-center px-2 py-2 font-bold text-red-400/90 light:text-red-700 border-l border-gray-800/60 light:border-slate-200">Puts</th>
-                  </tr>
-                  <tr className="bg-gray-900/50 light:bg-slate-100 text-gray-500 light:text-slate-500 uppercase tracking-wider">
-                    <Th>OI</Th><Th>Chg OI</Th><Th>Vol</Th><Th>IV</Th><Th>Delta</Th><Th>Theta</Th><Th>LTP</Th><Th right border>Activity</Th>
-                    <th className="text-center px-2 py-1.5 font-medium">Price</th>
-                    <Th left border>Activity</Th><Th>LTP</Th><Th>Theta</Th><Th>Delta</Th><Th>IV</Th><Th>Vol</Th><Th>Chg OI</Th><Th>OI</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {strikes.map((s) => {
-                    const isAtm = s.strike === chain.atmStrike;
-                    const callItm = s.strike < chain.spotPrice;
-                    const putItm = s.strike > chain.spotPrice;
-
-                    return (
-                      <tr
-                        key={s.strike}
-                        className={`border-t border-gray-800/40 light:border-slate-200 hover:bg-gray-800/30 light:hover:bg-slate-100 transition-colors ${
-                          isAtm ? 'bg-gradient-to-r from-cyan-500/[0.08] via-cyan-500/[0.14] to-cyan-500/[0.08] shadow-[inset_0_1px_0_rgba(6,182,212,0.25),inset_0_-1px_0_rgba(6,182,212,0.25)] animate-border-glow' : ''
-                        }`}
-                      >
-                        <LegCells leg={s.call} side="call" itm={callItm} maxOi={maxOi} />
-                        <td className="text-center px-2 py-1.5">
-                          <span className={`inline-block px-2 py-0.5 rounded-md font-bold tabular-nums ${
-                            isAtm ? 'bg-cyan-500/20 light:bg-cyan-500/15 text-cyan-300 light:text-cyan-700 shadow-[0_0_10px_-2px_rgba(6,182,212,0.6)] light:shadow-none' : 'text-gray-200 light:text-slate-800'
-                          }`}>
-                            {formatIndianNumber(s.strike, 0)}
-                          </span>
-                        </td>
-                        <LegCells leg={s.put} side="put" itm={putItm} maxOi={maxOi} />
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+      {/* Main content (left) + News sidebar (right) — News used to be a
+          full-width section in the main stack, which pushed the option
+          chain table further down the page on every symbol. As a sticky
+          sidebar it stays visible alongside the rest without disturbing
+          that flow. */}
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px] gap-4 items-start">
+        <div className="space-y-4 min-w-0">
+          {/* Option Chain Intelligence */}
+          {chain && (
+            <div>
+              <SectionLabel icon="🔬">Option Chain Intelligence</SectionLabel>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                <OiTrapCard trap={chain.oiTrap} />
+                <PositionMomentumCard momentum={chain.positionMomentum} />
+                <DecayCard decay={chain.decay} />
+                <TradeSetupCard setup={tradeSetup} />
+              </div>
             </div>
-          </div>
+          )}
+
+          {/* Futures Strip */}
+          {futures && futures.contracts.length > 0 && (
+            <div>
+              <SectionLabel icon="📅">Futures</SectionLabel>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {futures.contracts.map((c) => (
+                  <FuturesCard key={c.symbol} contract={c} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {chain && (
+            <div className="space-y-3">
+              <SectionLabel icon="⛓️">Option Chain</SectionLabel>
+              {/* Expiry Tabs */}
+              <div className="flex items-center gap-2 flex-wrap">
+                {chain.availableExpiries.map((exp) => (
+                  <button
+                    key={exp}
+                    onClick={() => setSelectedExpiry(exp)}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-150 ${
+                      exp === chain.expiry
+                        ? 'bg-gradient-to-b from-cyan-500/25 to-cyan-500/10 light:from-cyan-500/15 light:to-cyan-500/10 text-cyan-300 light:text-cyan-700 border border-cyan-500/40 shadow-[0_2px_8px_-2px_rgba(6,182,212,0.35)]'
+                        : 'bg-gray-800/40 light:bg-slate-100 text-gray-400 light:text-slate-500 border border-transparent hover:bg-gray-800/70 light:hover:bg-slate-200 hover:text-gray-200 light:hover:text-slate-800'
+                    }`}
+                  >
+                    {exp}
+                  </button>
+                ))}
+              </div>
+
+              {/* Summary Strip */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <SummaryTile label="PCR (OI)" value={chain.pcrDetail.oiPCR.toFixed(2)}
+                  accent={chain.pcrDetail.oiPCR > 1 ? 'emerald' : chain.pcrDetail.oiPCR < 0.7 ? 'red' : 'gray'} />
+                <SummaryTile label="Max Pain" value={formatIndianNumber(chain.maxPain, 0)}
+                  sub={`${chain.maxPainDistance >= 0 ? '+' : ''}${chain.maxPainDistance.toFixed(0)} from spot`} />
+                <SummaryTile label="Expected Move" value={`±${formatIndianNumber(chain.expectedMove.points, 0)}`}
+                  sub={`${formatIndianNumber(chain.expectedMove.lowerBound, 0)} – ${formatIndianNumber(chain.expectedMove.upperBound, 0)}`} />
+                <SummaryTile label="ATM Strike" value={formatIndianNumber(chain.atmStrike, 0)}
+                  sub={`Interval ${chain.strikeInterval}`} />
+              </div>
+
+              {/* Chain Table */}
+              <div className="bg-gradient-to-b from-[#141420] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 rounded-xl overflow-hidden shadow-[0_12px_36px_-16px_rgba(0,0,0,0.8)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.12)]">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="bg-gradient-to-b from-gray-900/90 to-gray-900/60 light:from-slate-100 light:to-slate-100 text-gray-400 light:text-slate-500 uppercase tracking-wider">
+                        <th colSpan={8} className="text-center px-2 py-2 font-bold text-emerald-400/90 light:text-emerald-700 border-r border-gray-800/60 light:border-slate-200">Calls</th>
+                        <th className="text-center px-2 py-2 font-medium">Strike</th>
+                        <th colSpan={8} className="text-center px-2 py-2 font-bold text-red-400/90 light:text-red-700 border-l border-gray-800/60 light:border-slate-200">Puts</th>
+                      </tr>
+                      <tr className="bg-gray-900/50 light:bg-slate-100 text-gray-500 light:text-slate-500 uppercase tracking-wider">
+                        <Th>OI</Th><Th>Chg OI</Th><Th>Vol</Th><Th>IV</Th><Th>Delta</Th><Th>Theta</Th><Th>LTP</Th><Th right border>Activity</Th>
+                        <th className="text-center px-2 py-1.5 font-medium">Price</th>
+                        <Th left border>Activity</Th><Th>LTP</Th><Th>Theta</Th><Th>Delta</Th><Th>IV</Th><Th>Vol</Th><Th>Chg OI</Th><Th>OI</Th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {strikes.map((s) => {
+                        const isAtm = s.strike === chain.atmStrike;
+                        const callItm = s.strike < chain.spotPrice;
+                        const putItm = s.strike > chain.spotPrice;
+
+                        return (
+                          <tr
+                            key={s.strike}
+                            className={`border-t border-gray-800/40 light:border-slate-200 hover:bg-gray-800/30 light:hover:bg-slate-100 transition-colors ${
+                              isAtm ? 'bg-gradient-to-r from-cyan-500/[0.08] via-cyan-500/[0.14] to-cyan-500/[0.08] shadow-[inset_0_1px_0_rgba(6,182,212,0.25),inset_0_-1px_0_rgba(6,182,212,0.25)] animate-border-glow' : ''
+                            }`}
+                          >
+                            <LegCells leg={s.call} side="call" itm={callItm} maxOi={maxOi} />
+                            <td className="text-center px-2 py-1.5">
+                              <span className={`inline-block px-2 py-0.5 rounded-md font-bold tabular-nums ${
+                                isAtm ? 'bg-cyan-500/20 light:bg-cyan-500/15 text-cyan-300 light:text-cyan-700 shadow-[0_0_10px_-2px_rgba(6,182,212,0.6)] light:shadow-none' : 'text-gray-200 light:text-slate-800'
+                              }`}>
+                                {formatIndianNumber(s.strike, 0)}
+                              </span>
+                            </td>
+                            <LegCells leg={s.put} side="put" itm={putItm} maxOi={maxOi} />
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
-      )}
+
+        <div className="xl:sticky xl:top-4">
+          <SectionLabel icon="📰">News</SectionLabel>
+          <NewsPanel symbol={selectedSymbol} />
+        </div>
+      </div>
     </div>
   );
 }
