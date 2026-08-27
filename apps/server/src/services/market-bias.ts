@@ -18,6 +18,9 @@ import {
   atr,
   macd,
   bollingerBands,
+  pivotPoints,
+  detectRsiDivergence,
+  detectCandlestickPattern,
   getOIDescription,
   buildTradeSetup,
   MAX_RISK_REWARD,
@@ -192,9 +195,37 @@ async function computeMarketBias(
 
   const rsi15Series = rsi(c15.closes, 14);
   const rsi15 = rsi15Series[rsi15Series.length - 1] ?? 50;
+  const rsiDivergence = detectRsiDivergence(c15.closes, rsi15Series);
+  // Individual-candle reversal shape (Hammer, Engulfing, Morning/Evening
+  // Star, ...) on the most recent 15m bars — a lightweight complement to
+  // the geometric multi-swing patterns already detected elsewhere. Needs a
+  // few bars of trailing context (trend judgment + up to 3-candle
+  // patterns), not just the latest bar in isolation.
+  const candlePattern = detectCandlestickPattern(candles15m.slice(-15));
+
+  // Classic pivot points from the prior session's H/L/C — price-based S/R
+  // to sit alongside the existing OI-wall S/R, since the two can disagree
+  // (an OI wall is where positioning is concentrated; a pivot is where
+  // price itself has previously reacted) and a trader benefits from
+  // seeing both rather than only one.
+  const previousSessionCandles = filterPreviousSession(candles15m);
+  const pivots =
+    previousSessionCandles.length > 0
+      ? pivotPoints(
+          Math.max(...previousSessionCandles.map((c) => c.high)),
+          Math.min(...previousSessionCandles.map((c) => c.low)),
+          previousSessionCandles[previousSessionCandles.length - 1].close
+        )
+      : null;
 
   const st15 = supertrend(c15.highs, c15.lows, c15.closes, 10, 3);
   const st15Direction = st15.direction[st15.direction.length - 1] ?? 'UP';
+  // Did the 15m Supertrend flip on this specific bar, or is it continuing
+  // an already-established trend? A flip is a "breakout" moment that
+  // deserves volume confirmation before being trusted at full weight; an
+  // already-running trend doesn't need continuous re-confirmation.
+  const st15PrevDirection = st15.direction[st15.direction.length - 2] ?? st15Direction;
+  const st15JustFlipped = st15Direction !== st15PrevDirection;
 
   // --- 1h signals ---
   const st1h = supertrend(c1h.highs, c1h.lows, c1h.closes, 10, 3);
@@ -240,9 +271,17 @@ async function computeMarketBias(
   const callWall = chain ? findMaxOiStrike(chain, 'call') : null;
 
   // --- Votes (-1 bearish, 0 neutral, +1 bullish) ---
+  // Elevated volume relative to the 20-bar average — the bar a "breakout"
+  // vote (a fresh Supertrend flip, or price actually outside the Bollinger
+  // bands) needs to clear before being trusted at full weight. An
+  // already-established trend/band position doesn't need continuous
+  // re-confirmation, only the initial break does.
+  const VOLUME_CONFIRM_THRESHOLD = 1.2;
+  const volumeConfirms = volumeRatio >= VOLUME_CONFIRM_THRESHOLD;
+
   const vwapVote: Vote = spot > sessionVwap * 1.0005 ? 1 : spot < sessionVwap * 0.9995 ? -1 : 0;
   const rsiVote: Vote = rsi15 > 55 ? 1 : rsi15 < 45 ? -1 : 0;
-  const st15Vote: Vote = st15Direction === 'UP' ? 1 : -1;
+  const st15Vote: Vote = st15JustFlipped && !volumeConfirms ? 0 : st15Direction === 'UP' ? 1 : -1;
   const st1hVote: Vote = st1hDirection === 'UP' ? 1 : -1;
   const futuresOiVote: Vote =
     futuresInterpretation === 'LONG_BUILDUP' || futuresInterpretation === 'SHORT_COVERING'
@@ -252,7 +291,8 @@ async function computeMarketBias(
       : 0;
   const pcrVote: Vote = pcr > 1.1 ? 1 : pcr < 0.85 ? -1 : 0;
   const macdVote: Vote = macdHistNow > 0 ? 1 : macdHistNow < 0 ? -1 : 0;
-  const bollingerVote: Vote = bbPercentB > 0.6 ? 1 : bbPercentB < 0.4 ? -1 : 0;
+  const bbBreakout = bbPercentB > 1 || bbPercentB < 0;
+  const bollingerVote: Vote = bbBreakout && !volumeConfirms ? 0 : bbPercentB > 0.6 ? 1 : bbPercentB < 0.4 ? -1 : 0;
 
   const directionVotes: Vote[] = [vwapVote, rsiVote, st15Vote, st1hVote, futuresOiVote, pcrVote];
   const voteSum = directionVotes.reduce((a: number, b) => a + b, 0);
@@ -313,6 +353,26 @@ async function computeMarketBias(
   if (Math.abs(volumeRatio - 1) > 0.3) {
     reasoning.push(`Volume ${volumeRatio > 1 ? 'above' : 'below'} its 20-bar average (${fmt(volumeRatio, 2)}x)`);
   }
+  if (st15JustFlipped && !volumeConfirms) {
+    reasoning.push(`Supertrend 15m just flipped ${st15Direction === 'UP' ? 'bullish' : 'bearish'} but volume (${fmt(volumeRatio, 2)}x) hasn't confirmed it — vote withheld`);
+  }
+  if (pivots) {
+    reasoning.push(
+      spot > pivots.pp
+        ? `Above prior-session pivot (${fmt(spot)} > PP ${fmt(pivots.pp)}) — R1 ${fmt(pivots.r1)}, S1 ${fmt(pivots.s1)}`
+        : `Below prior-session pivot (${fmt(spot)} < PP ${fmt(pivots.pp)}) — R1 ${fmt(pivots.r1)}, S1 ${fmt(pivots.s1)}`
+    );
+  }
+  if (rsiDivergence.signal !== 'NONE') {
+    reasoning.push(
+      `${rsiDivergence.signal === 'BEARISH' ? 'Bearish' : 'Bullish'} RSI divergence — price ${rsiDivergence.signal === 'BEARISH' ? 'made a higher high' : 'made a lower low'} while RSI weakened (${fmt(rsiDivergence.rsiSwing!.first, 0)} → ${fmt(rsiDivergence.rsiSwing!.second, 0)})`
+    );
+  }
+  if (candlePattern) {
+    reasoning.push(
+      `${candlePattern.pattern.replace(/_/g, ' ').toLowerCase()} candle (${candlePattern.direction.toLowerCase()}) on the latest 15m bar`
+    );
+  }
 
   const bias: MarketBias = {
     symbol: underlying,
@@ -337,8 +397,16 @@ async function computeMarketBias(
       expectedMove: chain?.expectedMove.points ?? null,
       expectedRangeLow: chain?.expectedMove.lowerBound ?? null,
       expectedRangeHigh: chain?.expectedMove.upperBound ?? null,
+      // OI-wall S/R (where positioning is concentrated) and price-pivot
+      // S/R (where price itself has previously reacted) are two distinct
+      // signals that can disagree — both surfaced rather than only one.
       support: putWall?.strike ?? null,
       resistance: callWall?.strike ?? null,
+      pivotSupport: pivots?.s1 ?? null,
+      pivotResistance: pivots?.r1 ?? null,
+      pivotPP: pivots?.pp ?? null,
+      rsiDivergence: rsiDivergence.signal,
+      candlePattern: candlePattern?.pattern ?? null,
     },
     timestamp: Date.now(),
   };
@@ -365,7 +433,15 @@ async function computeMarketBias(
   const technicalsVote = (rsiVote + macdVote + bollingerVote) / 3;
   const technicalsScore = contribution(technicalsVote, directionSign);
 
-  const volumeScore = clamp(Math.round(50 + (volumeRatio - 1) * 50), 0, 100);
+  // Direction-aware, matching oiShiftsScore/relativeStrengthScore below:
+  // elevated volume only means conviction if it's backing a move that
+  // agrees with `direction` — heavy volume on a move AGAINST the overall
+  // read is a warning sign, not confirmation, and previously scored just
+  // as high as genuine confirming volume since this only looked at
+  // magnitude. Below-average volume (ratio <= 1) carries no signal either
+  // way and scores neutral.
+  const volumeMoveVote = todayChangePct !== 0 ? Math.sign(todayChangePct) * clamp(volumeRatio - 1, 0, 1) : 0;
+  const volumeScore = contribution(volumeMoveVote, directionSign);
 
   // How big is the futures OI shift, scaled by whether that shift's own
   // buildup/unwinding type agrees with the overall direction (futuresOiVote,
@@ -394,16 +470,20 @@ async function computeMarketBias(
   // trendScore's own Supertrend+ADX signal a second time.
   const regimeScore = Math.round(adxNorm * 100);
 
+  // Volume bumped 5% -> 8% (now direction-aware, see volumeScore above, so
+  // the extra weight is trustworthy rather than amplifying the old
+  // magnitude-only noise) — trend and price-action trimmed slightly to
+  // fund it, still the two largest weights by a wide margin.
   const overall = Math.round(
-    trendScore * 0.18 +
-      priceActionScore * 0.13 +
+    trendScore * 0.16 +
+      priceActionScore * 0.12 +
       futuresOiScore * 0.13 +
       optionsOiScore * 0.13 +
       pcrScore * 0.09 +
       ivScore * 0.09 +
       technicalsScore * 0.09 +
       oiShiftsScore * 0.07 +
-      volumeScore * 0.05 +
+      volumeScore * 0.08 +
       relativeStrengthScore * 0.04
   );
 
@@ -702,6 +782,21 @@ function filterToday(candles: OHLCV[]): OHLCV[] {
     (c) => new Date(c.timestamp).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) === todayIST
   );
   return todays.length >= 2 ? todays : candles.slice(-20);
+}
+
+/** Candles from the most recent trading day strictly before today (IST) — the session pivot points are computed from. */
+function filterPreviousSession(candles: OHLCV[]): OHLCV[] {
+  const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const byDate = new Map<string, OHLCV[]>();
+  for (const c of candles) {
+    const d = new Date(c.timestamp).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    if (d === todayIST) continue;
+    if (!byDate.has(d)) byDate.set(d, []);
+    byDate.get(d)!.push(c);
+  }
+  const dates = [...byDate.keys()].sort();
+  const lastDate = dates[dates.length - 1];
+  return lastDate ? byDate.get(lastDate)! : [];
 }
 
 /** Angel One historical API expects "YYYY-MM-DD HH:mm" in IST. */

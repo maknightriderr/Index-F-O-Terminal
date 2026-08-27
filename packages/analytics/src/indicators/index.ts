@@ -431,3 +431,99 @@ export function pivotPoints(high: number, low: number, close: number): PivotPoin
     s3: low - 2 * (high - pp),
   };
 }
+
+// --- RSI Divergence ---
+
+export type DivergenceSignal = 'BULLISH' | 'BEARISH' | 'NONE';
+
+export interface DivergenceResult {
+  signal: DivergenceSignal;
+  priceSwing: { first: number; second: number } | null;
+  rsiSwing: { first: number; second: number } | null;
+}
+
+const NO_DIVERGENCE: DivergenceResult = { signal: 'NONE', priceSwing: null, rsiSwing: null };
+
+/**
+ * Detects regular RSI divergence by comparing the last two swing highs (for
+ * bearish) or swing lows (for bullish) in price against RSI at those same
+ * bars. A swing point is a local extremum over `swingWindow` bars on each
+ * side — a simple fractal definition, not a parameter-heavy peak detector.
+ *
+ * Bearish: price makes a higher high while RSI makes a lower high — rising
+ * price with weakening momentum, a classic exhaustion signal.
+ * Bullish: price makes a lower low while RSI makes a higher low — falling
+ * price with weakening downside momentum.
+ *
+ * If both resolve, the one whose second (most recent) swing point is later
+ * wins, since that's the more current, actionable read.
+ */
+export function detectRsiDivergence(
+  closePrices: number[],
+  rsiValues: number[],
+  swingWindow: number = 3,
+  lookback: number = 30
+): DivergenceResult {
+  if (rsiValues.length === 0) return NO_DIVERGENCE;
+
+  // rsi(14) needs 15 bars to produce its first value, so rsiValues is
+  // shorter than closePrices — align by trimming closePrices to the same
+  // trailing window, so index i in both arrays refers to the same bar.
+  const offset = closePrices.length - rsiValues.length;
+  if (offset < 0) return NO_DIVERGENCE;
+  const closes = closePrices.slice(offset);
+
+  const n = closes.length;
+  if (n < swingWindow * 2 + 1) return NO_DIVERGENCE;
+
+  const start = Math.max(swingWindow, n - lookback);
+  const swingHighs: number[] = [];
+  const swingLows: number[] = [];
+
+  for (let i = start; i < n - swingWindow; i++) {
+    const window = closes.slice(i - swingWindow, i + swingWindow + 1);
+    if (closes[i] === Math.max(...window)) swingHighs.push(i);
+    if (closes[i] === Math.min(...window)) swingLows.push(i);
+  }
+
+  // RSI compresses near its own ceiling/floor — once the first swing is
+  // already deep overbought (>90) or oversold (<10), Wilder's smoothing
+  // makes a second, even-stronger move mathematically unable to push RSI
+  // much further, producing a marginally lower/higher RSI reading that
+  // looks like divergence but is really just the indicator's own bounded
+  // range, not a genuine momentum shift. Require a real gap to filter that
+  // noise out — found live: a steeper second rally still read RSI 91.7 ->
+  // 88.0, a 3.7pt gap that isn't a meaningful divergence.
+  const MIN_RSI_GAP = 5;
+
+  let bearish: DivergenceResult | null = null;
+  let bearishAt = -1;
+  if (swingHighs.length >= 2) {
+    const [i1, i2] = swingHighs.slice(-2);
+    if (closes[i2] > closes[i1] && rsiValues[i1] - rsiValues[i2] >= MIN_RSI_GAP) {
+      bearish = {
+        signal: 'BEARISH',
+        priceSwing: { first: closes[i1], second: closes[i2] },
+        rsiSwing: { first: rsiValues[i1], second: rsiValues[i2] },
+      };
+      bearishAt = i2;
+    }
+  }
+
+  let bullish: DivergenceResult | null = null;
+  let bullishAt = -1;
+  if (swingLows.length >= 2) {
+    const [i1, i2] = swingLows.slice(-2);
+    if (closes[i2] < closes[i1] && rsiValues[i2] - rsiValues[i1] >= MIN_RSI_GAP) {
+      bullish = {
+        signal: 'BULLISH',
+        priceSwing: { first: closes[i1], second: closes[i2] },
+        rsiSwing: { first: rsiValues[i1], second: rsiValues[i2] },
+      };
+      bullishAt = i2;
+    }
+  }
+
+  if (bearish && bullish) return bearishAt >= bullishAt ? bearish : bullish;
+  return bearish ?? bullish ?? NO_DIVERGENCE;
+}
