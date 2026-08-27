@@ -860,6 +860,14 @@ async function resolveStickyTradeSetup(
     // Day rolled over — a setup from a prior session is unconditionally
     // stale regardless of direction, no debounce needed.
     await recordTradeSetupOutcome(stored!, 'EXPIRED', currentExitValue(chain, stored!));
+  } else if (!storedIsPlausible && stored?.available && stored?.signalId) {
+    // A previously-implausible setup (e.g. a diverging IV solver's target,
+    // or a bad-quote spread) is about to be silently replaced below — found
+    // in a backtesting-data review that this left the OLD database row
+    // permanently stuck at outcome: null ("OPEN" forever), since neither
+    // branch above ever ran for it. Close it out as EXPIRED first so the
+    // self-heal doesn't leave a zombie row behind.
+    await recordTradeSetupOutcome(stored!, 'EXPIRED', currentExitValue(chain, stored!));
   }
 
   const [ivRank, vix] = await Promise.all([

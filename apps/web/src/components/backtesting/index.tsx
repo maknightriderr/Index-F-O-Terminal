@@ -262,6 +262,7 @@ function TradeSetupHistoryTable({ history, loading, onOpen }: { history: TradeSe
               <tr className="text-gray-500 light:text-slate-500 uppercase tracking-wider text-[10px]">
                 <th className="text-left px-2 py-1.5 font-medium">Generated</th>
                 <th className="text-left px-2 py-1.5 font-medium">Symbol</th>
+                <th className="text-center px-2 py-1.5 font-medium">Mode</th>
                 <th className="text-left px-2 py-1.5 font-medium">Structure</th>
                 <th className="text-right px-2 py-1.5 font-medium">Entry</th>
                 <th className="text-right px-2 py-1.5 font-medium">Risk</th>
@@ -274,12 +275,24 @@ function TradeSetupHistoryTable({ history, loading, onOpen }: { history: TradeSe
             <tbody>
               {history.map((r) => {
                 const isSpread = r.structureType === 'SPREAD';
+                // Risk/Reward are AMOUNTS, not raw price levels — a spread's
+                // maxLoss/maxProfit already are amounts, but a naked long's
+                // stopLoss/target are prices, so those need to be converted
+                // (entry-stopLoss, target-entry) or the column reads as if
+                // e.g. a 255.50 stop-loss price were a 255.50 rupee loss.
+                const riskAmount = isSpread ? r.maxLoss ?? 0 : (r.entry ?? 0) - (r.stopLoss ?? 0);
+                const rewardAmount = isSpread ? r.maxProfit ?? 0 : (r.target ?? 0) - (r.entry ?? 0);
                 return (
                 <tr key={r.id} onClick={() => onOpen(r.symbol)} className="border-t border-gray-800/40 light:border-slate-200 hover:bg-gray-800/30 light:hover:bg-slate-100 cursor-pointer transition-colors">
                   <td className="px-2 py-2 text-gray-400 light:text-slate-500 whitespace-nowrap">
                     {new Date(r.generatedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
                   </td>
                   <td className="px-2 py-2 font-semibold text-gray-200 light:text-slate-800">{r.symbol}</td>
+                  <td className="text-center px-2 py-2">
+                    <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold ${r.mode === 'POSITIONAL' ? 'text-purple-400 bg-purple-500/10' : 'text-blue-400 bg-blue-500/10'}`}>
+                      {r.mode === 'POSITIONAL' ? 'POS' : 'INTRA'}
+                    </span>
+                  </td>
                   <td className="px-2 py-2 text-gray-300 light:text-slate-700 whitespace-nowrap">
                     {isSpread
                       ? <>{r.strategy}<span className="text-gray-500 light:text-slate-400"> ({r.legs?.map((l) => `${l.action[0]}${l.strike}`).join('/')})</span></>
@@ -290,12 +303,8 @@ function TradeSetupHistoryTable({ history, loading, onOpen }: { history: TradeSe
                       ? `${r.netPremium != null && r.netPremium < 0 ? 'Credit ' : 'Debit '}${Math.abs(r.netPremium ?? 0).toFixed(2)}`
                       : (r.entry ?? 0).toFixed(2)}
                   </td>
-                  <td className="text-right px-2 py-2 tabular-nums text-red-400/80">
-                    {isSpread ? (r.maxLoss ?? 0).toFixed(2) : (r.stopLoss ?? 0).toFixed(2)}
-                  </td>
-                  <td className="text-right px-2 py-2 tabular-nums text-emerald-400/80">
-                    {isSpread ? (r.maxProfit ?? 0).toFixed(2) : (r.target ?? 0).toFixed(2)}
-                  </td>
+                  <td className="text-right px-2 py-2 tabular-nums text-red-400/80">{riskAmount.toFixed(2)}</td>
+                  <td className="text-right px-2 py-2 tabular-nums text-emerald-400/80">{rewardAmount.toFixed(2)}</td>
                   <td className="text-right px-2 py-2 tabular-nums text-gray-400 light:text-slate-500">{r.riskReward.toFixed(2)}</td>
                   <td className="text-center px-2 py-2">
                     <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${r.outcome ? OUTCOME_STYLE[r.outcome] : 'text-cyan-400 bg-cyan-500/10'}`}>
