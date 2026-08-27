@@ -956,6 +956,8 @@ export interface TradeSetupRecord {
   id: string;
   symbol: string;
   exchange: Exchange;
+  /** Records persisted before the Intraday/Positional mode toggle shipped default to INTRADAY, which was the only mode that existed then. */
+  mode: TradingMode;
   generatedAt: number;
   direction: BiasDirection;
   confidence: number;

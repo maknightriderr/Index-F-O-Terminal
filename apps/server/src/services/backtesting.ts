@@ -19,6 +19,7 @@ import type {
   WinRateBucket,
   SymbolWinRate,
   WinRateAnalytics,
+  TradingMode,
 } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
@@ -44,6 +45,10 @@ function toTradeSetupRecord(row: SignalRow): TradeSetupRecord {
     id: row.id,
     symbol: row.symbol,
     exchange: (inputs.exchange ?? 'NSE') as Exchange,
+    // Absent on records from before the mode toggle shipped — those were
+    // all generated under what's now called INTRADAY, so that's the
+    // correct read for them, not "unknown".
+    mode: (inputs.mode as TradingMode) ?? 'INTRADAY',
     generatedAt: new Date(row.time).getTime(),
     direction: row.direction,
     confidence: Number(row.confidence),

@@ -74,7 +74,17 @@ const SCANNER_CACHE_TTL_SECONDS = 180;
 // hold for this many *consecutive* polls (~3 min at the frontend's 60s
 // poll interval) before actually invalidating a sticky setup filters that
 // noise out while still reacting to a real, sustained reversal.
+//
+// POSITIONAL gets a much higher bar — found during a re-audit that this
+// constant was being applied uniformly regardless of mode, meaning a
+// week-long positional thesis could be invalidated on the same ~3-minute
+// debounce tuned for an intraday scalp. Whatever the exact wall-clock time
+// that maps to (it depends on how often the underlying 1H/Daily candle
+// cache actually refreshes with new data, not just poll count), requiring
+// more consecutive confirmations is unambiguously more conservative and
+// appropriate for a multi-day/week hold.
 const REVERSAL_CONFIRM_POLLS = 3;
+const REVERSAL_CONFIRM_POLLS_POSITIONAL = 10;
 
 export interface MarketBiasResult {
   bias: MarketBias;
@@ -285,6 +295,15 @@ async function computeMarketBias(
 
   const todayOpen = todaysCandles[0]?.open ?? c15.closes[0];
   const todayChangePct = todayOpen > 0 ? ((spot - todayOpen) / todayOpen) * 100 : 0;
+  // For scoring (not the "today" reasoning text below, which stays exactly
+  // that), POSITIONAL needs a multi-bar reference, not today's session
+  // change — a week-long hold's relative-strength/volume conviction isn't
+  // well judged by a single day's move. Uses the last 10 bars of the
+  // "long" tier (Daily candles in POSITIONAL mode).
+  const referenceChangePct =
+    isPositional && c1h.closes.length > 10
+      ? ((spot - c1h.closes[c1h.closes.length - 11]) / c1h.closes[c1h.closes.length - 11]) * 100
+      : todayChangePct;
 
   // --- Futures OI ---
   const currentFuture = futures?.contracts.find((c) => c.expiryLabel === 'current') ?? null;
@@ -476,7 +495,7 @@ async function computeMarketBias(
   // as high as genuine confirming volume since this only looked at
   // magnitude. Below-average volume (ratio <= 1) carries no signal either
   // way and scores neutral.
-  const volumeMoveVote = todayChangePct !== 0 ? Math.sign(todayChangePct) * clamp(volumeRatio - 1, 0, 1) : 0;
+  const volumeMoveVote = referenceChangePct !== 0 ? Math.sign(referenceChangePct) * clamp(volumeRatio - 1, 0, 1) : 0;
   const volumeScore = contribution(volumeMoveVote, directionSign);
 
   // How big is the futures OI shift, scaled by whether that shift's own
@@ -489,12 +508,15 @@ async function computeMarketBias(
   const oiShiftMagnitude = Math.min(Math.abs(futuresChangeOiPct), 50) / 50; // 0..1
   const oiShiftsScore = contribution(futuresOiVote * oiShiftMagnitude, directionSign);
 
-  // Today's move relative to its own ATR (volatility-normalized momentum),
-  // scored the same agree-high/disagree-low way as every other dimension —
+  // Move relative to its own ATR (volatility-normalized momentum), scored
+  // the same agree-high/disagree-low way as every other dimension —
   // previously this rewarded any positive move and penalized any negative
   // one regardless of `direction`, so a bounce inside an overall bearish
-  // read scored as if it confirmed a bullish one.
-  const relativeStrengthVote = atrPctNow > 0 ? clamp(todayChangePct / atrPctNow, -1, 1) : 0;
+  // read scored as if it confirmed a bullish one. Uses referenceChangePct
+  // (today's move for INTRADAY, a 10-bar move for POSITIONAL) rather than
+  // always today's session change, for the same reason as volumeMoveVote
+  // above.
+  const relativeStrengthVote = atrPctNow > 0 ? clamp(referenceChangePct / atrPctNow, -1, 1) : 0;
   const relativeStrengthScore = contribution(relativeStrengthVote, directionSign);
 
   // Trend conviction (ADX), direction-agnostic by design — a strong trend
@@ -730,9 +752,11 @@ async function resolveStickyTradeSetup(
     } else {
       // Bias has flipped this poll — don't tear down the setup on a single
       // noisy reading. Require the reversal to hold for REVERSAL_CONFIRM_POLLS
-      // consecutive polls before treating it as real.
+      // (mode-scaled — POSITIONAL needs a much higher bar) consecutive polls
+      // before treating it as real.
+      const confirmPolls = isPositional ? REVERSAL_CONFIRM_POLLS_POSITIONAL : REVERSAL_CONFIRM_POLLS;
       const streak = (stored!.reversalStreak ?? 0) + 1;
-      if (streak < REVERSAL_CONFIRM_POLLS) {
+      if (streak < confirmPolls) {
         const bumped: StoredTradeSetup = { ...stored!, reversalStreak: streak };
         try {
           await redis.set(key, JSON.stringify(bumped), 'EX', setupTtl);
@@ -769,7 +793,7 @@ async function resolveStickyTradeSetup(
     return fresh;
   }
 
-  const signalId = await recordTradeSetupGenerated(underlying, exchange, fresh, direction, confidence, regime, intelligenceScore);
+  const signalId = await recordTradeSetupGenerated(underlying, exchange, fresh, direction, confidence, regime, intelligenceScore, mode);
 
   const toStore: StoredTradeSetup = { ...fresh, direction, day: today, generatedAt: Date.now(), signalId, initialStopLoss: fresh.stopLoss };
   try {
@@ -800,14 +824,20 @@ async function recordTradeSetupGenerated(
   direction: BiasDirection,
   confidence: number,
   regime: MarketRegime,
-  intelligenceScore: number
+  intelligenceScore: number,
+  mode: TradingMode
 ): Promise<string | undefined> {
   try {
+    // mode is persisted here (found missing in a re-audit) so backtesting
+    // can distinguish INTRADAY from POSITIONAL setups — without it, once
+    // positional trades start generating, their fundamentally different
+    // SL%/target/hold-time profile would get silently mixed into the same
+    // win-rate stats as intraday trades, diluting both.
     const rows = await sql<{ id: string }[]>`
       INSERT INTO signals (time, symbol, signal_type, direction, confidence, inputs, reasoning, market_regime, intelligence_score)
       VALUES (
         NOW(), ${underlying}, 'TRADE_SETUP', ${direction}, ${confidence},
-        ${sql.json({ exchange, side: fresh.side, strike: fresh.strike, entry: fresh.entry, stopLoss: fresh.stopLoss, target: fresh.target, riskReward: fresh.riskReward })},
+        ${sql.json({ exchange, mode, side: fresh.side, strike: fresh.strike, entry: fresh.entry, stopLoss: fresh.stopLoss, target: fresh.target, riskReward: fresh.riskReward })},
         ${fresh.reason}, ${regime}, ${intelligenceScore}
       )
       RETURNING id
