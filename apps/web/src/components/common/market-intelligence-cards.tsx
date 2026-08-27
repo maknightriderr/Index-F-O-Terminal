@@ -59,14 +59,23 @@ export function MarketRegimeCard({ bias }: { bias: MarketBias }) {
   const resistance = inputs.resistance as number | null;
   const pcr = inputs.pcr as number | undefined;
   const atmIv = inputs.atmIv as number | undefined;
+  const adx = inputs.adx as number | undefined;
 
   return (
     <div className="bg-gradient-to-b from-[#151522] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 border-t-2 border-t-violet-500/50 rounded-xl shadow-[0_8px_28px_-14px_rgba(0,0,0,0.75)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.15)] hover:border-gray-700/80 light:hover:border-slate-300 transition-all duration-200 p-4">
       <h3 className="text-xs font-bold text-gray-300 light:text-slate-700 uppercase tracking-wide mb-3">Market Regime</h3>
-      <div className="flex items-center gap-2 mb-4">
+      <div className="flex items-center gap-2 mb-1">
         <span className={`w-2 h-2 rounded-full ${info.dot} animate-pulse`} />
         <div className={`text-lg font-bold ${info.className}`}>{info.label}</div>
+        {adx != null && (
+          <span className="text-[10px] text-gray-500 light:text-slate-500 font-medium" title="Regime measures trend STRENGTH (ADX), not directional agreement — this can differ from Market Bias, which counts how many signals agree on direction. ADX >=25 is a strong trend, >=18 weak, below that the regime falls back to a volatility read.">
+            ADX {adx.toFixed(1)}
+          </span>
+        )}
       </div>
+      <p className="text-[10px] text-gray-600 light:text-slate-400 mb-3 leading-snug">
+        Trend strength — a separate read from Market Bias&apos;s directional agreement. Early-stage trends often show high bias confidence before ADX catches up.
+      </p>
       <div className="grid grid-cols-2 gap-2.5 text-xs">
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-2">
           <div className="text-gray-500 light:text-slate-500 mb-1 text-[10px] uppercase tracking-wide">Expected Range</div>
