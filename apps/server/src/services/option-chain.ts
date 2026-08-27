@@ -30,6 +30,7 @@ import {
   analyzePositionMomentum,
   analyzeOiTrap,
   analyzeTimeDecay,
+  calculateGammaExposure,
 } from '@fno/analytics';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { computeChangeOi } from '../lib/oi-baseline.js';
@@ -231,6 +232,7 @@ async function buildOptionChainUncached(
   const positionMomentum = analyzePositionMomentum(strikes, underlyingChangePercent);
   const oiTrap = analyzeOiTrap(strikes, spotPrice);
   const decay = analyzeTimeDecay(strikes, atmStrike, dte);
+  const gammaExposure = calculateGammaExposure(strikes, spotPrice);
 
   return {
     symbol: underlying,
@@ -260,6 +262,7 @@ async function buildOptionChainUncached(
     positionMomentum,
     oiTrap,
     decay,
+    gammaExposure,
     timestamp: now,
   };
 }

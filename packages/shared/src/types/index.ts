@@ -212,7 +212,32 @@ export interface OptionChain {
   positionMomentum: PositionMomentum;
   oiTrap: OiTrapAnalysis;
   decay: DecayAnalysis;
+  gammaExposure: GammaExposureResult;
   timestamp: number;
+}
+
+export type GammaExposureRegime = 'LONG_GAMMA' | 'SHORT_GAMMA' | 'NEUTRAL';
+
+export interface StrikeGex {
+  strike: number;
+  gex: number;
+}
+
+export interface GammaExposureResult {
+  /**
+   * Net dealer gamma exposure (Γ × OI × 100 × spot² / 10^7, calls positive
+   * / puts negative, summed across strikes). Not a precise rupee-notional
+   * figure — GEX conventions vary on the exact scaling constant, and that
+   * doesn't matter for the two things it's actually used for: the SIGN
+   * (drives `regime`) and the RELATIVE magnitude across strikes (drives
+   * `gammaWallStrike`), both unaffected by the scaling factor chosen.
+   * Treat the absolute number as a comparative index, not a dollar amount.
+   */
+  netGex: number;
+  regime: GammaExposureRegime;
+  /** Strike with the single largest absolute per-strike GEX — often acts as a pin/magnet level into expiry. Null if no strike has any OI-backed gamma. */
+  gammaWallStrike: number | null;
+  perStrike: StrikeGex[];
 }
 
 // --- Option Chain Intelligence (trapping / position momentum / decay / trade setup) ---

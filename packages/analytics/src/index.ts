@@ -8,3 +8,5 @@ export * from './indicators/index.js';
 export * from './trade-setup/index.js';
 export * from './patterns/index.js';
 export * from './candlestick-patterns/index.js';
+export * from './gamma-exposure/index.js';
+export * from './historical-volatility/index.js';

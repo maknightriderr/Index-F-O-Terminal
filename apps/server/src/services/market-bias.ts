@@ -25,6 +25,10 @@ import {
   buildTradeSetup,
   MAX_RISK_REWARD,
   evaluateSpreadProgress,
+  calculateHistoricalVolatility,
+  compareIvToHv,
+  TRADING_DAYS_PER_YEAR,
+  HOURLY_BARS_PER_YEAR,
 } from '@fno/analytics';
 import type {
   Exchange,
@@ -319,6 +323,19 @@ async function computeMarketBias(
   const putWall = chain ? findMaxOiStrike(chain, 'put') : null;
   const callWall = chain ? findMaxOiStrike(chain, 'call') : null;
 
+  // Historical (realized) volatility from the "long" tier's closes — 1H
+  // bars in INTRADAY mode, Daily bars in POSITIONAL — annualized with the
+  // bars-per-year matching that actual granularity (using the wrong
+  // annualization factor would silently under/over-state HV by roughly
+  // sqrt(6.25x), the ratio between daily and hourly bar counts per year).
+  // Compared against ATM IV: IV priced rich vs what the underlying
+  // actually realizes favors selling premium; cheap favors buying — a
+  // second, independent read from IV Rank's "cheap/rich vs its OWN
+  // history" question.
+  const hvBarsPerYear = isPositional ? TRADING_DAYS_PER_YEAR : HOURLY_BARS_PER_YEAR;
+  const hvPct = calculateHistoricalVolatility(c1h.closes, 20, hvBarsPerYear);
+  const ivVsHv = atmIvPct > 0 ? compareIvToHv(atmIvPct, hvPct) : { reading: 'FAIR' as const, spreadPct: null };
+
   // --- Votes (-1 bearish, 0 neutral, +1 bullish) ---
   // Elevated volume relative to the 20-bar average — the bar a "breakout"
   // vote (a fresh Supertrend flip, or price actually outside the Bollinger
@@ -407,6 +424,16 @@ async function computeMarketBias(
     reasoning.push(`${getOIDescription(futuresInterpretation).description} in futures OI`);
   }
   if (chain && atmIvPct > 0) reasoning.push(`ATM IV at ${fmt(atmIvPct)}%`);
+  if (ivVsHv.spreadPct != null && ivVsHv.reading !== 'FAIR') {
+    reasoning.push(
+      `IV ${ivVsHv.reading === 'RICH' ? 'richer' : 'cheaper'} than realized volatility (HV ${fmt(hvPct!, 1)}%, IV ${ivVsHv.spreadPct > 0 ? '+' : ''}${fmt(ivVsHv.spreadPct, 0)}% vs it) — ${ivVsHv.reading === 'RICH' ? 'favors selling' : 'favors buying'} premium`
+    );
+  }
+  if (chain?.gammaExposure && chain.gammaExposure.regime !== 'NEUTRAL') {
+    reasoning.push(
+      `Net ${chain.gammaExposure.regime === 'LONG_GAMMA' ? 'positive' : 'negative'} GEX — dealers likely ${chain.gammaExposure.regime === 'LONG_GAMMA' ? 'dampening moves (range-bound bias)' : 'amplifying moves (trend-following bias)'}${chain.gammaExposure.gammaWallStrike != null ? `, largest concentration at ${fmt(chain.gammaExposure.gammaWallStrike, 0)}` : ''}`
+    );
+  }
   if (Math.abs(volumeRatio - 1) > 0.3) {
     reasoning.push(`Volume ${volumeRatio > 1 ? 'above' : 'below'} its 20-bar average (${fmt(volumeRatio, 2)}x)`);
   }
@@ -464,6 +491,12 @@ async function computeMarketBias(
       pivotPP: pivots?.pp ?? null,
       rsiDivergence: rsiDivergence.signal,
       candlePattern: candlePattern?.pattern ?? null,
+      historicalVolatility: hvPct,
+      ivVsHv: ivVsHv.reading,
+      ivVsHvSpreadPct: ivVsHv.spreadPct,
+      netGex: chain?.gammaExposure.netGex ?? null,
+      gammaRegime: chain?.gammaExposure.regime ?? null,
+      gammaWallStrike: chain?.gammaExposure.gammaWallStrike ?? null,
     },
     timestamp: Date.now(),
   };
