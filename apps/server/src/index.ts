@@ -25,6 +25,7 @@ import { startPatternScanner } from './services/chart-patterns.js';
 import { createAiAssistantRoutes } from './api/ai-assistant.js';
 import { createInstitutionalFlowRoutes } from './api/institutional-flow.js';
 import { createBacktestingRoutes } from './api/backtesting.js';
+import { createNewsRoutes } from './api/news.js';
 import { startInstitutionalFlowScanner } from './services/institutional-flow-scanner.js';
 
 // --- Initialize Provider + Subscription Manager ---
@@ -82,6 +83,7 @@ app.use('/api/alerts', createAlertRoutes());
 app.use('/api/ai-assistant', createAiAssistantRoutes(provider));
 app.use('/api/institutional-flow', createInstitutionalFlowRoutes(provider));
 app.use('/api/backtesting', createBacktestingRoutes());
+app.use('/api/news', createNewsRoutes());
 
 // --- Health Check ---
 

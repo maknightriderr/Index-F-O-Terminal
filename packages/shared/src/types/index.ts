@@ -399,6 +399,16 @@ export interface FnoScannerRow {
   timestamp: number;
 }
 
+// --- News ---
+
+export interface NewsArticle {
+  title: string;
+  url: string;
+  source: string;
+  publishedAt: string; // ISO date
+  snippet: string;
+}
+
 // --- Chart Pattern Detection ---
 
 export type ChartPatternType =

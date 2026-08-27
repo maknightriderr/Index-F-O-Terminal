@@ -18,6 +18,7 @@ import type {
 } from '@fno/shared';
 import { OIBadge } from '@/components/common/badges';
 import { MarketBiasCard, MarketRegimeCard, IntelligenceScoreCard } from '@/components/common/market-intelligence-cards';
+import { NewsPanel } from '@/components/common/news-panel';
 
 const STRIKE_RANGE_OPTIONS = [5, 10, 15, 20];
 const REFRESH_INTERVAL_MS = 15000;
@@ -209,6 +210,12 @@ export function AssetWorkspace() {
           <MarketRegimeCard bias={bias} />
           <IntelligenceScoreCard score={score} symbol={selectedSymbol} />
         </div>
+      </div>
+
+      {/* News */}
+      <div>
+        <SectionLabel icon="📰">News</SectionLabel>
+        <NewsPanel symbol={selectedSymbol} />
       </div>
 
       {/* Option Chain Intelligence */}

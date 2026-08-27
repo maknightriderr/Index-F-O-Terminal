@@ -22,6 +22,7 @@ import type {
   PredictionAccuracyStats,
   WinRateAnalytics,
   TradeSetupRecord,
+  NewsArticle,
 } from '@fno/shared';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
@@ -207,6 +208,10 @@ class ApiClient {
     return this.get<{ bias: MarketBias; score: IntelligenceScore; tradeSetup: TradeSetup }>(
       `/api/market/bias/${symbol}?exchange=${exchange}&mode=${mode}`
     );
+  }
+
+  async getNews(symbol: string) {
+    return this.get<NewsArticle[]>(`/api/news/${symbol}`);
   }
 
   async getHealth() {
