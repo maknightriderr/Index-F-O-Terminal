@@ -105,6 +105,15 @@ function bucketStats(records: TradeSetupRecord[]): Omit<WinRateBucket, 'period'>
   const decisive = wins + losses;
   const returns = records.filter((r) => r.returnPercent != null).map((r) => r.returnPercent!);
 
+  // An EXPIRED close (bias reversed before the fixed target was reached)
+  // still has a real P&L at the moment it closed — see the WinRateBucket
+  // doc comment. Blend those into a second "did this actually make money"
+  // view rather than letting a profitable early exit vanish from both the
+  // win and loss buckets.
+  const profitableCloses = wins + records.filter((r) => r.outcome === 'EXPIRED' && r.returnPercent != null && r.returnPercent > 0).length;
+  const unprofitableCloses = losses + records.filter((r) => r.outcome === 'EXPIRED' && r.returnPercent != null && r.returnPercent < 0).length;
+  const profitableDecisive = profitableCloses + unprofitableCloses;
+
   return {
     total: records.length,
     wins,
@@ -113,6 +122,9 @@ function bucketStats(records: TradeSetupRecord[]): Omit<WinRateBucket, 'period'>
     open,
     winRatePercent: decisive > 0 ? Math.round((wins / decisive) * 1000) / 10 : null,
     avgReturnPercent: returns.length > 0 ? Math.round((returns.reduce((a, b) => a + b, 0) / returns.length) * 100) / 100 : null,
+    profitableCloses,
+    unprofitableCloses,
+    profitableCloseRatePercent: profitableDecisive > 0 ? Math.round((profitableCloses / profitableDecisive) * 1000) / 10 : null,
   };
 }
 

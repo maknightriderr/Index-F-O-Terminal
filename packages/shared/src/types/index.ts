@@ -1072,6 +1072,21 @@ export interface WinRateBucket {
   open: number;
   winRatePercent: number | null; // wins / (wins + losses) — expired/open excluded from the denominator
   avgReturnPercent: number | null;
+  /**
+   * WIN only ever means "hit its exact fixed target" — a position that got
+   * closed EXPIRED because the bias reversed still records its real P&L at
+   * that moment (recordTradeSetupOutcome's `currentValue`), which can be
+   * substantially positive even though the strict target was never reached.
+   * winRatePercent above excludes EXPIRED entirely, so a batch of early-exit
+   * profitable closes reads as "0% win rate" even when the actual calls
+   * were right. This blends them in: profitable = WIN + (EXPIRED with a
+   * positive return), unprofitable = LOSS + (EXPIRED with a negative
+   * return) — EXPIRED at exactly 0% (breakeven) or with no resolvable exit
+   * price counts toward neither, same as OPEN.
+   */
+  profitableCloses: number;
+  unprofitableCloses: number;
+  profitableCloseRatePercent: number | null;
 }
 
 export interface SymbolWinRate extends WinRateBucket {

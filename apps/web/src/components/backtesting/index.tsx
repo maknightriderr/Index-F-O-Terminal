@@ -141,13 +141,23 @@ function OverallSummary({ bucket }: { bucket: WinRateBucket }) {
   }
 
   const winRateColor = bucket.winRatePercent == null ? 'text-gray-400' : bucket.winRatePercent >= 55 ? 'text-emerald-400' : bucket.winRatePercent >= 40 ? 'text-yellow-400' : 'text-red-400';
+  const profitableRateColor = bucket.profitableCloseRatePercent == null ? 'text-gray-400' : bucket.profitableCloseRatePercent >= 55 ? 'text-emerald-400' : bucket.profitableCloseRatePercent >= 40 ? 'text-yellow-400' : 'text-red-400';
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
       <Card accent="border-t-cyan-500/50">
-        <div className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-1.5">Win Rate</div>
+        <div className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-1.5" title="Only counts a position as a win if it hit its exact fixed target — an early exit on a confirmed bias reversal is EXPIRED regardless of P&L, even if it closed up.">
+          Win Rate
+        </div>
         <div className={`text-3xl font-bold tabular-nums ${winRateColor}`}>{bucket.winRatePercent != null ? `${bucket.winRatePercent}%` : '—'}</div>
         <div className="text-[10px] text-gray-500 light:text-slate-500 mt-1">{bucket.wins}W / {bucket.losses}L</div>
+      </Card>
+      <Card accent="border-t-violet-500/50">
+        <div className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-1.5" title="WIN plus any EXPIRED close (bias reversed before target) that was still profitable at the moment it closed — the more honest 'did this actually make money' read.">
+          Profitable Close Rate
+        </div>
+        <div className={`text-3xl font-bold tabular-nums ${profitableRateColor}`}>{bucket.profitableCloseRatePercent != null ? `${bucket.profitableCloseRatePercent}%` : '—'}</div>
+        <div className="text-[10px] text-gray-500 light:text-slate-500 mt-1">{bucket.profitableCloses}↑ / {bucket.unprofitableCloses}↓</div>
       </Card>
       <Card>
         <div className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-1.5">Total Setups</div>
@@ -191,6 +201,7 @@ function WinRateTable({ buckets, periodLabel }: { buckets: WinRateBucket[]; peri
                 <th className="text-right px-2 py-1.5 font-medium">Expired</th>
                 <th className="text-right px-2 py-1.5 font-medium">Open</th>
                 <th className="text-right px-3 py-1.5 font-medium">Win Rate</th>
+                <th className="text-right px-3 py-1.5 font-medium" title="WIN plus any EXPIRED close that was still profitable when it closed">Profitable Close Rate</th>
                 <th className="text-right px-2 py-1.5 font-medium">Avg Return</th>
               </tr>
             </thead>
@@ -213,6 +224,19 @@ function WinRateTable({ buckets, periodLabel }: { buckets: WinRateBucket[]; peri
                       </div>
                       <span className="font-semibold text-gray-200 light:text-slate-800 tabular-nums w-10 text-right">
                         {b.winRatePercent != null ? `${b.winRatePercent}%` : '—'}
+                      </span>
+                    </div>
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="flex items-center gap-1.5 justify-end">
+                      <div className="w-14 h-1.5 bg-gray-800 light:bg-slate-200 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full bar-animated ${b.profitableCloseRatePercent != null && b.profitableCloseRatePercent >= 50 ? 'bg-violet-500' : 'bg-red-500'}`}
+                          style={{ width: `${b.profitableCloseRatePercent ?? 0}%` }}
+                        />
+                      </div>
+                      <span className="font-semibold text-gray-200 light:text-slate-800 tabular-nums w-10 text-right">
+                        {b.profitableCloseRatePercent != null ? `${b.profitableCloseRatePercent}%` : '—'}
                       </span>
                     </div>
                   </td>
