@@ -29,6 +29,7 @@ import {
   compareIvToHv,
   TRADING_DAYS_PER_YEAR,
   HOURLY_BARS_PER_YEAR,
+  calculateExpectedMove,
 } from '@fno/analytics';
 import type {
   Exchange,
@@ -944,7 +945,27 @@ async function resolveStickyTradeSetup(
   // in principle refresh in between.
   const vix = await lookupIndiaVix(provider, exchange);
   const slPremiumPct = isPositional ? POSITIONAL_SL_PREMIUM_PCT : undefined;
-  const fresh = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, chain.expectedMove.points, ivRank, slPremiumPct, vix, chain.dte);
+
+  // chain.expectedMove.points is IV × sqrt(chain.dte / 365) — correct for
+  // "where might price land by THIS OPTION'S expiry" (what the Option Chain
+  // page shows), but an INTRADAY naked long's sticky setup rolls over at
+  // day-end regardless of whether it resolved (see the day !== today check
+  // above) — it realistically has at most the rest of today to hit target
+  // before being forced EXPIRED. Feeding it a target scaled to the full
+  // ~20-30 day chain DTE asks it to cover a multi-week move within a single
+  // session — for CRUDEOIL's ~20-day monthly that's roughly a 4-5x larger
+  // move than sqrt(1/365) implies, which is *why* targets were essentially
+  // never reached (0 WINs across 40 recorded setups). POSITIONAL genuinely
+  // is meant to run toward the chain's full remaining life, so it keeps
+  // using chain.expectedMove.points as-is.
+  const targetExpectedMovePoints = isPositional
+    ? chain.expectedMove.points
+    : (() => {
+        const atmIvPct = computeAtmIv(chain);
+        return atmIvPct > 0 ? calculateExpectedMove(chain.spotPrice, atmIvPct / 100, 1, underlying).expectedMove : chain.expectedMove.points;
+      })();
+
+  const fresh = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, targetExpectedMovePoints, ivRank, slPremiumPct, vix, chain.dte);
 
   if (!fresh.available) {
     // Clear any previously locked setup now that conditions no longer
