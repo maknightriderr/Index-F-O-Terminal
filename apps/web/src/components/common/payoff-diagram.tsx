@@ -27,9 +27,15 @@ import type { TradeSetup, OptionChain, OptionType } from '@fno/shared';
 // ============================================================
 
 const POINTS = 80;
-const W = 640;
-const H = 260;
-const MARGIN = { l: 46, r: 12, t: 12, b: 28 };
+// Sized for the ~320px sidebar column this now lives in (moved out of the
+// wide main column) — SVG text scales with the viewBox, not the container,
+// so a viewBox this close to the real rendered width keeps it near 1:1
+// instead of shrinking to near-illegible size. X-axis labels are plain
+// HTML below the chart (crisp at any size) rather than in the SVG, since
+// they don't need to track chart geometry the way the Y-axis gridlines do.
+const W = 300;
+const H = 190;
+const MARGIN = { l: 36, r: 8, t: 8, b: 8 };
 
 function intrinsicValue(spot: number, strike: number, side: OptionType): number {
   return side === 'CE' ? Math.max(spot - strike, 0) : Math.max(strike - spot, 0);
@@ -154,7 +160,7 @@ export function PayoffDiagram({ setup, chain }: { setup: TradeSetup; chain: Opti
 
       {/* Fixed aspect-ratio wrapper keeps height bounded/predictable at any
           container width — do not switch back to h-auto + preserveAspectRatio=none. */}
-      <div className="w-full" style={{ aspectRatio: `${W} / ${H}`, maxHeight: 260 }}>
+      <div className="w-full" style={{ aspectRatio: `${W} / ${H}`, maxHeight: 220 }}>
         <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-full block">
           {/* Expected move band */}
           {emHigh > emLow && (
@@ -165,7 +171,7 @@ export function PayoffDiagram({ setup, chain }: { setup: TradeSetup; chain: Opti
           {[yMax, 0, yMin].map((y, i) => (
             <g key={i}>
               <line x1={MARGIN.l} y1={yToPx(y)} x2={W - MARGIN.r} y2={yToPx(y)} stroke="currentColor" className="text-gray-800 light:text-slate-200" strokeWidth={1} />
-              <text x={MARGIN.l - 6} y={yToPx(y)} textAnchor="end" dominantBaseline="middle" className="fill-gray-500 light:fill-slate-400" fontSize={10}>
+              <text x={MARGIN.l - 5} y={yToPx(y)} textAnchor="end" dominantBaseline="middle" className="fill-gray-500 light:fill-slate-400" fontSize={11}>
                 {compact(y)}
               </text>
             </g>
@@ -198,18 +204,14 @@ export function PayoffDiagram({ setup, chain }: { setup: TradeSetup; chain: Opti
           {/* Current spot marker */}
           <line x1={xToPx(chain.spotPrice)} y1={MARGIN.t} x2={xToPx(chain.spotPrice)} y2={H - MARGIN.b} stroke="rgb(34 211 238)" strokeWidth={1.5} />
           <circle cx={xToPx(chain.spotPrice)} cy={yToPx(spotPnl)} r={4.5} fill="rgb(34 211 238)" stroke="#0d0d14" strokeWidth={1.5} />
-
-          {/* X-axis labels */}
-          <text x={MARGIN.l} y={H - 8} textAnchor="start" className="fill-gray-500 light:fill-slate-400" fontSize={10}>
-            {formatIndianNumber(xMin, 0)}
-          </text>
-          <text x={W - MARGIN.r} y={H - 8} textAnchor="end" className="fill-gray-500 light:fill-slate-400" fontSize={10}>
-            {formatIndianNumber(xMax, 0)}
-          </text>
-          <text x={(MARGIN.l + W - MARGIN.r) / 2} y={H - 8} textAnchor="middle" className="fill-gray-600 light:fill-slate-400" fontSize={10}>
-            Spot price at expiry
-          </text>
         </svg>
+      </div>
+      {/* X-axis labels as plain HTML — crisp at any container width, unlike
+          SVG text which scales (and can shrink to illegible) with the viewBox. */}
+      <div className="flex items-center justify-between text-[10px] text-gray-500 light:text-slate-400 tabular-nums px-0.5 mt-1">
+        <span>{formatIndianNumber(xMin, 0)}</span>
+        <span className="text-gray-600 light:text-slate-400">Spot price at expiry</span>
+        <span>{formatIndianNumber(xMax, 0)}</span>
       </div>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-gray-500 light:text-slate-500 mt-2">

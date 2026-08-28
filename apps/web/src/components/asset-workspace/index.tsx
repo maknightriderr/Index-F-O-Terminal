@@ -178,7 +178,13 @@ export function AssetWorkspace() {
               </span>
             </div>
             {spot !== undefined && (
-              <div className="text-4xl font-bold tabular-nums text-gray-50 light:text-slate-900 tracking-tight">{formatIndianNumber(spot, 2)}</div>
+              <div
+                className={`text-4xl font-bold tabular-nums text-gray-50 light:text-slate-900 tracking-tight ${
+                  bias.direction === 'BULLISH' ? 'text-glow-emerald' : bias.direction === 'BEARISH' ? 'text-glow-red' : 'text-glow-cyan'
+                }`}
+              >
+                {formatIndianNumber(spot, 2)}
+              </div>
             )}
           </div>
           {chain && (
@@ -266,14 +272,6 @@ export function AssetWorkspace() {
                 <TradeSetupCard setup={tradeSetup} />
               </div>
             </div>
-          )}
-
-          {/* Payoff Diagram — P&L at expiry for the current Trade Setup, with
-              expected move / max pain / OI walls overlaid, so the risk/reward
-              shown in TradeSetupCard can actually be seen against the likely
-              price range instead of read as bare numbers. */}
-          {chain && tradeSetup.available && (
-            <PayoffDiagram setup={tradeSetup} chain={chain} />
           )}
 
           {/* Futures Strip */}
@@ -370,6 +368,12 @@ export function AssetWorkspace() {
         </div>
 
         <div className="xl:sticky xl:top-4 space-y-4">
+          {chain && tradeSetup.available && (
+            <div>
+              <SectionLabel icon="📈">Payoff Diagram</SectionLabel>
+              <PayoffDiagram setup={tradeSetup} chain={chain} />
+            </div>
+          )}
           <div>
             <SectionLabel icon="📰">News</SectionLabel>
             <NewsPanel symbol={selectedSymbol} />
@@ -399,7 +403,11 @@ function FuturesCard({ contract }: { contract: FuturesData }) {
         <span className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider">{EXPIRY_LABEL_TEXT[contract.expiryLabel]}</span>
         <span className="text-[10px] text-gray-500 light:text-slate-500">DTE {contract.dte}</span>
       </div>
-      <div className="text-xl font-bold tabular-nums text-gray-50 light:text-slate-900 mb-1.5">
+      <div
+        className={`text-xl font-bold tabular-nums text-gray-50 light:text-slate-900 mb-1.5 ${
+          contract.premiumDiscountType === 'PREMIUM' ? 'text-glow-emerald' : 'text-glow-red'
+        }`}
+      >
         {formatIndianNumber(contract.futuresPrice, 2)}
       </div>
       <div className="flex items-center gap-2 mb-3">
