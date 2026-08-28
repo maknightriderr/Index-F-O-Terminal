@@ -5,7 +5,7 @@ import { useLiveIndices } from '@/lib/use-live-indices';
 import { useAllIndices } from '@/lib/use-all-indices';
 import { useFnoScanner } from '@/lib/use-fno-scanner';
 import { useMarketBias } from '@/lib/use-market-bias';
-import { formatIndianNumber, formatPercent, formatCompact } from '@fno/shared';
+import { formatIndianNumber, formatPercent, formatCompact, isMarketOpen } from '@fno/shared';
 import type { Exchange, BiasDirection, OIInterpretation } from '@fno/shared';
 import { OIBadge, BiasBadge, ScoreBadge } from '@/components/common/badges';
 import { AddAssetButton } from '@/components/common/add-asset-button';
@@ -193,16 +193,34 @@ export function Dashboard() {
     [fnoRows]
   );
 
+  // Outside NSE trading hours, the broker's live feed legitimately has no
+  // fresh ticks to serve — quote requests come back empty (not an error),
+  // which used to trip the same "broker connection offline" alarm as an
+  // actual outage during market hours. That's a false alarm: the session is
+  // fine, there's just nothing live to report right now. Distinguish the
+  // two so the banner only reads as urgent when it actually is.
+  const marketClosed = !isMarketOpen('NSE');
+
   return (
     <div className="p-4 space-y-4 min-h-full">
       {/* Offline / Mock Notice */}
       {!indicesLive && !fnoLive && (
-        <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2.5 text-amber-400 light:text-amber-700 text-xs font-medium animate-slide-in backdrop-blur-sm flex items-center justify-between">
+        <div className={`rounded-xl px-4 py-2.5 text-xs font-medium animate-slide-in backdrop-blur-sm flex items-center justify-between border ${
+          marketClosed
+            ? 'bg-gray-800/40 light:bg-slate-100 border-gray-700/40 light:border-slate-200 text-gray-400 light:text-slate-500'
+            : 'bg-amber-500/10 border-amber-500/20 text-amber-400 light:text-amber-700'
+        }`}>
           <div className="flex items-center gap-2">
-            <span className="text-sm">⚠️</span>
-            <span>Live broker connection offline — displaying simulated real-time intelligence feeds.</span>
+            <span className="text-sm">{marketClosed ? '🌙' : '⚠️'}</span>
+            <span>
+              {marketClosed
+                ? 'Markets are closed — live feeds resume next session. Showing simulated placeholder data.'
+                : 'Live broker connection offline — displaying simulated real-time intelligence feeds.'}
+            </span>
           </div>
-          <span className="text-[11px] text-amber-400/70 font-mono">Simulated Market Feeds Active</span>
+          <span className={`text-[11px] font-mono ${marketClosed ? 'text-gray-500 light:text-slate-400' : 'text-amber-400/70'}`}>
+            {marketClosed ? 'Market Closed' : 'Simulated Market Feeds Active'}
+          </span>
         </div>
       )}
 

@@ -19,6 +19,7 @@ import type {
 import { OIBadge } from '@/components/common/badges';
 import { MarketBiasCard, MarketRegimeCard, IntelligenceScoreCard } from '@/components/common/market-intelligence-cards';
 import { NewsPanel } from '@/components/common/news-panel';
+import { EventCalendarPanel } from '@/components/common/event-calendar-panel';
 
 const STRIKE_RANGE_OPTIONS = [5, 10, 15, 20];
 const REFRESH_INTERVAL_MS = 15000;
@@ -357,9 +358,15 @@ export function AssetWorkspace() {
           )}
         </div>
 
-        <div className="xl:sticky xl:top-4">
-          <SectionLabel icon="📰">News</SectionLabel>
-          <NewsPanel symbol={selectedSymbol} />
+        <div className="xl:sticky xl:top-4 space-y-4">
+          <div>
+            <SectionLabel icon="📰">News</SectionLabel>
+            <NewsPanel symbol={selectedSymbol} />
+          </div>
+          <div>
+            <SectionLabel icon="📅">Event Calendar</SectionLabel>
+            <EventCalendarPanel chain={chain} futures={futures} symbol={selectedSymbol} />
+          </div>
         </div>
       </div>
     </div>
