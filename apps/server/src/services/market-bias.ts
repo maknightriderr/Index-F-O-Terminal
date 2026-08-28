@@ -44,11 +44,12 @@ import type {
   TradingMode,
   GammaExposureRegime,
 } from '@fno/shared';
-import { KNOWN_INDEX_TOKENS, CM_SEGMENT, calculateDTE } from '@fno/shared';
+import { KNOWN_INDEX_TOKENS, CM_SEGMENT, calculateDTE, INDEX_SYMBOLS } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveSpotToken, resolveNearestFuturesContract, buildOptionChain } from './option-chain.js';
 import { buildFuturesData } from './futures.js';
 import { scanFnoUniverse } from './fno-scanner.js';
+import { getCorporateActionsForSymbol } from './corporate-actions.js';
 import { cached } from '../lib/cache.js';
 import { redis } from '../lib/redis.js';
 import { sql } from '../lib/db.js';
@@ -723,6 +724,101 @@ async function lookupIndiaVix(provider: MarketDataProvider, exchange: Exchange):
   }
 }
 
+// --- Reliability filters ---
+// Three cross-checks against data this app already computes elsewhere,
+// run right before a fresh setup would be generated — a setup that passes
+// its own confidence/liquidity/R:R bar can still be individually
+// unreliable if it's fighting the broader market, landing on a corporate-
+// action ex-date, or contradicting an independently-computed institutional
+// read. None of these add a new signal source; they just stop generating
+// in isolation from signals the app already has.
+
+// getPredictionHistory in institutional-flow-scanner.ts isn't imported
+// here — that file imports buildMarketBias from this one, so importing it
+// back would create a circular module dependency. Reading the same
+// `signals` rows directly (same pattern backtesting.ts and the scanner
+// itself already use — several services query this shared table
+// independently rather than going through each other) avoids that.
+async function lookupInstitutionalDirection(symbol: string): Promise<BiasDirection | null> {
+  try {
+    const rows = await sql<{ direction: BiasDirection }[]>`
+      SELECT direction FROM signals
+      WHERE symbol = ${symbol} AND signal_type = 'NEXT_DAY_BIAS'
+      ORDER BY time DESC
+      LIMIT 1
+    `;
+    return rows[0]?.direction ?? null;
+  } catch (err: any) {
+    logger.warn({ error: err.message, symbol }, 'Institutional-flow direction lookup failed');
+    return null;
+  }
+}
+
+async function lookupCachedBiasDirection(exchange: Exchange, symbol: string, mode: TradingMode): Promise<BiasDirection | null> {
+  try {
+    const raw = await redis.get(`bias_result:${exchange}:${symbol}:${mode}`);
+    if (!raw) return null;
+    return (JSON.parse(raw) as MarketBiasResult).bias.direction;
+  } catch (err: any) {
+    logger.warn({ error: err.message, symbol }, 'Cached bias direction lookup failed');
+    return null;
+  }
+}
+
+/** Non-null return is the reason a fresh setup should NOT be generated right now. */
+async function checkReliabilityFilters(
+  underlying: string,
+  exchange: Exchange,
+  direction: BiasDirection,
+  mode: TradingMode
+): Promise<string | null> {
+  const isNseStock = exchange === 'NSE' && !(INDEX_SYMBOLS as readonly string[]).includes(underlying);
+
+  // Corporate-action ex-date today or tomorrow — the price move around it
+  // is the action itself (dividend/bonus/split adjustment), not a
+  // technical signal, and reads as a false breakout/breakdown either way.
+  if (isNseStock) {
+    try {
+      const actions = await getCorporateActionsForSymbol(underlying);
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      const upcoming = actions.find((a) => a.exDate === today || a.exDate === tomorrow);
+      if (upcoming) {
+        return `${upcoming.type} ex-date ${upcoming.exDate === today ? 'today' : 'tomorrow'} (${upcoming.purpose}) — the price move around this is the corporate action, not a technical signal.`;
+      }
+    } catch (err: any) {
+      logger.warn({ error: err.message, underlying }, 'Corporate-action reliability check failed — proceeding ungated');
+    }
+  }
+
+  if (direction === 'NEUTRAL') return null; // nothing left to disagree with
+
+  // Broader-market alignment — only meaningful for an individual stock
+  // against the index; an index can't fight itself, and MCX/BSE commodities
+  // have no real equity-index relationship to check against.
+  if (isNseStock) {
+    const niftyDirection = await lookupCachedBiasDirection('NSE', 'NIFTY', mode);
+    if (niftyDirection != null && niftyDirection !== 'NEUTRAL' && niftyDirection !== direction) {
+      return `NIFTY itself is currently ${niftyDirection} — a ${direction} setup on ${underlying} would be fighting the broader market.`;
+    }
+  }
+
+  // Institutional Flow's next-day read for the relevant broad index —
+  // BANKNIFTY's own prediction when the setup IS BANKNIFTY, NIFTY's
+  // otherwise. Institutional Flow only covers these two symbols, and only
+  // NIFTY/BANKNIFTY themselves plus NSE stocks have a real relationship to
+  // either — MCX/BSE are skipped, same reasoning as the alignment check.
+  if (exchange === 'NSE') {
+    const relevantIndex = underlying === 'BANKNIFTY' ? 'BANKNIFTY' : 'NIFTY';
+    const predicted = await lookupInstitutionalDirection(relevantIndex);
+    if (predicted != null && predicted !== 'NEUTRAL' && predicted !== direction) {
+      return `Institutional Flow's next-day read for ${relevantIndex} is ${predicted}, disagreeing with this ${direction} setup.`;
+    }
+  }
+
+  return null;
+}
+
 // --- Sticky Trade Setup ---
 // Recomputing the setup fresh on every poll made entry/SL/target track the
 // live option premium tick-by-tick — useless as a "setup" since a real
@@ -936,6 +1032,16 @@ async function resolveStickyTradeSetup(
     // branch above ever ran for it. Close it out as EXPIRED first so the
     // self-heal doesn't leave a zombie row behind.
     await recordTradeSetupOutcome(stored!, 'EXPIRED', currentExitValue(chain, stored!));
+  }
+
+  const unreliableReason = await checkReliabilityFilters(underlying, exchange, direction, mode);
+  if (unreliableReason != null) {
+    try {
+      await redis.del(key);
+    } catch (err: any) {
+      logger.warn({ error: err.message, underlying }, 'Sticky trade setup clear failed');
+    }
+    return { available: false, reason: unreliableReason };
   }
 
   // ivRank is now passed in by the caller (computeMarketBias hoisted the
