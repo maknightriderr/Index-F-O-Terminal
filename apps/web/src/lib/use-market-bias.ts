@@ -16,6 +16,17 @@ const RETRY_DELAY_MS = 5000;
 
 const NO_SETUP: TradeSetup = { available: false, reason: 'Live signal engine unreachable.' };
 
+// Module-level so a revisited symbol/exchange/mode combination shows its
+// last-known bias instantly on switch instead of either (a) blanking to the
+// generic NIFTY mock, or (b) — the actual prior behavior, since state here
+// simply wasn't reset on prop change — silently showing the PREVIOUS
+// symbol's bias/regime/score mislabeled under the new symbol's header until
+// the first fetch for the new key resolved.
+const biasCache = new Map<string, { bias: MarketBias; score: IntelligenceScore; tradeSetup: TradeSetup }>();
+function biasCacheKey(symbol: string, exchange: string, mode: TradingMode): string {
+  return `${exchange}:${symbol}:${mode}`;
+}
+
 /**
  * Live Market Bias / Regime / Intelligence Score / Trade Setup for a symbol
  * — falls back to the NIFTY mock (clearly flagged via `isLive`) if the
@@ -42,13 +53,24 @@ export function useMarketBias(
 
   useEffect(() => {
     let cancelled = false;
-    // Reset live tracking when symbol or mode changes
-    hasReceivedLive.current = false;
+    const key = biasCacheKey(symbol, exchange, mode);
+    const cached = biasCache.get(key);
+
+    // Sync to this key's cache (or the mock, if never fetched before) the
+    // moment symbol/exchange/mode changes — without this, whatever was on
+    // screen for the PREVIOUS key stays visible, mislabeled as the new
+    // symbol/mode, until the first fetch below resolves.
+    setBias(cached?.bias ?? MOCK_NIFTY_BIAS);
+    setScore(cached?.score ?? MOCK_NIFTY_SCORE);
+    setTradeSetup(cached?.tradeSetup ?? NO_SETUP);
+    setIsLive(!!cached);
+    hasReceivedLive.current = !!cached;
 
     const fetchBias = async () => {
       try {
         const data = await api.getMarketBias(symbol, exchange, mode);
         if (cancelled) return;
+        biasCache.set(key, data);
         setBias(data.bias);
         setScore(data.score);
         setTradeSetup(data.tradeSetup);
@@ -62,6 +84,7 @@ export function useMarketBias(
           if (cancelled) return;
           const data = await api.getMarketBias(symbol, exchange, mode);
           if (cancelled) return;
+          biasCache.set(key, data);
           setBias(data.bias);
           setScore(data.score);
           setTradeSetup(data.tradeSetup);
@@ -69,8 +92,10 @@ export function useMarketBias(
           hasReceivedLive.current = true;
         } catch {
           if (cancelled) return;
-          // If we previously had live data, keep it (don't reset to mocks).
-          // Only mark as non-live if we never received live data at all.
+          // If we previously had live data (this poll cycle or an earlier
+          // visit to this same symbol/exchange/mode), keep it rather than
+          // resetting to mocks. Only mark as non-live if we never received
+          // live data for this key at all.
           if (!hasReceivedLive.current) {
             setIsLive(false);
           }

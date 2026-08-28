@@ -23,6 +23,21 @@ import { NewsPanel } from '@/components/common/news-panel';
 const STRIKE_RANGE_OPTIONS = [5, 10, 15, 20];
 const REFRESH_INTERVAL_MS = 15000;
 
+// Module-level (survives across switches — AssetWorkspace is one persistent
+// instance reused for every tab, not remounted per tab) so switching BACK
+// to an already-visited symbol shows its last-known chain/futures instantly
+// instead of blanking to "Loading workspace…" every single time, even for
+// a tab the user was just on seconds ago. A background refresh still runs
+// (see fetchAll), this only avoids the visible flash while it does.
+interface CachedWorkspaceData {
+  chain: OptionChain | null;
+  futures: FuturesChainResponse | null;
+}
+const workspaceCache = new Map<string, CachedWorkspaceData>();
+function workspaceCacheKey(exchange: string, symbol: string): string {
+  return `${exchange}:${symbol}`;
+}
+
 /**
  * Everything for one asset in one place: spot header, futures snapshot,
  * and the full option chain — this is what a tab in the AssetTabBar opens.
@@ -46,17 +61,28 @@ export function AssetWorkspace() {
       if (!selectedSymbol) return;
       const requestSymbol = selectedSymbol;
       const requestExchange = selectedExchange;
+      const requestKey = workspaceCacheKey(requestExchange, requestSymbol);
       if (!silent) setLoading(true);
       setError(null);
 
       const [chainResult, futuresResult] = await Promise.allSettled([
-        api.getOptionChain(selectedSymbol, {
-          exchange: selectedExchange,
+        api.getOptionChain(requestSymbol, {
+          exchange: requestExchange,
           expiry: selectedExpiry || undefined,
           strikeRange,
         }),
-        api.getFutures(selectedSymbol, selectedExchange),
+        api.getFutures(requestSymbol, requestExchange),
       ]);
+
+      // Cache whatever came back under the REQUESTED symbol's key regardless
+      // of whether the user has since switched away — a failed leg keeps
+      // whatever was cached before rather than overwriting it with null, so
+      // one bad background poll can't evict otherwise-good cached data.
+      const prevCached = workspaceCache.get(requestKey);
+      workspaceCache.set(requestKey, {
+        chain: chainResult.status === 'fulfilled' ? chainResult.value : prevCached?.chain ?? null,
+        futures: futuresResult.status === 'fulfilled' ? futuresResult.value : prevCached?.futures ?? null,
+      });
 
       // The user may have switched tabs while this request was in flight —
       // a late response for the asset they left must not overwrite what's
@@ -85,17 +111,23 @@ export function AssetWorkspace() {
     [selectedSymbol, selectedExchange, selectedExpiry, strikeRange, setSelectedExpiry]
   );
 
-  // Clear stale data from the previously-active asset immediately on switch,
-  // so a slow or failing fetch for the new asset can't leave the old asset's
-  // option chain on screen under the new asset's header.
+  // On switch, restore this symbol's last-known data from cache instead of
+  // blanking to null — a revisit shows instantly rather than flashing
+  // "Loading workspace…" every time. A genuinely new-to-this-session symbol
+  // still has nothing cached, so it falls back to the original blank state.
   useEffect(() => {
-    setChain(null);
-    setFutures(null);
+    const key = selectedSymbol ? workspaceCacheKey(selectedExchange, selectedSymbol) : null;
+    const cached = key ? workspaceCache.get(key) : undefined;
+    setChain(cached?.chain ?? null);
+    setFutures(cached?.futures ?? null);
     setError(null);
   }, [selectedSymbol, selectedExchange]);
 
   useEffect(() => {
-    fetchAll();
+    const key = selectedSymbol ? workspaceCacheKey(selectedExchange, selectedSymbol) : null;
+    // Cache hit → refresh quietly in the background (good data is already on
+    // screen); cache miss → behave exactly as before (visible loading state).
+    fetchAll(!!(key && workspaceCache.has(key)));
     const interval = setInterval(() => fetchAll(true), REFRESH_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [fetchAll]);
