@@ -825,7 +825,7 @@ async function resolveStickyTradeSetup(
       // no trailing-stop this pass (the naked long's premium-based trail
       // doesn't translate directly to a multi-leg position's P&L; a
       // reasonable further refinement, not built here).
-      const legPrices = stored!.legs.map((l) => ({ action: l.action, price: findLeg(chain, l.strike, l.side)?.ltp ?? null }));
+      const legPrices = stored!.legs.map((l) => ({ action: l.action, price: legLtpOrNull(chain, l.strike, l.side) }));
       const progress = evaluateSpreadProgress(legPrices, stored!.netPremium!, stored!.maxProfit!, stored!.maxLoss!);
       currentValue = progress.currentValue;
       hitSL = progress.hitStop;
@@ -834,8 +834,7 @@ async function resolveStickyTradeSetup(
       // SL/target are about the option's own price, not the current bias
       // read — check them first and unconditionally, so a real win/loss is
       // never masked by a same-tick direction flicker.
-      const leg = findLeg(chain, stored!.strike!, stored!.side!);
-      const currentLtp = leg?.ltp ?? null;
+      const currentLtp = legLtpOrNull(chain, stored!.strike!, stored!.side!);
       currentValue = currentLtp;
 
       // Trailing stop — naked long only. Ratchet stopLoss up as price
@@ -1075,15 +1074,31 @@ function findLeg(chain: OptionChain, strike: number, side: 'CE' | 'PE') {
   return side === 'CE' ? entry?.call : entry?.put;
 }
 
+// A found leg with ltp<=0 is NOT a real price of zero — it's the broker
+// reporting no live trade for that strike (illiquid, or an off-hours poll
+// with no fresh tick), the exact same condition buildNakedLong itself
+// already refuses to build a setup from (`leg.ltp <= 0`). Without this
+// guard, `?? null` only substitutes for null/undefined — 0 sails straight
+// through as a "real" price, and since 0 is <= any positive stopLoss, a
+// single bad/stale tick falsely registers a stop-loss hit and records the
+// exit at 0, producing an exact -100.00% "loss" that never actually
+// happened. Found via a backtesting review: every recorded LOSS was
+// showing precisely -100.00% regardless of the position's actual SL
+// distance — the fingerprint of this bug, not real trading outcomes.
+function legLtpOrNull(chain: OptionChain, strike: number, side: 'CE' | 'PE'): number | null {
+  const ltp = findLeg(chain, strike, side)?.ltp;
+  return ltp != null && ltp > 0 ? ltp : null;
+}
+
 /** Mark-to-market value of a stored setup right now — a single leg's LTP for a naked long, or the net cost-to-close for a spread. Null if any required leg's quote is currently unavailable. */
 function currentExitValue(chain: OptionChain, stored: StoredTradeSetup): number | null {
   if (stored.structureType === 'SPREAD' && stored.legs) {
-    const prices = stored.legs.map((l) => findLeg(chain, l.strike, l.side)?.ltp ?? null);
+    const prices = stored.legs.map((l) => legLtpOrNull(chain, l.strike, l.side));
     if (prices.some((p) => p == null)) return null;
     return round2(stored.legs.reduce((sum, l, i) => sum + (l.action === 'BUY' ? prices[i]! : -prices[i]!), 0));
   }
   if (stored.strike == null || !stored.side) return null;
-  return findLeg(chain, stored.strike, stored.side)?.ltp ?? null;
+  return legLtpOrNull(chain, stored.strike, stored.side);
 }
 
 // --- Helpers ---
