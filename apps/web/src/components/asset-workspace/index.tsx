@@ -512,10 +512,11 @@ function Th({ children, right, left, border }: { children: React.ReactNode; righ
 
 function SummaryTile({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: 'emerald' | 'red' | 'gray' }) {
   const color = accent === 'emerald' ? 'text-emerald-400 light:text-emerald-700' : accent === 'red' ? 'text-red-400 light:text-red-700' : 'text-gray-100 light:text-slate-800';
+  const glow = accent === 'emerald' ? 'text-glow-emerald' : accent === 'red' ? 'text-glow-red' : 'text-glow-cyan';
   return (
     <div className="bg-gradient-to-b from-[#151522] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 rounded-xl p-3.5 shadow-[0_8px_28px_-14px_rgba(0,0,0,0.75)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.12)] hover:border-gray-700/80 light:hover:border-slate-300 hover:shadow-[0_14px_36px_-14px_rgba(0,0,0,0.85)] transition-all duration-200">
       <div className="text-[10px] text-gray-500 light:text-slate-500 uppercase tracking-wider mb-1.5">{label}</div>
-      <div className={`text-xl font-bold tabular-nums ${color}`}>{value}</div>
+      <div className={`text-2xl font-bold tabular-nums tracking-tight ${color} ${glow}`}>{value}</div>
       {sub && <div className="text-[10px] text-gray-500 light:text-slate-500 mt-1">{sub}</div>}
     </div>
   );
@@ -664,18 +665,18 @@ function TradeSetupCard({ setup }: { setup: TradeSetup }) {
         <div className="text-[10px] text-gray-500 light:text-slate-500 mb-2 leading-snug">
           {setup.legs?.map((l) => `${l.action} ${l.side} ${formatIndianNumber(l.strike, 0)} @ ${l.premium.toFixed(2)}`).join(' · ')}
         </div>
-        <div className="grid grid-cols-3 gap-1.5 text-[11px]">
+        <div className="grid grid-cols-3 gap-1.5">
           <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
             <div className="text-gray-500 light:text-slate-500 text-[10px]">Net {isCredit ? 'Credit' : 'Debit'}</div>
-            <div className="text-gray-200 light:text-slate-800 font-semibold tabular-nums">{Math.abs(setup.netPremium ?? 0).toFixed(2)}</div>
+            <div className="text-gray-200 light:text-slate-800 font-bold tabular-nums text-base text-glow-cyan">{Math.abs(setup.netPremium ?? 0).toFixed(2)}</div>
           </div>
           <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
             <div className="text-gray-500 light:text-slate-500 text-[10px]">Max Loss</div>
-            <div className="text-red-400 font-semibold tabular-nums">{setup.maxLoss!.toFixed(2)}</div>
+            <div className="text-red-400 font-bold tabular-nums text-base text-glow-red">{setup.maxLoss!.toFixed(2)}</div>
           </div>
           <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
             <div className="text-gray-500 light:text-slate-500 text-[10px]">Max Profit</div>
-            <div className="text-emerald-400 font-semibold tabular-nums">{setup.maxProfit!.toFixed(2)}</div>
+            <div className="text-emerald-400 font-bold tabular-nums text-base text-glow-emerald">{setup.maxProfit!.toFixed(2)}</div>
           </div>
         </div>
         <div className="text-[10px] text-gray-500 light:text-slate-500 mt-1.5">
@@ -701,18 +702,18 @@ function TradeSetupCard({ setup }: { setup: TradeSetup }) {
         </span>
         <span className="text-[10px] text-gray-400 light:text-slate-500 font-medium">R:R {setup.riskReward!.toFixed(2)}</span>
       </div>
-      <div className="grid grid-cols-3 gap-1.5 text-[11px]">
+      <div className="grid grid-cols-3 gap-1.5">
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
           <div className="text-gray-500 light:text-slate-500 text-[10px]">Entry</div>
-          <div className="text-gray-200 light:text-slate-800 font-semibold tabular-nums">{setup.entry!.toFixed(2)}</div>
+          <div className="text-gray-200 light:text-slate-800 font-bold tabular-nums text-base text-glow-cyan">{setup.entry!.toFixed(2)}</div>
         </div>
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
           <div className="text-gray-500 light:text-slate-500 text-[10px]">SL</div>
-          <div className="text-red-400 font-semibold tabular-nums">{setup.stopLoss!.toFixed(2)}</div>
+          <div className="text-red-400 font-bold tabular-nums text-base text-glow-red">{setup.stopLoss!.toFixed(2)}</div>
         </div>
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
           <div className="text-gray-500 light:text-slate-500 text-[10px]">Target</div>
-          <div className="text-emerald-400 font-semibold tabular-nums">{setup.target!.toFixed(2)}</div>
+          <div className="text-emerald-400 font-bold tabular-nums text-base text-glow-emerald">{setup.target!.toFixed(2)}</div>
         </div>
       </div>
       <p className="text-[10px] text-gray-600 mt-2.5 leading-snug">
