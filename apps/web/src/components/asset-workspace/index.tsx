@@ -21,6 +21,7 @@ import { OIBadge } from '@/components/common/badges';
 import { MarketBiasCard, MarketRegimeCard, IntelligenceScoreCard } from '@/components/common/market-intelligence-cards';
 import { NewsPanel } from '@/components/common/news-panel';
 import { EventCalendarPanel } from '@/components/common/event-calendar-panel';
+import { PayoffDiagram } from '@/components/common/payoff-diagram';
 
 const STRIKE_RANGE_OPTIONS = [5, 10, 15, 20];
 const REFRESH_INTERVAL_MS = 15000;
@@ -265,6 +266,14 @@ export function AssetWorkspace() {
                 <TradeSetupCard setup={tradeSetup} />
               </div>
             </div>
+          )}
+
+          {/* Payoff Diagram — P&L at expiry for the current Trade Setup, with
+              expected move / max pain / OI walls overlaid, so the risk/reward
+              shown in TradeSetupCard can actually be seen against the likely
+              price range instead of read as bare numbers. */}
+          {chain && tradeSetup.available && (
+            <PayoffDiagram setup={tradeSetup} chain={chain} />
           )}
 
           {/* Futures Strip */}
