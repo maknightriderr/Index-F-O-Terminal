@@ -32,6 +32,7 @@ const ICONS: Record<string, string> = {
   dashboard:    'M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z M9 22V12h6v10',
   indices:      'M22 12h-4l-3 9L9 3l-3 9H2',
   'fno-stocks': 'M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2 M9 12h6 M9 16h6 M12 2v4',
+  'corporate-actions': 'M8 2v4 M16 2v4 M3 10h18 M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z M8 14h.01 M12 14h.01 M16 14h.01 M8 18h.01 M12 18h.01',
   'oi-intelligence': 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z M21 21l-4.35-4.35 M11 8v4l2.5 1.5',
   'iv-greeks':  'M9.5 2A5.5 5.5 0 0 0 4 7.5v0A5.5 5.5 0 0 0 9.5 13h0a5.5 5.5 0 0 0 0-11z M14.5 11a5.5 5.5 0 0 0 0 11h0a5.5 5.5 0 0 0 0-11z',
   'market-scanner': 'M13 2L3 14h9l-1 8 10-12h-9l1-8',
@@ -67,6 +68,7 @@ const NAV_SECTIONS: NavSection[] = [
       { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
       { id: 'indices', label: 'Indices', icon: 'indices' },
       { id: 'fno-stocks', label: 'F&O Stocks', icon: 'fno-stocks' },
+      { id: 'corporate-actions', label: 'Corporate Actions', icon: 'corporate-actions' },
     ],
   },
   {

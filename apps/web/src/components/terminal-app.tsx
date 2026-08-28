@@ -5,6 +5,7 @@ import { AppShell } from '@/components/layout/app-shell';
 import { Dashboard } from '@/components/dashboard';
 import { AssetWorkspace } from '@/components/asset-workspace';
 import { FnoStocksPage } from '@/components/fno-stocks';
+import { CorporateActionsPage } from '@/components/corporate-actions';
 import { IndicesPage } from '@/components/indices';
 import { IvGreeksPage } from '@/components/iv-greeks';
 import { OiIntelligencePage } from '@/components/oi-intelligence';
@@ -34,6 +35,8 @@ export function TerminalApp() {
         return <IndicesPage />;
       case 'fno-stocks':
         return <FnoStocksPage />;
+      case 'corporate-actions':
+        return <CorporateActionsPage />;
       case 'oi-intelligence':
         return <OiIntelligencePage />;
       case 'iv-greeks':

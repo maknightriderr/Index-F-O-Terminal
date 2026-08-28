@@ -409,6 +409,19 @@ export interface NewsArticle {
   snippet: string;
 }
 
+// --- Corporate Actions ---
+
+export type CorporateActionType = 'DIVIDEND' | 'BONUS' | 'SPLIT' | 'RIGHTS' | 'BUYBACK' | 'OTHER';
+
+export interface CorporateAction {
+  symbol: string;
+  company: string;
+  type: CorporateActionType;
+  purpose: string;
+  exDate: string; // ISO yyyy-mm-dd
+  recordDate: string | null;
+}
+
 // --- Chart Pattern Detection ---
 
 export type ChartPatternType =

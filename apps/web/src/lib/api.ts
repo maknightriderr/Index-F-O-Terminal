@@ -23,6 +23,7 @@ import type {
   WinRateAnalytics,
   TradeSetupRecord,
   NewsArticle,
+  CorporateAction,
 } from '@fno/shared';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
@@ -212,6 +213,14 @@ class ApiClient {
 
   async getNews(symbol: string) {
     return this.get<NewsArticle[]>(`/api/news/${symbol}`);
+  }
+
+  async getUpcomingCorporateActions() {
+    return this.get<CorporateAction[]>('/api/corporate-actions');
+  }
+
+  async getCorporateActionsForSymbol(symbol: string) {
+    return this.get<CorporateAction[]>(`/api/corporate-actions/${symbol}`);
   }
 
   async getHealth() {

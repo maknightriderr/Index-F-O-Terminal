@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { useMarketStore } from '@/stores';
 import { api, ApiError } from '@/lib/api';
 import { useMarketBias } from '@/lib/use-market-bias';
+import { useCorporateActionsForSymbol } from '@/lib/use-corporate-actions';
 import { formatIndianNumber, formatCompact, isMarketOpen } from '@fno/shared';
 import type {
   Exchange,
@@ -51,6 +52,7 @@ export function AssetWorkspace() {
   // "no asset selected" early return below — harmless, just polls NIFTY
   // until an asset is actually picked.
   const { bias, score, tradeSetup, isLive: biasLive } = useMarketBias(selectedSymbol || 'NIFTY', selectedExchange || 'NSE', biasMode);
+  const { actions: corporateActions } = useCorporateActionsForSymbol(selectedSymbol || 'NIFTY', selectedExchange || 'NSE');
   const [chain, setChain] = useState<OptionChain | null>(null);
   const [futures, setFutures] = useState<FuturesChainResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -365,7 +367,7 @@ export function AssetWorkspace() {
           </div>
           <div>
             <SectionLabel icon="📅">Event Calendar</SectionLabel>
-            <EventCalendarPanel chain={chain} futures={futures} symbol={selectedSymbol} />
+            <EventCalendarPanel chain={chain} futures={futures} corporateActions={corporateActions} symbol={selectedSymbol} />
           </div>
         </div>
       </div>
