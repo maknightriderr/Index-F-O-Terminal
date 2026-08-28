@@ -21,6 +21,23 @@ import type {
   SubscriptionMode,
 } from '@fno/shared';
 import { isExpiryActive } from '@fno/shared';
+
+// Angel One can reject the current access token (HTTP 200, status:false,
+// message like "Invalid Token") well before its own 24h expiry — a
+// concurrent login with the same credentials elsewhere is the most common
+// real-world cause (SmartAPI allows only one active session per login).
+// isAuthenticated() only checks whether SOME token is stored, so this goes
+// undetected by health checks and every quote/historical request just
+// fails silently until someone notices and restarts the process. Matching
+// on the broker's own message text lets a bad token trigger an immediate
+// re-login instead of waiting for the next scheduled refresh (or a manual
+// restart) — found live: a fresh boot's token was already being rejected
+// within ~16 minutes, well inside the 8h scheduled-refresh window.
+const TOKEN_REJECTION_PATTERNS = [/invalid token/i, /token.*expired/i, /session.*expired/i, /unauthorized/i];
+function isTokenRejection(apiMessage: string | undefined | null): boolean {
+  if (!apiMessage) return false;
+  return TOKEN_REJECTION_PATTERNS.some((p) => p.test(apiMessage));
+}
 import type {
   MarketDataProvider,
   AuthCredentials,
@@ -108,6 +125,8 @@ export class AngelOneProvider implements MarketDataProvider {
   private instrumentCache: Instrument[] = [];
   private instrumentCacheTime: number = 0;
   private instrumentCacheInFlight: Promise<Instrument[]> | null = null;
+  private reauthInFlight: Promise<void> | null = null;
+  private lastReauthAttemptAt = 0;
 
   constructor() {
     this.api = axios.create({
@@ -244,6 +263,41 @@ export class AngelOneProvider implements MarketDataProvider {
     logger.info('Angel One logged out');
   }
 
+  // Under a real token-rejection episode, many parallel requests (across
+  // symbols/exchanges) all fail within the same second — without a lock
+  // that would fire off that many simultaneous fresh logins, hammering
+  // Angel One's auth endpoint right when it's already unhappy. One
+  // in-flight attempt at a time, and callers that lose the race just wait
+  // on it; a 20s cooldown after a finished attempt covers the case where
+  // the fresh login itself doesn't stick (e.g. something else re-kicks the
+  // session immediately) so this can't spin in a tight retry loop.
+  private static readonly REAUTH_COOLDOWN_MS = 20_000;
+
+  private async recoverFromTokenRejection(apiMessage: string | undefined, context: string): Promise<void> {
+    if (this.reauthInFlight) {
+      await this.reauthInFlight;
+      return;
+    }
+    if (Date.now() - this.lastReauthAttemptAt < AngelOneProvider.REAUTH_COOLDOWN_MS) return;
+    if (!this.credentials) return;
+
+    logger.warn({ apiMessage, context }, 'Angel One token rejected — triggering immediate re-authentication');
+    this.lastReauthAttemptAt = Date.now();
+    this.reauthInFlight = this.authenticate(this.credentials)
+      .then((result) => {
+        if (result.success) {
+          logger.info({ context }, 'Angel One re-authentication after token rejection succeeded');
+        } else {
+          logger.error({ error: result.error, context }, 'Angel One re-authentication after token rejection failed');
+        }
+      })
+      .catch((err: any) => logger.error({ error: err.message, context }, 'Angel One re-authentication after token rejection threw'))
+      .finally(() => {
+        this.reauthInFlight = null;
+      });
+    await this.reauthInFlight;
+  }
+
   // --- Instrument Master ---
 
   async getInstrumentMaster(): Promise<Instrument[]> {
@@ -374,6 +428,9 @@ export class AngelOneProvider implements MarketDataProvider {
         { params, apiMessage: response.data?.message, apiErrorCode: response.data?.errorcode, apiStatus: response.data?.status },
         'Historical data request returned no candles — broker responded but reported failure'
       );
+      if (isTokenRejection(response.data?.message)) {
+        await this.recoverFromTokenRejection(response.data?.message, 'getHistoricalData');
+      }
       return [];
     } catch (error: any) {
       logger.error({ error: error.message, params }, 'Historical data fetch failed');
@@ -429,6 +486,13 @@ export class AngelOneProvider implements MarketDataProvider {
         }));
       }
 
+      logger.warn(
+        { exchangeSegment, tokenCount: tokens.length, apiMessage: response.data?.message, apiErrorCode: response.data?.errorcode },
+        'LTP request returned no data — broker responded but reported failure'
+      );
+      if (isTokenRejection(response.data?.message)) {
+        await this.recoverFromTokenRejection(response.data?.message, 'getLTP');
+      }
       return [];
     } catch (error: any) {
       logger.error({ error: error.message }, 'LTP fetch failed');
@@ -505,6 +569,9 @@ export class AngelOneProvider implements MarketDataProvider {
             { exchangeSegment, chunkSize: chunk.length, apiMessage: response.data?.message, apiErrorCode: response.data?.errorcode, apiStatus: response.data?.status },
             'Quote request returned no data — broker responded but reported failure'
           );
+          if (isTokenRejection(response.data?.message)) {
+            await this.recoverFromTokenRejection(response.data?.message, 'getQuote');
+          }
         }
       } catch (error: any) {
         logger.error({ error: error.message, exchangeSegment, chunkSize: chunk.length }, 'Quote fetch failed');
