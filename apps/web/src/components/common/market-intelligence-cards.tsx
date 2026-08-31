@@ -23,10 +23,10 @@ export function MarketBiasCard({ bias, symbol }: { bias: MarketBias; symbol: str
         <span className="text-gray-200 light:text-slate-800 font-semibold tabular-nums">{bias.confidence}/100</span>
       </div>
       {/* Reasoning */}
-      <div className="mt-3.5 pt-3.5 border-t border-gray-800/60 light:border-slate-200 space-y-1.5">
+      <div className="mt-3.5 pt-3.5 border-t border-gray-800/60 light:border-slate-200 space-y-2">
         {bias.reasoning.slice(0, 9).map((r, i) => (
-          <div key={i} className="text-[10px] text-gray-400 light:text-slate-500 flex items-start gap-1.5">
-            <span className="text-cyan-500/70 mt-0.5">▸</span>
+          <div key={i} className="text-xs leading-snug text-gray-300 light:text-slate-600 flex items-start gap-2">
+            <span className="text-cyan-500/70 mt-0.5 shrink-0">▸</span>
             <span>{r}</span>
           </div>
         ))}
