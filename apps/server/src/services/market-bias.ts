@@ -21,6 +21,7 @@ import {
   pivotPoints,
   detectRsiDivergence,
   detectCandlestickPattern,
+  detectPattern,
   getOIDescription,
   buildTradeSetup,
   MAX_RISK_REWARD,
@@ -232,6 +233,22 @@ async function computeMarketBias(
 
   const spot = c15.closes[c15.closes.length - 1];
 
+  const shortLabel = isPositional ? '1H' : '15m';
+  const longLabel = isPositional ? 'Daily' : '1H';
+
+  // Multi-swing chart-structure pattern (Double Top, Head & Shoulders,
+  // Triangle, Wedge, Flag, ...) on both tiers — reuses the SAME candles
+  // already fetched above for every other indicator here, so this costs
+  // zero additional broker calls. Distinct from candlePattern below,
+  // which is a single/few-candle shape (Hammer, Doji); this is the
+  // broader multi-swing structure a trader actually means by "what is
+  // this forming." shortTermPattern is genuinely intraday in INTRADAY
+  // mode (15m) but a few-day read in POSITIONAL (1H); longTermPattern is
+  // the mode's "long" tier either way (1H / Daily) — switching biasMode
+  // in the UI is what moves this between "intraday" and "long timeframe."
+  const shortTermPattern = detectPattern(c15.highs, c15.lows, c15.closes);
+  const longTermPattern = detectPattern(c1h.highs, c1h.lows, c1h.closes);
+
   // --- 15m signals ---
   const todaysCandles = filterToday(candles15m);
   const sessionVwapSeries = todaysCandles.length >= 2
@@ -421,6 +438,16 @@ async function computeMarketBias(
       `${candlePattern.pattern.replace(/_/g, ' ').toLowerCase()} candle (${candlePattern.direction.toLowerCase()}) on the latest 15m bar`
     );
   }
+  if (shortTermPattern) {
+    reasoning.push(
+      `${formatPatternName(shortTermPattern.pattern)} forming on ${shortLabel} — ${shortTermPattern.direction.toLowerCase()} structure (${shortTermPattern.confidence}% confidence)`
+    );
+  }
+  if (longTermPattern) {
+    reasoning.push(
+      `${formatPatternName(longTermPattern.pattern)} forming on ${longLabel} — ${longTermPattern.direction.toLowerCase()} structure (${longTermPattern.confidence}% confidence)`
+    );
+  }
   reasoning.push(
     vwapVote === 1
       ? `Price above VWAP (${fmt(spot)} > ${fmt(sessionVwap)})`
@@ -428,8 +455,7 @@ async function computeMarketBias(
       ? `Price below VWAP (${fmt(spot)} < ${fmt(sessionVwap)})`
       : `Price near VWAP (${fmt(spot)} ≈ ${fmt(sessionVwap)})`
   );
-  const shortLabel = isPositional ? '1H' : '15m';
-  const longLabel = isPositional ? 'Daily' : '1H';
+  // shortLabel/longLabel computed earlier, alongside shortTermPattern/longTermPattern.
   reasoning.push(
     st15Direction === st1hDirection
       ? `Supertrend ${st15Direction === 'UP' ? 'bullish' : 'bearish'} on ${shortLabel} and ${longLabel}`
@@ -521,6 +547,12 @@ async function computeMarketBias(
       gammaRegime: chain?.gammaExposure.regime ?? null,
       gammaWallStrike: chain?.gammaExposure.gammaWallStrike ?? null,
       dte: chain?.dte ?? null,
+      chartStructureShort: shortTermPattern
+        ? { pattern: shortTermPattern.pattern, direction: shortTermPattern.direction, confidence: shortTermPattern.confidence, interval: shortLabel }
+        : null,
+      chartStructureLong: longTermPattern
+        ? { pattern: longTermPattern.pattern, direction: longTermPattern.direction, confidence: longTermPattern.confidence, interval: longLabel }
+        : null,
     },
     timestamp: Date.now(),
   };
@@ -1455,6 +1487,14 @@ function round2(n: number): number {
 
 function fmt(n: number, decimals = 2): string {
   return n.toLocaleString('en-IN', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
+/** 'HEAD_AND_SHOULDERS' -> 'Head And Shoulders' */
+function formatPatternName(pattern: string): string {
+  return pattern
+    .split('_')
+    .map((w) => w.charAt(0) + w.slice(1).toLowerCase())
+    .join(' ');
 }
 
 function computeAtmIv(chain: NonNullable<Awaited<ReturnType<typeof buildOptionChain>>>): number {
