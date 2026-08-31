@@ -971,20 +971,7 @@ async function resolveStickyTradeSetup(
     }
 
     if (hitSL || hitTarget) {
-      // A stop trailed up to or past entry that then gets hit locked in a
-      // real (or breakeven) result, not a loss — only an SL still below
-      // entry (never trailed, or a shallow trail that didn't reach it) is
-      // a genuine loss. Spreads have no trailing, so a stop hit is always
-      // a real loss and a target hit is always a real win.
-      const outcome: 'WIN' | 'LOSS' | 'EXPIRED' = hitTarget
-        ? 'WIN'
-        : isSpread
-        ? 'LOSS'
-        : stored!.stopLoss! > stored!.entry!
-        ? 'WIN'
-        : stored!.stopLoss! === stored!.entry!
-        ? 'EXPIRED'
-        : 'LOSS';
+      const outcome = classifyPriceHitOutcome(stored!, isSpread, hitTarget);
       await recordTradeSetupOutcome(stored!, outcome, currentValue);
       // falls through to fresh generation below
     } else if (stored!.direction === direction) {
@@ -1226,6 +1213,114 @@ function currentExitValue(chain: OptionChain, stored: StoredTradeSetup): number 
   }
   if (stored.strike == null || !stored.side) return null;
   return legLtpOrNull(chain, stored.strike, stored.side);
+}
+
+// A stop trailed up to or past entry that then gets hit locked in a real
+// (or breakeven) result, not a loss — only an SL still below entry (never
+// trailed, or a shallow trail that didn't reach it) is a genuine loss.
+// Spreads have no trailing, so a stop hit is always a real loss and a
+// target hit is always a real win. Shared by resolveStickyTradeSetup's own
+// SL/target branch and the lightweight price-level monitor below, so the
+// two can't silently drift apart.
+function classifyPriceHitOutcome(stored: StoredTradeSetup, isSpread: boolean, hitTarget: boolean): 'WIN' | 'LOSS' | 'EXPIRED' {
+  return hitTarget
+    ? 'WIN'
+    : isSpread
+    ? 'LOSS'
+    : stored.stopLoss! > stored.entry!
+    ? 'WIN'
+    : stored.stopLoss! === stored.entry!
+    ? 'EXPIRED'
+    : 'LOSS';
+}
+
+/**
+ * Lightweight, standalone SL/target check for one locked INTRADAY setup —
+ * fetches only the option chain (quotes, cached ~10s) rather than the full
+ * buildMarketBias, which pulls 15m+1h historical candles and is subject to
+ * Angel One's much stricter historical-endpoint rate limit (see alerts.ts's
+ * "Trade Setup closed" check, which avoids buildMarketBias for the same
+ * reason). Only checks the hard price-level SL/target hit, not the softer
+ * bias-reversal EXPIRED path — that genuinely needs the full bias
+ * computation and stays on-demand (a user's browser poll, or the
+ * NIFTY/BANKNIFTY institutional scanner's 15-minute cadence), same as
+ * before this existed.
+ *
+ * Exists specifically because that on-demand-only model has a real gap: a
+ * fast intraday SL/target touch that happens between checks — or for any
+ * symbol nobody's actively viewing at all — was going completely
+ * undetected. Scoped to INTRADAY only: POSITIONAL setups can be pinned to
+ * a non-nearest expiry (see resolveTargetExpiry), which this always-
+ * nearest-expiry fetch can't reliably match, so those stay on the existing
+ * on-demand path.
+ *
+ * Two independent triggers (a live on-demand call and this monitor) can in
+ * principle race on the same locked setup and both record an outcome —
+ * a narrow, pre-existing risk (multiple browser tabs on the same symbol
+ * already have it) rather than one this introduces; not worth full
+ * distributed locking for what would be a duplicate backtesting row, not a
+ * functional or safety issue.
+ */
+export async function checkLockedSetupPriceLevels(provider: MarketDataProvider, exchange: Exchange, underlying: string): Promise<void> {
+  const key = `trade_setup:${exchange}:${underlying}:INTRADAY`;
+
+  let stored: StoredTradeSetup | null = null;
+  try {
+    const raw = await redis.get(key);
+    if (raw) stored = JSON.parse(raw) as StoredTradeSetup;
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying }, 'Price-level monitor: sticky setup read failed');
+    return;
+  }
+
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  if (!stored?.available || stored.day !== today) return;
+
+  let chain: OptionChain;
+  try {
+    chain = await buildOptionChain(provider, underlying, exchange);
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying }, 'Price-level monitor: option chain fetch failed — will retry next tick');
+    return;
+  }
+
+  const isSpread = stored.structureType === 'SPREAD';
+  let currentValue: number | null;
+  let hitSL: boolean;
+  let hitTarget: boolean;
+
+  if (isSpread && stored.legs && stored.netPremium != null && stored.maxProfit != null && stored.maxLoss != null) {
+    const legPrices = stored.legs.map((l) => ({ action: l.action, price: legLtpOrNull(chain, l.strike, l.side) }));
+    const progress = evaluateSpreadProgress(legPrices, stored.netPremium, stored.maxProfit, stored.maxLoss);
+    currentValue = progress.currentValue;
+    hitSL = progress.hitStop;
+    hitTarget = progress.hitTarget;
+  } else if (!isSpread && stored.strike != null && stored.side && stored.stopLoss != null && stored.target != null) {
+    const currentLtp = legLtpOrNull(chain, stored.strike, stored.side);
+    currentValue = currentLtp;
+    hitSL = currentLtp != null && currentLtp <= stored.stopLoss;
+    hitTarget = currentLtp != null && currentLtp >= stored.target;
+  } else {
+    return;
+  }
+
+  if (!hitSL && !hitTarget) return;
+
+  const outcome = classifyPriceHitOutcome(stored, isSpread, hitTarget);
+  await recordTradeSetupOutcome(stored, outcome, currentValue);
+  // recordTradeSetupOutcome only updates the DB row — resolveStickyTradeSetup's
+  // on-demand path normally clears/overwrites this Redis key itself right
+  // after (it falls through to generating a fresh setup). This monitor
+  // doesn't generate a replacement, so it must clear the key directly, or
+  // the next on-demand view would still see available:true and show a
+  // setup that's already resolved in the DB as if it were still open —
+  // exactly the bug this monitor exists to prevent, just relocated.
+  try {
+    await redis.del(key);
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying }, 'Price-level monitor: sticky setup clear failed after recording outcome');
+  }
+  logger.info({ underlying, exchange, outcome }, 'Price-level monitor: closed a locked setup that hit SL/target between on-demand checks');
 }
 
 // --- Helpers ---

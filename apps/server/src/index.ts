@@ -28,6 +28,7 @@ import { createBacktestingRoutes } from './api/backtesting.js';
 import { createNewsRoutes } from './api/news.js';
 import { createCorporateActionsRoutes } from './api/corporate-actions.js';
 import { startInstitutionalFlowScanner } from './services/institutional-flow-scanner.js';
+import { startTradeSetupPriceMonitor } from './services/trade-setup-monitor.js';
 
 // --- Initialize Provider + Subscription Manager ---
 
@@ -194,6 +195,7 @@ authenticateOnBoot();
 startAlertScanner(provider);
 startPatternScanner(provider);
 startInstitutionalFlowScanner(provider);
+startTradeSetupPriceMonitor(provider);
 
 setInterval(() => {
   const { apiKey, clientId, password, totpSecret } = config.angelOne;
