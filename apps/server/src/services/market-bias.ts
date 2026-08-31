@@ -394,6 +394,24 @@ async function computeMarketBias(
   const bbBreakout = bbPercentB > 1 || bbPercentB < 0;
   const bollingerVote: Vote = bbBreakout && !volumeConfirms ? 0 : bbPercentB > 0.6 ? 1 : bbPercentB < 0.4 ? -1 : 0;
 
+  // Leading breakout/breakdown regime: a volume-confirmed break outside the
+  // Bollinger Bands on THIS specific bar, not just "currently outside them"
+  // — bands walk outward during an established trend, so "outside now"
+  // alone would keep firing for hours into what's really already a
+  // confirmed STRONG_TREND (ADX just hasn't caught up yet in THAT case).
+  // Requiring the PREVIOUS bar to have been inside the band keeps this to
+  // the actual moment of the break, which is the entire point of having a
+  // leading signal alongside ADX's inherently lagging one.
+  const bbUpperPrev = bb15.upper[bb15.upper.length - 2];
+  const bbLowerPrev = bb15.lower[bb15.lower.length - 2];
+  const prevClose15 = c15.closes[c15.closes.length - 2];
+  const bbPercentBPrev =
+    bbUpperPrev !== undefined && bbLowerPrev !== undefined && bbUpperPrev > bbLowerPrev && prevClose15 !== undefined
+      ? (prevClose15 - bbLowerPrev) / (bbUpperPrev - bbLowerPrev)
+      : 0.5;
+  const freshBreakoutUp = bbPercentB > 1 && bbPercentBPrev <= 1 && volumeConfirms;
+  const freshBreakoutDown = bbPercentB < 0 && bbPercentBPrev >= 0 && volumeConfirms;
+
   const directionVotes: Vote[] = [vwapVote, rsiVote, st15Vote, st1hVote, futuresOiVote, pcrVote];
   const voteSum = directionVotes.reduce((a: number, b) => a + b, 0);
   const votesFor = directionVotes.filter((v) => v === 1).length;
@@ -411,8 +429,8 @@ async function computeMarketBias(
   const agreementCount = direction === 'BULLISH' ? votesFor : direction === 'BEARISH' ? votesAgainst : votesFlat;
   const confidence = clamp(Math.round((agreementCount / total) * 100), 15, 95);
 
-  // --- Regime: trend strength (ADX) + direction (Supertrend 1H) + volatility (ATR z-score), overridden by expiry-day gamma when DTE<=1 ---
-  const regime = classifyRegime(adxValue, st1hDirection, atrPctZ, chain?.dte ?? null, chain?.gammaExposure?.regime ?? null);
+  // --- Regime: leading breakout/breakdown (fresh, volume-confirmed Bollinger break) takes priority over the lagging ADX-based trend read, overridden by expiry-day gamma when DTE<=1 ---
+  const regime = classifyRegime(adxValue, st1hDirection, atrPctZ, chain?.dte ?? null, chain?.gammaExposure?.regime ?? null, freshBreakoutUp, freshBreakoutDown);
 
   // --- Reasoning (built from the actual computed values, not templated) ---
   // Ordered by priority, not computation order — the frontend card only
@@ -426,6 +444,11 @@ async function computeMarketBias(
   if (regime === 'EXPIRY_GAMMA' && chain) {
     reasoning.push(
       `Expiry day (DTE ${chain.dte}) with ${chain.gammaExposure.regime === 'LONG_GAMMA' ? 'positive' : 'negative'} GEX — dealer hedging can pin or whipsaw price independent of the underlying trend; SL widened for expiry-day gamma risk.`
+    );
+  }
+  if (regime === 'BREAKOUT' || regime === 'BREAKDOWN') {
+    reasoning.push(
+      `Volume-confirmed ${regime === 'BREAKOUT' ? 'break above the upper' : 'break below the lower'} Bollinger Band (${fmt(volumeRatio, 2)}x volume) — a leading signal ADX hasn't caught up to yet.`
     );
   }
   if (rsiDivergence.signal !== 'NONE') {
@@ -1445,11 +1468,20 @@ function classifyRegime(
   st1hDirection: 'UP' | 'DOWN',
   atrZ: number,
   dte: number | null,
-  gexRegime: GammaExposureRegime | null
+  gexRegime: GammaExposureRegime | null,
+  freshBreakoutUp: boolean,
+  freshBreakoutDown: boolean
 ): MarketRegime {
   if (dte != null && dte <= EXPIRY_GAMMA_MAX_DTE && gexRegime != null && gexRegime !== 'NEUTRAL') {
     return 'EXPIRY_GAMMA';
   }
+  // A volume-confirmed break outside the Bollinger Bands on this bar is a
+  // leading signal — it can fire well before ADX (a 14-period smoothed
+  // average) has accumulated enough bars to call the same move a "strong
+  // trend." Checked ahead of the ADX bands below for exactly that reason:
+  // by the time ADX confirms, the leading part of the move is already over.
+  if (freshBreakoutUp) return 'BREAKOUT';
+  if (freshBreakoutDown) return 'BREAKDOWN';
   if (adxValue >= 25) return st1hDirection === 'UP' ? 'STRONG_BULL_TREND' : 'STRONG_BEAR_TREND';
   if (adxValue >= 18) return st1hDirection === 'UP' ? 'WEAK_BULL_TREND' : 'WEAK_BEAR_TREND';
   if (atrZ > 1) return 'HIGH_VOLATILITY';
