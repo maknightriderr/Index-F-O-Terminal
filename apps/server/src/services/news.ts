@@ -106,7 +106,13 @@ async function fetchNewsUncached(symbol: string): Promise<NewsArticle[]> {
     }
 
     const xml = await response.text();
-    return parseRssXml(xml).slice(0, MAX_ARTICLES);
+    // Google News RSS order is relevance-weighted, not strictly
+    // chronological — sort newest-first before capping so the freshest
+    // articles survive the MAX_ARTICLES cut instead of whatever the feed
+    // happened to list first.
+    return parseRssXml(xml)
+      .sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime())
+      .slice(0, MAX_ARTICLES);
   } catch (err: any) {
     if (err.name === 'AbortError') {
       logger.warn({ symbol }, 'Google News RSS fetch timed out');
