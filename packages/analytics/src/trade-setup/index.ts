@@ -151,6 +151,28 @@ export function buildTradeSetup(
     );
   }
 
+  // ivRank unknown (indices/MCX/stocks outside the F&O universe scan) —
+  // still prefer a defined-risk debit spread over a naked long. A naked
+  // long's full premium bleeds to theta with nothing offsetting it, and
+  // its SL is a price floor that can be widened (VIX/expiry adjustments,
+  // up to MAX_SL_PREMIUM_PCT) well past what a rational stop should allow
+  // before EOD forces an EXPIRED close — a live backtest showed exactly
+  // this: NIFTY/BANKNIFTY/CRUDEOIL (naked-long-only, no ivRank coverage)
+  // averaging deeply negative returns with 0 target hits, while stocks
+  // getting the spread path below showed real, mixed (sometimes positive)
+  // outcomes. A debit spread's short leg collects its own theta in the
+  // same direction, and its max loss is capped by construction (the net
+  // debit paid), not by a floor that can drift. Only fall back to the
+  // naked long when a spread genuinely can't be built — too few strikes
+  // on the far side, or a leg with no live quote.
+  const spreadAttempt = withDteNote(
+    direction === 'BULLISH'
+      ? buildBullCallSpread(strikes, atmStrike, confidence, null)
+      : buildBearPutSpread(strikes, atmStrike, confidence, null),
+    dte
+  );
+  if (spreadAttempt.available) return spreadAttempt;
+
   return buildNakedLong(strikes, atmStrike, direction, side, confidence, expectedMovePoints, slPremiumPct, vix, dte);
 }
 
@@ -311,7 +333,7 @@ function buildDebitSpread(
   buyStrikeEntry: OptionChainStrike,
   strategy: string,
   confidence: number,
-  ivRank: number,
+  ivRank: number | null,
   sellOffset: number
 ): TradeSetup {
   const sellEntry = strikeAtOffset(strikes, buyStrikeEntry.strike, sellOffset);
@@ -356,7 +378,7 @@ function buildDebitSpread(
     breakeven,
     riskReward,
     reason:
-      `${direction} bias at ${confidence}/100 confidence, IV Rank ${ivRank} not elevated — ${strategy}: buy ${side} ${buyStrikeEntry.strike} @ ${buyPremium.toFixed(2)}, ` +
+      `${direction} bias at ${confidence}/100 confidence${ivRank != null ? `, IV Rank ${ivRank} not elevated` : ' (IV Rank not available for this symbol)'} — ${strategy}: buy ${side} ${buyStrikeEntry.strike} @ ${buyPremium.toFixed(2)}, ` +
       `sell ${side} ${sellEntry.strike} @ ${sellPremium.toFixed(2)}. Net debit ${netPremium.toFixed(2)}. ` +
       `Max profit ${maxProfit.toFixed(2)}, max loss ${maxLoss.toFixed(2)}, breakeven ${breakeven.toFixed(2)}.` +
       slippageNote([buyPricing, sellPricing]),
@@ -424,13 +446,13 @@ function buildCreditSpread(
   };
 }
 
-function buildBullCallSpread(strikes: OptionChainStrike[], atmStrike: number, confidence: number, ivRank: number): TradeSetup {
+function buildBullCallSpread(strikes: OptionChainStrike[], atmStrike: number, confidence: number, ivRank: number | null): TradeSetup {
   const atmEntry = strikes.find((s) => s.strike === atmStrike);
   if (!atmEntry) return unavailableSpread('Bull Call Spread', 'ATM strike not found in the chain.');
   return buildDebitSpread(strikes, 'CE', 'BULLISH', atmEntry, 'Bull Call Spread', confidence, ivRank, DEBIT_SPREAD_WIDTH_STRIKES);
 }
 
-function buildBearPutSpread(strikes: OptionChainStrike[], atmStrike: number, confidence: number, ivRank: number): TradeSetup {
+function buildBearPutSpread(strikes: OptionChainStrike[], atmStrike: number, confidence: number, ivRank: number | null): TradeSetup {
   const atmEntry = strikes.find((s) => s.strike === atmStrike);
   if (!atmEntry) return unavailableSpread('Bear Put Spread', 'ATM strike not found in the chain.');
   return buildDebitSpread(strikes, 'PE', 'BEARISH', atmEntry, 'Bear Put Spread', confidence, ivRank, -DEBIT_SPREAD_WIDTH_STRIKES);

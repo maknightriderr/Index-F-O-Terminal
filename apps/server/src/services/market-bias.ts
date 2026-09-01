@@ -45,7 +45,7 @@ import type {
   TradingMode,
   GammaExposureRegime,
 } from '@fno/shared';
-import { KNOWN_INDEX_TOKENS, CM_SEGMENT, calculateDTE, INDEX_SYMBOLS } from '@fno/shared';
+import { KNOWN_INDEX_TOKENS, CM_SEGMENT, calculateDTE, INDEX_SYMBOLS, TRADING_HOURS } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveSpotToken, resolveNearestFuturesContract, buildOptionChain } from './option-chain.js';
 import { buildFuturesData } from './futures.js';
@@ -693,6 +693,26 @@ async function computeMarketBias(
   return result;
 }
 
+// Fraction of today's remaining trading session, clamped to a small floor
+// so a setup minted in the closing minutes doesn't get an effectively-zero
+// (or negative, once the clock is past close) target. MCX's session runs
+// past midnight-adjacent hours (09:00-23:30) — same open/close-minutes math
+// as NSE/BSE, just a much longer window, so no special-casing needed.
+const MIN_REMAINING_SESSION_FRACTION = 0.05;
+
+function remainingSessionFraction(exchange: Exchange): number {
+  const hours = TRADING_HOURS[exchange];
+  const ist = new Date(new Date().toLocaleString('en-US', { timeZone: hours.timezone }));
+  const [openH, openM] = hours.open.split(':').map(Number);
+  const [closeH, closeM] = hours.close.split(':').map(Number);
+  const openMinutes = openH * 60 + openM;
+  const closeMinutes = closeH * 60 + closeM;
+  const nowMinutes = ist.getHours() * 60 + ist.getMinutes();
+  const totalSessionMinutes = closeMinutes - openMinutes;
+  const remainingMinutes = closeMinutes - nowMinutes;
+  return Math.max(MIN_REMAINING_SESSION_FRACTION, Math.min(1, remainingMinutes / totalSessionMinutes));
+}
+
 // IV Rank is only computed for the ~200-stock NSE F&O universe scan (see
 // fno-scanner.ts's computeIvRanks) — not available for indices (NIFTY/
 // BANKNIFTY) or MCX/BSE symbols. Reuses the same cached scan alerts.ts and
@@ -1106,11 +1126,25 @@ async function resolveStickyTradeSetup(
   // never reached (0 WINs across 40 recorded setups). POSITIONAL genuinely
   // is meant to run toward the chain's full remaining life, so it keeps
   // using chain.expectedMove.points as-is.
+  //
+  // Even the 1-day figure overstates what's reachable for a setup minted
+  // mid-session — a backtest review found EVERY INTRADAY naked long still
+  // sized off a flat full-day move regardless of when it was generated, so
+  // a 2pm setup was asked to cover the SAME move as one generated at the
+  // 9:15 open with the full 6h15m session ahead of it. Expected move scales
+  // with sqrt(time), so scale the 1-day figure down by sqrt(remaining
+  // session fraction) — a setup with half the session left gets ~71% of
+  // the full-day move as its target, not 100% of it. This only matters for
+  // the naked-long fallback now (buildTradeSetup tries a debit spread
+  // first for ivRank-unknown symbols), but a spread that does fall back to
+  // naked long deserves the same realistic target as anything else.
   const targetExpectedMovePoints = isPositional
     ? chain.expectedMove.points
     : (() => {
         const atmIvPct = computeAtmIv(chain);
-        return atmIvPct > 0 ? calculateExpectedMove(chain.spotPrice, atmIvPct / 100, 1, underlying).expectedMove : chain.expectedMove.points;
+        if (atmIvPct <= 0) return chain.expectedMove.points;
+        const oneDayMove = calculateExpectedMove(chain.spotPrice, atmIvPct / 100, 1, underlying).expectedMove;
+        return oneDayMove * Math.sqrt(remainingSessionFraction(exchange));
       })();
 
   const fresh = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, targetExpectedMovePoints, ivRank, slPremiumPct, vix, chain.dte);
