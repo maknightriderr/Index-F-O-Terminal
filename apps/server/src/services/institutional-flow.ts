@@ -129,12 +129,24 @@ export async function buildSentimentSnapshot(provider: MarketDataProvider): Prom
   // --- Component scores (0-100, 50 = neutral), same scale/spirit as
   // market-bias.ts's contribution()/pcrScore so a "70" means the same
   // thing across every score in this app. ---
-  const scores: number[] = [];
+  // Weighted, not a plain average — VIX and index futures OI are direct,
+  // single-instrument reads of market-wide institutional positioning;
+  // the F&O-universe buildup counts and option-OI skew are much noisier,
+  // heterogeneous aggregations across dozens of unrelated stocks, where
+  // one stock's earnings-driven move can swing the aggregate independent
+  // of anything actually institutional. An unweighted average let that
+  // noisier pair dilute a clean VIX+index-futures signal just as much as
+  // strengthening it. Weights only matter relative to each other — the
+  // weighted-mean formula below naturally renormalizes over whichever
+  // subset is actually available, so a missing input doesn't need
+  // special-casing.
+  const WEIGHT = { vix: 30, indexFutures: 30, blendedPcr: 20, stockBuildup: 12, optionOiSkew: 8 };
+  const scores: Array<{ value: number; weight: number }> = [];
   const reasoning: string[] = [];
 
   if (vix) {
     const vixScore = clamp(Math.round(100 - (vix.value - 10) * 4), 0, 100);
-    scores.push(vixScore);
+    scores.push({ value: vixScore, weight: WEIGHT.vix });
     reasoning.push(`India VIX at ${vix.value.toFixed(2)} (${vix.changePercent >= 0 ? '+' : ''}${vix.changePercent.toFixed(2)}%) — ${vixScore >= 60 ? 'calm, bullish-friendly' : vixScore <= 40 ? 'elevated, risk-off' : 'moderate'}`);
   }
 
@@ -142,7 +154,7 @@ export async function buildSentimentSnapshot(provider: MarketDataProvider): Prom
   if (avgPcr.length > 0) {
     const pcr = avgPcr.reduce((a, b) => a + b, 0) / avgPcr.length;
     const pcrScore = clamp(Math.round(50 + (pcr - 1) * 40), 0, 100);
-    scores.push(pcrScore);
+    scores.push({ value: pcrScore, weight: WEIGHT.blendedPcr });
     reasoning.push(`NIFTY/BANKNIFTY blended PCR at ${pcr.toFixed(2)} — ${pcr > 1.1 ? 'put-heavy, bullish lean' : pcr < 0.85 ? 'call-heavy, bearish lean' : 'balanced'}`);
   }
 
@@ -150,14 +162,14 @@ export async function buildSentimentSnapshot(provider: MarketDataProvider): Prom
     const idxScore = Math.round(
       indexFuturesLean.reduce((sum, f) => sum + implicationScore(f.interpretation), 0) / indexFuturesLean.length
     );
-    scores.push(idxScore);
+    scores.push({ value: idxScore, weight: WEIGHT.indexFutures });
     reasoning.push(`Index futures OI: ${indexFuturesLean.map((f) => `${f.symbol} ${getOIDescription(f.interpretation).description.split(' — ')[0]}`).join(', ')}`);
   }
 
   if (buildupCounts.total > 0) {
     const net = buildupCounts.longBuildup + buildupCounts.shortCovering - buildupCounts.shortBuildup - buildupCounts.longUnwinding;
     const stockScore = clamp(Math.round(50 + (net / buildupCounts.total) * 100), 0, 100);
-    scores.push(stockScore);
+    scores.push({ value: stockScore, weight: WEIGHT.stockBuildup });
     reasoning.push(
       `F&O universe (${buildupCounts.total} stocks): ${buildupCounts.longBuildup} long buildup, ${buildupCounts.shortBuildup} short buildup, ${buildupCounts.shortCovering} short covering, ${buildupCounts.longUnwinding} long unwinding`
     );
@@ -165,18 +177,19 @@ export async function buildSentimentSnapshot(provider: MarketDataProvider): Prom
 
   if (optionOiLean) {
     const oiScore = clamp(Math.round(50 + (optionOiLean.putHeavyPct - optionOiLean.callHeavyPct)), 0, 100);
-    scores.push(oiScore);
+    scores.push({ value: oiScore, weight: WEIGHT.optionOiSkew });
     reasoning.push(`Option OI skew across ${optionOiLean.sampledSymbols} stocks: ${optionOiLean.putHeavyPct}% put-heavy, ${optionOiLean.callHeavyPct}% call-heavy`);
   }
 
-  const sentimentScore = scores.length > 0 ? clamp(Math.round(scores.reduce((a, b) => a + b, 0) / scores.length), 0, 100) : 50;
+  const totalWeight = scores.reduce((sum, s) => sum + s.weight, 0);
+  const sentimentScore = totalWeight > 0 ? clamp(Math.round(scores.reduce((sum, s) => sum + s.value * s.weight, 0) / totalWeight), 0, 100) : 50;
   const sentimentLabel = classifySentiment(sentimentScore);
 
   const overallLean = sentimentScore > 60 ? 1 : sentimentScore < 40 ? -1 : 0;
-  const agreeing = scores.filter((s) => (overallLean === 1 && s > 55) || (overallLean === -1 && s < 45) || (overallLean === 0 && s >= 40 && s <= 60)).length;
+  const agreeing = scores.filter((s) => (overallLean === 1 && s.value > 55) || (overallLean === -1 && s.value < 45) || (overallLean === 0 && s.value >= 40 && s.value <= 60)).length;
   const confidenceScore = scores.length > 0 ? clamp(Math.round((agreeing / scores.length) * 100), 10, 95) : 10;
 
-  reasoning.push(`Sentiment score is an equal-weighted average of ${scores.length} available input${scores.length === 1 ? '' : 's'} — ${unavailableInputs.length} more (FII/DII flows, global markets) aren't connected yet and are excluded rather than estimated.`);
+  reasoning.push(`Sentiment score is a weighted average of ${scores.length} available input${scores.length === 1 ? '' : 's'} (VIX and index futures OI weighted highest as direct market-wide reads) — ${unavailableInputs.length} more (FII/DII flows, global markets) aren't connected yet and are excluded rather than estimated.`);
 
   return {
     vix,

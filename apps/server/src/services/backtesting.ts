@@ -19,6 +19,7 @@ import type {
   WinRateBucket,
   SymbolWinRate,
   WinRateAnalytics,
+  RiskMetrics,
   TradingMode,
   SpreadLeg,
 } from '@fno/shared';
@@ -128,6 +129,65 @@ function bucketStats(records: TradeSetupRecord[]): Omit<WinRateBucket, 'period'>
   };
 }
 
+// Win-rate alone can be misleading — a 60%-win-rate system where the
+// average loss is twice the average win is still a losing system. These
+// walk the resolved trades in the order they actually happened (unlike
+// bucketStats above, order genuinely matters here) to answer "how bad
+// did it get" and "gross wins vs. gross losses", not just "how often did
+// it work."
+function computeRiskMetrics(records: TradeSetupRecord[]): RiskMetrics {
+  const resolved = records
+    .filter((r) => r.returnPercent != null)
+    .slice()
+    .sort((a, b) => a.generatedAt - b.generatedAt);
+
+  if (resolved.length === 0) {
+    return { maxDrawdownPercent: null, maxConsecutiveLosses: 0, maxConsecutiveWins: 0, profitFactor: null };
+  }
+
+  let cumulative = 0;
+  let peak = 0;
+  let maxDrawdown = 0;
+  let grossProfit = 0;
+  let grossLoss = 0;
+  let winStreak = 0;
+  let lossStreak = 0;
+  let maxWinStreak = 0;
+  let maxLossStreak = 0;
+
+  for (const r of resolved) {
+    const ret = r.returnPercent!;
+    // Additive, not compounded — each trade's returnPercent is against
+    // ITS OWN entry basis (a different premium every time), and there's
+    // no shared capital base here to compound against.
+    cumulative += ret;
+    peak = Math.max(peak, cumulative);
+    maxDrawdown = Math.max(maxDrawdown, peak - cumulative);
+
+    if (ret > 0) {
+      grossProfit += ret;
+      winStreak += 1;
+      lossStreak = 0;
+    } else if (ret < 0) {
+      grossLoss += Math.abs(ret);
+      lossStreak += 1;
+      winStreak = 0;
+    } else {
+      winStreak = 0;
+      lossStreak = 0;
+    }
+    maxWinStreak = Math.max(maxWinStreak, winStreak);
+    maxLossStreak = Math.max(maxLossStreak, lossStreak);
+  }
+
+  return {
+    maxDrawdownPercent: Math.round(maxDrawdown * 100) / 100,
+    maxConsecutiveLosses: maxLossStreak,
+    maxConsecutiveWins: maxWinStreak,
+    profitFactor: grossLoss > 0 ? Math.round((grossProfit / grossLoss) * 100) / 100 : null,
+  };
+}
+
 function bucketBy(records: TradeSetupRecord[], keyFn: (r: TradeSetupRecord) => string): WinRateBucket[] {
   const groups = new Map<string, TradeSetupRecord[]>();
   for (const r of records) {
@@ -160,6 +220,7 @@ export async function getWinRateAnalytics(modeFilter?: TradingMode | 'ALL'): Pro
 
   return {
     overall: { period: 'ALL', ...bucketStats(all) },
+    riskMetrics: computeRiskMetrics(all),
     daily: bucketBy(all, (r) => istDateString(r.generatedAt)),
     weekly: bucketBy(all, (r) => istWeekString(r.generatedAt)),
     monthly: bucketBy(all, (r) => istDateString(r.generatedAt).slice(0, 7)),

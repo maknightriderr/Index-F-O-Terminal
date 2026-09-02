@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { formatIndianNumber } from '@fno/shared';
-import type { WinRateBucket, TradeSetupRecord } from '@fno/shared';
+import type { WinRateBucket, TradeSetupRecord, RiskMetrics } from '@fno/shared';
 import { useBacktesting } from '@/lib/use-backtesting';
 import { useAssetTabsStore } from '@/stores';
 
@@ -88,6 +88,7 @@ export function BacktestingPage() {
       {analytics && (
         <>
           <OverallSummary bucket={analytics.overall} />
+          <RiskMetricsSummary metrics={analytics.riskMetrics} />
 
           <div className="pt-1">
             <h2 className="text-sm font-bold text-gray-200 light:text-slate-800">Win Rate Over Time</h2>
@@ -210,6 +211,45 @@ function OverallSummary({ bucket }: { bucket: WinRateBucket }) {
           {bucket.avgReturnPercent != null ? `${bucket.avgReturnPercent >= 0 ? '+' : ''}${bucket.avgReturnPercent}%` : '—'}
         </div>
         <div className="text-[10px] text-gray-500 light:text-slate-500 mt-1">{bucket.expired} expired · {bucket.open} open</div>
+      </Card>
+    </div>
+  );
+}
+
+// --- Risk metrics ---
+// Win-rate and avg-return alone can be misleading — a 60%-win-rate
+// system where the average loss is twice the average win is still a
+// losing system. These are sequence-dependent (computed by walking
+// resolved trades in the order they actually happened), unlike every
+// card above, which is why they're their own section rather than more
+// columns in the grid above.
+
+function RiskMetricsSummary({ metrics }: { metrics: RiskMetrics }) {
+  if (metrics.maxDrawdownPercent == null) return null;
+
+  const profitFactorColor =
+    metrics.profitFactor == null ? 'text-gray-400' : metrics.profitFactor >= 1.5 ? 'text-emerald-400' : metrics.profitFactor >= 1 ? 'text-yellow-400' : 'text-red-400';
+
+  return (
+    <div className="grid grid-cols-3 gap-3">
+      <Card accent="border-t-red-500/50">
+        <div className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-1.5" title="Largest peak-to-trough decline in cumulative return%, walking resolved trades in the order they happened. Additive, not compounded against a capital base.">
+          Max Drawdown
+        </div>
+        <div className="text-3xl font-bold tabular-nums text-red-400">-{metrics.maxDrawdownPercent}%</div>
+      </Card>
+      <Card accent="border-t-orange-500/50">
+        <div className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-1.5" title="Longest streak of consecutive unprofitable closes in a row — the same population Profitable Close Rate uses.">
+          Max Consecutive Losses
+        </div>
+        <div className="text-3xl font-bold tabular-nums text-orange-400">{metrics.maxConsecutiveLosses}</div>
+        <div className="text-[10px] text-gray-500 light:text-slate-500 mt-1">{metrics.maxConsecutiveWins} max consecutive wins</div>
+      </Card>
+      <Card accent="border-t-violet-500/50">
+        <div className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-1.5" title="Gross profit ÷ gross loss across resolved trades. Above 1 means total wins outweigh total losses; below 1 means the losses are bigger even if the win rate looks fine.">
+          Profit Factor
+        </div>
+        <div className={`text-3xl font-bold tabular-nums ${profitFactorColor}`}>{metrics.profitFactor != null ? metrics.profitFactor.toFixed(2) : '—'}</div>
       </Card>
     </div>
   );

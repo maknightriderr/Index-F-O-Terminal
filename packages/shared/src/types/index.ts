@@ -1111,8 +1111,27 @@ export interface SymbolWinRate extends WinRateBucket {
   symbol: string;
 }
 
+/**
+ * Sequence-dependent stats — unlike every WinRateBucket field (a plain
+ * population count/average, order-independent), these depend on the
+ * CHRONOLOGICAL order trades resolved in, so they're computed once over
+ * the whole filtered history rather than per bucket (a single day/week's
+ * bucket has too few trades for a drawdown/streak read to mean much).
+ */
+export interface RiskMetrics {
+  /** Largest peak-to-trough decline in cumulative return%, walking resolved trades oldest-first. Additive (sum of each trade's own returnPercent), not compounded — there's no capital base to compound against here. Null when there's nothing resolved yet. */
+  maxDrawdownPercent: number | null;
+  /** Longest streak of consecutive unprofitable closes (LOSS + negative-return EXPIRED) — the same "profitable close" population profitableCloseRatePercent uses, not the stricter WIN/LOSS-only one winRatePercent uses. */
+  maxConsecutiveLosses: number;
+  /** Mirror of the above, for context. */
+  maxConsecutiveWins: number;
+  /** Gross profit ÷ gross loss across resolved trades. Null when there are no losses yet to divide by (undefined, not infinite). */
+  profitFactor: number | null;
+}
+
 export interface WinRateAnalytics {
   overall: WinRateBucket;
+  riskMetrics: RiskMetrics;
   daily: WinRateBucket[];
   weekly: WinRateBucket[];
   monthly: WinRateBucket[];

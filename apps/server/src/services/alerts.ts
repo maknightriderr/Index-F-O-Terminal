@@ -240,11 +240,21 @@ async function checkTradeSetupAlerts(): Promise<void> {
 }
 
 async function checkOneTradeSetup(key: string): Promise<void> {
-  // key shape: trade_setup:{exchange}:{underlying}
-  const [, exchange, underlying] = key.split(':');
-  if (!exchange || !underlying) return;
+  // key shape: trade_setup:{exchange}:{underlying}:{mode} — INTRADAY and
+  // POSITIONAL setups for the same symbol are two independent Redis keys
+  // (see market-bias.ts's resolveStickyTradeSetup), so mode must stay in
+  // the seen-baseline key too. Dropping it (as this used to) meant both
+  // modes shared ONE seenKey slot — whichever mode's key the scanner
+  // happened to process first each tick "won" the baseline, and the
+  // other mode's every subsequent poll compared its real setup against
+  // a snapshot belonging to a DIFFERENT mode (different SL%, different
+  // hold horizon), which could spuriously fire or spuriously suppress a
+  // TRADE_SETUP_CLOSED alert.
+  const [, exchange, underlying, mode] = key.split(':');
+  if (!exchange || !underlying || !mode) return;
 
-  const seenKey = `alert_setup_seen:${exchange}:${underlying}`;
+  const seenKey = `alert_setup_seen:${exchange}:${underlying}:${mode}`;
+  const modeLabel = mode === 'POSITIONAL' ? 'POS' : 'INTRA';
 
   const [currentRaw, seenRaw] = await Promise.all([redis.get(key), redis.get(seenKey)]);
   const current: StoredTradeSetupSnapshot | null = currentRaw ? JSON.parse(currentRaw) : null;
@@ -270,7 +280,7 @@ async function checkOneTradeSetup(key: string): Promise<void> {
           exchange,
           alertType: 'TRADE_SETUP_CLOSED',
           severity: 'WARNING',
-          message: `🎯 ${underlying}: Trade Setup closed — ${seen.side} ${seen.strike} (Entry ₹${seen.entry} · SL ₹${seen.stopLoss} · Target ₹${seen.target}) hit its stop-loss or target`,
+          message: `🎯 ${underlying} (${modeLabel}): Trade Setup closed — ${seen.side} ${seen.strike} (Entry ₹${seen.entry} · SL ₹${seen.stopLoss} · Target ₹${seen.target}) hit its stop-loss or target`,
           condition: { reason: 'SL_OR_TARGET', side: seen.side, strike: seen.strike, entry: seen.entry, stopLoss: seen.stopLoss, target: seen.target },
         });
       } else {
@@ -281,7 +291,7 @@ async function checkOneTradeSetup(key: string): Promise<void> {
           exchange,
           alertType: 'TRADE_SETUP_CLOSED',
           severity: 'INFO',
-          message: `${underlying}: Trade Setup ended — ${seen.side} ${seen.strike} (bias shifted or the session rolled over)`,
+          message: `${underlying} (${modeLabel}): Trade Setup ended — ${seen.side} ${seen.strike} (bias shifted or the session rolled over)`,
           condition: { reason: 'BIAS_OR_DAY_CHANGE', side: seen.side, strike: seen.strike, entry: seen.entry, stopLoss: seen.stopLoss, target: seen.target },
         });
       }
