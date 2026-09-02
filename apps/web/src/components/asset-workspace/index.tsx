@@ -652,6 +652,10 @@ function TradeSetupCard({ setup }: { setup: TradeSetup }) {
     <> Locked at {new Date(setup.generatedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit' })}, holds until target/stop is hit.</>
   );
 
+  const liveMark = setup.currentValue != null && (
+    <LiveMarkRow currentValue={setup.currentValue} unrealizedPnl={setup.unrealizedPnl ?? null} />
+  );
+
   if (setup.structureType === 'SPREAD') {
     const isCredit = (setup.netPremium ?? 0) < 0;
     return (
@@ -686,6 +690,7 @@ function TradeSetupCard({ setup }: { setup: TradeSetup }) {
             ? `Breakeven ${formatIndianNumber(setup.breakeven, 0)}`
             : null}
         </div>
+        {liveMark}
         <p className="text-[10px] text-gray-600 mt-2.5 leading-snug">
           Defined-risk spread — matches Strategy Scanner's IV-regime call for this symbol.{lockedNote}
         </p>
@@ -716,9 +721,33 @@ function TradeSetupCard({ setup }: { setup: TradeSetup }) {
           <div className="text-emerald-400 font-bold tabular-nums text-base text-glow-emerald">{setup.target!.toFixed(2)}</div>
         </div>
       </div>
+      {liveMark}
       <p className="text-[10px] text-gray-600 mt-2.5 leading-snug">
         Heuristic from live data — not investment advice.{lockedNote}
       </p>
     </IntelCard>
+  );
+}
+
+// Entry/legs premiums stay fixed at whatever they were when the setup was
+// locked (a real trade doesn't renegotiate its own fill price) — this is
+// the one thing on the card that updates every poll, so a viewer can tell
+// "what I got in at" from "what it's actually worth right now" instead of
+// mistaking a since-moved market for a wrong number.
+function LiveMarkRow({ currentValue, unrealizedPnl }: { currentValue: number; unrealizedPnl: number | null }) {
+  const color = unrealizedPnl == null ? 'text-gray-400 light:text-slate-500' : unrealizedPnl > 0 ? 'text-emerald-400' : unrealizedPnl < 0 ? 'text-red-400' : 'text-gray-400 light:text-slate-500';
+  const sign = unrealizedPnl != null && unrealizedPnl > 0 ? '+' : '';
+  return (
+    <div className="flex items-center justify-between mt-1.5 bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-1.5">
+      <span className="text-[10px] text-gray-500 light:text-slate-500">Live</span>
+      <span className="text-xs font-semibold tabular-nums">
+        <span className="text-gray-200 light:text-slate-800">{currentValue.toFixed(2)}</span>
+        {unrealizedPnl != null && (
+          <span className={`ml-1.5 ${color}`}>
+            ({sign}{unrealizedPnl.toFixed(2)})
+          </span>
+        )}
+      </span>
+    </div>
   );
 }

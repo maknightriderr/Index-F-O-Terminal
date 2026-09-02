@@ -1053,14 +1053,14 @@ async function resolveStickyTradeSetup(
       // Bias still agrees with the locked setup — fully sticky. Clear any
       // reversal streak that had started building from an earlier blip,
       // since the reversal didn't hold.
-      if (!stored!.reversalStreak) return stored!;
+      if (!stored!.reversalStreak) return withLiveMark(stored!, currentValue, isSpread);
       const reset: StoredTradeSetup = { ...stored!, reversalStreak: 0 };
       try {
         await redis.set(key, JSON.stringify(reset), 'EX', setupTtl);
       } catch (err: any) {
         logger.warn({ error: err.message, underlying }, 'Sticky trade setup reversal-streak reset failed');
       }
-      return reset;
+      return withLiveMark(reset, currentValue, isSpread);
     } else {
       // Bias has flipped this poll — don't tear down the setup on a single
       // noisy reading. Require the reversal to hold for REVERSAL_CONFIRM_POLLS
@@ -1075,7 +1075,7 @@ async function resolveStickyTradeSetup(
         } catch (err: any) {
           logger.warn({ error: err.message, underlying }, 'Sticky trade setup reversal-streak write failed');
         }
-        return bumped;
+        return withLiveMark(bumped, currentValue, isSpread);
       }
       // Reversal confirmed across enough polls — inconclusive, not a loss.
       // Still worth a mark-to-market exit price where we can get one, so
@@ -1302,6 +1302,20 @@ function currentExitValue(chain: OptionChain, stored: StoredTradeSetup): number 
   }
   if (stored.strike == null || !stored.side) return null;
   return legLtpOrNull(chain, stored.strike, stored.side);
+}
+
+// Attaches the freshly-computed live mark to a still-open sticky setup
+// before returning it — never persisted to Redis (each of this function's
+// three sticky-path callers already wrote the plain, mark-free object),
+// so this only affects the value handed back to whoever asked for it this
+// poll. Without this, the API response only ever showed the entry price
+// locked at generation time with no live comparison anywhere in the UI —
+// exactly what read as "wrong strike prices" when a user compared a
+// setup's entry against what they saw live elsewhere hours later.
+function withLiveMark(setup: StoredTradeSetup, currentValue: number | null, isSpread: boolean): TradeSetup {
+  const basis = isSpread ? setup.netPremium : setup.entry;
+  const unrealizedPnl = currentValue != null && basis != null ? round2(currentValue - basis) : null;
+  return { ...setup, currentValue, unrealizedPnl };
 }
 
 // A stop trailed up to or past entry that then gets hit locked in a real

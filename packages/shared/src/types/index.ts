@@ -313,6 +313,20 @@ export interface TradeSetup {
 
   /** Reward:risk — maxProfit/maxLoss for a spread, (target-entry)/(entry-stopLoss) for a naked long. Meaningful for display either way. */
   riskReward?: number;
+
+  /**
+   * Live mark-to-market value as of the last poll — the option's current
+   * LTP for a naked long, or the spread's current net cost to close (same
+   * shape as `netPremium`) for a spread. Recomputed fresh on every read
+   * (never itself persisted), so — unlike `entry`/`legs[].premium`, which
+   * stay fixed at whatever the setup was locked in at — this reflects
+   * right now, not whenever the setup was originally generated. Null when
+   * a live quote wasn't available this poll; absent only if the setup
+   * isn't a locked position at all (unavailable).
+   */
+  currentValue?: number | null;
+  /** currentValue minus entry (naked long) or minus netPremium (spread) — positive is profit. Null/absent alongside currentValue. */
+  unrealizedPnl?: number | null;
 }
 
 // --- Greeks ---
