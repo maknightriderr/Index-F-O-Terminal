@@ -49,7 +49,6 @@ import { KNOWN_INDEX_TOKENS, CM_SEGMENT, calculateDTE, INDEX_SYMBOLS, TRADING_HO
 import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveSpotToken, resolveNearestFuturesContract, buildOptionChain } from './option-chain.js';
 import { buildFuturesData } from './futures.js';
-import { scanFnoUniverse } from './fno-scanner.js';
 import { getCorporateActionsForSymbol } from './corporate-actions.js';
 import { cached } from '../lib/cache.js';
 import { redis } from '../lib/redis.js';
@@ -68,11 +67,6 @@ const HISTORICAL_CACHE_TTL_SECONDS = 90;
 // enough that a transient outage never surfaces the "unreachable" banner,
 // short enough that stale data doesn't linger past a trading session.
 const BIAS_RESULT_CACHE_TTL_SECONDS = 5 * 60;
-
-// Must match instruments.ts/alerts.ts's fno-scanner cache TTL — same key,
-// shared cache, so this just reads whatever the universe scan last cached
-// rather than triggering its own fetch.
-const SCANNER_CACHE_TTL_SECONDS = 180;
 
 // The 6-vote direction read (VWAP/RSI/Supertrend×2/futures OI/PCR) has no
 // hysteresis — a single vote crossing its threshold (e.g. spot ticking
@@ -201,13 +195,7 @@ async function computeMarketBias(
     nonEmpty
   );
 
-  // IV Rank is looked up here (not later, inside resolveStickyTradeSetup as
-  // before) because it now also decides WHICH expiry to build the chain
-  // against for POSITIONAL mode — see resolveTargetExpiry. Independent of
-  // the chain itself (reads the cached F&O-universe scan), so hoisting it
-  // costs nothing extra on the common (INTRADAY) path.
-  const ivRank = await lookupIvRank(provider, exchange, underlying);
-  const targetExpiry = await resolveTargetExpiry(provider, underlying, exchange, mode, ivRank);
+  const targetExpiry = await resolveTargetExpiry(provider, underlying, exchange, mode);
 
   const [chain, futures] = await Promise.all([
     buildOptionChain(provider, underlying, exchange, targetExpiry).catch((err) => {
@@ -696,7 +684,7 @@ async function computeMarketBias(
   };
 
   const tradeSetup: TradeSetup = chain
-    ? await resolveStickyTradeSetup(provider, underlying, exchange, chain, direction, confidence, regime, overall, mode, ivRank)
+    ? await resolveStickyTradeSetup(provider, underlying, exchange, chain, direction, confidence, regime, overall, mode)
     : { available: false, reason: 'Option chain unavailable for this symbol — cannot size a setup.' };
 
   const result: MarketBiasResult = { bias, score, tradeSetup };
@@ -731,54 +719,33 @@ function remainingSessionFraction(exchange: Exchange): number {
   return Math.max(MIN_REMAINING_SESSION_FRACTION, Math.min(1, remainingMinutes / totalSessionMinutes));
 }
 
-// IV Rank is only computed for the ~200-stock NSE F&O universe scan (see
-// fno-scanner.ts's computeIvRanks) — not available for indices (NIFTY/
-// BANKNIFTY) or MCX/BSE symbols. Reuses the same cached scan alerts.ts and
-// institutional-flow.ts already read, so this never triggers an extra fetch
-// on top of the regular 180s universe poll. Returns null (unknown) rather
-// than throwing when the symbol isn't in that scan or the scan itself fails
-// — buildTradeSetup treats null as "don't gate," preserving today's
-// behavior for symbols outside IV Rank's coverage.
-async function lookupIvRank(provider: MarketDataProvider, exchange: Exchange, underlying: string): Promise<number | null> {
-  if (exchange !== 'NSE') return null;
-  try {
-    const rows = await cached('fno-scanner:NSE', SCANNER_CACHE_TTL_SECONDS, () => scanFnoUniverse(provider, 'NSE'));
-    const row = rows.find((r) => r.symbol === underlying);
-    return row?.ivRank ?? null;
-  } catch (err: any) {
-    logger.warn({ error: err.message, underlying }, 'IV Rank lookup failed for trade setup — proceeding ungated');
-    return null;
-  }
-}
-
-// A POSITIONAL naked long (ivRank unknown — indices/MCX/stocks outside the
-// F&O universe scan) needs runway: 15-30 DTE gives the thesis time to play
-// out before theta/vega bleed the premium regardless of direction. A
-// POSITIONAL credit spread (ivRank known) wants the OPPOSITE — 7-14 DTE —
-// since the short leg's accelerating theta decay into expiry IS the edge; a
-// far-dated credit spread just sits there collecting little while tying up
-// margin. INTRADAY always keeps the nearest (highest-gamma, tightest-spread)
-// weekly regardless of ivRank — a same-session hold never reaches either
-// tradeoff. Returns undefined (nearest/default) when no expiry falls close
-// enough to be worth deviating from the weekly, or when expiry data can't
-// be fetched — resolveStickyTradeSetup's caller already treats undefined as
-// "use the default chain."
-const POSITIONAL_SPREAD_DTE_RANGE: [number, number] = [7, 14];
+// A POSITIONAL naked long needs runway: 15-30 DTE gives the thesis time to
+// play out before theta/vega bleed the premium regardless of direction —
+// Trade Setup only ever builds a naked long (the user is an option buyer,
+// not a spread trader — see trade-setup/index.ts's file header), so this
+// is the only band that matters here now; a credit spread's opposite
+// preference (short-dated, 7-14 DTE, since the short leg's accelerating
+// theta into expiry IS the edge) doesn't apply to anything this function
+// picks an expiry for any more. INTRADAY always keeps the nearest
+// (highest-gamma, tightest-spread) weekly regardless — a same-session hold
+// never reaches this tradeoff at all. Returns undefined (nearest/default)
+// when no expiry falls close enough to be worth deviating from the weekly,
+// or when expiry data can't be fetched — resolveStickyTradeSetup's caller
+// already treats undefined as "use the default chain."
 const POSITIONAL_NAKED_LONG_DTE_RANGE: [number, number] = [15, 30];
 
 async function resolveTargetExpiry(
   provider: MarketDataProvider,
   underlying: string,
   exchange: Exchange,
-  mode: TradingMode,
-  ivRank: number | null
+  mode: TradingMode
 ): Promise<string | undefined> {
   if (mode !== 'POSITIONAL') return undefined;
   try {
     const expiries = await provider.getExpiries(underlying, exchange);
     if (expiries.length === 0) return undefined;
 
-    const [minDte, maxDte] = ivRank != null ? POSITIONAL_SPREAD_DTE_RANGE : POSITIONAL_NAKED_LONG_DTE_RANGE;
+    const [minDte, maxDte] = POSITIONAL_NAKED_LONG_DTE_RANGE;
     const targetDte = (minDte + maxDte) / 2;
     const withDte = expiries.map((expiry) => ({ expiry, dte: calculateDTE(expiry) })).filter((x) => x.dte >= 0);
     if (withDte.length === 0) return undefined;
@@ -956,8 +923,7 @@ async function resolveStickyTradeSetup(
   confidence: number,
   regime: MarketRegime,
   intelligenceScore: number,
-  mode: TradingMode = 'INTRADAY',
-  ivRank: number | null = null
+  mode: TradingMode = 'INTRADAY'
 ): Promise<TradeSetup> {
   const isPositional = mode === 'POSITIONAL';
   const setupTtl = isPositional ? STICKY_TRADE_SETUP_TTL_SECONDS_POSITIONAL : STICKY_TRADE_SETUP_TTL_SECONDS;
@@ -1124,11 +1090,6 @@ async function resolveStickyTradeSetup(
     return { available: false, reason: unreliableReason };
   }
 
-  // ivRank is now passed in by the caller (computeMarketBias hoisted the
-  // lookup so it could also pick this chain's expiry for POSITIONAL mode —
-  // see resolveTargetExpiry) rather than looked up fresh here, so the same
-  // value drives both decisions instead of two reads of a cache that could
-  // in principle refresh in between.
   const vix = await lookupIndiaVix(provider, exchange);
   const slPremiumPct = isPositional ? POSITIONAL_SL_PREMIUM_PCT : undefined;
 
@@ -1152,10 +1113,10 @@ async function resolveStickyTradeSetup(
   // 9:15 open with the full 6h15m session ahead of it. Expected move scales
   // with sqrt(time), so scale the 1-day figure down by sqrt(remaining
   // session fraction) — a setup with half the session left gets ~71% of
-  // the full-day move as its target, not 100% of it. This only matters for
-  // the naked-long fallback now (buildTradeSetup tries a debit spread
-  // first for ivRank-unknown symbols), but a spread that does fall back to
-  // naked long deserves the same realistic target as anything else.
+  // the full-day move as its target, not 100% of it. buildTradeSetup only
+  // ever builds a naked long now (the user is an option buyer, not a
+  // spread trader — see trade-setup/index.ts's file header), so this
+  // applies to every INTRADAY setup, not a fallback case.
   const targetExpectedMovePoints = isPositional
     ? chain.expectedMove.points
     : (() => {
@@ -1165,7 +1126,7 @@ async function resolveStickyTradeSetup(
         return oneDayMove * Math.sqrt(remainingSessionFraction(exchange));
       })();
 
-  const fresh = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, targetExpectedMovePoints, ivRank, slPremiumPct, vix, chain.dte);
+  const fresh = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, targetExpectedMovePoints, slPremiumPct, vix, chain.dte);
 
   if (!fresh.available) {
     // Clear any previously locked setup now that conditions no longer
