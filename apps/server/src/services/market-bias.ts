@@ -33,6 +33,7 @@ import {
   calculateExpectedMove,
   detectFairValueGaps,
   testActiveFvg,
+  detectVcp,
 } from '@fno/analytics';
 import type {
   Exchange,
@@ -239,6 +240,22 @@ async function computeMarketBias(
   const shortTermPattern = detectPattern(c15.highs, c15.lows, c15.closes);
   const longTermPattern = detectPattern(c1h.highs, c1h.lows, c1h.closes);
 
+  // Volatility Contraction Pattern (Minervini base-building: a sequence
+  // of progressively shallower pullbacks, ideally on shrinking volume) —
+  // a multi-week/month pattern in its classic form, so run on the "long"
+  // tier only (Daily in POSITIONAL, 1H in INTRADAY — same tier
+  // longTermPattern uses), never the short tier. Breakout confirmation
+  // (below, once VOLUME_CONFIRM_THRESHOLD is in scope) requires
+  // above-average long-tier volume on top of clearing the base's high —
+  // "still basing" alone is reasoning-only, matching the leading-
+  // BREAKOUT-regime philosophy of only counting a signal once it's
+  // actually confirmed, not merely forming.
+  const vcp = detectVcp(c1h.highs, c1h.lows, c1h.closes, c1h.volumes);
+  const longVolSeries = c1h.volumes.slice(-20);
+  const longAvgVolume = longVolSeries.length > 0 ? longVolSeries.reduce((a, b) => a + b, 0) / longVolSeries.length : 0;
+  const longLastVolume = c1h.volumes[c1h.volumes.length - 1] ?? 0;
+  const longVolumeRatio = longAvgVolume > 0 ? longLastVolume / longAvgVolume : 1;
+
   // --- 15m signals ---
   const todaysCandles = filterToday(candles15m);
   const sessionVwapSeries = todaysCandles.length >= 2
@@ -373,6 +390,7 @@ async function computeMarketBias(
   // re-confirmation, only the initial break does.
   const VOLUME_CONFIRM_THRESHOLD = 1.2;
   const volumeConfirms = volumeRatio >= VOLUME_CONFIRM_THRESHOLD;
+  const vcpBreakoutConfirmed = vcp != null && vcp.breakoutRatio >= 1 && longVolumeRatio >= VOLUME_CONFIRM_THRESHOLD;
 
   // Positional requires a higher-conviction RSI reading (60/40 vs 55/45) —
   // a multi-day hold shouldn't be triggered by the same mild RSI lean
@@ -445,6 +463,17 @@ async function computeMarketBias(
     directionVotes.push(fvgVote);
   }
 
+  // VCP breakout: bullish-only (see vcp/index.ts — no standard bearish
+  // mirror), and only counted once actually confirmed (price cleared the
+  // base's high on above-average long-tier volume), not merely "still
+  // basing." Counted TWICE like RSI divergence — Minervini treats a
+  // volume-confirmed VCP breakout as a high-conviction setup, not an
+  // ordinary equal-weight read. Only added when confirmed, same dilution
+  // reasoning as the other event-based votes above.
+  if (vcpBreakoutConfirmed) {
+    directionVotes.push(1, 1);
+  }
+
   const voteSum = directionVotes.reduce((a: number, b) => a + b, 0);
   const votesFor = directionVotes.filter((v) => v === 1).length;
   const votesAgainst = directionVotes.filter((v) => v === -1).length;
@@ -492,6 +521,19 @@ async function computeMarketBias(
     reasoning.push(
       `Price testing an unfilled ${activeFvg.gap.type === 'BULLISH' ? 'bullish Fair Value Gap (acting as support)' : 'bearish Fair Value Gap (acting as resistance)'} at ${fmt(activeFvg.gap.bottom, 0)}–${fmt(activeFvg.gap.top, 0)} (${Math.round(activeFvg.penetrationPct * 100)}% into the zone)`
     );
+  }
+  if (vcp) {
+    const firstDepth = vcp.contractions[0].depthPct * 100;
+    const lastDepth = vcp.contractions[vcp.contractions.length - 1].depthPct * 100;
+    if (vcpBreakoutConfirmed) {
+      reasoning.push(
+        `Volume-confirmed breakout (${fmt(longVolumeRatio, 2)}x volume) from a ${vcp.contractions.length}-leg Volatility Contraction Pattern on ${longLabel} — contractions tightened from ${fmt(firstDepth, 1)}% to ${fmt(lastDepth, 1)}%${vcp.volumeDryUp ? ', volume dried up through the base' : ''} — a high-conviction Minervini-style setup.`
+      );
+    } else {
+      reasoning.push(
+        `${vcp.contractions.length}-leg Volatility Contraction Pattern still basing on ${longLabel} (${fmt(vcp.breakoutRatio * 100, 1)}% of the way to breaking out, contractions ${fmt(firstDepth, 1)}%→${fmt(lastDepth, 1)}%) — not yet confirmed.`
+      );
+    }
   }
   if (candlePattern) {
     reasoning.push(
@@ -615,6 +657,9 @@ async function computeMarketBias(
         : null,
       activeFvg: activeFvg
         ? { type: activeFvg.gap.type, top: activeFvg.gap.top, bottom: activeFvg.gap.bottom, penetrationPct: Math.round(activeFvg.penetrationPct * 100) }
+        : null,
+      vcp: vcp
+        ? { legs: vcp.contractions.length, breakoutRatioPct: Math.round(vcp.breakoutRatio * 100), volumeDryUp: vcp.volumeDryUp, confirmed: vcpBreakoutConfirmed }
         : null,
     },
     timestamp: Date.now(),

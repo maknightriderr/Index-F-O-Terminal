@@ -11,3 +11,4 @@ export * from './candlestick-patterns/index.js';
 export * from './gamma-exposure/index.js';
 export * from './historical-volatility/index.js';
 export * from './fvg/index.js';
+export * from './vcp/index.js';
