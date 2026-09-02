@@ -413,6 +413,24 @@ async function computeMarketBias(
   const freshBreakoutDown = bbPercentB < 0 && bbPercentBPrev >= 0 && volumeConfirms;
 
   const directionVotes: Vote[] = [vwapVote, rsiVote, st15Vote, st1hVote, futuresOiVote, pcrVote];
+
+  // RSI divergence (price makes a higher high/lower low while RSI weakens)
+  // is a genuinely stronger, more reliable reversal signal than a plain
+  // RSI-level threshold — it's the classic early warning that a trend is
+  // losing momentum before price itself turns. Counted TWICE, not as one
+  // more equal-weight vote, so it can actually outweigh 1-2 lagging votes
+  // still pointing the old way — exactly the case divergence exists to
+  // catch early. Only added to the array when it actually fires: a NONE
+  // reading means "no opinion," not "flat disagreement," so it must not
+  // dilute confidence on the (far more common) ticks with no divergence —
+  // pushing two always-present neutral slots would otherwise lower the
+  // confidence denominator on every single symbol/tick regardless of
+  // whether divergence is even relevant right now.
+  const rsiDivergenceVote: Vote = rsiDivergence.signal === 'BULLISH' ? 1 : rsiDivergence.signal === 'BEARISH' ? -1 : 0;
+  if (rsiDivergenceVote !== 0) {
+    directionVotes.push(rsiDivergenceVote, rsiDivergenceVote);
+  }
+
   const voteSum = directionVotes.reduce((a: number, b) => a + b, 0);
   const votesFor = directionVotes.filter((v) => v === 1).length;
   const votesAgainst = directionVotes.filter((v) => v === -1).length;
@@ -453,7 +471,7 @@ async function computeMarketBias(
   }
   if (rsiDivergence.signal !== 'NONE') {
     reasoning.push(
-      `${rsiDivergence.signal === 'BEARISH' ? 'Bearish' : 'Bullish'} RSI divergence — price ${rsiDivergence.signal === 'BEARISH' ? 'made a higher high' : 'made a lower low'} while RSI weakened (${fmt(rsiDivergence.rsiSwing!.first, 0)} → ${fmt(rsiDivergence.rsiSwing!.second, 0)})`
+      `${rsiDivergence.signal === 'BEARISH' ? 'Bearish' : 'Bullish'} RSI divergence (counted double for its reversal reliability) — price ${rsiDivergence.signal === 'BEARISH' ? 'made a higher high' : 'made a lower low'} while RSI weakened (${fmt(rsiDivergence.rsiSwing!.first, 0)} → ${fmt(rsiDivergence.rsiSwing!.second, 0)})`
     );
   }
   if (candlePattern) {
