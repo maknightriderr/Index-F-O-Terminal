@@ -48,8 +48,36 @@ const OI_CONFIG: Record<OIInterpretation, { label: string; color: string; dot: s
     color: 'text-orange-400 light:text-orange-700 bg-orange-500/12 shadow-[0_0_0_1px_rgba(249,115,22,0.2)_inset]',
     dot: 'bg-orange-400 shadow-[0_0_6px_rgba(249,115,22,0.8)]',
   },
+  // Colors now directly encode bullish/bearish regardless of call/put,
+  // matching the LONG_BUILDUP/SHORT_BUILDUP/SHORT_COVERING/LONG_UNWINDING
+  // palette above: emerald/red for the two strong (OI-building) reads,
+  // yellow/orange for the two mild (OI-unwinding) reads. Calls follow the
+  // futures palette directly (long calls = bullish, same as long
+  // futures); puts invert it (buying puts is the bearish bet, so
+  // PUT_BUYING gets the red SHORT_BUILDUP-equivalent slot, not the
+  // emerald one).
+  CALL_BUYING: {
+    label: 'Call Buying',
+    color: 'text-emerald-400 light:text-emerald-700 bg-emerald-500/12 shadow-[0_0_0_1px_rgba(16,185,129,0.2)_inset]',
+    dot: 'bg-emerald-400 shadow-[0_0_6px_rgba(16,185,129,0.8)]',
+  },
   CALL_WRITING: {
     label: 'Call Writing',
+    color: 'text-red-400 light:text-red-700 bg-red-500/12 shadow-[0_0_0_1px_rgba(239,68,68,0.2)_inset]',
+    dot: 'bg-red-400 shadow-[0_0_6px_rgba(239,68,68,0.8)]',
+  },
+  CALL_SHORT_COVERING: {
+    label: 'Call Short Cover',
+    color: 'text-yellow-400 light:text-yellow-700 bg-yellow-500/12 shadow-[0_0_0_1px_rgba(251,191,36,0.2)_inset]',
+    dot: 'bg-yellow-400 shadow-[0_0_6px_rgba(251,191,36,0.8)]',
+  },
+  CALL_UNWINDING: {
+    label: 'Call Unwind',
+    color: 'text-orange-400 light:text-orange-700 bg-orange-500/12 shadow-[0_0_0_1px_rgba(249,115,22,0.2)_inset]',
+    dot: 'bg-orange-400 shadow-[0_0_6px_rgba(249,115,22,0.8)]',
+  },
+  PUT_BUYING: {
+    label: 'Put Buying',
     color: 'text-red-400 light:text-red-700 bg-red-500/12 shadow-[0_0_0_1px_rgba(239,68,68,0.2)_inset]',
     dot: 'bg-red-400 shadow-[0_0_6px_rgba(239,68,68,0.8)]',
   },
@@ -58,15 +86,15 @@ const OI_CONFIG: Record<OIInterpretation, { label: string; color: string; dot: s
     color: 'text-emerald-400 light:text-emerald-700 bg-emerald-500/12 shadow-[0_0_0_1px_rgba(16,185,129,0.2)_inset]',
     dot: 'bg-emerald-400 shadow-[0_0_6px_rgba(16,185,129,0.8)]',
   },
-  CALL_UNWINDING: {
-    label: 'Call Unwind',
-    color: 'text-yellow-400 light:text-yellow-700 bg-yellow-500/12 shadow-[0_0_0_1px_rgba(251,191,36,0.2)_inset]',
-    dot: 'bg-yellow-400 shadow-[0_0_6px_rgba(251,191,36,0.8)]',
+  PUT_SHORT_COVERING: {
+    label: 'Put Short Cover',
+    color: 'text-orange-400 light:text-orange-700 bg-orange-500/12 shadow-[0_0_0_1px_rgba(249,115,22,0.2)_inset]',
+    dot: 'bg-orange-400 shadow-[0_0_6px_rgba(249,115,22,0.8)]',
   },
   PUT_UNWINDING: {
     label: 'Put Unwind',
-    color: 'text-orange-400 light:text-orange-700 bg-orange-500/12 shadow-[0_0_0_1px_rgba(249,115,22,0.2)_inset]',
-    dot: 'bg-orange-400 shadow-[0_0_6px_rgba(249,115,22,0.8)]',
+    color: 'text-yellow-400 light:text-yellow-700 bg-yellow-500/12 shadow-[0_0_0_1px_rgba(251,191,36,0.2)_inset]',
+    dot: 'bg-yellow-400 shadow-[0_0_6px_rgba(251,191,36,0.8)]',
   },
   NEUTRAL: {
     label: 'Neutral',

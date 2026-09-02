@@ -65,12 +65,32 @@ export function calculatePCR(
 
   const oiPCR = totalCallOI > 0 ? totalPutOI / totalCallOI : 0;
   const volumePCR = totalCallVolume > 0 ? totalPutVolume / totalCallVolume : 0;
-  const changeOiPCR = totalCallChangeOI > 0 ? totalPutChangeOI / totalCallChangeOI : 0;
+  // Unlike OI itself (always >= 0), changeOi is SIGNED — negative means
+  // unwinding. A ratio is only a meaningful "how much more put OI built
+  // vs call OI built" reading when both sides are actually building; if
+  // either is flat or unwinding, a straight division can produce a
+  // negative or wildly inflated number with no PCR-like interpretation
+  // (e.g. calls barely +10 while puts are -5000 gives PCR -500). 0 is
+  // the same "no signal" sentinel oiPCR/volumePCR already use when their
+  // own denominator is non-positive.
+  const changeOiPCR = totalCallChangeOI > 0 && totalPutChangeOI > 0 ? totalPutChangeOI / totalCallChangeOI : 0;
   const nearAtmPCR = nearAtmCallOI > 0 ? nearAtmPutOI / nearAtmCallOI : 0;
 
-  // Interpretation based on OI PCR
+  // Interpretation based on OI PCR. Moderate readings follow the
+  // standard convention (elevated puts = bullish hedging/writing,
+  // elevated calls = bearish) — but a genuinely EXTREME PCR in either
+  // direction is more often read as contrarian: one-sided positioning
+  // that crowded tends to precede a reversal rather than confirm
+  // continuation, so the label flips back the other way at the extremes
+  // rather than calling PCR 2.5 "BULLISH" the same as PCR 1.1.
+  const PCR_EXTREME_HIGH = 1.5;
+  const PCR_EXTREME_LOW = 0.4;
   let interpretation: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
-  if (oiPCR > 1.0) {
+  if (oiPCR >= PCR_EXTREME_HIGH) {
+    interpretation = 'BEARISH';
+  } else if (oiPCR <= PCR_EXTREME_LOW) {
+    interpretation = 'BULLISH';
+  } else if (oiPCR > 1.0) {
     interpretation = 'BULLISH';
   } else if (oiPCR < 0.7) {
     interpretation = 'BEARISH';
@@ -87,17 +107,27 @@ export function calculatePCR(
   };
 }
 
+// A PCR move of 0.15 is a ~30% relative shift at a base of 0.5 but only
+// ~5% at a base of 3.0 — an absolute threshold made reversals trivially
+// easy to trigger at low PCR and nearly impossible at high PCR. Floored
+// so a near-zero base doesn't turn a trivial absolute move into a huge
+// relative one.
+const MIN_PCR_REVERSAL_BASE = 0.3;
+
 /**
- * Detect PCR reversal (significant change in PCR direction).
+ * Detect PCR reversal — a significant RELATIVE change in PCR level, not
+ * a fixed absolute move (see MIN_PCR_REVERSAL_BASE above for why).
  */
 export function detectPCRReversal(
   currentPCR: number,
   previousPCR: number,
-  threshold: number = 0.15
+  relativeThreshold: number = 0.15
 ): { isReversal: boolean; direction: 'UP' | 'DOWN' | 'NONE'; magnitude: number } {
   const change = currentPCR - previousPCR;
+  const base = Math.max(Math.abs(previousPCR), MIN_PCR_REVERSAL_BASE);
+  const relativeChange = Math.abs(change) / base;
 
-  if (Math.abs(change) >= threshold) {
+  if (relativeChange >= relativeThreshold) {
     return {
       isReversal: true,
       direction: change > 0 ? 'UP' : 'DOWN',

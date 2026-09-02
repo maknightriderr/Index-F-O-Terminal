@@ -50,39 +50,58 @@ export function classifyFuturesOI(input: OIClassificationInput): OIInterpretatio
 }
 
 /**
- * Classify Options OI activity.
+ * Classify Options OI activity — a real 4-quadrant read (OI direction ×
+ * premium direction), the same shape as classifyFuturesOI, applied to
+ * the option's OWN price instead of the underlying's:
  *
  * For CALL options:
- *   OI ↑ → Call Writing (typically bearish signal)
- *   OI ↓ → Call Unwinding
+ *   OI ↑, premium ↑ → Call Buying (aggressive buyers paying up)   → bullish
+ *   OI ↑, premium ↓ → Call Writing (sellers dominate)             → bearish
+ *   OI ↓, premium ↑ → Call Short Covering (writers buying back)   → bullish
+ *   OI ↓, premium ↓ → Call Unwinding (longs closing losing calls) → bearish
  *
- * For PUT options:
- *   OI ↑ → Put Writing (typically bullish signal)
- *   OI ↓ → Put Unwinding
+ * For PUT options the OI-direction meaning is the same, but the
+ * bullish/bearish READ inverts — buying puts is a bearish bet, writing
+ * puts is a bullish one:
+ *   OI ↑, premium ↑ → Put Buying (bearish bet being built)          → bearish
+ *   OI ↑, premium ↓ → Put Writing (confidence price holds above K)  → bullish
+ *   OI ↓, premium ↑ → Put Short Covering (writers squeezed)         → bearish
+ *   OI ↓, premium ↓ → Put Unwinding (bearish bets abandoned)        → bullish
  *
- * Deliberately OI-direction-only, unlike classifyFuturesOI: `OIInterpretation`
- * only has one WRITING and one UNWINDING state per side, not a full 4-quadrant
- * buying/writing/covering/unwinding split, so there's nowhere for a price-
- * direction read to change the verdict. `priceChange` is accepted (callers
- * may have it, e.g. the underlying's own move) but intentionally unused —
- * pass 0 if you don't have it. A true price-aware option-OI signal (mirroring
- * classifyFuturesOI's 4-quadrant test against the option's own premium
- * change) would need new OIInterpretation states and is a bigger model
- * change, not a bug fix.
+ * Previously this only looked at OI direction (one WRITING and one
+ * UNWINDING state per side) and quietly discarded `priceChange` — so
+ * "OI up" was always labeled WRITING regardless of whether buyers or
+ * sellers were actually driving it, and "OI down" was always labeled
+ * UNWINDING even when it was really short covering. Both are common,
+ * opposite-implication scenarios that look identical from OI alone.
  */
 export function classifyOptionOI(
   input: OIClassificationInput,
   optionType: OptionType
 ): OIInterpretation {
-  const { oiChange } = input;
+  const { priceChange, oiChange } = input;
 
+  const priceThreshold = 0.01; // 0.01% minimum move — same noise floor as classifyFuturesOI
+  const priceUp = priceChange > priceThreshold;
+  const priceDown = priceChange < -priceThreshold;
   const oiUp = oiChange > 0;
   const oiDown = oiChange < 0;
 
   if (optionType === 'CE') {
+    if (oiUp && priceUp) return 'CALL_BUYING';
+    if (oiUp && priceDown) return 'CALL_WRITING';
+    if (oiDown && priceUp) return 'CALL_SHORT_COVERING';
+    if (oiDown && priceDown) return 'CALL_UNWINDING';
+    // OI moved but price didn't clear the noise threshold either way —
+    // still worth naming which side of OI moved, defaulting to the
+    // OI-only read rather than falling all the way back to NEUTRAL.
     if (oiUp) return 'CALL_WRITING';
     if (oiDown) return 'CALL_UNWINDING';
   } else {
+    if (oiUp && priceUp) return 'PUT_BUYING';
+    if (oiUp && priceDown) return 'PUT_WRITING';
+    if (oiDown && priceUp) return 'PUT_SHORT_COVERING';
+    if (oiDown && priceDown) return 'PUT_UNWINDING';
     if (oiUp) return 'PUT_WRITING';
     if (oiDown) return 'PUT_UNWINDING';
   }
@@ -107,14 +126,29 @@ export function getOIDescription(interpretation: OIInterpretation): {
       return { description: 'Short Covering — Shorts exiting', implication: 'BULLISH', emoji: '🟡' };
     case 'LONG_UNWINDING':
       return { description: 'Long Unwinding — Longs exiting', implication: 'BEARISH', emoji: '🟡' };
+    case 'CALL_BUYING':
+      return { description: 'Call Buying — Aggressive buyers paying up', implication: 'BULLISH', emoji: '🟢' };
     case 'CALL_WRITING':
-      return { description: 'Call Writing — Selling calls', implication: 'BEARISH', emoji: '🔴' };
-    case 'PUT_WRITING':
-      return { description: 'Put Writing — Selling puts', implication: 'BULLISH', emoji: '🟢' };
+      return { description: 'Call Writing — Sellers dominate, premium falling on rising OI', implication: 'BEARISH', emoji: '🔴' };
+    case 'CALL_SHORT_COVERING':
+      return { description: 'Call Short Covering — Writers buying back at a loss', implication: 'BULLISH', emoji: '🟡' };
     case 'CALL_UNWINDING':
-      return { description: 'Call Unwinding — Closing call shorts', implication: 'BULLISH', emoji: '🟡' };
+      // Was mislabeled "Closing call shorts" (BULLISH) — any OI decrease
+      // on calls used to get this label regardless of which side was
+      // actually closing. Now genuinely means longs exiting losing calls
+      // (premium falling alongside the OI drop); short covering has its
+      // own state above.
+      return { description: 'Call Unwinding — Longs exiting losing calls', implication: 'BEARISH', emoji: '🟡' };
+    case 'PUT_BUYING':
+      return { description: 'Put Buying — Bearish bets being built', implication: 'BEARISH', emoji: '🔴' };
+    case 'PUT_WRITING':
+      return { description: 'Put Writing — Confidence price holds above the strike', implication: 'BULLISH', emoji: '🟢' };
+    case 'PUT_SHORT_COVERING':
+      return { description: 'Put Short Covering — Writers squeezed as premium rises', implication: 'BEARISH', emoji: '🟡' };
     case 'PUT_UNWINDING':
-      return { description: 'Put Unwinding — Closing put shorts', implication: 'BEARISH', emoji: '🟡' };
+      // Same correction as CALL_UNWINDING above, mirrored: now genuinely
+      // means bearish put bets being abandoned (premium falling with OI).
+      return { description: 'Put Unwinding — Bearish bets being abandoned', implication: 'BULLISH', emoji: '🟡' };
     case 'NEUTRAL':
     default:
       return { description: 'Neutral — No significant OI activity', implication: 'NEUTRAL', emoji: '⚪' };

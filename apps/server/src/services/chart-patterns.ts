@@ -140,7 +140,8 @@ async function scanOneSymbol(
     const match = detectPattern(
       candles.map((c) => c.high),
       candles.map((c) => c.low),
-      candles.map((c) => c.close)
+      candles.map((c) => c.close),
+      candles.map((c) => c.volume)
     );
     if (match) {
       found.push({

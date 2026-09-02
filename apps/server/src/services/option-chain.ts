@@ -154,6 +154,14 @@ async function buildOptionChainUncached(
     const quote = quoteByToken.get(inst.token);
     const broker = greeksByKey.get(`${strike}:${optionType}`);
     const changeOi = changeOiByToken.get(inst.token) ?? 0;
+    // Same self-computed % change as underlyingChangePercent above (not
+    // the provider's own percentChange field, which OHLC-mode payloads
+    // don't always populate) — this leg's OWN premium move, feeding
+    // classifyOptionOI's real buying-vs-writing / covering-vs-unwinding
+    // read below instead of the OI-direction-only guess it used to fall
+    // back to when this was hardcoded to 0.
+    const legChangePercent =
+      quote && quote.close > 0 ? ((quote.ltp - quote.close) / quote.close) * 100 : 0;
 
     const brokerIv = broker ? Number(broker.iv) : 0;
     // Broker Greeks must pass a plausibility check before we trust them —
@@ -193,7 +201,7 @@ async function buildOptionChainUncached(
       gamma: greeks.gamma,
       theta: greeks.theta,
       vega: greeks.vega,
-      oiInterpretation: classifyOptionOI({ priceChange: 0, oiChange: changeOi }, optionType),
+      oiInterpretation: classifyOptionOI({ priceChange: legChangePercent, oiChange: changeOi }, optionType),
       // Calls and puts at the same strike are moneyness-opposite (a strike
       // below spot is ITM for a call but OTM for the put at that same
       // strike) — must be classified per-leg with its own optionType, not

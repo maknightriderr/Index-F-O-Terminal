@@ -47,11 +47,19 @@ export function calculateMultiTimeframeExpectedMove(
   iv: number,
   symbol: string
 ): Record<string, ExpectedMove> {
+  // calculateExpectedMove's own formula (√(dte/365)) treats its `dte`
+  // input as CALENDAR days — matching how DTE/expiry dates and IV are
+  // actually quoted in the options market (the same calendar-day
+  // convention yearsToExpiry uses for Black-Scholes). These were
+  // previously TRADING-day counts (5/10/21) mislabeled as such in the
+  // comments while being fed straight into a calendar-day formula —
+  // silently understating the 1W/2W/1M moves by ~20% (√(365/252) ≈
+  // 1.20). Now genuinely calendar days per label.
   const timeframes = {
     '1D': 1,
-    '1W': 5,   // 5 trading days
-    '2W': 10,
-    '1M': 21,  // ~21 trading days
+    '1W': 7,
+    '2W': 14,
+    '1M': 30,
   };
 
   const result: Record<string, ExpectedMove> = {};

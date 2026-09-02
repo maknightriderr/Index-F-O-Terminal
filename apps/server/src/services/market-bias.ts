@@ -242,8 +242,8 @@ async function computeMarketBias(
   // mode (15m) but a few-day read in POSITIONAL (1H); longTermPattern is
   // the mode's "long" tier either way (1H / Daily) — switching biasMode
   // in the UI is what moves this between "intraday" and "long timeframe."
-  const shortTermPattern = detectPattern(c15.highs, c15.lows, c15.closes);
-  const longTermPattern = detectPattern(c1h.highs, c1h.lows, c1h.closes);
+  const shortTermPattern = detectPattern(c15.highs, c15.lows, c15.closes, c15.volumes);
+  const longTermPattern = detectPattern(c1h.highs, c1h.lows, c1h.closes, c1h.volumes);
 
   // Volatility Contraction Pattern (Minervini base-building: a sequence
   // of progressively shallower pullbacks, ideally on shrinking volume) —

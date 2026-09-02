@@ -22,6 +22,7 @@ import type {
   PredictionAccuracyStats,
   PredictionAccuracyWindow,
 } from '@fno/shared';
+import { TRADING_HOURS } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { buildMarketBias } from './market-bias.js';
 import { getLiveIndexQuotes, INDEX_LIST } from './indices.js';
@@ -31,7 +32,19 @@ import { logger } from '../lib/logger.js';
 
 const SCAN_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes — a same-day prediction/resolution doesn't need to be sub-minute fresh
 const INITIAL_DELAY_MS = 60_000;
-const LATE_SESSION_HOUR_IST = 15; // only resolve using a near-close (not random intraday) price
+// Was a hardcoded "hour >= 15" — fired as early as 3:00pm, up to 30
+// minutes before NSE's actual 15:30 close, locking in a mid-session LTP
+// as the permanent "actualClose" for that prediction (the resolution
+// query only picks up each pending row once, via fwd_1d_return IS NULL,
+// so whichever snapshot wins the first post-gate tick is what sticks
+// forever). Now derived from TRADING_HOURS.NSE.close (the same source
+// of truth remainingSessionFraction() and isMarketOpen() use) plus a
+// small buffer — by RESOLUTION_BUFFER_MINUTES after the bell, trading
+// has actually stopped and LTP is genuinely frozen at the day's last
+// print, not just "whatever it happened to be a half hour early."
+const RESOLUTION_BUFFER_MINUTES = 5;
+const [NSE_CLOSE_H, NSE_CLOSE_M] = TRADING_HOURS.NSE.close.split(':').map(Number);
+const RESOLUTION_GATE_MINUTES = NSE_CLOSE_H * 60 + NSE_CLOSE_M + RESOLUTION_BUFFER_MINUTES;
 
 let scannerStarted = false;
 
@@ -62,7 +75,7 @@ async function runScan(provider: MarketDataProvider): Promise<void> {
     }
   }
 
-  if (istHourNow() >= LATE_SESSION_HOUR_IST) {
+  if (istMinutesNow() >= RESOLUTION_GATE_MINUTES) {
     for (const { symbol } of INSTITUTIONAL_SYMBOLS) {
       try {
         await resolvePendingPredictions(provider, symbol);
@@ -258,6 +271,12 @@ function istDateString(): string {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 }
 
-function istHourNow(): number {
-  return Number(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false }));
+// Minutes since midnight IST — comparable directly against
+// TRADING_HOURS.NSE.close's own "HH:MM" so the resolution gate tracks
+// the real exchange close instead of a hardcoded hour that drifted out
+// of sync with it. Same Date-round-trip pattern market-bias.ts's own
+// remainingSessionFraction() uses for the identical IST-minutes need.
+function istMinutesNow(): number {
+  const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  return ist.getHours() * 60 + ist.getMinutes();
 }

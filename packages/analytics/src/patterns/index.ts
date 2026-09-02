@@ -90,34 +90,72 @@ function confidenceFromTightness(diffPct: number, tolerance: number): number {
  * structure. Checked in roughly the order a chartist would look —
  * reversal patterns (double top/bottom, H&S) before continuation
  * shapes (triangles, wedges, flags) — and returns the first match.
+ *
+ * `volumes`, when provided, adjusts the returned confidence for whether
+ * volume behaved the way classical TA expects while the pattern formed
+ * (H&S/triangles/flags all textbook-expect volume drying up through the
+ * pattern, confirming on the eventual breakout) — declining volume
+ * nudges confidence up, rising volume (less classic) nudges it down.
+ * Applied post-hoc against a fixed lookback ending at the pattern's own
+ * atIndex rather than threaded into each individual sub-detector (which
+ * would need every one of the 7 pattern functions below to separately
+ * track and expose its own start index) — a deliberate simplification,
+ * not a claim that every pattern's true formation window is exactly
+ * this length.
  */
-export function detectPattern(highs: number[], lows: number[], closes: number[]): DetectedPattern | null {
+export function detectPattern(highs: number[], lows: number[], closes: number[], volumes?: number[]): DetectedPattern | null {
   if (highs.length < 15) return null;
 
   const { peaks, troughs } = findSwingPoints(highs, lows);
 
   const doubleTop = detectDoubleTop(peaks, troughs);
-  if (doubleTop) return doubleTop;
+  if (doubleTop) return withVolumeConfirmation(doubleTop, volumes);
 
   const doubleBottom = detectDoubleBottom(peaks, troughs);
-  if (doubleBottom) return doubleBottom;
+  if (doubleBottom) return withVolumeConfirmation(doubleBottom, volumes);
 
   const hs = detectHeadAndShoulders(peaks, troughs);
-  if (hs) return hs;
+  if (hs) return withVolumeConfirmation(hs, volumes);
 
   const ihs = detectInverseHeadAndShoulders(peaks, troughs);
-  if (ihs) return ihs;
+  if (ihs) return withVolumeConfirmation(ihs, volumes);
 
   const triangle = detectTriangle(peaks, troughs, closes);
-  if (triangle) return triangle;
+  if (triangle) return withVolumeConfirmation(triangle, volumes);
 
   const wedge = detectWedge(peaks, troughs);
-  if (wedge) return wedge;
+  if (wedge) return withVolumeConfirmation(wedge, volumes);
 
   const flag = detectFlag(highs, lows, closes);
-  if (flag) return flag;
+  if (flag) return withVolumeConfirmation(flag, volumes);
 
   return null;
+}
+
+const VOLUME_CONFIRMATION_LOOKBACK = 20; // bars treated as "the pattern's formation window" for the volume-trend check
+const MAX_VOLUME_CONFIDENCE_ADJUSTMENT = 8; // +/- cap so this never swings a match past believable
+
+function withVolumeConfirmation(pattern: DetectedPattern, volumes: number[] | undefined): DetectedPattern {
+  if (!volumes || volumes.length === 0) return pattern;
+
+  const end = Math.min(pattern.atIndex, volumes.length - 1);
+  const start = Math.max(0, end - VOLUME_CONFIRMATION_LOOKBACK + 1);
+  if (end - start < 3) return pattern; // too short a window for a trend read to mean anything
+
+  const mid = start + Math.floor((end - start) / 2);
+  const early = volumes.slice(start, mid + 1);
+  const late = volumes.slice(mid + 1, end + 1);
+  const avgEarly = early.reduce((a, b) => a + b, 0) / early.length;
+  const avgLate = late.length > 0 ? late.reduce((a, b) => a + b, 0) / late.length : avgEarly;
+  if (avgEarly <= 0) return pattern;
+
+  // Positive = volume declined through the window (textbook), negative =
+  // it rose (atypical) — scaled and capped into a small confidence nudge.
+  const declinePct = (avgEarly - avgLate) / avgEarly;
+  const adjustment = Math.max(-MAX_VOLUME_CONFIDENCE_ADJUSTMENT, Math.min(MAX_VOLUME_CONFIDENCE_ADJUSTMENT, Math.round(declinePct * 20)));
+  if (adjustment === 0) return pattern;
+
+  return { ...pattern, confidence: Math.max(50, Math.min(95, pattern.confidence + adjustment)) };
 }
 
 // --- Double Top / Bottom ---
