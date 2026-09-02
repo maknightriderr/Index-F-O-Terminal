@@ -31,6 +31,8 @@ import {
   TRADING_DAYS_PER_YEAR,
   HOURLY_BARS_PER_YEAR,
   calculateExpectedMove,
+  detectFairValueGaps,
+  testActiveFvg,
 } from '@fno/analytics';
 import type {
   Exchange,
@@ -259,6 +261,17 @@ async function computeMarketBias(
   // patterns), not just the latest bar in isolation.
   const candlePattern = detectCandlestickPattern(candles15m.slice(-15));
 
+  // Fair Value Gap (ICT "imbalance"): a 3-candle pattern where an
+  // impulsive move leaves a price zone nothing has traded through — price
+  // often retraces into it before continuing, a bullish gap tending to act
+  // as support and a bearish gap as resistance. Scanned over closed 15m
+  // bars only (`.slice(0, -1)` drops the current/still-forming candle,
+  // which `spot` already represents) so "is price live-testing this zone
+  // right now" and "did a later candle already fill it" stay two separate
+  // questions rather than the current bar answering both at once.
+  const fvgs = detectFairValueGaps(c15.highs.slice(0, -1), c15.lows.slice(0, -1));
+  const activeFvg = testActiveFvg(fvgs, spot);
+
   // Classic pivot points from the prior session's H/L/C — price-based S/R
   // to sit alongside the existing OI-wall S/R, since the two can disagree
   // (an OI wall is where positioning is concentrated; a pivot is where
@@ -419,6 +432,19 @@ async function computeMarketBias(
     directionVotes.push(rsiDivergenceVote, rsiDivergenceVote);
   }
 
+  // Fair Value Gap: price actively sitting inside an unfilled imbalance
+  // zone is a real support/resistance-test signal (see fvg/index.ts) — a
+  // bullish gap tends to hold as support, a bearish gap as resistance.
+  // Single weight, not doubled like divergence above: this is a zone
+  // test, not a proven-strength reversal signal. Same "only add when
+  // active" reasoning as divergence — no active test means "no opinion,"
+  // not "flat disagreement," and must not dilute confidence on the far
+  // more common ticks where price isn't inside any open gap.
+  const fvgVote: Vote = activeFvg == null ? 0 : activeFvg.gap.type === 'BULLISH' ? 1 : -1;
+  if (fvgVote !== 0) {
+    directionVotes.push(fvgVote);
+  }
+
   const voteSum = directionVotes.reduce((a: number, b) => a + b, 0);
   const votesFor = directionVotes.filter((v) => v === 1).length;
   const votesAgainst = directionVotes.filter((v) => v === -1).length;
@@ -460,6 +486,11 @@ async function computeMarketBias(
   if (rsiDivergence.signal !== 'NONE') {
     reasoning.push(
       `${rsiDivergence.signal === 'BEARISH' ? 'Bearish' : 'Bullish'} RSI divergence (counted double for its reversal reliability) — price ${rsiDivergence.signal === 'BEARISH' ? 'made a higher high' : 'made a lower low'} while RSI weakened (${fmt(rsiDivergence.rsiSwing!.first, 0)} → ${fmt(rsiDivergence.rsiSwing!.second, 0)})`
+    );
+  }
+  if (activeFvg) {
+    reasoning.push(
+      `Price testing an unfilled ${activeFvg.gap.type === 'BULLISH' ? 'bullish Fair Value Gap (acting as support)' : 'bearish Fair Value Gap (acting as resistance)'} at ${fmt(activeFvg.gap.bottom, 0)}–${fmt(activeFvg.gap.top, 0)} (${Math.round(activeFvg.penetrationPct * 100)}% into the zone)`
     );
   }
   if (candlePattern) {
@@ -581,6 +612,9 @@ async function computeMarketBias(
         : null,
       chartStructureLong: longTermPattern
         ? { pattern: longTermPattern.pattern, direction: longTermPattern.direction, confidence: longTermPattern.confidence, interval: longLabel }
+        : null,
+      activeFvg: activeFvg
+        ? { type: activeFvg.gap.type, top: activeFvg.gap.top, bottom: activeFvg.gap.bottom, penetrationPct: Math.round(activeFvg.penetrationPct * 100) }
         : null,
     },
     timestamp: Date.now(),
