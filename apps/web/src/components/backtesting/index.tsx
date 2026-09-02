@@ -18,11 +18,21 @@ const PERIOD_LABELS: Record<PeriodTab, string> = {
 type ModeFilter = 'ALL' | 'INTRADAY' | 'POSITIONAL';
 const MODE_FILTER_LABELS: Record<ModeFilter, string> = { ALL: 'All', INTRADAY: 'Intraday', POSITIONAL: 'Positional' };
 
+// WIN/LOSS/EXPIRED all mean the position is resolved (r.outcome is set) —
+// grouped together as "Closed" since they're all read the same way here
+// ("what happened"), vs. OPEN (r.outcome null/undefined) which is still
+// live and not yet comparable to the others.
+type OutcomeTab = 'ALL' | 'CLOSED' | 'OPEN';
+const OUTCOME_TAB_LABELS: Record<OutcomeTab, string> = { ALL: 'All', CLOSED: 'Closed', OPEN: 'Open' };
+
 export function BacktestingPage() {
   const [modeFilter, setModeFilter] = useState<ModeFilter>('ALL');
   const { analytics, history, loading, isLive } = useBacktesting(modeFilter);
   const [periodTab, setPeriodTab] = useState<PeriodTab>('daily');
+  const [outcomeTab, setOutcomeTab] = useState<OutcomeTab>('ALL');
   const openTab = useAssetTabsStore((s) => s.openTab);
+  const filteredHistory =
+    outcomeTab === 'ALL' ? history : outcomeTab === 'OPEN' ? history.filter((r) => !r.outcome) : history.filter((r) => !!r.outcome);
 
   return (
     <div className="p-4 space-y-4 min-h-full">
@@ -108,11 +118,34 @@ export function BacktestingPage() {
         </>
       )}
 
-      <div className="pt-1">
-        <h2 className="text-sm font-bold text-gray-200 light:text-slate-800">Recent Trade Setups</h2>
-        <p className="text-[11px] text-gray-500 light:text-slate-500 mt-0.5">Every setup the system has locked in, newest first, with its outcome once resolved.</p>
+      <div className="flex items-center justify-between flex-wrap gap-3 pt-1">
+        <div>
+          <h2 className="text-sm font-bold text-gray-200 light:text-slate-800">Recent Trade Setups</h2>
+          <p className="text-[11px] text-gray-500 light:text-slate-500 mt-0.5">Every setup the system has locked in, newest first, with its outcome once resolved.</p>
+        </div>
+        <div className="flex items-center gap-0.5 bg-gray-800/60 light:bg-slate-200/60 rounded-lg p-0.5" role="group" aria-label="Filter by outcome">
+          {(Object.keys(OUTCOME_TAB_LABELS) as OutcomeTab[]).map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setOutcomeTab(t)}
+              className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wide transition-colors ${
+                outcomeTab === t
+                  ? 'bg-emerald-500/90 text-white'
+                  : 'text-gray-400 light:text-slate-500 hover:text-gray-200 light:hover:text-slate-700'
+              }`}
+            >
+              {OUTCOME_TAB_LABELS[t]} ({t === 'ALL' ? history.length : t === 'OPEN' ? history.filter((r) => !r.outcome).length : history.filter((r) => !!r.outcome).length})
+            </button>
+          ))}
+        </div>
       </div>
-      <TradeSetupHistoryTable history={history} loading={loading} onOpen={(s) => openTab(s, 'NSE')} />
+      <TradeSetupHistoryTable
+        history={filteredHistory}
+        loading={loading}
+        onOpen={(s) => openTab(s, 'NSE')}
+        emptyMessage={history.length > 0 ? `No ${OUTCOME_TAB_LABELS[outcomeTab].toLowerCase()} setups right now.` : undefined}
+      />
     </div>
   );
 }
@@ -306,12 +339,22 @@ const OUTCOME_STYLE: Record<string, string> = {
   EXPIRED: 'text-gray-400 bg-gray-500/10',
 };
 
-function TradeSetupHistoryTable({ history, loading, onOpen }: { history: TradeSetupRecord[]; loading: boolean; onOpen: (symbol: string) => void }) {
+function TradeSetupHistoryTable({
+  history,
+  loading,
+  onOpen,
+  emptyMessage = 'No trade setups recorded yet.',
+}: {
+  history: TradeSetupRecord[];
+  loading: boolean;
+  onOpen: (symbol: string) => void;
+  emptyMessage?: string;
+}) {
   return (
     <Card>
       {history.length === 0 ? (
         <p className="text-xs text-gray-500 light:text-slate-500 py-6 text-center">
-          {loading ? 'Loading…' : 'No trade setups recorded yet.'}
+          {loading ? 'Loading…' : emptyMessage}
         </p>
       ) : (
         <div className="overflow-x-auto">
