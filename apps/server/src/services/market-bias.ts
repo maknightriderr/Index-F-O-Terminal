@@ -34,6 +34,11 @@ import {
   detectFairValueGaps,
   testActiveFvg,
   detectVcp,
+  analyzeMarketStructure,
+  detectLiquiditySweep,
+  detectOrderBlocks,
+  testActiveOrderBlock,
+  classifyPremiumDiscount,
 } from '@fno/analytics';
 import type {
   Exchange,
@@ -289,6 +294,17 @@ async function computeMarketBias(
   const fvgs = detectFairValueGaps(c15.highs.slice(0, -1), c15.lows.slice(0, -1));
   const activeFvg = testActiveFvg(fvgs, spot);
 
+  // ICT market structure — all on the same "short" tier as the divergence
+  // and FVG checks above: swing-based trend/reversal classification
+  // (BOS/CHoCH), a liquidity-sweep check on the current bar, order-block
+  // zone tracking, and premium/discount context. See
+  // market-structure/index.ts for what each concept means.
+  const marketStructure = analyzeMarketStructure(c15.highs, c15.lows);
+  const liquiditySweep = detectLiquiditySweep(c15.highs, c15.lows, c15.closes);
+  const orderBlocks = detectOrderBlocks(c15.highs, c15.lows, c15.closes);
+  const activeOrderBlock = testActiveOrderBlock(orderBlocks, spot);
+  const premiumDiscount = classifyPremiumDiscount(c15.highs, c15.lows, spot);
+
   // Classic pivot points from the prior session's H/L/C — price-based S/R
   // to sit alongside the existing OI-wall S/R, since the two can disagree
   // (an OI wall is where positioning is concentrated; a pivot is where
@@ -474,6 +490,37 @@ async function computeMarketBias(
     directionVotes.push(1, 1);
   }
 
+  // Change of Character (CHoCH): the swing structure just broke AGAINST
+  // its established trend for the first time — ICT's structural early-
+  // reversal warning, the same role RSI divergence plays from a momentum
+  // angle. Counted TWICE for the same reason divergence is: a genuine
+  // structural break is a stronger signal than an ordinary trend vote.
+  // Break of Structure (BOS): the swing structure just extended its
+  // established trend — a real but ordinary trend-confirmation read, so
+  // single weight, same as any other baseline vote.
+  if (marketStructure.lastEvent?.type === 'CHOCH') {
+    directionVotes.push(marketStructure.lastEvent.direction === 'BULLISH' ? 1 : -1, marketStructure.lastEvent.direction === 'BULLISH' ? 1 : -1);
+  } else if (marketStructure.lastEvent?.type === 'BOS') {
+    directionVotes.push(marketStructure.lastEvent.direction === 'BULLISH' ? 1 : -1);
+  }
+
+  // Liquidity sweep: a BUY_SIDE sweep ran the stops resting above a
+  // prior high and rejected back down — trapped longs, bearish. A
+  // SELL_SIDE sweep mirrors it — bullish. Single weight (a trap/zone
+  // signal, not a proven-strength reversal read like CHoCH/divergence),
+  // only added on an actual sweep this bar.
+  if (liquiditySweep) {
+    directionVotes.push(liquiditySweep.type === 'SELL_SIDE' ? 1 : -1);
+  }
+
+  // Order block test: price is sitting inside an unmitigated order block
+  // zone right now — the same "zone under live test" shape as the FVG
+  // vote above, single weight for the same reason.
+  const orderBlockVote: Vote = activeOrderBlock == null ? 0 : activeOrderBlock.block.type === 'BULLISH' ? 1 : -1;
+  if (orderBlockVote !== 0) {
+    directionVotes.push(orderBlockVote);
+  }
+
   const voteSum = directionVotes.reduce((a: number, b) => a + b, 0);
   const votesFor = directionVotes.filter((v) => v === 1).length;
   const votesAgainst = directionVotes.filter((v) => v === -1).length;
@@ -520,6 +567,21 @@ async function computeMarketBias(
   if (activeFvg) {
     reasoning.push(
       `Price testing an unfilled ${activeFvg.gap.type === 'BULLISH' ? 'bullish Fair Value Gap (acting as support)' : 'bearish Fair Value Gap (acting as resistance)'} at ${fmt(activeFvg.gap.bottom, 0)}–${fmt(activeFvg.gap.top, 0)} (${Math.round(activeFvg.penetrationPct * 100)}% into the zone)`
+    );
+  }
+  if (marketStructure.lastEvent?.type === 'CHOCH') {
+    reasoning.push(
+      `Change of Character — market structure just broke ${marketStructure.lastEvent.direction.toLowerCase()} for the first time, an early structural reversal warning`
+    );
+  }
+  if (liquiditySweep) {
+    reasoning.push(
+      `${liquiditySweep.type === 'BUY_SIDE' ? 'Buy-side' : 'Sell-side'} liquidity sweep at ${fmt(liquiditySweep.sweptLevel, 0)} — price ran the stops resting ${liquiditySweep.type === 'BUY_SIDE' ? 'above the prior high' : 'below the prior low'} then rejected back, a likely trap`
+    );
+  }
+  if (activeOrderBlock) {
+    reasoning.push(
+      `Price testing an unmitigated ${activeOrderBlock.block.type === 'BULLISH' ? 'bullish' : 'bearish'} order block at ${fmt(activeOrderBlock.block.bottom, 0)}–${fmt(activeOrderBlock.block.top, 0)} (${Math.round(activeOrderBlock.penetrationPct * 100)}% into the zone)`
     );
   }
   if (vcp) {
@@ -661,6 +723,13 @@ async function computeMarketBias(
       vcp: vcp
         ? { legs: vcp.contractions.length, breakoutRatioPct: Math.round(vcp.breakoutRatio * 100), volumeDryUp: vcp.volumeDryUp, confirmed: vcpBreakoutConfirmed }
         : null,
+      marketStructureBias: marketStructure.bias,
+      lastStructureEvent: marketStructure.lastEvent,
+      liquiditySweep,
+      activeOrderBlock: activeOrderBlock
+        ? { type: activeOrderBlock.block.type, top: activeOrderBlock.block.top, bottom: activeOrderBlock.block.bottom, penetrationPct: Math.round(activeOrderBlock.penetrationPct * 100) }
+        : null,
+      premiumDiscount: premiumDiscount.zone,
     },
     timestamp: Date.now(),
   };
