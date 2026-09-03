@@ -163,6 +163,7 @@ interface OiLevelInput {
 
 export function SupportResistanceCard({ bias }: { bias: MarketBias }) {
   const inputs = bias.inputs as Record<string, unknown>;
+  const spotPrice = inputs.spotPrice as number | null;
   const supportLevels = ((inputs.supportLevels as OiLevelInput[] | undefined) ?? []).slice().sort((a, b) => b.strike - a.strike);
   const resistanceLevels = ((inputs.resistanceLevels as OiLevelInput[] | undefined) ?? []).slice().sort((a, b) => b.strike - a.strike);
   const pivotLevels: Array<{ label: string; value: number | null; kind: 'resistance' | 'pivot' | 'support' }> = [
@@ -189,12 +190,29 @@ export function SupportResistanceCard({ bias }: { bias: MarketBias }) {
               OI Walls
             </div>
             <div className="space-y-1">
-              {resistanceLevels.map((r, i) => (
-                <OiLevelRow key={`r-${i}`} strike={r.strike} strengthPct={r.strengthPct} color="red" />
-              ))}
-              {supportLevels.map((s, i) => (
-                <OiLevelRow key={`s-${i}`} strike={s.strike} strengthPct={s.strengthPct} color="emerald" />
-              ))}
+              {resistanceLevels.length > 0 && (
+                <>
+                  <div className="text-[9px] font-bold text-red-400 uppercase tracking-wide">▲ Resistance</div>
+                  {resistanceLevels.map((r, i) => (
+                    <OiLevelRow key={`r-${i}`} strike={r.strike} strengthPct={r.strengthPct} color="red" />
+                  ))}
+                </>
+              )}
+              {spotPrice != null && (
+                <div className="flex items-center gap-2 py-1">
+                  <div className="flex-1 h-px bg-gray-700 light:bg-slate-300" />
+                  <span className="text-[10px] text-gray-400 light:text-slate-500 font-semibold tabular-nums whitespace-nowrap">Spot {formatIndianNumber(spotPrice, 0)}</span>
+                  <div className="flex-1 h-px bg-gray-700 light:bg-slate-300" />
+                </div>
+              )}
+              {supportLevels.length > 0 && (
+                <>
+                  <div className="text-[9px] font-bold text-emerald-400 uppercase tracking-wide">▼ Support</div>
+                  {supportLevels.map((s, i) => (
+                    <OiLevelRow key={`s-${i}`} strike={s.strike} strengthPct={s.strengthPct} color="emerald" />
+                  ))}
+                </>
+              )}
             </div>
           </div>
         )}
