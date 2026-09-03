@@ -456,7 +456,17 @@ export class AngelOneProvider implements MarketDataProvider {
 
       return [];
     } catch (error: any) {
-      logger.error({ error: error.message, name, expiry }, 'Option Greeks fetch failed');
+      // Was just `error.message` — axios's own generic "Request failed
+      // with status code 403", which says nothing about WHY Angel One
+      // rejected it (rate limit vs. a genuine permissions/entitlement
+      // gap on this specific endpoint vs. a stale token). The broker's
+      // own response body (same shape every other endpoint in this file
+      // already logs — see apiMessage/apiErrorCode elsewhere) carries
+      // that answer; axios attaches it to error.response for any non-2xx
+      // status, it just wasn't being read here.
+      const apiMessage = error.response?.data?.message;
+      const apiErrorCode = error.response?.data?.errorcode;
+      logger.error({ error: error.message, apiMessage, apiErrorCode, httpStatus: error.response?.status, name, expiry }, 'Option Greeks fetch failed');
       return [];
     }
   }
