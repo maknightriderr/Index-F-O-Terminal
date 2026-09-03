@@ -456,19 +456,19 @@ export class AngelOneProvider implements MarketDataProvider {
 
       return [];
     } catch (error: any) {
-      // Was just `error.message` — axios's own generic "Request failed
-      // with status code 403", which says nothing about WHY Angel One
-      // rejected it (rate limit vs. a genuine permissions/entitlement
-      // gap on this specific endpoint vs. a stale token). The broker's
-      // own response body (same shape every other endpoint in this file
-      // already logs — see apiMessage/apiErrorCode elsewhere) carries
-      // that answer; axios attaches it to error.response for any non-2xx
-      // status, it just wasn't being read here.
+      // Confirmed live: Angel One rejects this endpoint with a bare 403
+      // and a plain-text body — "Access denied because of exceeding
+      // access rate" — not its usual {status,message,errorcode} JSON
+      // shape every other endpoint in this file logs via
+      // apiMessage/apiErrorCode. rawBody is the only way to actually see
+      // that text (JSON.stringify(undefined) on a missing body would
+      // otherwise silently produce "undefined"), so it stays a permanent
+      // part of this log line rather than the generic apiMessage/
+      // apiErrorCode pair, which will just be empty here. The real fix
+      // for the rate limit itself lives in option-chain.ts (a much
+      // longer, endpoint-specific cache — see GREEKS_CACHE_TTL_SECONDS).
       const apiMessage = error.response?.data?.message;
       const apiErrorCode = error.response?.data?.errorcode;
-      // TEMPORARY: dump whatever the body actually is (Angel One's usual
-      // {status,message,errorcode} shape isn't showing up above) — remove
-      // once this 403's real cause is confirmed.
       let rawBody: string | undefined;
       try {
         rawBody = typeof error.response?.data === 'string' ? error.response.data.slice(0, 500) : JSON.stringify(error.response?.data)?.slice(0, 500);

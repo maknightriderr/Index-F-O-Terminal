@@ -42,6 +42,18 @@ export interface BuildOptionChainOptions {
 }
 
 const CHAIN_CACHE_TTL_SECONDS = 10;
+// Angel One's optionGreek endpoint rate-limits far more strictly than the
+// 10s whole-chain cache above accounts for — that cache is PER SYMBOL, so
+// it doesn't bound the AGGREGATE call rate across however many symbols
+// are being tracked at once (every open browser tab polling every 15s,
+// plus the trade-setup monitor's own 90s sweep across every locked
+// position, each independently able to miss the 10s window and re-fetch
+// Greeks for its own symbol). Confirmed live: every single call was
+// coming back "Access denied because of exceeding access rate". Greeks
+// don't swing on a sub-minute basis the way LTP does, so a much longer,
+// endpoint-specific cache directly cuts the aggregate call rate rather
+// than just each symbol's own rate.
+const GREEKS_CACHE_TTL_SECONDS = 90;
 
 export async function buildOptionChain(
   provider: MarketDataProvider,
@@ -128,10 +140,22 @@ async function buildOptionChainUncached(
 
   const [quotes, greeksData] = await Promise.all([
     provider.getQuote(FO_SEGMENT[exchange], allTokens, 'FULL'),
-    provider.getOptionGreeks(underlying, expiry).catch((err) => {
-      logger.warn({ error: err.message, underlying, expiry }, 'Broker Greeks unavailable, using internal engine only');
-      return [];
-    }),
+    // Deliberately using cached()'s default shouldCache (always cache,
+    // empty result included) rather than the nonEmpty-style guard other
+    // callers use for a swallowed-error empty array (see cached()'s own
+    // doc comment). That guard exists so a rare transient failure doesn't
+    // lock out a legitimate retry — the right call when the failure is
+    // random. This one isn't: the confirmed cause is "Access denied
+    // because of exceeding access rate," so retrying on every uncached
+    // poll is exactly what KEEPS it rate-limited. Caching the empty
+    // result too is a deliberate backoff, giving the limit window time to
+    // actually clear instead of re-tripping it every poll.
+    cached(`option-greeks:${exchange}:${underlying}:${expiry}`, GREEKS_CACHE_TTL_SECONDS, () =>
+      provider.getOptionGreeks(underlying, expiry).catch((err) => {
+        logger.warn({ error: err.message, underlying, expiry }, 'Broker Greeks unavailable, using internal engine only');
+        return [];
+      })
+    ),
   ]);
 
   const quoteByToken = new Map(quotes.map((q) => [q.token, q]));
