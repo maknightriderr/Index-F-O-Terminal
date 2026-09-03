@@ -10,6 +10,8 @@ import type {
   Exchange,
   OptionChain,
   OptionChainLeg,
+  OptionChainStrike,
+  OIInterpretation,
   FuturesChainResponse,
   FuturesData,
   PositionMomentum,
@@ -265,12 +267,13 @@ export function AssetWorkspace() {
           {chain && (
             <div>
               <SectionLabel icon="🔬">Option Chain Intelligence</SectionLabel>
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mb-3">
                 <OiTrapCard trap={chain.oiTrap} />
                 <PositionMomentumCard momentum={chain.positionMomentum} />
                 <DecayCard decay={chain.decay} />
                 <TradeSetupCard setup={tradeSetup} />
               </div>
+              <OiShiftCard strikes={chain.strikes} />
             </div>
           )}
 
@@ -539,6 +542,7 @@ const INTEL_ACCENT: Record<string, string> = {
   blue: 'border-t-blue-500/50',
   red: 'border-t-red-500/50',
   emerald: 'border-t-emerald-500/50',
+  violet: 'border-t-violet-500/50',
 };
 
 function IntelCard({ title, children, accent = 'amber' }: { title: string; children: React.ReactNode; accent?: keyof typeof INTEL_ACCENT }) {
@@ -608,6 +612,64 @@ function MomentumRow({
       </span>
       <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${activityClass}`}>{activity}</span>
     </div>
+  );
+}
+
+// Every strike already carries its own real 4-quadrant OI classification
+// (CALL/PUT × BUYING/WRITING/SHORT_COVERING/UNWINDING — see oi/index.ts),
+// but it only ever showed up as a small badge buried in one row of a long
+// scrolling table. This surfaces the same data as a ranked "where is it
+// actually moving" list — purely a client-side reshuffle of data the
+// chain response already includes, no new API call.
+interface OiShiftRow {
+  strike: number;
+  side: 'CE' | 'PE';
+  changeOi: number;
+  interpretation: OIInterpretation;
+}
+
+function buildOiShiftRows(strikes: OptionChainStrike[], limit = 8): OiShiftRow[] {
+  const rows: OiShiftRow[] = [];
+  for (const s of strikes) {
+    if (s.call && s.call.changeOi !== 0) rows.push({ strike: s.strike, side: 'CE', changeOi: s.call.changeOi, interpretation: s.call.oiInterpretation });
+    if (s.put && s.put.changeOi !== 0) rows.push({ strike: s.strike, side: 'PE', changeOi: s.put.changeOi, interpretation: s.put.oiInterpretation });
+  }
+  return rows.sort((a, b) => Math.abs(b.changeOi) - Math.abs(a.changeOi)).slice(0, limit);
+}
+
+function OiShiftCard({ strikes }: { strikes: OptionChainStrike[] }) {
+  const rows = useMemo(() => buildOiShiftRows(strikes), [strikes]);
+  if (rows.length === 0) {
+    return (
+      <IntelCard title="Where OI Is Shifting" accent="violet">
+        <p className="text-[11px] text-gray-500 light:text-slate-500 leading-snug">No OI change yet this session — nothing has moved.</p>
+      </IntelCard>
+    );
+  }
+
+  const maxAbs = Math.max(...rows.map((r) => Math.abs(r.changeOi)));
+
+  return (
+    <IntelCard title="Where OI Is Shifting" accent="violet">
+      <div className="space-y-1.5">
+        {rows.map((r) => (
+          <div key={`${r.strike}-${r.side}`} className="flex items-center gap-2">
+            <span className={`text-[9px] font-bold px-1 py-0.5 rounded shrink-0 ${r.side === 'CE' ? 'text-emerald-400 bg-emerald-500/12' : 'text-red-400 bg-red-500/12'}`}>{r.side}</span>
+            <span className="text-[11px] text-gray-300 light:text-slate-700 tabular-nums w-12 shrink-0">{formatIndianNumber(r.strike, 0)}</span>
+            <div className="flex-1 h-1.5 bg-gray-900/70 light:bg-slate-200 rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full ${r.changeOi > 0 ? 'bg-emerald-500' : 'bg-red-500'}`}
+                style={{ width: `${maxAbs > 0 ? (Math.abs(r.changeOi) / maxAbs) * 100 : 0}%` }}
+              />
+            </div>
+            <span className={`text-[11px] tabular-nums w-14 shrink-0 text-right font-medium ${r.changeOi > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+              {r.changeOi > 0 ? '+' : ''}{formatCompact(r.changeOi)}
+            </span>
+            <OIBadge type={r.interpretation} />
+          </div>
+        ))}
+      </div>
+    </IntelCard>
   );
 }
 
