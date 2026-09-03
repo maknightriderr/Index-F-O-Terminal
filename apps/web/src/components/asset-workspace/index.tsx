@@ -20,7 +20,7 @@ import type {
   TradeSetup,
 } from '@fno/shared';
 import { OIBadge } from '@/components/common/badges';
-import { MarketBiasCard, MarketRegimeCard, IntelligenceScoreCard } from '@/components/common/market-intelligence-cards';
+import { MarketBiasCard, MarketRegimeCard, IntelligenceScoreCard, SupportResistanceCard } from '@/components/common/market-intelligence-cards';
 import { NewsPanel } from '@/components/common/news-panel';
 import { EventCalendarPanel } from '@/components/common/event-calendar-panel';
 import { PayoffDiagram } from '@/components/common/payoff-diagram';
@@ -253,6 +253,9 @@ export function AssetWorkspace() {
           <MarketBiasCard bias={bias} symbol={selectedSymbol} />
           <MarketRegimeCard bias={bias} />
           <IntelligenceScoreCard score={score} symbol={selectedSymbol} />
+        </div>
+        <div className="mt-3">
+          <SupportResistanceCard bias={bias} />
         </div>
       </div>
 

@@ -382,8 +382,10 @@ async function computeMarketBias(
   // --- Option chain PCR / OI walls ---
   const pcr = chain?.pcrDetail.oiPCR ?? 1;
   const atmIvPct = chain ? computeAtmIv(chain) : 0;
-  const putWall = chain ? findMaxOiStrike(chain, 'put') : null;
-  const callWall = chain ? findMaxOiStrike(chain, 'call') : null;
+  const putLevels = chain ? findTopOiLevels(chain, 'put') : [];
+  const callLevels = chain ? findTopOiLevels(chain, 'call') : [];
+  const putWall = putLevels[0] ?? null;
+  const callWall = callLevels[0] ?? null;
 
   // Historical (realized) volatility from the "long" tier's closes — 1H
   // bars in INTRADAY mode, Daily bars in POSITIONAL — annualized with the
@@ -697,11 +699,24 @@ async function computeMarketBias(
       // OI-wall S/R (where positioning is concentrated) and price-pivot
       // S/R (where price itself has previously reacted) are two distinct
       // signals that can disagree — both surfaced rather than only one.
+      // support/resistance/pivotSupport/pivotResistance stay as the
+      // single strongest level each for any existing reader of this
+      // field; supportLevels/resistanceLevels and the full pivot ladder
+      // below are the same data, just not collapsed to one level —
+      // intraday trading wants the full ladder, not just the top one.
       support: putWall?.strike ?? null,
       resistance: callWall?.strike ?? null,
+      supportLevels: putLevels,
+      resistanceLevels: callLevels,
       pivotSupport: pivots?.s1 ?? null,
       pivotResistance: pivots?.r1 ?? null,
       pivotPP: pivots?.pp ?? null,
+      pivotS1: pivots?.s1 ?? null,
+      pivotS2: pivots?.s2 ?? null,
+      pivotS3: pivots?.s3 ?? null,
+      pivotR1: pivots?.r1 ?? null,
+      pivotR2: pivots?.r2 ?? null,
+      pivotR3: pivots?.r3 ?? null,
       rsiDivergence: rsiDivergence.signal,
       candlePattern: candlePattern?.pattern ?? null,
       historicalVolatility: hvPct,
@@ -1755,15 +1770,32 @@ function computeAtmIv(chain: NonNullable<Awaited<ReturnType<typeof buildOptionCh
   return samples.length > 0 ? samples.reduce((a, b) => a + b, 0) / samples.length : 0;
 }
 
-function findMaxOiStrike(
+export interface OiLevel {
+  strike: number;
+  oi: number;
+  /** OI relative to the single strongest level on this side, 0-100 — the strongest level is always 100, the rest scaled against it. */
+  strengthPct: number;
+}
+
+// Intraday traders generally want more than just the single heaviest
+// strike — a ladder of the next-heaviest levels shows where price is
+// likely to find further reaction on the way to (or past) the primary
+// wall, not just where the single biggest one sits.
+const OI_LEVEL_COUNT = 3;
+
+function findTopOiLevels(
   chain: NonNullable<Awaited<ReturnType<typeof buildOptionChain>>>,
-  side: 'call' | 'put'
-): { strike: number; oi: number } | null {
-  let best: { strike: number; oi: number } | null = null;
+  side: 'call' | 'put',
+  count: number = OI_LEVEL_COUNT
+): OiLevel[] {
+  const levels: Array<{ strike: number; oi: number }> = [];
   for (const s of chain.strikes) {
     const leg = side === 'call' ? s.call : s.put;
-    if (!leg) continue;
-    if (!best || leg.oi > best.oi) best = { strike: s.strike, oi: leg.oi };
+    if (!leg || leg.oi <= 0) continue;
+    levels.push({ strike: s.strike, oi: leg.oi });
   }
-  return best;
+  levels.sort((a, b) => b.oi - a.oi);
+  const top = levels.slice(0, count);
+  const maxOi = top[0]?.oi ?? 0;
+  return top.map((l) => ({ ...l, strengthPct: maxOi > 0 ? Math.round((l.oi / maxOi) * 100) : 0 }));
 }

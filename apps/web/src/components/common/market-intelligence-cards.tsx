@@ -148,6 +148,96 @@ export function IntelligenceScoreCard({ score, symbol }: { score: IntelligenceSc
   );
 }
 
+// --- Support & Resistance ---
+// Two independent methodologies, both already computed server-side but
+// previously collapsed down to a single level each in MarketRegimeCard —
+// intraday trading wants the fuller ladder, not just "the one strongest
+// level," since price often reacts at several nearby zones on the way to
+// (or past) the primary one.
+
+interface OiLevelInput {
+  strike: number;
+  oi: number;
+  strengthPct: number;
+}
+
+export function SupportResistanceCard({ bias }: { bias: MarketBias }) {
+  const inputs = bias.inputs as Record<string, unknown>;
+  const supportLevels = ((inputs.supportLevels as OiLevelInput[] | undefined) ?? []).slice().sort((a, b) => b.strike - a.strike);
+  const resistanceLevels = ((inputs.resistanceLevels as OiLevelInput[] | undefined) ?? []).slice().sort((a, b) => b.strike - a.strike);
+  const pivotLevels: Array<{ label: string; value: number | null; kind: 'resistance' | 'pivot' | 'support' }> = [
+    { label: 'R3', value: inputs.pivotR3 as number | null, kind: 'resistance' },
+    { label: 'R2', value: inputs.pivotR2 as number | null, kind: 'resistance' },
+    { label: 'R1', value: inputs.pivotR1 as number | null, kind: 'resistance' },
+    { label: 'PP', value: inputs.pivotPP as number | null, kind: 'pivot' },
+    { label: 'S1', value: inputs.pivotS1 as number | null, kind: 'support' },
+    { label: 'S2', value: inputs.pivotS2 as number | null, kind: 'support' },
+    { label: 'S3', value: inputs.pivotS3 as number | null, kind: 'support' },
+  ];
+  const hasPivots = pivotLevels.some((p) => p.value != null);
+  const hasOiLevels = supportLevels.length > 0 || resistanceLevels.length > 0;
+
+  if (!hasOiLevels && !hasPivots) return null;
+
+  return (
+    <div className="bg-gradient-to-b from-[#151522] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 border-t-2 border-t-amber-500/50 rounded-xl shadow-[0_8px_28px_-14px_rgba(0,0,0,0.75)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.15)] hover:border-gray-700/80 light:hover:border-slate-300 transition-all duration-200 p-4">
+      <h3 className="text-xs font-bold text-gray-300 light:text-slate-700 uppercase tracking-wide mb-3">Support &amp; Resistance</h3>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {hasOiLevels && (
+          <div>
+            <div className="text-[10px] text-gray-500 light:text-slate-500 uppercase tracking-wide mb-1.5" title="Top strikes by open interest on each side — OI concentration is where positioning is heaviest, a real trading-activity signal.">
+              OI Walls
+            </div>
+            <div className="space-y-1">
+              {resistanceLevels.map((r, i) => (
+                <OiLevelRow key={`r-${i}`} strike={r.strike} strengthPct={r.strengthPct} color="red" />
+              ))}
+              {supportLevels.map((s, i) => (
+                <OiLevelRow key={`s-${i}`} strike={s.strike} strengthPct={s.strengthPct} color="emerald" />
+              ))}
+            </div>
+          </div>
+        )}
+        {hasPivots && (
+          <div>
+            <div className="text-[10px] text-gray-500 light:text-slate-500 uppercase tracking-wide mb-1.5" title="Classic pivot ladder from the prior session's high/low/close — where price itself has previously reacted, independent of current positioning.">
+              Pivot Ladder
+            </div>
+            <div className="space-y-1">
+              {pivotLevels.map((p) => (
+                <div key={p.label} className="flex items-center justify-between text-xs bg-gray-900/50 light:bg-slate-100 rounded px-2 py-1">
+                  <span
+                    className={`text-[10px] font-bold w-6 ${
+                      p.kind === 'resistance' ? 'text-red-400' : p.kind === 'support' ? 'text-emerald-400' : 'text-gray-400 light:text-slate-500'
+                    }`}
+                  >
+                    {p.label}
+                  </span>
+                  <span className="text-gray-200 light:text-slate-800 font-medium tabular-nums">{p.value != null ? formatIndianNumber(p.value, 0) : '—'}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function OiLevelRow({ strike, strengthPct, color }: { strike: number; strengthPct: number; color: 'red' | 'emerald' }) {
+  const barColor = color === 'red' ? 'bg-red-500' : 'bg-emerald-500';
+  const textColor = color === 'red' ? 'text-red-400' : 'text-emerald-400';
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className={`font-semibold tabular-nums w-14 ${textColor}`}>{formatIndianNumber(strike, 0)}</span>
+      <div className="flex-1 h-1.5 bg-gray-900/70 light:bg-slate-200 rounded-full overflow-hidden">
+        <div className={`h-full rounded-full ${barColor}`} style={{ width: `${strengthPct}%` }} />
+      </div>
+      <span className="text-gray-500 light:text-slate-500 tabular-nums w-8 text-right">{strengthPct}%</span>
+    </div>
+  );
+}
+
 const PROB_BAR_COLORS: Record<string, string> = {
   emerald: 'bg-emerald-500',
   gray: 'bg-gray-500',
