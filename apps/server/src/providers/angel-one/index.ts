@@ -466,7 +466,16 @@ export class AngelOneProvider implements MarketDataProvider {
       // status, it just wasn't being read here.
       const apiMessage = error.response?.data?.message;
       const apiErrorCode = error.response?.data?.errorcode;
-      logger.error({ error: error.message, apiMessage, apiErrorCode, httpStatus: error.response?.status, name, expiry }, 'Option Greeks fetch failed');
+      // TEMPORARY: dump whatever the body actually is (Angel One's usual
+      // {status,message,errorcode} shape isn't showing up above) — remove
+      // once this 403's real cause is confirmed.
+      let rawBody: string | undefined;
+      try {
+        rawBody = typeof error.response?.data === 'string' ? error.response.data.slice(0, 500) : JSON.stringify(error.response?.data)?.slice(0, 500);
+      } catch {
+        rawBody = String(error.response?.data);
+      }
+      logger.error({ error: error.message, apiMessage, apiErrorCode, httpStatus: error.response?.status, rawBody, name, expiry }, 'Option Greeks fetch failed');
       return [];
     }
   }
