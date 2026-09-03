@@ -1114,6 +1114,31 @@ async function resolveStickyTradeSetup(
       ? stored.maxProfit != null && stored.maxProfit > 0 && stored.maxLoss != null && stored.maxLoss > 0
       : stored.riskReward != null && stored.riskReward <= MAX_RISK_REWARD);
 
+  // Self-heal a setup that's alive and trade-able in the terminal but
+  // missing its Backtesting row — recordTradeSetupGenerated below can
+  // fail transiently (a DB blip) while the Redis write that actually
+  // makes the setup live in the UI succeeds regardless, since the two
+  // are independent writes with no shared transaction. Found this after
+  // a user reported Backtesting wasn't showing every OPEN position
+  // visible in the terminal — recordTradeSetupOutcome already no-ops
+  // when signalId is missing (see its own comment), so without this
+  // there was never a second chance to record a setup that failed once.
+  // Retried every poll until it succeeds; a rare double-failure window
+  // (the DB insert succeeds but the very next Redis write fails) can
+  // leave one harmless duplicate row, which is a far better failure mode
+  // than the guaranteed-permanent gap this replaces.
+  if (storedIsPlausible && stored && !stored.signalId) {
+    const backfilledId = await recordTradeSetupGenerated(underlying, exchange, stored, stored.direction, confidence, regime, intelligenceScore, mode);
+    if (backfilledId) {
+      stored = { ...stored, signalId: backfilledId };
+      try {
+        await redis.set(key, JSON.stringify(stored), 'EX', setupTtl);
+      } catch (err: any) {
+        logger.warn({ error: err.message, underlying }, 'Sticky trade setup signalId backfill write failed');
+      }
+    }
+  }
+
   // A positional hold is meant to run days/weeks — unlike intraday, a
   // calendar-day change alone shouldn't invalidate it, only SL/target
   // being hit or a confirmed reversal should. Intraday keeps requiring
@@ -1503,14 +1528,34 @@ export async function checkLockedSetupPriceLevels(provider: MarketDataProvider, 
     return;
   }
 
-  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-  if (!stored?.available || stored.day !== today) return;
+  if (!stored?.available) return;
 
   let chain: OptionChain;
   try {
     chain = await buildOptionChain(provider, underlying, exchange);
   } catch (err: any) {
     logger.warn({ error: err.message, underlying }, 'Price-level monitor: option chain fetch failed — will retry next tick');
+    return;
+  }
+
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  if (stored.day !== today) {
+    // A prior-day INTRADAY setup used to just get silently skipped here —
+    // day-rollover EXPIRY only ever happened in resolveStickyTradeSetup's
+    // ON-DEMAND path, which never runs for a symbol nobody revisits the
+    // next day. That setup's Redis key eventually vanished on its own TTL
+    // (2 days) with no outcome ever recorded, leaving its Backtesting row
+    // permanently stuck showing "open" — found via a live DB/Redis
+    // comparison: 32 DB rows had no outcome, but only 9 were still backed
+    // by a real Redis key; the other 23 were exactly this. Same close-out
+    // resolveStickyTradeSetup itself uses for a same-poll day rollover.
+    await recordTradeSetupOutcome(stored, 'EXPIRED', currentExitValue(chain, stored));
+    try {
+      await redis.del(key);
+    } catch (err: any) {
+      logger.warn({ error: err.message, underlying }, 'Price-level monitor: stale-day sticky setup clear failed');
+    }
+    logger.info({ underlying, exchange }, 'Price-level monitor: closed a prior-day setup nobody had revisited');
     return;
   }
 
