@@ -538,7 +538,12 @@ async function computeMarketBias(
   const freshBreakoutUp = bbPercentB > 1 && bbPercentBPrev <= 1 && volumeConfirms;
   const freshBreakoutDown = bbPercentB < 0 && bbPercentBPrev >= 0 && volumeConfirms;
 
-  const directionVotes: Vote[] = [vwapVote, rsiVote, st15Vote, st1hVote, futuresOiVote, pcrVote, optionOiFlowVote];
+  // macdVote/bollingerVote were computed above but only ever fed the
+  // Intelligence Score's separate "Technicals" dimension — never the
+  // actual Bias direction/confidence, despite both being fully-formed
+  // votes (bollingerVote already has its own breakout/volume-confirmation
+  // guard). Added here as baseline votes, same tier as VWAP/RSI/Supertrend.
+  const directionVotes: Vote[] = [vwapVote, rsiVote, st15Vote, st1hVote, futuresOiVote, pcrVote, optionOiFlowVote, macdVote, bollingerVote];
 
   // RSI divergence (price makes a higher high/lower low while RSI weakens)
   // is a genuinely stronger, more reliable reversal signal than a plain
@@ -776,6 +781,22 @@ async function computeMarketBias(
       : rsi15 < rsiBearThreshold
       ? `RSI at ${fmt(rsi15, 0)} — bearish but not oversold`
       : `RSI at ${fmt(rsi15, 0)} — neutral`
+  );
+  reasoning.push(
+    macdVote === 1
+      ? `MACD histogram positive (${fmt(macdHistNow, 2)}) — bullish momentum`
+      : macdVote === -1
+      ? `MACD histogram negative (${fmt(macdHistNow, 2)}) — bearish momentum`
+      : `MACD histogram flat (${fmt(macdHistNow, 2)}) — no clear momentum`
+  );
+  reasoning.push(
+    bbBreakout && !volumeConfirms
+      ? `Price outside the Bollinger Band (%B ${fmt(bbPercentB, 2)}) but volume (${fmt(volumeRatio, 2)}x) hasn't confirmed it — vote withheld`
+      : bollingerVote === 1
+      ? `Price in the upper Bollinger Band zone (%B ${fmt(bbPercentB, 2)}) — bullish`
+      : bollingerVote === -1
+      ? `Price in the lower Bollinger Band zone (%B ${fmt(bbPercentB, 2)}) — bearish`
+      : `Price mid-Bollinger-Band (%B ${fmt(bbPercentB, 2)}) — neutral`
   );
   // PCR / futures OI / option-flow all feed an actual vote in directionVotes
   // — placed ahead of the OI-wall/pivot lines below, which are informational
