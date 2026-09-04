@@ -581,7 +581,9 @@ export type MarketRegime =
   | 'LOW_VOLATILITY'
   | 'BREAKOUT'
   | 'BREAKDOWN'
-  | 'EXPIRY_GAMMA';
+  | 'EXPIRY_GAMMA'
+  | 'OPERATOR_ACCUMULATION'
+  | 'OPERATOR_DISTRIBUTION';
 
 // --- Market Bias ---
 

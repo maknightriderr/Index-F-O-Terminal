@@ -451,6 +451,26 @@ async function computeMarketBias(
       ? -1
       : 0;
   const pcrVote: Vote = pcr > 1.1 ? 1 : pcr < 0.85 ? -1 : 0;
+
+  // Operator/retail activity regime: real positioning data (futures OI
+  // buildup, an OI wall actually under price pressure, PCR skew) instead
+  // of a smoothed transformation of past price like ADX/Supertrend below
+  // — this is where large/informed participants have actually committed
+  // capital right now, not a lagging read of where price has already
+  // been. Requires ALL THREE to agree (unanimous, not just a majority)
+  // plus the futures OI change to clear a real magnitude, not a noise-
+  // level blip — kept deliberately hard to trigger so it stays a genuine
+  // high-conviction override, the same bar BREAKOUT/BREAKDOWN's own
+  // volume-confirmation already holds leading signals to.
+  const OPERATOR_ACTIVITY_MIN_OI_CHANGE_PCT = 3;
+  const oiWallPressureVote: Vote = chain?.oiTrap.call.active ? 1 : chain?.oiTrap.put.active ? -1 : 0;
+  const operatorActivityVotes = [futuresOiVote, oiWallPressureVote, pcrVote];
+  const operatorActivityUnanimous =
+    operatorActivityVotes.every((v) => v === 1) || operatorActivityVotes.every((v) => v === -1);
+  const operatorActivityConfirmed = operatorActivityUnanimous && Math.abs(futuresChangeOiPct) >= OPERATOR_ACTIVITY_MIN_OI_CHANGE_PCT;
+  const operatorActivityBullish = operatorActivityConfirmed && futuresOiVote === 1;
+  const operatorActivityBearish = operatorActivityConfirmed && futuresOiVote === -1;
+
   const macdVote: Vote = macdHistNow > 0 ? 1 : macdHistNow < 0 ? -1 : 0;
   const bbBreakout = bbPercentB > 1 || bbPercentB < 0;
   const bollingerVote: Vote = bbBreakout && !volumeConfirms ? 0 : bbPercentB > 0.6 ? 1 : bbPercentB < 0.4 ? -1 : 0;
@@ -587,7 +607,7 @@ async function computeMarketBias(
   const confidence = clamp(Math.round((agreementCount / total) * 100), 15, 95);
 
   // --- Regime: leading breakout/breakdown (fresh, volume-confirmed Bollinger break) takes priority over the lagging ADX-based trend read, overridden by expiry-day gamma when DTE<=1 ---
-  const regime = classifyRegime(adxValue, st1hDirectionConfirmed, atrPctZ, chain?.dte ?? null, chain?.gammaExposure?.regime ?? null, freshBreakoutUp, freshBreakoutDown);
+  const regime = classifyRegime(adxValue, st1hDirectionConfirmed, atrPctZ, chain?.dte ?? null, chain?.gammaExposure?.regime ?? null, freshBreakoutUp, freshBreakoutDown, operatorActivityBullish, operatorActivityBearish);
 
   // --- Reasoning (built from the actual computed values, not templated) ---
   // Ordered by priority, not computation order — the frontend card only
@@ -601,6 +621,11 @@ async function computeMarketBias(
   if (regime === 'EXPIRY_GAMMA' && chain) {
     reasoning.push(
       `Expiry day (DTE ${chain.dte}) with ${chain.gammaExposure.regime === 'LONG_GAMMA' ? 'positive' : 'negative'} GEX — dealer hedging can pin or whipsaw price independent of the underlying trend; SL widened for expiry-day gamma risk.`
+    );
+  }
+  if (regime === 'OPERATOR_ACCUMULATION' || regime === 'OPERATOR_DISTRIBUTION') {
+    reasoning.push(
+      `Futures OI, the ${regime === 'OPERATOR_ACCUMULATION' ? 'call' : 'put'} wall under pressure, and PCR skew all agree ${regime === 'OPERATOR_ACCUMULATION' ? 'bullish' : 'bearish'} with a ${fmt(Math.abs(futuresChangeOiPct), 1)}% futures OI change — real positioning, not just price action, is driving this move.`
     );
   }
   if (regime === 'BREAKOUT' || regime === 'BREAKDOWN') {
@@ -1798,11 +1823,23 @@ function classifyRegime(
   dte: number | null,
   gexRegime: GammaExposureRegime | null,
   freshBreakoutUp: boolean,
-  freshBreakoutDown: boolean
+  freshBreakoutDown: boolean,
+  operatorActivityBullish: boolean,
+  operatorActivityBearish: boolean
 ): MarketRegime {
   if (dte != null && dte <= EXPIRY_GAMMA_MAX_DTE && gexRegime != null && gexRegime !== 'NEUTRAL') {
     return 'EXPIRY_GAMMA';
   }
+  // Real capital committed right now (futures OI buildup + an OI wall
+  // actually under price pressure + PCR skew, all three agreeing) is a
+  // stronger, more trustworthy leading signal than a pure price break —
+  // a breakout can be a fakeout with no real positioning behind it, but
+  // this requires informed/large participants to have actually acted.
+  // Checked ahead of BREAKOUT/BREAKDOWN for that reason, still below
+  // EXPIRY_GAMMA (a hard mechanical constraint that overrides everything
+  // when dealer hedging can dominate regardless of positioning).
+  if (operatorActivityBullish) return 'OPERATOR_ACCUMULATION';
+  if (operatorActivityBearish) return 'OPERATOR_DISTRIBUTION';
   // A volume-confirmed break outside the Bollinger Bands on this bar is a
   // leading signal — it can fire well before ADX (a 14-period smoothed
   // average) has accumulated enough bars to call the same move a "strong

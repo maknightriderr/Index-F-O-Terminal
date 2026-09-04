@@ -240,6 +240,8 @@ const TREND_BASE_BY_REGIME: Record<MarketRegime, number> = {
   BREAKOUT: 75,
   BREAKDOWN: 75,
   EXPIRY_GAMMA: 40,
+  OPERATOR_ACCUMULATION: 78,
+  OPERATOR_DISTRIBUTION: 78,
 };
 
 export async function buildNextDayBias(provider: MarketDataProvider, symbol: string): Promise<NextDayBias> {

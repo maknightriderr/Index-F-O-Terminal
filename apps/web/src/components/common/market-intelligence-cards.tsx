@@ -46,6 +46,8 @@ const REGIME_LABELS: Record<string, { label: string; className: string; dot: str
   BREAKOUT: { label: 'Breakout', className: 'text-cyan-400', dot: 'bg-cyan-400' },
   BREAKDOWN: { label: 'Breakdown', className: 'text-red-400', dot: 'bg-red-400' },
   EXPIRY_GAMMA: { label: 'Expiry Gamma', className: 'text-amber-400', dot: 'bg-amber-400' },
+  OPERATOR_ACCUMULATION: { label: 'Operator Accumulation', className: 'text-emerald-400', dot: 'bg-emerald-400' },
+  OPERATOR_DISTRIBUTION: { label: 'Operator Distribution', className: 'text-red-400', dot: 'bg-red-400' },
 };
 
 export function MarketRegimeCard({ bias }: { bias: MarketBias }) {
