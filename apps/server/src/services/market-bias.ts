@@ -407,7 +407,14 @@ async function computeMarketBias(
   // already-established trend/band position doesn't need continuous
   // re-confirmation, only the initial break does.
   const VOLUME_CONFIRM_THRESHOLD = 1.2;
-  const volumeConfirms = volumeRatio >= VOLUME_CONFIRM_THRESHOLD;
+  // Short-tier only (15m in INTRADAY) — the opening/closing noise window
+  // is about THIS SESSION's clock, not the long tier VCP checks below
+  // read off (1H/Daily), so only the short-tier bar gets raised, and
+  // only for INTRADAY (a POSITIONAL hold doesn't care what time it is
+  // right now).
+  const effectiveVolumeConfirmThreshold =
+    !isPositional && isNoisyIntradayWindow(exchange) ? VOLUME_CONFIRM_THRESHOLD * NOISY_WINDOW_VOLUME_MULTIPLIER : VOLUME_CONFIRM_THRESHOLD;
+  const volumeConfirms = volumeRatio >= effectiveVolumeConfirmThreshold;
   const vcpBreakoutConfirmed = vcp != null && vcp.breakoutRatio >= 1 && longVolumeRatio >= VOLUME_CONFIRM_THRESHOLD;
 
   // Positional requires a higher-conviction RSI reading (60/40 vs 55/45) —
@@ -523,6 +530,29 @@ async function computeMarketBias(
     directionVotes.push(orderBlockVote);
   }
 
+  // Chart structure (Double Top/H&S/Triangle/Wedge/Flag/...) was
+  // reasoning-only until now — detected and shown, but never actually
+  // counted, unlike every other structural signal above. Single weight
+  // each; when BOTH tiers detect a pattern with the SAME direction
+  // (genuine multi-timeframe confluence — e.g. a Double Bottom on the
+  // long tier confirmed by a Bullish Flag on the short tier is a
+  // stronger read than either alone), each gets bumped to double weight
+  // instead of just summing two ordinary votes, since agreement across
+  // timeframes is itself information a naive sum wouldn't capture. Two
+  // real, independently-detected patterns disagreeing still cancel out
+  // to a net-zero contribution, which is the correct read for that case.
+  const patternsAgree = shortTermPattern != null && longTermPattern != null && shortTermPattern.direction === longTermPattern.direction;
+  if (shortTermPattern) {
+    const v: Vote = shortTermPattern.direction === 'BULLISH' ? 1 : -1;
+    directionVotes.push(v);
+    if (patternsAgree) directionVotes.push(v);
+  }
+  if (longTermPattern) {
+    const v: Vote = longTermPattern.direction === 'BULLISH' ? 1 : -1;
+    directionVotes.push(v);
+    if (patternsAgree) directionVotes.push(v);
+  }
+
   const voteSum = directionVotes.reduce((a: number, b) => a + b, 0);
   const votesFor = directionVotes.filter((v) => v === 1).length;
   const votesAgainst = directionVotes.filter((v) => v === -1).length;
@@ -612,6 +642,11 @@ async function computeMarketBias(
   if (longTermPattern) {
     reasoning.push(
       `${formatPatternName(longTermPattern.pattern)} forming on ${longLabel} — ${longTermPattern.direction.toLowerCase()} structure (${longTermPattern.confidence}% confidence)`
+    );
+  }
+  if (patternsAgree) {
+    reasoning.push(
+      `Multi-timeframe confluence — ${shortLabel} and ${longLabel} structure both point ${shortTermPattern!.direction.toLowerCase()}, counted double for the agreement`
     );
   }
   reasoning.push(
@@ -745,6 +780,11 @@ async function computeMarketBias(
         ? { type: activeOrderBlock.block.type, top: activeOrderBlock.block.top, bottom: activeOrderBlock.block.bottom, penetrationPct: Math.round(activeOrderBlock.penetrationPct * 100) }
         : null,
       premiumDiscount: premiumDiscount.zone,
+      // Whether this poll fell in the opening/closing noise window and
+      // had its volume-confirmation bar raised as a result (see
+      // isNoisyIntradayWindow) — surfaced so it's auditable, not a
+      // silent adjustment.
+      noisyIntradayWindow: !isPositional && isNoisyIntradayWindow(exchange),
     },
     timestamp: Date.now(),
   };
@@ -880,6 +920,31 @@ function remainingSessionFraction(exchange: Exchange): number {
   const totalSessionMinutes = closeMinutes - openMinutes;
   const remainingMinutes = closeMinutes - nowMinutes;
   return Math.max(MIN_REMAINING_SESSION_FRACTION, Math.min(1, remainingMinutes / totalSessionMinutes));
+}
+
+// The opening auction settling and end-of-day unwinding/rollover flows
+// make price action structurally noisier in these two windows than at
+// the identical reading mid-session — a fresh Supertrend flip or
+// Bollinger breakout at 9:20am shouldn't carry the same weight as one at
+// 11:30am. Raising the volume-confirmation bar during these windows
+// (rather than suppressing votes outright) means a genuinely strong move
+// still gets through, just needs more conviction than mid-session —
+// every fresh-signal check already gated on volumeConfirms (Supertrend
+// flip, Bollinger breakout) tightens together from this one change
+// point, no need to touch each vote individually.
+const OPENING_WINDOW_MINUTES = 30;
+const CLOSING_WINDOW_MINUTES = 15;
+const NOISY_WINDOW_VOLUME_MULTIPLIER = 1.5;
+
+function isNoisyIntradayWindow(exchange: Exchange): boolean {
+  const hours = TRADING_HOURS[exchange];
+  const ist = new Date(new Date().toLocaleString('en-US', { timeZone: hours.timezone }));
+  const [openH, openM] = hours.open.split(':').map(Number);
+  const [closeH, closeM] = hours.close.split(':').map(Number);
+  const openMinutes = openH * 60 + openM;
+  const closeMinutes = closeH * 60 + closeM;
+  const nowMinutes = ist.getHours() * 60 + ist.getMinutes();
+  return nowMinutes < openMinutes + OPENING_WINDOW_MINUTES || nowMinutes > closeMinutes - CLOSING_WINDOW_MINUTES;
 }
 
 // A POSITIONAL naked long needs runway: 15-30 DTE gives the thesis time to

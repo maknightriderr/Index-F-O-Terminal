@@ -184,23 +184,30 @@ export function detectUnusualOI(
  * classifies each side with the same classifyFuturesOI/classifyOptionOI
  * logic already used per-leg — no new classification rule, just rolled up.
  */
-export function analyzePositionMomentum(
-  strikes: OptionChainStrike[],
-  underlyingChangePercent: number
-): PositionMomentum {
+export function analyzePositionMomentum(strikes: OptionChainStrike[]): PositionMomentum {
   let callOi = 0;
   let putOi = 0;
   let callOiChange = 0;
   let putOiChange = 0;
+  // OI-weighted average of each leg's OWN premium change — was the
+  // underlying's changePercent standing in as a proxy for every leg on
+  // that side, inconsistent with the per-strike classification right
+  // next to it (option-chain.ts's own legChangePercent). Now the same
+  // real signal, just aggregated: strikes with more OI behind them pull
+  // the average more, same principle as callOiChange/putOiChange above.
+  let callWeightedChange = 0;
+  let putWeightedChange = 0;
 
   for (const s of strikes) {
     if (s.call) {
       callOi += s.call.oi;
       callOiChange += s.call.changeOi;
+      callWeightedChange += s.call.oi * s.call.changePercent;
     }
     if (s.put) {
       putOi += s.put.oi;
       putOiChange += s.put.changeOi;
+      putWeightedChange += s.put.oi * s.put.changePercent;
     }
   }
 
@@ -212,13 +219,16 @@ export function analyzePositionMomentum(
     return 'FLAT';
   };
 
+  const callAvgChangePercent = callOi > 0 ? callWeightedChange / callOi : 0;
+  const putAvgChangePercent = putOi > 0 ? putWeightedChange / putOi : 0;
+
   return {
     callOi,
     putOi,
     callOiChange,
     putOiChange,
-    callInterpretation: classifyOptionOI({ priceChange: underlyingChangePercent, oiChange: callOiChange }, 'CE'),
-    putInterpretation: classifyOptionOI({ priceChange: underlyingChangePercent, oiChange: putOiChange }, 'PE'),
+    callInterpretation: classifyOptionOI({ priceChange: callAvgChangePercent, oiChange: callOiChange }, 'CE'),
+    putInterpretation: classifyOptionOI({ priceChange: putAvgChangePercent, oiChange: putOiChange }, 'PE'),
     callActivity: activityOf(callOiChange, callOi),
     putActivity: activityOf(putOiChange, putOi),
   };

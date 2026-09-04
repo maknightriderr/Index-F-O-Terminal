@@ -87,11 +87,7 @@ async function buildOptionChainUncached(
       ? requestedExpiry
       : availableExpiries[0];
 
-  const { ltp: spotPrice, close: spotClose } = await getSpotQuote(provider, underlying, exchange);
-  // Compute the % change ourselves rather than trust the provider's
-  // percentChange field — OHLC-mode payloads don't always populate it,
-  // and close/ltp are always present, so this is more reliable.
-  const underlyingChangePercent = spotClose > 0 ? ((spotPrice - spotClose) / spotClose) * 100 : 0;
+  const { ltp: spotPrice } = await getSpotQuote(provider, underlying, exchange);
 
   if (spotPrice <= 0) {
     throw new Error(`Unable to resolve a live spot price for ${underlying}`);
@@ -220,6 +216,7 @@ async function buildOptionChainUncached(
       volume: quote?.volume ?? 0,
       oi: quote?.oi ?? 0,
       changeOi,
+      changePercent: legChangePercent,
       iv: greeks.iv,
       delta: greeks.delta,
       gamma: greeks.gamma,
@@ -258,7 +255,7 @@ async function buildOptionChainUncached(
 
   const expectedMoveDetail = calculateExpectedMove(spotPrice, atmIv, dte, underlying);
 
-  const positionMomentum = analyzePositionMomentum(strikes, underlyingChangePercent);
+  const positionMomentum = analyzePositionMomentum(strikes);
   const oiTrap = analyzeOiTrap(strikes, spotPrice);
   const decay = analyzeTimeDecay(strikes, atmStrike, dte);
   const gammaExposure = calculateGammaExposure(strikes, spotPrice);

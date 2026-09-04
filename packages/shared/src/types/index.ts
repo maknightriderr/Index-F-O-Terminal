@@ -178,6 +178,8 @@ export interface OptionChainLeg {
   volume: number;
   oi: number;
   changeOi: number;
+  /** This leg's own premium % change vs its previous close — 0 doubles as "no live close data this tick" and "genuinely flat," same sentinel convention every other 0-defaulted field here already uses. */
+  changePercent: number;
   iv: number;
   delta: number;
   gamma: number;

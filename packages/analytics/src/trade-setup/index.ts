@@ -88,6 +88,18 @@ const EXPIRY_DAY_SL_WIDEN_FACTOR = 1.5;
 // than size a "trade" around a price nobody could actually get filled at.
 const MAX_ATM_SPREAD_PCT = 5;
 
+// Nothing about entry/SL/target/riskReward above accounts for what it
+// actually costs to trade this — brokerage, STT, and the bid-ask spread
+// beyond the mid-price this setup is sized from all eat into the real
+// P&L. Deliberately NOT threaded into a structured field or subtracted
+// from riskReward itself: brokerage is a flat rupee amount per order, so
+// its % impact depends on lot size, which this module doesn't have (and
+// pulling it in would drag this into position-sizing territory — out of
+// scope, see market-bias.ts's own file header). This is a rough,
+// broker-independent rule of thumb surfaced as a note, not a number the
+// UI should present as precise — real costs vary by broker/plan.
+const ESTIMATED_ROUND_TRIP_COST_PCT = 3; // brokerage-equivalent + STT + residual spread, as a % of entry premium
+
 // A defined-risk spread's max profit/loss are only realized if held to (or
 // very near) expiry — exiting early at a fraction of each is the standard
 // retail practice. Nothing here builds a new spread setup any more (see
@@ -210,6 +222,8 @@ function buildNakedLong(
     };
   }
 
+  const estimatedCost = round2(entry * (ESTIMATED_ROUND_TRIP_COST_PCT / 100));
+
   return {
     available: true,
     structureType: 'NAKED_LONG',
@@ -223,7 +237,8 @@ function buildNakedLong(
       `${direction} bias at ${confidence}/100 confidence — ATM ${side} ${atmStrike} @ ${entry.toFixed(2)}${hasQuote ? ' (bid-ask mid)' : ''}. ` +
       `Target ${target.toFixed(2)} from delta (${leg.delta.toFixed(2)}) × IV-implied expected move (${expectedMovePoints.toFixed(0)} pts). ` +
       `SL ${stopLoss.toFixed(2)} — a ${Math.round(effectiveSlPct * 100)}% premium stop${vixNote}${expiryNote}.` +
-      (dte != null ? ` DTE ${dte}.` : ''),
+      (dte != null ? ` DTE ${dte}.` : '') +
+      ` None of the numbers above subtract real trading costs — brokerage, STT, and slippage beyond this mid-price entry typically run ~${ESTIMATED_ROUND_TRIP_COST_PCT}% of premium round-trip (~${estimatedCost.toFixed(2)} here), a rough estimate that varies by broker, not a precise deduction.`,
   };
 }
 
