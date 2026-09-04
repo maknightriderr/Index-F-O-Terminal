@@ -141,6 +141,7 @@ export async function scanFnoUniverse(provider: MarketDataProvider, exchange: Ex
     let atmGamma = 0;
     let atmTheta = 0;
     let atmVega = 0;
+    let atmSpreadPct: number | null = null;
 
     if (pick) {
       let callOi = 0;
@@ -185,6 +186,24 @@ export async function scanFnoUniverse(provider: MarketDataProvider, exchange: Ex
       atmGamma = avgOfDefined(callGreeks?.gamma, putGreeks?.gamma);
       atmVega = avgOfDefined(callGreeks?.vega, putGreeks?.vega);
       atmTheta = avgOfDefined(callGreeks?.theta, putGreeks?.theta);
+
+      // Real liquidity signal, not a volume/OI proxy — the SAME bid-ask
+      // spread trade-setup/index.ts's naked-long path gates on
+      // (MAX_ATM_SPREAD_PCT), computed here from quotes already fetched
+      // above for IV/PCR (Round 3), so this costs nothing extra. Average
+      // of call+put ATM spread when both quote a genuine two-sided
+      // market; whichever one does when only one does; null (not 0 —
+      // 0% would misleadingly read as perfectly liquid) when neither
+      // does this tick.
+      const spreadPctOf = (token: string | undefined): number | null => {
+        if (!token) return null;
+        const q = optByToken.get(token);
+        if (!q || !q.bid || !q.ask || q.bid <= 0 || q.ask <= 0) return null;
+        const mid = (q.bid + q.ask) / 2;
+        return mid > 0 ? ((q.ask - q.bid) / mid) * 100 : null;
+      };
+      const spreadSamples = [spreadPctOf(atmEntry?.call), spreadPctOf(atmEntry?.put)].filter((v): v is number => v != null);
+      atmSpreadPct = spreadSamples.length > 0 ? Math.round((spreadSamples.reduce((a, b) => a + b, 0) / spreadSamples.length) * 100) / 100 : null;
     }
 
     const ivSkew = ceIv > 0 && peIv > 0 ? ceIv - peIv : 0;
@@ -212,6 +231,7 @@ export async function scanFnoUniverse(provider: MarketDataProvider, exchange: Ex
       atmGamma,
       atmTheta,
       atmVega,
+      atmSpreadPct,
       direction,
       confidence,
       score,

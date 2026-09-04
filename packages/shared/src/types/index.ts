@@ -409,6 +409,8 @@ export interface FnoScannerRow {
   atmGamma: number;
   atmTheta: number;
   atmVega: number;
+  /** ATM bid-ask spread as a % of mid, averaged across the call+put ATM legs — the real liquidity signal (same one trade-setup/index.ts gates naked longs on), not a volume/OI proxy. Null when neither leg quoted a genuine two-sided market this tick. */
+  atmSpreadPct: number | null;
   direction: BiasDirection;
   confidence: number;
   score: number;

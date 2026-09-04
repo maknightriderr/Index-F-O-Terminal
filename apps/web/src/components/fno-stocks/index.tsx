@@ -10,7 +10,12 @@ import { FilterPills } from '@/components/common/filter-pills';
 import { SkeletonTableRow } from '@/components/common/skeleton';
 import type { BiasDirection, OIInterpretation } from '@fno/shared';
 
-type SortKey = 'symbol' | 'price' | 'changePercent' | 'volume' | 'futuresOi' | 'futuresChangeOi' | 'pcr' | 'atmIv' | 'ivRank' | 'score';
+type SortKey = 'symbol' | 'price' | 'changePercent' | 'volume' | 'futuresOi' | 'futuresChangeOi' | 'pcr' | 'atmIv' | 'ivRank' | 'atmSpreadPct' | 'score';
+
+// Same threshold trade-setup/index.ts gates naked longs on — a wider
+// ATM spread than this means an entry/SL/target can't be trusted to
+// actually fill near the quoted price.
+const LIQUID_SPREAD_MAX_PCT = 5;
 type BiasFilter = 'ALL' | BiasDirection;
 type ActivityFilter = 'ALL' | OIInterpretation;
 
@@ -38,12 +43,16 @@ export function FnoStocksPage() {
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>('ALL');
   const [sortKey, setSortKey] = useState<SortKey>('score');
   const [sortDesc, setSortDesc] = useState(true);
+  const [liquidOnly, setLiquidOnly] = useState(false);
 
   const filtered = useMemo(() => {
     const q = query.trim().toUpperCase();
     let base = q ? rows.filter((r) => r.symbol.includes(q)) : rows;
     if (biasFilter !== 'ALL') base = base.filter((r) => r.direction === biasFilter);
     if (activityFilter !== 'ALL') base = base.filter((r) => r.oiInterpretation === activityFilter);
+    // No spread data this tick reads as "can't confirm it's liquid," same
+    // as an actually-wide spread — neither belongs in a "liquid only" view.
+    if (liquidOnly) base = base.filter((r) => r.atmSpreadPct != null && r.atmSpreadPct <= LIQUID_SPREAD_MAX_PCT);
     const sorted = [...base].sort((a, b) => {
       const av = a[sortKey];
       const bv = b[sortKey];
@@ -57,14 +66,19 @@ export function FnoStocksPage() {
     });
     if (sortDesc) sorted.reverse();
     return sorted;
-  }, [rows, query, biasFilter, activityFilter, sortKey, sortDesc]);
+  }, [rows, query, biasFilter, activityFilter, liquidOnly, sortKey, sortDesc]);
 
   const toggleSort = (key: SortKey) => {
     if (key === sortKey) {
       setSortDesc((d) => !d);
     } else {
       setSortKey(key);
-      setSortDesc(true);
+      // Every other column's "best" reading is the highest number (score,
+      // volume, OI...), so descending-first is the useful default. Spread
+      // is the opposite — the tightest (lowest) spread is what "liquid"
+      // means, so default to ascending there instead of making a user
+      // click twice to see it.
+      setSortDesc(key !== 'atmSpreadPct');
     }
   };
 
@@ -94,6 +108,15 @@ export function FnoStocksPage() {
       <div className="flex items-center flex-wrap gap-4">
         <FilterPills label="Bias" options={BIAS_OPTIONS} value={biasFilter} onChange={setBiasFilter} />
         <FilterPills label="Activity" options={ACTIVITY_OPTIONS} value={activityFilter} onChange={setActivityFilter} />
+        <label className="flex items-center gap-1.5 text-xs text-gray-400 light:text-slate-500 cursor-pointer select-none" title={`ATM bid-ask spread <= ${LIQUID_SPREAD_MAX_PCT}% of mid — the same threshold Trade Setup gates naked longs on. Hides anything wider, and anything with no spread data this tick.`}>
+          <input
+            type="checkbox"
+            checked={liquidOnly}
+            onChange={(e) => setLiquidOnly(e.target.checked)}
+            className="accent-emerald-500 w-3.5 h-3.5"
+          />
+          Liquid only
+        </label>
       </div>
 
       {!isLive && !loading && (
@@ -107,7 +130,7 @@ export function FnoStocksPage() {
           <table className="w-full text-xs">
             <tbody>
               {Array.from({ length: 8 }, (_, i) => (
-                <SkeletonTableRow key={i} cols={12} />
+                <SkeletonTableRow key={i} cols={13} />
               ))}
             </tbody>
           </table>
@@ -128,6 +151,7 @@ export function FnoStocksPage() {
                   <SortTh label="Price" active={sortKey === 'price'} desc={sortDesc} onClick={() => toggleSort('price')} />
                   <SortTh label="Chg%" active={sortKey === 'changePercent'} desc={sortDesc} onClick={() => toggleSort('changePercent')} />
                   <SortTh label="Volume" active={sortKey === 'volume'} desc={sortDesc} onClick={() => toggleSort('volume')} />
+                  <SortTh label="Spread" active={sortKey === 'atmSpreadPct'} desc={sortDesc} onClick={() => toggleSort('atmSpreadPct')} />
                   <SortTh label="Futures OI" active={sortKey === 'futuresOi'} desc={sortDesc} onClick={() => toggleSort('futuresOi')} />
                   <SortTh label="OI Chg" active={sortKey === 'futuresChangeOi'} desc={sortDesc} onClick={() => toggleSort('futuresChangeOi')} />
                   <th className="text-left px-3 py-2 font-medium">OI Activity</th>
@@ -151,6 +175,9 @@ export function FnoStocksPage() {
                       {formatPercent(stock.changePercent)}
                     </td>
                     <td className="text-right px-3 py-2.5 tabular-nums text-gray-400 light:text-slate-500">{formatCompact(stock.volume)}</td>
+                    <td className="text-right px-3 py-2.5 tabular-nums">
+                      <SpreadCell value={stock.atmSpreadPct} />
+                    </td>
                     <td className="text-right px-3 py-2.5 tabular-nums text-gray-400 light:text-slate-500">{formatCompact(stock.futuresOi)}</td>
                     <td className={`text-right px-3 py-2.5 tabular-nums font-medium ${stock.futuresChangeOi >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                       {stock.futuresChangeOi >= 0 ? '+' : ''}{formatCompact(stock.futuresChangeOi)}
@@ -217,6 +244,15 @@ function SortTh({
       {active && <span className="ml-0.5">{desc ? '▾' : '▴'}</span>}
     </th>
   );
+}
+
+// Tighter spread = more liquid, so the color scale runs the OPPOSITE
+// direction from IVRankBar's (low is good here, not bad) — green under
+// 2%, yellow up to the LIQUID_SPREAD_MAX_PCT gate, red past it.
+function SpreadCell({ value }: { value: number | null }) {
+  if (value == null) return <span className="text-gray-600 light:text-slate-300">—</span>;
+  const color = value <= 2 ? 'text-emerald-400' : value <= LIQUID_SPREAD_MAX_PCT ? 'text-yellow-400' : 'text-red-400';
+  return <span className={`font-medium ${color}`}>{value.toFixed(2)}%</span>;
 }
 
 function IVRankBar({ value }: { value: number }) {
