@@ -26,6 +26,9 @@ export type ChartPatternType =
   | 'SYMMETRIC_TRIANGLE'
   | 'RISING_WEDGE'
   | 'FALLING_WEDGE'
+  | 'ASCENDING_CHANNEL'
+  | 'DESCENDING_CHANNEL'
+  | 'HORIZONTAL_CHANNEL'
   | 'BULLISH_FLAG'
   | 'BEARISH_FLAG';
 
@@ -89,7 +92,8 @@ function confidenceFromTightness(diffPct: number, tolerance: number): number {
  * Detects the single most recent pattern from the tail of the swing
  * structure. Checked in roughly the order a chartist would look —
  * reversal patterns (double top/bottom, H&S) before continuation
- * shapes (triangles, wedges, flags) — and returns the first match.
+ * shapes (triangles, channels, wedges, flags) — and returns the first
+ * match.
  *
  * `volumes`, when provided, adjusts the returned confidence for whether
  * volume behaved the way classical TA expects while the pattern formed
@@ -122,6 +126,9 @@ export function detectPattern(highs: number[], lows: number[], closes: number[],
 
   const triangle = detectTriangle(peaks, troughs, closes);
   if (triangle) return withVolumeConfirmation(triangle, volumes);
+
+  const channel = detectChannel(peaks, troughs, closes);
+  if (channel) return withVolumeConfirmation(channel, volumes);
 
   const wedge = detectWedge(peaks, troughs);
   if (wedge) return withVolumeConfirmation(wedge, volumes);
@@ -283,6 +290,55 @@ function detectTriangle(peaks: SwingPoint[], troughs: SwingPoint[], closes: numb
   return null;
 }
 
+// --- Channels ---
+// Both trendlines move together — similar slope, not converging like a
+// wedge or one-flat-one-sloped like a triangle — so price oscillates
+// between two roughly parallel boundaries instead of a narrowing range.
+// Ascending/descending channels are continuation reads (buy near the
+// rising support, sell near the falling resistance); a flat channel is
+// a genuine trading range with no directional lean of its own, so — same
+// fallback SYMMETRIC_TRIANGLE already uses above — direction comes from
+// the recent trend context instead of forcing an artificial call purely
+// from geometry.
+
+// How close peak/trough slopes must be to count as "parallel" rather
+// than converging — also the floor detectWedge (below) requires its OWN
+// convergence to clear, so the two patterns stay mutually exclusive
+// instead of a barely-converging channel misreading as a wedge.
+const CHANNEL_PARALLEL_TOLERANCE = 0.01;
+// The two trendlines must actually be some real distance apart — without
+// this, two near-identical price levels with technically-parallel slopes
+// would misread as a channel instead of just noise around a flat line.
+const MIN_CHANNEL_WIDTH_PCT = 0.015;
+
+function detectChannel(peaks: SwingPoint[], troughs: SwingPoint[], closes: number[]): DetectedPattern | null {
+  if (peaks.length < 2 || troughs.length < 2) return null;
+  const [p1, p2] = peaks.slice(-2);
+  const [t1, t2] = troughs.slice(-2);
+  if (t2.price <= 0 || p2.price <= t2.price) return null;
+
+  const width = (p2.price - t2.price) / t2.price;
+  if (width < MIN_CHANNEL_WIDTH_PCT) return null;
+
+  const peakSlope = (p2.price - p1.price) / p1.price;
+  const troughSlope = (t2.price - t1.price) / t1.price;
+  const slopeDiff = Math.abs(peakSlope - troughSlope);
+  if (slopeDiff > CHANNEL_PARALLEL_TOLERANCE) return null; // converging/diverging — a triangle's or wedge's territory, not a channel
+
+  const atIndex = Math.max(p2.index, t2.index);
+  const confidence = confidenceFromTightness(slopeDiff, CHANNEL_PARALLEL_TOLERANCE);
+  const avgSlope = (peakSlope + troughSlope) / 2;
+
+  if (avgSlope > FLAT_SLOPE_TOLERANCE) {
+    return { pattern: 'ASCENDING_CHANNEL', direction: 'BULLISH', confidence, atIndex };
+  }
+  if (avgSlope < -FLAT_SLOPE_TOLERANCE) {
+    return { pattern: 'DESCENDING_CHANNEL', direction: 'BEARISH', confidence, atIndex };
+  }
+  const trendDirection = closes[closes.length - 1] >= closes[Math.max(0, closes.length - 20)] ? 'BULLISH' : 'BEARISH';
+  return { pattern: 'HORIZONTAL_CHANNEL', direction: trendDirection, confidence, atIndex };
+}
+
 // --- Wedges ---
 // Both trendlines move the same direction but converge: rising wedge
 // (peaks rising slower than troughs close in) is bearish, falling wedge
@@ -301,9 +357,13 @@ function detectWedge(peaks: SwingPoint[], troughs: SwingPoint[]): DetectedPatter
   const bothFalling = peakSlope < -FLAT_SLOPE_TOLERANCE && troughSlope < -FLAT_SLOPE_TOLERANCE;
   // The peak line and trough line converge (the gap between them narrows
   // over time) whenever the peak line's slope is below the trough line's —
-  // true regardless of whether both are rising or both are falling.
-  const converging = peakSlope < troughSlope;
+  // true regardless of whether both are rising or both are falling. Must
+  // clear CHANNEL_PARALLEL_TOLERANCE, not just be nonzero — otherwise a
+  // barely-converging pair that's really a channel (detectChannel's own
+  // tolerance) would misread as a wedge instead, since this used to fire
+  // on any convergence at all, however tiny.
   const convergence = troughSlope - peakSlope;
+  const converging = convergence > CHANNEL_PARALLEL_TOLERANCE;
 
   if (bothRising && converging) {
     return { pattern: 'RISING_WEDGE', direction: 'BEARISH', confidence: confidenceFromTightness(1 / (1 + convergence * 20), 1), atIndex };

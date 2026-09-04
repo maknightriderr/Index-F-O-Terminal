@@ -14,6 +14,9 @@ const PATTERN_LABELS: Record<ChartPatternType, string> = {
   SYMMETRIC_TRIANGLE: 'Symmetric Triangle Coil',
   RISING_WEDGE: 'Rising Wedge Exhaustion',
   FALLING_WEDGE: 'Falling Wedge Reversal',
+  ASCENDING_CHANNEL: 'Ascending Channel',
+  DESCENDING_CHANNEL: 'Descending Channel',
+  HORIZONTAL_CHANNEL: 'Horizontal Channel (Range)',
   BULLISH_FLAG: 'Bullish Flag Continuation',
   BEARISH_FLAG: 'Bearish Flag Continuation',
 };
@@ -28,6 +31,9 @@ const PATTERN_ICONS: Partial<Record<ChartPatternType, string>> = {
   SYMMETRIC_TRIANGLE: '⚖️',
   RISING_WEDGE: '↗️',
   FALLING_WEDGE: '↘️',
+  ASCENDING_CHANNEL: '📈',
+  DESCENDING_CHANNEL: '📉',
+  HORIZONTAL_CHANNEL: '↔️',
   BULLISH_FLAG: '🚩',
   BEARISH_FLAG: '🏴',
 };
