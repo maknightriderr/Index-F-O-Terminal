@@ -336,6 +336,18 @@ async function computeMarketBias(
   // --- 1h signals ---
   const st1h = supertrend(c1h.highs, c1h.lows, c1h.closes, 10, stMultiplier);
   const st1hDirection = st1h.direction[st1h.direction.length - 1] ?? 'UP';
+  // Same reasoning as st15JustFlipped above, but this one had NO
+  // equivalent protection at all until now — found live: Market Regime
+  // flipped STRONG_BULL_TREND -> STRONG_BEAR_TREND inside 2 minutes at
+  // an unchanged ADX, which can only mean the CURRENT (still-forming,
+  // not yet closed) 1H candle's Supertrend wobbled across its own flip
+  // line and back — a whipsaw on incomplete-candle data, not a genuine
+  // new trend. st1hFlipConfirmed/st1hDirectionConfirmed (below, once
+  // VOLUME_CONFIRM_THRESHOLD is in scope) resolve this — Regime has no
+  // "0/neutral" a vote can fall back to, so an unconfirmed flip falls
+  // back to the PREVIOUS bar's direction instead of suppressing to zero.
+  const st1hPrevDirection = st1h.direction[st1h.direction.length - 2] ?? st1hDirection;
+  const st1hJustFlipped = st1hDirection !== st1hPrevDirection;
 
   const adx1h = adx(c1h.highs, c1h.lows, c1h.closes, 14);
   const adxValue = adx1h.adx[adx1h.adx.length - 1] ?? 15;
@@ -416,6 +428,11 @@ async function computeMarketBias(
     !isPositional && isNoisyIntradayWindow(exchange) ? VOLUME_CONFIRM_THRESHOLD * NOISY_WINDOW_VOLUME_MULTIPLIER : VOLUME_CONFIRM_THRESHOLD;
   const volumeConfirms = volumeRatio >= effectiveVolumeConfirmThreshold;
   const vcpBreakoutConfirmed = vcp != null && vcp.breakoutRatio >= 1 && longVolumeRatio >= VOLUME_CONFIRM_THRESHOLD;
+  // Base threshold, not the noisy-window-adjusted one — same reasoning as
+  // vcpBreakoutConfirmed above: this reads the LONG tier (1H/Daily), not
+  // the current session's opening/closing minutes.
+  const st1hFlipConfirmed = !st1hJustFlipped || longVolumeRatio >= VOLUME_CONFIRM_THRESHOLD;
+  const st1hDirectionConfirmed = st1hFlipConfirmed ? st1hDirection : st1hPrevDirection;
 
   // Positional requires a higher-conviction RSI reading (60/40 vs 55/45) —
   // a multi-day hold shouldn't be triggered by the same mild RSI lean
@@ -426,7 +443,7 @@ async function computeMarketBias(
   const vwapVote: Vote = spot > sessionVwap * 1.0005 ? 1 : spot < sessionVwap * 0.9995 ? -1 : 0;
   const rsiVote: Vote = rsi15 > rsiBullThreshold ? 1 : rsi15 < rsiBearThreshold ? -1 : 0;
   const st15Vote: Vote = st15JustFlipped && !volumeConfirms ? 0 : st15Direction === 'UP' ? 1 : -1;
-  const st1hVote: Vote = st1hDirection === 'UP' ? 1 : -1;
+  const st1hVote: Vote = st1hDirectionConfirmed === 'UP' ? 1 : -1;
   const futuresOiVote: Vote =
     futuresInterpretation === 'LONG_BUILDUP' || futuresInterpretation === 'SHORT_COVERING'
       ? 1
@@ -570,7 +587,7 @@ async function computeMarketBias(
   const confidence = clamp(Math.round((agreementCount / total) * 100), 15, 95);
 
   // --- Regime: leading breakout/breakdown (fresh, volume-confirmed Bollinger break) takes priority over the lagging ADX-based trend read, overridden by expiry-day gamma when DTE<=1 ---
-  const regime = classifyRegime(adxValue, st1hDirection, atrPctZ, chain?.dte ?? null, chain?.gammaExposure?.regime ?? null, freshBreakoutUp, freshBreakoutDown);
+  const regime = classifyRegime(adxValue, st1hDirectionConfirmed, atrPctZ, chain?.dte ?? null, chain?.gammaExposure?.regime ?? null, freshBreakoutUp, freshBreakoutDown);
 
   // --- Reasoning (built from the actual computed values, not templated) ---
   // Ordered by priority, not computation order — the frontend card only
@@ -706,6 +723,11 @@ async function computeMarketBias(
   }
   if (st15JustFlipped && !volumeConfirms) {
     reasoning.push(`Supertrend 15m just flipped ${st15Direction === 'UP' ? 'bullish' : 'bearish'} but volume (${fmt(volumeRatio, 2)}x) hasn't confirmed it — vote withheld`);
+  }
+  if (!st1hFlipConfirmed) {
+    reasoning.push(
+      `Supertrend ${longLabel} just flipped ${st1hDirection === 'UP' ? 'bullish' : 'bearish'} on the still-forming bar but volume (${fmt(longVolumeRatio, 2)}x) hasn't confirmed it — Regime and this vote still reading ${st1hPrevDirection === 'UP' ? 'bullish' : 'bearish'} until it does`
+    );
   }
 
   const bias: MarketBias = {
