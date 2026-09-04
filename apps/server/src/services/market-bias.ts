@@ -944,6 +944,12 @@ function isNoisyIntradayWindow(exchange: Exchange): boolean {
   const openMinutes = openH * 60 + openM;
   const closeMinutes = closeH * 60 + closeM;
   const nowMinutes = ist.getHours() * 60 + ist.getMinutes();
+  // The closing-side check on its own has no upper bound — caught live:
+  // it read "noisy" for the entire stretch from 15:15 onward, including
+  // hours after the market had actually closed, not just the intended
+  // last-15-minutes-of-real-trading window. Gate on the session actually
+  // being open first.
+  if (nowMinutes < openMinutes || nowMinutes > closeMinutes) return false;
   return nowMinutes < openMinutes + OPENING_WINDOW_MINUTES || nowMinutes > closeMinutes - CLOSING_WINDOW_MINUTES;
 }
 
