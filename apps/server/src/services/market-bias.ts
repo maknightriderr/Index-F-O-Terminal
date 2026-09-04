@@ -52,6 +52,7 @@ import type {
   HistoricalParams,
   TradingMode,
   GammaExposureRegime,
+  OIInterpretation,
 } from '@fno/shared';
 import { KNOWN_INDEX_TOKENS, CM_SEGMENT, calculateDTE, INDEX_SYMBOLS, TRADING_HOURS } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
@@ -399,6 +400,45 @@ async function computeMarketBias(
   const putWall = putLevels[0] ?? null;
   const callWall = callLevels[0] ?? null;
 
+  // --- Option OI flow: buying-vs-writing / covering-vs-unwinding, aggregated ---
+  // Rising OI alone is ambiguous on both sides: CALL_WRITING (bearish,
+  // sellers capping the strike) and CALL_BUYING (bullish, buyers paying up)
+  // both show "call OI up"; PUT_BUYING (bearish, fresh downside bets) and
+  // PUT_WRITING (bullish, writers confident price holds above) both show
+  // "put OI up." classifyOptionOI (via option-chain.ts, already on every
+  // leg as oiInterpretation) resolves this per-leg using that leg's OWN
+  // premium direction. This aggregates that read across the whole chain,
+  // weighted by how much OI actually moved on each leg today (not resting
+  // OI) so one big-but-quiet strike can't drown out several small-but-active
+  // ones, and reports which single interpretation (e.g. "Put Writing")
+  // dominated for the reasoning line below.
+  let optionOiFlowBullishWeight = 0;
+  let optionOiFlowBearishWeight = 0;
+  const optionOiFlowWeightByType = new Map<OIInterpretation, number>();
+  if (chain) {
+    for (const s of chain.strikes) {
+      for (const leg of [s.call, s.put]) {
+        if (!leg || leg.changeOi === 0) continue;
+        const weight = Math.abs(leg.changeOi);
+        const { implication } = getOIDescription(leg.oiInterpretation);
+        if (implication === 'BULLISH') optionOiFlowBullishWeight += weight;
+        else if (implication === 'BEARISH') optionOiFlowBearishWeight += weight;
+        optionOiFlowWeightByType.set(leg.oiInterpretation, (optionOiFlowWeightByType.get(leg.oiInterpretation) ?? 0) + weight);
+      }
+    }
+  }
+  const optionOiFlowTotalWeight = optionOiFlowBullishWeight + optionOiFlowBearishWeight;
+  const optionOiFlowNetSkew =
+    optionOiFlowTotalWeight > 0 ? (optionOiFlowBullishWeight - optionOiFlowBearishWeight) / optionOiFlowTotalWeight : 0;
+  let optionOiFlowDominant: OIInterpretation | null = null;
+  let optionOiFlowDominantWeight = 0;
+  for (const [type, weight] of optionOiFlowWeightByType) {
+    if (weight > optionOiFlowDominantWeight) {
+      optionOiFlowDominant = type;
+      optionOiFlowDominantWeight = weight;
+    }
+  }
+
   // Historical (realized) volatility from the "long" tier's closes — 1H
   // bars in INTRADAY mode, Daily bars in POSITIONAL — annualized with the
   // bars-per-year matching that actual granularity (using the wrong
@@ -451,6 +491,11 @@ async function computeMarketBias(
       ? -1
       : 0;
   const pcrVote: Vote = pcr > 1.1 ? 1 : pcr < 0.85 ? -1 : 0;
+  // Require a real net skew (not a near-50/50 split) before this counts as
+  // a vote — same noise-floor philosophy as the PCR bands above.
+  const OPTION_OI_FLOW_MIN_SKEW = 0.15;
+  const optionOiFlowVote: Vote =
+    optionOiFlowNetSkew > OPTION_OI_FLOW_MIN_SKEW ? 1 : optionOiFlowNetSkew < -OPTION_OI_FLOW_MIN_SKEW ? -1 : 0;
 
   // Operator/retail activity regime: real positioning data (futures OI
   // buildup, an OI wall actually under price pressure, PCR skew) instead
@@ -493,7 +538,7 @@ async function computeMarketBias(
   const freshBreakoutUp = bbPercentB > 1 && bbPercentBPrev <= 1 && volumeConfirms;
   const freshBreakoutDown = bbPercentB < 0 && bbPercentBPrev >= 0 && volumeConfirms;
 
-  const directionVotes: Vote[] = [vwapVote, rsiVote, st15Vote, st1hVote, futuresOiVote, pcrVote];
+  const directionVotes: Vote[] = [vwapVote, rsiVote, st15Vote, st1hVote, futuresOiVote, pcrVote, optionOiFlowVote];
 
   // RSI divergence (price makes a higher high/lower low while RSI weakens)
   // is a genuinely stronger, more reliable reversal signal than a plain
@@ -732,6 +777,12 @@ async function computeMarketBias(
   if (currentFuture) {
     reasoning.push(`${getOIDescription(futuresInterpretation).description} in futures OI`);
   }
+  if (optionOiFlowDominant && optionOiFlowDominant !== 'NEUTRAL' && optionOiFlowTotalWeight > 0) {
+    const dominantShare = Math.round((optionOiFlowDominantWeight / optionOiFlowTotalWeight) * 100);
+    reasoning.push(
+      `${getOIDescription(optionOiFlowDominant).description} dominates chain-wide option OI flow (${dominantShare}% of today's net OI movement)`
+    );
+  }
   if (chain?.gammaExposure && chain.gammaExposure.regime !== 'NEUTRAL') {
     reasoning.push(
       `Net ${chain.gammaExposure.regime === 'LONG_GAMMA' ? 'positive' : 'negative'} GEX — dealers likely ${chain.gammaExposure.regime === 'LONG_GAMMA' ? 'dampening moves (range-bound bias)' : 'amplifying moves (trend-following bias)'}${chain.gammaExposure.gammaWallStrike != null ? `, largest concentration at ${fmt(chain.gammaExposure.gammaWallStrike, 0)}` : ''}`
@@ -774,6 +825,8 @@ async function computeMarketBias(
       pcr,
       atmIv: atmIvPct,
       futuresOi: futuresInterpretation,
+      optionOiFlow: optionOiFlowDominant,
+      optionOiFlowNetSkew: Math.round(optionOiFlowNetSkew * 100) / 100,
       maxPain: chain?.maxPain ?? null,
       expectedMove: chain?.expectedMove.points ?? null,
       expectedRangeLow: chain?.expectedMove.lowerBound ?? null,
@@ -847,7 +900,10 @@ async function computeMarketBias(
   const priceActionScore = contribution(priceActionVote, directionSign);
 
   const futuresOiScore = contribution(futuresOiVote, directionSign);
-  const optionsOiScore = contribution(pcrVote, directionSign);
+  // Was aliasing pcrVote (already its own dedicated pcrScore below) instead
+  // of reflecting actual options OI activity — now scores the real
+  // buying-vs-writing / covering-vs-unwinding flow read.
+  const optionsOiScore = contribution(optionOiFlowVote, directionSign);
   const pcrScore = clamp(Math.round(50 + (pcr - 1) * 40), 0, 100);
   // atmIvPct is 0 both when IV is genuinely unresolvable (no chain, no legs
   // with a broker/calculated IV) and — vanishingly rarely — when it's truly
