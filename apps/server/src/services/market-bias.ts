@@ -623,14 +623,23 @@ async function computeMarketBias(
   // timeframes is itself information a naive sum wouldn't capture. Two
   // real, independently-detected patterns disagreeing still cancel out
   // to a net-zero contribution, which is the correct read for that case.
-  const patternsAgree = shortTermPattern != null && longTermPattern != null && shortTermPattern.direction === longTermPattern.direction;
-  if (shortTermPattern) {
-    const v: Vote = shortTermPattern.direction === 'BULLISH' ? 1 : -1;
+  // HORIZONTAL_CHANNEL is structurally non-directional (a flat range) — its
+  // "confidence" measures how parallel/tight the two trendlines are, not
+  // directional conviction, and its BULLISH/BEARISH label is only a crude
+  // 20-bar trailing-momentum guess unrelated to the range itself. Letting
+  // that vote (or count toward confluence) dressed it up as a real
+  // directional signal it isn't. ASCENDING/DESCENDING_CHANNEL keep voting —
+  // those have a genuine slope-derived direction.
+  const shortTermPatternVotes = shortTermPattern != null && shortTermPattern.pattern !== 'HORIZONTAL_CHANNEL';
+  const longTermPatternVotes = longTermPattern != null && longTermPattern.pattern !== 'HORIZONTAL_CHANNEL';
+  const patternsAgree = shortTermPatternVotes && longTermPatternVotes && shortTermPattern!.direction === longTermPattern!.direction;
+  if (shortTermPatternVotes) {
+    const v: Vote = shortTermPattern!.direction === 'BULLISH' ? 1 : -1;
     directionVotes.push(v);
     if (patternsAgree) directionVotes.push(v);
   }
-  if (longTermPattern) {
-    const v: Vote = longTermPattern.direction === 'BULLISH' ? 1 : -1;
+  if (longTermPatternVotes) {
+    const v: Vote = longTermPattern!.direction === 'BULLISH' ? 1 : -1;
     directionVotes.push(v);
     if (patternsAgree) directionVotes.push(v);
   }
@@ -692,6 +701,10 @@ async function computeMarketBias(
     reasoning.push(
       `Change of Character — market structure just broke ${marketStructure.lastEvent.direction.toLowerCase()} for the first time, an early structural reversal warning`
     );
+  } else if (marketStructure.lastEvent?.type === 'BOS') {
+    reasoning.push(
+      `Break of Structure — swing structure extended ${marketStructure.lastEvent.direction.toLowerCase()}, confirming the established trend`
+    );
   }
   if (liquiditySweep) {
     reasoning.push(
@@ -723,12 +736,16 @@ async function computeMarketBias(
   }
   if (shortTermPattern) {
     reasoning.push(
-      `${formatPatternName(shortTermPattern.pattern)} forming on ${shortLabel} — ${shortTermPattern.direction.toLowerCase()} structure (${shortTermPattern.confidence}% confidence)`
+      shortTermPattern.pattern === 'HORIZONTAL_CHANNEL'
+        ? `Horizontal Channel forming on ${shortLabel} — range-bound (${shortTermPattern.confidence}% trendline tightness), no directional edge until it breaks, not counted in the vote`
+        : `${formatPatternName(shortTermPattern.pattern)} forming on ${shortLabel} — ${shortTermPattern.direction.toLowerCase()} structure (${shortTermPattern.confidence}% confidence)`
     );
   }
   if (longTermPattern) {
     reasoning.push(
-      `${formatPatternName(longTermPattern.pattern)} forming on ${longLabel} — ${longTermPattern.direction.toLowerCase()} structure (${longTermPattern.confidence}% confidence)`
+      longTermPattern.pattern === 'HORIZONTAL_CHANNEL'
+        ? `Horizontal Channel forming on ${longLabel} — range-bound (${longTermPattern.confidence}% trendline tightness), no directional edge until it breaks, not counted in the vote`
+        : `${formatPatternName(longTermPattern.pattern)} forming on ${longLabel} — ${longTermPattern.direction.toLowerCase()} structure (${longTermPattern.confidence}% confidence)`
     );
   }
   if (patternsAgree) {
@@ -760,15 +777,12 @@ async function computeMarketBias(
       ? `RSI at ${fmt(rsi15, 0)} — bearish but not oversold`
       : `RSI at ${fmt(rsi15, 0)} — neutral`
   );
-  if (putWall) reasoning.push(`Put OI concentration at ${fmt(putWall.strike, 0)} (support)`);
-  if (callWall) reasoning.push(`Call OI build-up at ${fmt(callWall.strike, 0)} (resistance)`);
-  if (pivots) {
-    reasoning.push(
-      spot > pivots.pp
-        ? `Above prior-session pivot (${fmt(spot)} > PP ${fmt(pivots.pp)}) — R1 ${fmt(pivots.r1)}, S1 ${fmt(pivots.s1)}`
-        : `Below prior-session pivot (${fmt(spot)} < PP ${fmt(pivots.pp)}) — R1 ${fmt(pivots.r1)}, S1 ${fmt(pivots.s1)}`
-    );
-  }
+  // PCR / futures OI / option-flow all feed an actual vote in directionVotes
+  // — placed ahead of the OI-wall/pivot lines below, which are informational
+  // only (no vote) and already shown as their own Support/Resistance/pivot
+  // fields elsewhere on this card. With the reasoning list capped at 9 lines
+  // on the frontend, a real vote behind the confidence number must not lose
+  // its slot to a level that's visible somewhere else on the same screen.
   if (chain) {
     reasoning.push(
       `PCR at ${fmt(pcr)} — ${pcr > 1.1 ? 'moderately bullish' : pcr < 0.85 ? 'moderately bearish' : 'neutral'}`
@@ -781,6 +795,15 @@ async function computeMarketBias(
     const dominantShare = Math.round((optionOiFlowDominantWeight / optionOiFlowTotalWeight) * 100);
     reasoning.push(
       `${getOIDescription(optionOiFlowDominant).description} dominates chain-wide option OI flow (${dominantShare}% of today's net OI movement)`
+    );
+  }
+  if (putWall) reasoning.push(`Put OI concentration at ${fmt(putWall.strike, 0)} (support)`);
+  if (callWall) reasoning.push(`Call OI build-up at ${fmt(callWall.strike, 0)} (resistance)`);
+  if (pivots) {
+    reasoning.push(
+      spot > pivots.pp
+        ? `Above prior-session pivot (${fmt(spot)} > PP ${fmt(pivots.pp)}) — R1 ${fmt(pivots.r1)}, S1 ${fmt(pivots.s1)}`
+        : `Below prior-session pivot (${fmt(spot)} < PP ${fmt(pivots.pp)}) — R1 ${fmt(pivots.r1)}, S1 ${fmt(pivots.s1)}`
     );
   }
   if (chain?.gammaExposure && chain.gammaExposure.regime !== 'NEUTRAL') {
