@@ -1,31 +1,48 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { createChart, ColorType, LineStyle, type IChartApi, type ISeriesApi, type IPriceLine } from 'lightweight-charts';
+import { createChart, ColorType, LineStyle, type IChartApi, type ISeriesApi, type IPriceLine, type UTCTimestamp } from 'lightweight-charts';
 import { useUISettingsStore } from '@/stores';
 import { api } from '@/lib/api';
+import { detectPattern } from '@fno/analytics';
+import type { DetectedPattern } from '@fno/analytics';
 import { KNOWN_INDEX_TOKENS } from '@fno/shared';
 import type { CandleInterval, Exchange } from '@fno/shared';
+
+function formatPatternName(pattern: string): string {
+  return pattern.split('_').map((w) => w[0] + w.slice(1).toLowerCase()).join(' ');
+}
 
 type Timeframe = '1m' | '5m' | '15m' | '30m' | '1H' | '1D' | '5D' | '1M' | '3M' | '6M' | '1Y';
 type ChartMode = 'SPOT' | 'FUTURES';
 
 const TIMEFRAMES: Timeframe[] = ['1m', '5m', '15m', '30m', '1H', '1D', '5D', '1M', '3M', '6M', '1Y'];
 
-// A few extra calendar days of lookback beyond the nominal window covers
-// weekends/holidays so the most recent trading session is never cut off.
+// Lookback needs a real safety margin, not just "how far back this label
+// implies" — a tight window can land entirely AFTER the last trading
+// session ended (checking after-hours, on a weekend, the morning after a
+// holiday, etc.), in which case the API correctly returns zero candles
+// for that slice even though real recent data exists just outside it.
+// Confirmed live: `days: 1` for '1m' returned empty because "now minus a
+// day" fell after Friday's 15:30 close with no Monday session yet inside
+// the window. These margins are sized to comfortably span at least one
+// full recent session (a 3-4 day holiday weekend included) regardless of
+// when "now" happens to fall, not just the nominal range implied by the
+// button's label — fitContent() shows whatever comes back either way, so
+// a slightly wider window just means a bit more scrollable history, not
+// a wrong-looking chart.
 const TIMEFRAME_CONFIG: Record<Timeframe, { interval: CandleInterval; days: number }> = {
-  '1m': { interval: 'ONE_MINUTE', days: 1 },
-  '5m': { interval: 'FIVE_MINUTE', days: 2 },
-  '15m': { interval: 'FIFTEEN_MINUTE', days: 3 },
-  '30m': { interval: 'THIRTY_MINUTE', days: 5 },
-  '1H': { interval: 'ONE_HOUR', days: 10 },
-  '1D': { interval: 'FIFTEEN_MINUTE', days: 4 },
-  '5D': { interval: 'FIFTEEN_MINUTE', days: 9 },
-  '1M': { interval: 'ONE_HOUR', days: 34 },
-  '3M': { interval: 'ONE_DAY', days: 95 },
-  '6M': { interval: 'ONE_DAY', days: 186 },
-  '1Y': { interval: 'ONE_DAY', days: 370 },
+  '1m': { interval: 'ONE_MINUTE', days: 5 },
+  '5m': { interval: 'FIVE_MINUTE', days: 6 },
+  '15m': { interval: 'FIFTEEN_MINUTE', days: 6 },
+  '30m': { interval: 'THIRTY_MINUTE', days: 8 },
+  '1H': { interval: 'ONE_HOUR', days: 12 },
+  '1D': { interval: 'FIFTEEN_MINUTE', days: 6 },
+  '5D': { interval: 'FIFTEEN_MINUTE', days: 10 },
+  '1M': { interval: 'ONE_HOUR', days: 36 },
+  '3M': { interval: 'ONE_DAY', days: 96 },
+  '6M': { interval: 'ONE_DAY', days: 188 },
+  '1Y': { interval: 'ONE_DAY', days: 372 },
 };
 
 // Same positive/negative language as the rest of the app (--positive/
@@ -71,11 +88,14 @@ export function InstrumentChart({
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
+  const patternSeriesRef = useRef<ISeriesApi<'Line'>[]>([]);
+  const candleTimesRef = useRef<UTCTimestamp[]>([]);
   const [timeframe, setTimeframe] = useState<Timeframe>('1D');
   const [mode, setMode] = useState<ChartMode>(hasSpot ? 'SPOT' : 'FUTURES');
   const [loading, setLoading] = useState(true);
   const [hasData, setHasData] = useState(false);
   const [chartReady, setChartReady] = useState(false);
+  const [detectedPattern, setDetectedPattern] = useState<DetectedPattern | null>(null);
 
   // A commodity like CRUDEOIL/GOLD has no cash/spot instrument at all —
   // force Futures whenever the instrument switches to one of those.
@@ -111,6 +131,7 @@ export function InstrumentChart({
       chartRef.current = null;
       seriesRef.current = null;
       priceLinesRef.current = [];
+      patternSeriesRef.current = [];
       setChartReady(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -157,7 +178,7 @@ export function InstrumentChart({
       .then((candles: any[]) => {
         if (cancelled || !seriesRef.current) return;
         const data = candles.map((c) => ({
-          time: Math.floor(new Date(c.timestamp).getTime() / 1000) as any,
+          time: Math.floor(new Date(c.timestamp).getTime() / 1000) as UTCTimestamp,
           open: c.open,
           high: c.high,
           low: c.low,
@@ -165,13 +186,25 @@ export function InstrumentChart({
         }));
         seriesRef.current.setData(data);
         chartRef.current?.timeScale().fitContent();
+        candleTimesRef.current = data.map((d) => d.time);
         setHasData(data.length > 0);
         setLoading(false);
+
+        // Pattern detection runs on these EXACT candles — whatever timeframe
+        // is on screen is what gets checked, not a separate fixed window —
+        // so switching timeframes re-detects fresh rather than reusing a
+        // stale read from a different interval/range.
+        setDetectedPattern(
+          data.length >= 15
+            ? detectPattern(candles.map((c) => c.high), candles.map((c) => c.low), candles.map((c) => c.close), candles.map((c) => c.volume))
+            : null
+        );
       })
       .catch(() => {
         if (cancelled) return;
         seriesRef.current?.setData([]);
         setHasData(false);
+        setDetectedPattern(null);
         setLoading(false);
       });
 
@@ -201,6 +234,44 @@ export function InstrumentChart({
     supportLevels.slice(0, 2).forEach((lvl, i) => addLine(lvl.strike, c.support, i === 0 ? 'Support' : `Support ${i + 1}`));
     resistanceLevels.slice(0, 2).forEach((lvl, i) => addLine(lvl.strike, c.resistance, i === 0 ? 'Resistance' : `Resistance ${i + 1}`));
   }, [chartReady, supportLevels, resistanceLevels, resolvedTheme]);
+
+  // Draw whatever pattern was just detected on THIS timeframe's candles —
+  // each line is a real 2-point trendline segment (lightweight-charts v4
+  // has no native trendline primitive, so a 2-data-point Line series is
+  // the standard way to draw one), not a full-width price line, since a
+  // triangle/wedge/channel's boundaries are sloped, not horizontal.
+  useEffect(() => {
+    if (!chartRef.current) return;
+    const chart = chartRef.current;
+
+    patternSeriesRef.current.forEach((s) => chart.removeSeries(s));
+    patternSeriesRef.current = [];
+
+    if (!detectedPattern?.lines) return;
+    const times = candleTimesRef.current;
+    const c = CHART_COLORS[resolvedTheme];
+    const color = detectedPattern.direction === 'BULLISH' ? c.support : c.resistance;
+
+    for (const line of detectedPattern.lines) {
+      const fromTime = times[line.from.index];
+      const toTime = times[line.to.index];
+      if (fromTime == null || toTime == null) continue;
+      const series = chart.addLineSeries({
+        color,
+        lineWidth: 2,
+        lineStyle: LineStyle.Dashed,
+        lastValueVisible: false,
+        priceLineVisible: false,
+        crosshairMarkerVisible: false,
+        title: line.label,
+      });
+      series.setData([
+        { time: fromTime, value: line.from.price },
+        { time: toTime, value: line.to.price },
+      ]);
+      patternSeriesRef.current.push(series);
+    }
+  }, [detectedPattern, resolvedTheme]);
 
   return (
     <div>
@@ -247,6 +318,15 @@ export function InstrumentChart({
         {(loading || !hasData) && (
           <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-500 light:text-slate-400 pointer-events-none">
             {loading ? 'Loading chart…' : 'No chart data for this range'}
+          </div>
+        )}
+        {detectedPattern && (
+          <div
+            className={`absolute top-2 left-2 px-2.5 py-1.5 rounded-lg badge-glass text-[11px] font-semibold pointer-events-none ${
+              detectedPattern.direction === 'BULLISH' ? 'bg-emerald-500/15 text-emerald-500 light:text-emerald-700' : 'bg-red-500/15 text-red-500 light:text-red-700'
+            }`}
+          >
+            {formatPatternName(detectedPattern.pattern)} · {detectedPattern.direction === 'BULLISH' ? '▲' : '▼'} {detectedPattern.confidence}%
           </div>
         )}
       </div>

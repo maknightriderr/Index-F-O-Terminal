@@ -37,12 +37,31 @@ export interface SwingPoint {
   price: number;
 }
 
+export interface PatternLinePoint {
+  index: number;
+  price: number;
+}
+
+export interface PatternLine {
+  from: PatternLinePoint;
+  to: PatternLinePoint;
+  /** e.g. "Upper Trendline", "Neckline", "Resistance" — which boundary this segment represents. */
+  label: string;
+}
+
 export interface DetectedPattern {
   pattern: ChartPatternType;
   direction: 'BULLISH' | 'BEARISH';
   confidence: number; // 0-100
   /** Index into the candle array where the pattern's last confirming point sits. */
   atIndex: number;
+  /**
+   * The actual swing points forming the pattern's geometry — a chart can
+   * draw these as line segments (2 points each) rather than just labeling
+   * the pattern as text. Absent only if a future pattern type doesn't have
+   * a natural 2-point-per-line geometry; every pattern below sets it.
+   */
+  lines?: PatternLine[];
 }
 
 const PEAK_TOLERANCE_PCT = 0.02; // peaks/troughs within 2% count as "equal height"
@@ -183,6 +202,10 @@ function detectDoubleTop(peaks: SwingPoint[], troughs: SwingPoint[]): DetectedPa
     direction: 'BEARISH',
     confidence: confidenceFromTightness(heightDiff, PEAK_TOLERANCE_PCT),
     atIndex: p2.index,
+    lines: [
+      { from: p1, to: p2, label: 'Resistance' },
+      { from: { index: p1.index, price: neckline }, to: { index: p2.index, price: neckline }, label: 'Neckline' },
+    ],
   };
 }
 
@@ -202,6 +225,10 @@ function detectDoubleBottom(peaks: SwingPoint[], troughs: SwingPoint[]): Detecte
     direction: 'BULLISH',
     confidence: confidenceFromTightness(depthDiff, PEAK_TOLERANCE_PCT),
     atIndex: t2.index,
+    lines: [
+      { from: t1, to: t2, label: 'Support' },
+      { from: { index: t1.index, price: neckline }, to: { index: t2.index, price: neckline }, label: 'Neckline' },
+    ],
   };
 }
 
@@ -218,7 +245,9 @@ function detectHeadAndShoulders(peaks: SwingPoint[], troughs: SwingPoint[]): Det
   const neck1 = troughs.filter((t) => t.index > ls.index && t.index < head.index);
   const neck2 = troughs.filter((t) => t.index > head.index && t.index < rs.index);
   if (neck1.length === 0 || neck2.length === 0) return null;
-  const necklineDiff = pctDiff(Math.min(...neck1.map((t) => t.price)), Math.min(...neck2.map((t) => t.price)));
+  const necklinePoint1 = neck1.reduce((a, b) => (b.price < a.price ? b : a));
+  const necklinePoint2 = neck2.reduce((a, b) => (b.price < a.price ? b : a));
+  const necklineDiff = pctDiff(necklinePoint1.price, necklinePoint2.price);
   if (necklineDiff > PEAK_TOLERANCE_PCT * 1.5) return null;
 
   return {
@@ -226,6 +255,10 @@ function detectHeadAndShoulders(peaks: SwingPoint[], troughs: SwingPoint[]): Det
     direction: 'BEARISH',
     confidence: confidenceFromTightness(shoulderDiff, PEAK_TOLERANCE_PCT),
     atIndex: rs.index,
+    lines: [
+      { from: ls, to: rs, label: 'Shoulders' },
+      { from: necklinePoint1, to: necklinePoint2, label: 'Neckline' },
+    ],
   };
 }
 
@@ -240,7 +273,9 @@ function detectInverseHeadAndShoulders(peaks: SwingPoint[], troughs: SwingPoint[
   const neck1 = peaks.filter((p) => p.index > ls.index && p.index < head.index);
   const neck2 = peaks.filter((p) => p.index > head.index && p.index < rs.index);
   if (neck1.length === 0 || neck2.length === 0) return null;
-  const necklineDiff = pctDiff(Math.max(...neck1.map((p) => p.price)), Math.max(...neck2.map((p) => p.price)));
+  const necklinePoint1 = neck1.reduce((a, b) => (b.price > a.price ? b : a));
+  const necklinePoint2 = neck2.reduce((a, b) => (b.price > a.price ? b : a));
+  const necklineDiff = pctDiff(necklinePoint1.price, necklinePoint2.price);
   if (necklineDiff > PEAK_TOLERANCE_PCT * 1.5) return null;
 
   return {
@@ -248,6 +283,10 @@ function detectInverseHeadAndShoulders(peaks: SwingPoint[], troughs: SwingPoint[
     direction: 'BULLISH',
     confidence: confidenceFromTightness(shoulderDiff, PEAK_TOLERANCE_PCT),
     atIndex: rs.index,
+    lines: [
+      { from: ls, to: rs, label: 'Shoulders' },
+      { from: necklinePoint1, to: necklinePoint2, label: 'Neckline' },
+    ],
   };
 }
 
@@ -274,17 +313,21 @@ function detectTriangle(peaks: SwingPoint[], troughs: SwingPoint[], closes: numb
   const atIndex = Math.max(p2.index, t2.index);
   const tightness = 1 - Math.min(1, (Math.abs(peakSlope) + Math.abs(troughSlope)) / (FLAT_SLOPE_TOLERANCE * 4));
   const confidence = Math.round(55 + Math.max(0, tightness) * 30);
+  const lines: PatternLine[] = [
+    { from: p1, to: p2, label: 'Upper Trendline' },
+    { from: t1, to: t2, label: 'Lower Trendline' },
+  ];
 
   if (peaksFlat && troughsRising) {
-    return { pattern: 'ASCENDING_TRIANGLE', direction: 'BULLISH', confidence, atIndex };
+    return { pattern: 'ASCENDING_TRIANGLE', direction: 'BULLISH', confidence, atIndex, lines };
   }
   if (troughsFlat && peaksFalling) {
-    return { pattern: 'DESCENDING_TRIANGLE', direction: 'BEARISH', confidence, atIndex };
+    return { pattern: 'DESCENDING_TRIANGLE', direction: 'BEARISH', confidence, atIndex, lines };
   }
   if (peaksFalling && troughsRising) {
     // Continuation pattern — direction follows the trend into the triangle.
     const trendDirection = closes[closes.length - 1] >= closes[Math.max(0, closes.length - 20)] ? 'BULLISH' : 'BEARISH';
-    return { pattern: 'SYMMETRIC_TRIANGLE', direction: trendDirection, confidence, atIndex };
+    return { pattern: 'SYMMETRIC_TRIANGLE', direction: trendDirection, confidence, atIndex, lines };
   }
 
   return null;
@@ -328,15 +371,19 @@ function detectChannel(peaks: SwingPoint[], troughs: SwingPoint[], closes: numbe
   const atIndex = Math.max(p2.index, t2.index);
   const confidence = confidenceFromTightness(slopeDiff, CHANNEL_PARALLEL_TOLERANCE);
   const avgSlope = (peakSlope + troughSlope) / 2;
+  const lines: PatternLine[] = [
+    { from: p1, to: p2, label: 'Upper Channel' },
+    { from: t1, to: t2, label: 'Lower Channel' },
+  ];
 
   if (avgSlope > FLAT_SLOPE_TOLERANCE) {
-    return { pattern: 'ASCENDING_CHANNEL', direction: 'BULLISH', confidence, atIndex };
+    return { pattern: 'ASCENDING_CHANNEL', direction: 'BULLISH', confidence, atIndex, lines };
   }
   if (avgSlope < -FLAT_SLOPE_TOLERANCE) {
-    return { pattern: 'DESCENDING_CHANNEL', direction: 'BEARISH', confidence, atIndex };
+    return { pattern: 'DESCENDING_CHANNEL', direction: 'BEARISH', confidence, atIndex, lines };
   }
   const trendDirection = closes[closes.length - 1] >= closes[Math.max(0, closes.length - 20)] ? 'BULLISH' : 'BEARISH';
-  return { pattern: 'HORIZONTAL_CHANNEL', direction: trendDirection, confidence, atIndex };
+  return { pattern: 'HORIZONTAL_CHANNEL', direction: trendDirection, confidence, atIndex, lines };
 }
 
 // --- Wedges ---
@@ -365,11 +412,16 @@ function detectWedge(peaks: SwingPoint[], troughs: SwingPoint[]): DetectedPatter
   const convergence = troughSlope - peakSlope;
   const converging = convergence > CHANNEL_PARALLEL_TOLERANCE;
 
+  const lines: PatternLine[] = [
+    { from: p1, to: p2, label: 'Upper Trendline' },
+    { from: t1, to: t2, label: 'Lower Trendline' },
+  ];
+
   if (bothRising && converging) {
-    return { pattern: 'RISING_WEDGE', direction: 'BEARISH', confidence: confidenceFromTightness(1 / (1 + convergence * 20), 1), atIndex };
+    return { pattern: 'RISING_WEDGE', direction: 'BEARISH', confidence: confidenceFromTightness(1 / (1 + convergence * 20), 1), atIndex, lines };
   }
   if (bothFalling && converging) {
-    return { pattern: 'FALLING_WEDGE', direction: 'BULLISH', confidence: confidenceFromTightness(1 / (1 + convergence * 20), 1), atIndex };
+    return { pattern: 'FALLING_WEDGE', direction: 'BULLISH', confidence: confidenceFromTightness(1 / (1 + convergence * 20), 1), atIndex, lines };
   }
 
   return null;
@@ -400,12 +452,20 @@ function detectFlag(highs: number[], lows: number[], closes: number[]): Detected
   if (poleStart <= 0) return null;
   const poleMove = (poleEnd - poleStart) / poleStart;
 
+  const flagStartIndex = n - flagBars;
+  const flagEndIndex = n - 1;
+  const lines: PatternLine[] = [
+    { from: { index: flagStartIndex, price: flagHigh }, to: { index: flagEndIndex, price: flagHigh }, label: 'Flag Upper' },
+    { from: { index: flagStartIndex, price: flagLow }, to: { index: flagEndIndex, price: flagLow }, label: 'Flag Lower' },
+  ];
+
   if (poleMove >= POLE_MOVE_THRESHOLD) {
     return {
       pattern: 'BULLISH_FLAG',
       direction: 'BULLISH',
       confidence: confidenceFromTightness(flagRange, FLAG_RANGE_THRESHOLD),
       atIndex: n - 1,
+      lines,
     };
   }
   if (poleMove <= -POLE_MOVE_THRESHOLD) {
@@ -414,6 +474,7 @@ function detectFlag(highs: number[], lows: number[], closes: number[]): Detected
       direction: 'BEARISH',
       confidence: confidenceFromTightness(flagRange, FLAG_RANGE_THRESHOLD),
       atIndex: n - 1,
+      lines,
     };
   }
 
