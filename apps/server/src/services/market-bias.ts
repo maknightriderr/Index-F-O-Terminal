@@ -39,6 +39,7 @@ import {
   detectOrderBlocks,
   testActiveOrderBlock,
   classifyPremiumDiscount,
+  detectEmaTrendStructure,
 } from '@fno/analytics';
 import type {
   Exchange,
@@ -257,6 +258,13 @@ async function computeMarketBias(
   // BREAKOUT-regime philosophy of only counting a signal once it's
   // actually confirmed, not merely forming.
   const vcp = detectVcp(c1h.highs, c1h.lows, c1h.closes, c1h.volumes);
+  // EMA20/EMA50 trend structure on the long tier (1H/Daily) — a classic
+  // trend-following filter distinct from Supertrend: are the moving
+  // averages actually stacked (price > EMA20 > EMA50, or the mirror) AND
+  // sloping in that direction, not just "price happens to be above them
+  // right now." `aligned` alone can be true on a flat/tangled EMA — only
+  // `aligned && slopeOk` together mean a real trend structure.
+  const emaTrend = detectEmaTrendStructure(c1h.closes);
   const longVolSeries = c1h.volumes.slice(-20);
   const longAvgVolume = longVolSeries.length > 0 ? longVolSeries.reduce((a, b) => a + b, 0) / longVolSeries.length : 0;
   const longLastVolume = c1h.volumes[c1h.volumes.length - 1] ?? 0;
@@ -491,6 +499,11 @@ async function computeMarketBias(
       ? -1
       : 0;
   const pcrVote: Vote = pcr > 1.1 ? 1 : pcr < 0.85 ? -1 : 0;
+  // Only counts when the EMAs are both stacked AND sloping in that
+  // direction — a flat/tangled EMA20 sitting on price (aligned but not
+  // sloping) is exactly the chop signature this vote should stay silent on.
+  const emaTrendVote: Vote =
+    emaTrend?.aligned && emaTrend.slopeOk ? (emaTrend.direction === 'BULLISH' ? 1 : -1) : 0;
   // Require a real net skew (not a near-50/50 split) before this counts as
   // a vote — same noise-floor philosophy as the PCR bands above.
   const OPTION_OI_FLOW_MIN_SKEW = 0.15;
@@ -543,7 +556,7 @@ async function computeMarketBias(
   // actual Bias direction/confidence, despite both being fully-formed
   // votes (bollingerVote already has its own breakout/volume-confirmation
   // guard). Added here as baseline votes, same tier as VWAP/RSI/Supertrend.
-  const directionVotes: Vote[] = [vwapVote, rsiVote, st15Vote, st1hVote, futuresOiVote, pcrVote, optionOiFlowVote, macdVote, bollingerVote];
+  const directionVotes: Vote[] = [vwapVote, rsiVote, st15Vote, st1hVote, futuresOiVote, pcrVote, optionOiFlowVote, macdVote, bollingerVote, emaTrendVote];
 
   // RSI divergence (price makes a higher high/lower low while RSI weakens)
   // is a genuinely stronger, more reliable reversal signal than a plain
@@ -798,6 +811,15 @@ async function computeMarketBias(
       ? `Price in the lower Bollinger Band zone (%B ${fmt(bbPercentB, 2)}) — bearish`
       : `Price mid-Bollinger-Band (%B ${fmt(bbPercentB, 2)}) — neutral`
   );
+  if (emaTrend) {
+    reasoning.push(
+      emaTrend.aligned && emaTrend.slopeOk
+        ? `Price ${emaTrend.direction === 'BULLISH' ? '>' : '<'} EMA20 ${emaTrend.direction === 'BULLISH' ? '>' : '<'} EMA50 on ${longLabel}, sloping ${emaTrend.direction!.toLowerCase()} — strong trend structure`
+        : emaTrend.aligned
+        ? `EMA20/EMA50 stacked ${emaTrend.direction!.toLowerCase()} on ${longLabel} but flat — not sloping enough to trust yet`
+        : `EMA20 (${fmt(emaTrend.ema20, 0)}) and EMA50 (${fmt(emaTrend.ema50, 0)}) tangled on ${longLabel} — no trend structure`
+    );
+  }
   // PCR / futures OI / option-flow all feed an actual vote in directionVotes
   // — placed ahead of the OI-wall/pivot lines below, which are informational
   // only (no vote) and already shown as their own Support/Resistance/pivot
@@ -871,6 +893,10 @@ async function computeMarketBias(
       futuresOi: futuresInterpretation,
       optionOiFlow: optionOiFlowDominant,
       optionOiFlowNetSkew: Math.round(optionOiFlowNetSkew * 100) / 100,
+      ema20: emaTrend?.ema20 ?? null,
+      ema50: emaTrend?.ema50 ?? null,
+      emaAligned: emaTrend?.aligned && emaTrend.slopeOk ? emaTrend.direction : null,
+      volumeRatio: Math.round(volumeRatio * 100) / 100,
       maxPain: chain?.maxPain ?? null,
       expectedMove: chain?.expectedMove.points ?? null,
       expectedRangeLow: chain?.expectedMove.lowerBound ?? null,

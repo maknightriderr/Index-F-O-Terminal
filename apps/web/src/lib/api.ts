@@ -24,6 +24,7 @@ import type {
   TradeSetupRecord,
   NewsArticle,
   CorporateAction,
+  MarketScanResult,
 } from '@fno/shared';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
@@ -129,6 +130,10 @@ class ApiClient {
 
   async getFnoScanner(exchange = 'NSE') {
     return this.get<FnoScannerRow[]>(`/api/instruments/fno-scanner?exchange=${exchange}`);
+  }
+
+  async getMarketScan() {
+    return this.get<MarketScanResult>('/api/market-scanner');
   }
 
   async getExpiries(symbol: string, exchange = 'NSE') {

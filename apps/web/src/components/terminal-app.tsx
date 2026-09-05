@@ -11,6 +11,7 @@ import { IvGreeksPage } from '@/components/iv-greeks';
 import { OiIntelligencePage } from '@/components/oi-intelligence';
 import { AlertsPage } from '@/components/alerts';
 import { StrategyScannerPage } from '@/components/strategy-scanner';
+import { MarketScannerPage } from '@/components/market-scanner';
 import { AiAssistantPage } from '@/components/ai-assistant';
 import { InstitutionalFlowPage } from '@/components/institutional-flow';
 import { BacktestingPage } from '@/components/backtesting';
@@ -42,7 +43,7 @@ export function TerminalApp() {
       case 'iv-greeks':
         return <IvGreeksPage />;
       case 'market-scanner':
-        return <PlaceholderPage title="Market Scanner" icon="🔥" description="F&O market scanner with unusual activity detection and relative strength." />;
+        return <MarketScannerPage />;
       case 'strategy-scanner':
         return <StrategyScannerPage />;
       case 'backtesting':

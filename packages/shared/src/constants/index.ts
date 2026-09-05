@@ -168,6 +168,12 @@ export const SECTOR_MAP: Record<string, string[]> = {
   Infrastructure: ['LT', 'ULTRACEMCO', 'GRASIM', 'ACC', 'AMBUJACEM', 'SIEMENS', 'ABB'],
 };
 
+// ATM bid-ask spread as a % of mid, wider than this and an entry/SL/target
+// can't be trusted to actually fill near the quoted price — the same gate
+// Trade Setup uses for naked longs, the F&O Stocks "liquid only" filter,
+// and the Market Scanner's stock-shortlist step.
+export const LIQUID_SPREAD_MAX_PCT = 5;
+
 // --- Option Chain Config ---
 
 export const DEFAULT_STRIKE_RANGE = 20; // Number of strikes above and below ATM

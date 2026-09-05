@@ -13,3 +13,4 @@ export * from './historical-volatility/index.js';
 export * from './fvg/index.js';
 export * from './vcp/index.js';
 export * from './market-structure/index.js';
+export * from './ema-trend/index.js';

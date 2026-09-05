@@ -29,6 +29,8 @@ import { createNewsRoutes } from './api/news.js';
 import { createCorporateActionsRoutes } from './api/corporate-actions.js';
 import { startInstitutionalFlowScanner } from './services/institutional-flow-scanner.js';
 import { startTradeSetupPriceMonitor } from './services/trade-setup-monitor.js';
+import { createMarketScannerRoutes } from './api/market-scanner.js';
+import { startMarketScanner } from './services/market-scanner.js';
 
 // --- Initialize Provider + Subscription Manager ---
 
@@ -87,6 +89,7 @@ app.use('/api/institutional-flow', createInstitutionalFlowRoutes(provider));
 app.use('/api/backtesting', createBacktestingRoutes());
 app.use('/api/news', createNewsRoutes());
 app.use('/api/corporate-actions', createCorporateActionsRoutes());
+app.use('/api/market-scanner', createMarketScannerRoutes(provider));
 
 // --- Health Check ---
 
@@ -196,6 +199,7 @@ startAlertScanner(provider);
 startPatternScanner(provider);
 startInstitutionalFlowScanner(provider);
 startTradeSetupPriceMonitor(provider);
+startMarketScanner(provider);
 
 setInterval(() => {
   const { apiKey, clientId, password, totpSecret } = config.angelOne;

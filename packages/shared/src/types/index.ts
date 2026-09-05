@@ -631,6 +631,75 @@ export interface IntelligenceScore {
   timestamp: number;
 }
 
+// --- Market Scanner ---
+// Top-down NIFTY -> strongest/weakest sector -> top liquid F&O stocks in
+// it -> per-candidate 8-category score, per the manual trading workflow
+// this feature automates (see market-scanner.ts for the pipeline).
+
+export interface MarketBreadth {
+  advances: number;
+  declines: number;
+  unchanged: number;
+  total: number;
+  advPercent: number;
+  decPercent: number;
+  unchPercent: number;
+  isBullishBias: boolean;
+}
+
+export type MarketTrend = 'BULLISH' | 'BEARISH' | 'SIDEWAYS';
+
+export interface MarketTrendRead {
+  trend: MarketTrend;
+  /** 0-15, this pipeline's "Market Trend" scoring category. */
+  score: number;
+  niftyBias: MarketBias;
+  bankNiftyBias: MarketBias;
+  vix: number | null;
+  breadth: MarketBreadth;
+  reasoning: string[];
+}
+
+export interface SectorRank {
+  sector: string;
+  /** Average of the sector's constituent stocks' relativeStrength (today's changePercent vs NIFTY's own). */
+  avgRelativeStrength: number;
+  memberCount: number;
+  symbols: string[];
+}
+
+export type ScannerSetupTier = 'HIGH_CONVICTION' | 'WATCHLIST' | 'WEAK';
+
+export interface ScannerScoreBreakdown {
+  marketTrend: number;    // /15
+  sectorStrength: number; // /10
+  priceAction: number;    // /20
+  emaTrend: number;       // /10
+  volume: number;         // /10
+  optionChain: number;    // /15
+  oiBuildup: number;      // /10
+  smcStructure: number;   // /10
+}
+
+export interface ScannedCandidate {
+  symbol: string;
+  exchange: Exchange;
+  sector: string;
+  side: OptionType;
+  score: number; // 0-100, sum of scoreBreakdown
+  tier: ScannerSetupTier;
+  scoreBreakdown: ScannerScoreBreakdown;
+  tradeSetup: TradeSetup;
+  reasoning: string[];
+}
+
+export interface MarketScanResult {
+  marketTrend: MarketTrendRead;
+  sector: SectorRank | null;
+  candidates: ScannedCandidate[];
+  scannedAt: number;
+}
+
 // --- Signals ---
 
 export type SignalType =

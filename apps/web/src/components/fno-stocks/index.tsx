@@ -3,7 +3,7 @@
 import React, { useMemo, useState } from 'react';
 import { useFnoScanner } from '@/lib/use-fno-scanner';
 import { useAssetTabsStore } from '@/stores';
-import { formatIndianNumber, formatPercent, formatCompact } from '@fno/shared';
+import { formatIndianNumber, formatPercent, formatCompact, LIQUID_SPREAD_MAX_PCT } from '@fno/shared';
 import type { FnoScannerRow } from '@fno/shared';
 import { OIBadge, BiasBadge, ScoreBadge } from '@/components/common/badges';
 import { FilterPills } from '@/components/common/filter-pills';
@@ -12,10 +12,6 @@ import type { BiasDirection, OIInterpretation } from '@fno/shared';
 
 type SortKey = 'symbol' | 'price' | 'changePercent' | 'volume' | 'futuresOi' | 'futuresChangeOi' | 'pcr' | 'atmIv' | 'ivRank' | 'atmSpreadPct' | 'score';
 
-// Same threshold trade-setup/index.ts gates naked longs on — a wider
-// ATM spread than this means an entry/SL/target can't be trusted to
-// actually fill near the quoted price.
-const LIQUID_SPREAD_MAX_PCT = 5;
 type BiasFilter = 'ALL' | BiasDirection;
 type ActivityFilter = 'ALL' | OIInterpretation;
 
