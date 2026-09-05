@@ -69,7 +69,7 @@ export function WatchlistPanel({ allIndices, fnoRows }: { allIndices: MarketQuot
 
                 <div onClick={() => openTab(r.symbol, r.exchange)} className="flex-1 min-w-0 cursor-pointer">
                   <div className="text-xs font-bold text-gray-100 light:text-slate-900 truncate">{r.symbol}</div>
-                  <div className="text-[10px] text-gray-500 light:text-slate-500">
+                  <div className="text-[10px] text-gray-500 light:text-slate-500 tabular-nums">
                     {r.exchange}
                     {r.oi != null ? ` · OI ${formatCompact(r.oi)}` : ''}
                     {r.volume != null ? ` · Vol ${formatCompact(r.volume)}` : ''}

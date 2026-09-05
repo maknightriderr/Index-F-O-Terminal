@@ -19,10 +19,27 @@ import { ChartPatternsPanel } from '@/components/common/chart-patterns-panel';
 import { getPriceHistory } from '@/lib/price-history-store';
 import { useChartPatterns } from '@/lib/use-chart-patterns';
 import { useAssetTabsStore, useMarketStore } from '@/stores';
-import { NiftyChart } from './nifty-chart';
+import { InstrumentChart } from './instrument-chart';
 import { WatchlistPanel } from './watchlist-panel';
 
 const TOP_MOVERS_COUNT = 8;
+
+interface InstrumentOption {
+  symbol: string;
+  exchange: Exchange;
+  label: string;
+  /** MCX commodities (CRUDEOIL, GOLD) have no cash/spot instrument at all — futures/options only. */
+  hasSpot: boolean;
+}
+
+const INSTRUMENTS: InstrumentOption[] = [
+  { symbol: 'NIFTY', exchange: 'NSE', label: 'NIFTY', hasSpot: true },
+  { symbol: 'BANKNIFTY', exchange: 'NSE', label: 'BANK NIFTY', hasSpot: true },
+  { symbol: 'FINNIFTY', exchange: 'NSE', label: 'FIN NIFTY', hasSpot: true },
+  { symbol: 'SENSEX', exchange: 'BSE', label: 'SENSEX', hasSpot: true },
+  { symbol: 'CRUDEOIL', exchange: 'MCX', label: 'CRUDEOIL', hasSpot: false },
+  { symbol: 'GOLD', exchange: 'MCX', label: 'GOLD', hasSpot: false },
+];
 
 type ScreenerFilter =
   | 'ALL'
@@ -57,10 +74,22 @@ export function Dashboard() {
   const { data: fiiDii } = useFiiDii();
   const { data: fiiDiiHistory } = useFiiDiiHistory(20);
   const { snapshot: sentiment } = useInstitutionalFlow();
-  const { data: optionSummary } = useOptionChainSummary('NIFTY', 'NSE');
   const vixQuote = allIndices.find((i) => i.symbol === 'INDIAVIX') ?? null;
   const niftyQuote = indices.find((i) => i.symbol === 'NIFTY') ?? indices[0] ?? null;
   const bankNiftyQuote = indices.find((i) => i.symbol === 'BANKNIFTY') ?? indices[1] ?? null;
+
+  // Instrument & Expiry context — the chart, intelligence panel, and
+  // Options Intelligence all follow whichever instrument is selected here.
+  // FII/DII, Top Movers, and the Watchlist stay market-wide/NSE-universe
+  // scoped regardless, since there's no per-instrument data for those.
+  const [instrumentIdx, setInstrumentIdx] = useState(0);
+  const instrument = INSTRUMENTS[instrumentIdx];
+  const [selectedExpiry, setSelectedExpiry] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    setSelectedExpiry(undefined); // reset to nearest expiry whenever the instrument changes
+  }, [instrument.symbol]);
+
+  const { data: optionSummary, availableExpiries, currentExpiry } = useOptionChainSummary(instrument.symbol, instrument.exchange, selectedExpiry);
 
   // Screener controls
   const [screenerFilter, setScreenerFilter] = useState<ScreenerFilter>('ALL');
@@ -68,8 +97,12 @@ export function Dashboard() {
   const [displayMode, setDisplayMode] = useState<'top' | 'full'>('top');
   const [moversTab, setMoversTab] = useState<MoversTab>('GAINERS');
 
-  // NIFTY bias — drives both the chart's header stats and the intelligence panel
-  const { bias, score } = useMarketBias('NIFTY', 'NSE');
+  // Selected instrument's bias — drives both the chart's header stats and the intelligence panel
+  const { bias, score } = useMarketBias(instrument.symbol, instrument.exchange);
+  const instrumentQuote = allIndices.find((i) => i.symbol === instrument.symbol) ?? null;
+  const instrumentPrice = instrumentQuote?.ltp ?? (bias.inputs.spotPrice as number | undefined) ?? null;
+  const supportLevels = (bias.inputs.supportLevels as Array<{ strike: number; strengthPct: number }> | undefined) ?? [];
+  const resistanceLevels = (bias.inputs.resistanceLevels as Array<{ strike: number; strengthPct: number }> | undefined) ?? [];
 
   // Market Breadth Calculations
   const breadth = useMemo(() => {
@@ -216,31 +249,52 @@ export function Dashboard() {
       </div>
 
       {/* ============================================================
-          NIFTY MARKET INTELLIGENCE — chart + intelligence panel
+          MARKET INTELLIGENCE — instrument-switchable chart + panel
           ============================================================ */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <div className="xl:col-span-2 card-premium p-4">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
             <div>
-              <h2 className="text-sm font-bold text-gray-100 light:text-slate-900">NIFTY Market Intelligence</h2>
+              <h2 className="text-sm font-bold text-gray-100 light:text-slate-900">{instrument.label} Market Intelligence</h2>
               <div className="flex items-center gap-3 mt-1 text-[11px] text-gray-400 light:text-slate-500">
                 <span className="tabular-nums font-semibold text-gray-200 light:text-slate-800">
-                  {niftyQuote ? formatIndianNumber(niftyQuote.ltp, 2) : '—'}
+                  {instrumentPrice != null ? formatIndianNumber(instrumentPrice, 2) : '—'}
                 </span>
-                {niftyQuote && (
-                  <span className={`font-semibold tabular-nums ${niftyQuote.change >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                    {niftyQuote.change >= 0 ? '+' : ''}{niftyQuote.change.toFixed(2)} ({formatPercent(niftyQuote.changePercent)})
+                {instrumentQuote && (
+                  <span className={`font-semibold tabular-nums ${instrumentQuote.change >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {instrumentQuote.change >= 0 ? '+' : ''}{instrumentQuote.change.toFixed(2)} ({formatPercent(instrumentQuote.changePercent)})
                   </span>
                 )}
-                <span>Vol {niftyQuote ? formatCompact(niftyQuote.volume) : '—'}</span>
-                <span>VWAP {bias.inputs.vwap != null ? formatIndianNumber(bias.inputs.vwap as number, 0) : '—'}</span>
-                <span className="text-emerald-400">Support {bias.inputs.support != null ? formatIndianNumber(bias.inputs.support as number, 0) : '—'}</span>
-                <span className="text-red-400">Resistance {bias.inputs.resistance != null ? formatIndianNumber(bias.inputs.resistance as number, 0) : '—'}</span>
+                <span className="tabular-nums">Vol {instrumentQuote ? formatCompact(instrumentQuote.volume) : '—'}</span>
+                <span className="tabular-nums">VWAP {bias.inputs.vwap != null ? formatIndianNumber(bias.inputs.vwap as number, 0) : '—'}</span>
+                <span className="text-emerald-400 tabular-nums">Support {bias.inputs.support != null ? formatIndianNumber(bias.inputs.support as number, 0) : '—'}</span>
+                <span className="text-red-400 tabular-nums">Resistance {bias.inputs.resistance != null ? formatIndianNumber(bias.inputs.resistance as number, 0) : '—'}</span>
                 <span className="px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-500 light:text-indigo-700 font-semibold">{bias.regime.replace(/_/g, ' ')}</span>
               </div>
             </div>
+
+            {/* Instrument Switcher */}
+            <div className="flex items-center gap-1 bg-gray-900/60 light:bg-slate-100 p-0.5 rounded-lg border border-gray-800/40 light:border-slate-200 overflow-x-auto scrollbar-none">
+              {INSTRUMENTS.map((inst, i) => (
+                <button
+                  key={inst.symbol}
+                  onClick={() => setInstrumentIdx(i)}
+                  className={`px-2.5 py-1 text-[11px] font-semibold rounded-md whitespace-nowrap transition-colors ${
+                    instrumentIdx === i ? 'bg-indigo-500/20 text-indigo-500 light:text-indigo-700' : 'text-gray-400 light:text-slate-500'
+                  }`}
+                >
+                  {inst.label}
+                </button>
+              ))}
+            </div>
           </div>
-          <NiftyChart symbol="NIFTY" exchange="NSE" />
+          <InstrumentChart
+            symbol={instrument.symbol}
+            exchange={instrument.exchange}
+            hasSpot={instrument.hasSpot}
+            supportLevels={supportLevels}
+            resistanceLevels={resistanceLevels}
+          />
         </div>
 
         <MarketIntelligencePanel bias={bias} score={score} sentiment={sentiment} fiiDii={fiiDii} breadth={breadth} />
@@ -254,7 +308,13 @@ export function Dashboard() {
       {/* ============================================================
           OPTIONS INTELLIGENCE
           ============================================================ */}
-      <OptionsIntelligence summary={optionSummary} />
+      <OptionsIntelligence
+        label={instrument.label}
+        summary={optionSummary}
+        availableExpiries={availableExpiries}
+        currentExpiry={currentExpiry}
+        onExpiryChange={setSelectedExpiry}
+      />
 
       {/* ============================================================
           TOP MOVERS
@@ -553,7 +613,7 @@ function MarketIntelligencePanel({ bias, score, sentiment, fiiDii, breadth }: an
               style={{ width: `${bias.confidence}%` }}
             />
           </div>
-          <div className="text-[11px] text-gray-400 light:text-slate-500 mt-1">{bias.confidence}% Confidence</div>
+          <div className="text-[11px] text-gray-400 light:text-slate-500 mt-1 tabular-nums">{bias.confidence}% Confidence</div>
         </div>
       </div>
 
@@ -638,13 +698,38 @@ function FiiDiiAnalytics({ today, history }: { today: import('@fno/shared').FiiD
 // OPTIONS INTELLIGENCE
 // ============================================================
 
-function OptionsIntelligence({ summary }: { summary: import('@/lib/use-option-chain-summary').OptionChainSummary | null }) {
+function OptionsIntelligence({
+  label,
+  summary,
+  availableExpiries,
+  currentExpiry,
+  onExpiryChange,
+}: {
+  label: string;
+  summary: import('@/lib/use-option-chain-summary').OptionChainSummary | null;
+  availableExpiries: string[];
+  currentExpiry: string | null;
+  onExpiryChange: (expiry: string) => void;
+}) {
   const totalOi = summary ? summary.callOi + summary.putOi : 0;
   const callPct = summary && totalOi > 0 ? (summary.callOi / totalOi) * 100 : 50;
 
   return (
     <div className="card-premium p-4">
-      <h2 className="text-sm font-bold text-gray-100 light:text-slate-900 mb-3">Options Intelligence — NIFTY</h2>
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <h2 className="text-sm font-bold text-gray-100 light:text-slate-900">Options Intelligence — {label}</h2>
+        {availableExpiries.length > 0 && (
+          <select
+            value={currentExpiry ?? ''}
+            onChange={(e) => onExpiryChange(e.target.value)}
+            className="text-[11px] font-semibold bg-gray-900/60 light:bg-slate-100 border border-gray-800/50 light:border-slate-200 rounded-md px-2 py-1 text-gray-200 light:text-slate-800 focus:outline-none focus:border-indigo-500/50"
+          >
+            {availableExpiries.map((exp) => (
+              <option key={exp} value={exp}>{exp}</option>
+            ))}
+          </select>
+        )}
+      </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
         <StatTile label="Call OI" value={summary ? formatCompact(summary.callOi) : '—'} />
@@ -658,7 +743,7 @@ function OptionsIntelligence({ summary }: { summary: import('@/lib/use-option-ch
       </div>
 
       <div>
-        <div className="flex justify-between text-[10px] font-semibold mb-1">
+        <div className="flex justify-between text-[10px] font-semibold mb-1 tabular-nums">
           <span className="text-red-400">Call OI {callPct.toFixed(0)}%</span>
           <span className="text-emerald-400">Put OI {(100 - callPct).toFixed(0)}%</span>
         </div>

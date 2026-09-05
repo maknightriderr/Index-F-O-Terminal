@@ -8,14 +8,14 @@
 
 import type {
   MarketQuote,
-  OptionChain,
-  OptionChainStrike,
-  FuturesData,
   MarketBias,
   IntelligenceScore,
   SystemHealth,
   FnoScannerRow,
+  FiiDiiActivity,
+  InstitutionalFlowSnapshot,
 } from '@fno/shared';
+import type { OptionChainSummary } from './use-option-chain-summary';
 
 // --- Mock Index Quotes ---
 
@@ -291,6 +291,67 @@ export const MOCK_NIFTY_SCORE: IntelligenceScore = {
     'Declining IV provides smooth tailwinds for bulls',
   ],
   timestamp: Date.now(),
+};
+
+// --- Mock FII/DII (NSE daily cash activity — realistic Rs crore figures) ---
+
+export const MOCK_FII_DII: FiiDiiActivity = {
+  date: 'Sample Session',
+  fii: { buyValue: 13857.58, sellValue: 16969.52, netValue: -3111.94 },
+  dii: { buyValue: 19254.19, sellValue: 10324.07, netValue: 8930.12 },
+  fetchedAt: Date.now(),
+};
+
+export const MOCK_FII_DII_HISTORY: FiiDiiActivity[] = Array.from({ length: 14 }, (_, i) => {
+  // Deterministic seeded wobble, not Math.random(), so mock data doesn't
+  // jump around on every render/poll while the backend is offline.
+  const seed = Math.sin(i * 12.9898) * 43758.5453;
+  const wobble = (seed - Math.floor(seed)) * 2 - 1; // -1..1
+  const fiiNet = Math.round(-2500 + wobble * 4000);
+  const diiNet = Math.round(2000 - wobble * 3500);
+  return {
+    date: `Session -${14 - i}`,
+    fii: { buyValue: 12000 + Math.abs(fiiNet), sellValue: 12000 + Math.max(0, -fiiNet), netValue: fiiNet },
+    dii: { buyValue: 11000 + Math.abs(diiNet), sellValue: 11000 + Math.max(0, -diiNet), netValue: diiNet },
+    fetchedAt: Date.now() - (14 - i) * 24 * 60 * 60 * 1000,
+  };
+});
+
+// --- Mock Institutional Flow Snapshot ---
+
+export const MOCK_INSTITUTIONAL_SNAPSHOT: InstitutionalFlowSnapshot = {
+  vix: { value: 13.82, changePercent: -2.3 },
+  niftyPcr: 1.12,
+  bankNiftyPcr: 1.05,
+  indexFuturesLean: [
+    { symbol: 'NIFTY', interpretation: 'LONG_BUILDUP', changeOiPercent: 3.96 },
+    { symbol: 'BANKNIFTY', interpretation: 'SHORT_COVERING', changeOiPercent: 2.1 },
+  ],
+  stockFuturesBuildup: { longBuildup: 62, shortBuildup: 24, shortCovering: 38, longUnwinding: 18, neutral: 20, total: 162 },
+  optionOiLean: { putHeavyPct: 46, callHeavyPct: 28, sampledSymbols: 140 },
+  fiiDii: MOCK_FII_DII,
+  sentimentScore: 71,
+  sentimentLabel: 'BULLISH',
+  confidenceScore: 68,
+  institutionalConvictionScore: 62,
+  sentimentReasoning: ['Sample sentiment composite — live broker connection unavailable.'],
+  availableInputs: ['India VIX', 'NIFTY/BANKNIFTY PCR', 'FII/DII Cash Activity'],
+  unavailableInputs: [],
+  timestamp: Date.now(),
+};
+
+// --- Mock Option Chain Summary (NIFTY-scale figures) ---
+
+export const MOCK_OPTION_CHAIN_SUMMARY: OptionChainSummary = {
+  callOi: 84_500_000,
+  putOi: 96_200_000,
+  callOiChange: -1_250_000,
+  putOiChange: 2_180_000,
+  pcr: 1.12,
+  maxPain: 24600,
+  atmIv: 14.2,
+  highestCallOiStrike: 24800,
+  highestPutOiStrike: 24500,
 };
 
 // --- Data Source Label ---

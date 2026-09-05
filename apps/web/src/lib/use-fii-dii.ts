@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { api } from './api';
+import { MOCK_FII_DII } from './mock-data';
 import type { FiiDiiActivity } from '@fno/shared';
 
 // EOD-only data (NSE publishes once, after market close) — no point
@@ -9,8 +10,9 @@ import type { FiiDiiActivity } from '@fno/shared';
 // pick up the one daily update within the session.
 const POLL_INTERVAL_MS = 10 * 60 * 1000;
 
+/** Falls back to realistic mock data when the backend/NSE's endpoint is unreachable — same isLive-flagged pattern as useLiveIndices. */
 export function useFiiDii(): { data: FiiDiiActivity | null; isLive: boolean; loading: boolean } {
-  const [data, setData] = useState<FiiDiiActivity | null>(null);
+  const [data, setData] = useState<FiiDiiActivity | null>(MOCK_FII_DII);
   const [isLive, setIsLive] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -22,8 +24,12 @@ export function useFiiDii(): { data: FiiDiiActivity | null; isLive: boolean; loa
         .getFiiDii()
         .then((result) => {
           if (cancelled) return;
-          setData(result);
-          setIsLive(result != null);
+          if (result) {
+            setData(result);
+            setIsLive(true);
+          } else {
+            setIsLive(false);
+          }
           setLoading(false);
         })
         .catch(() => {

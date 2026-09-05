@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from 'react';
 import { api } from './api';
+import { MOCK_INSTITUTIONAL_SNAPSHOT } from './mock-data';
 import type { InstitutionalFlowSnapshot, NextDayBias, InstitutionalCommentary, InstitutionalFlowPrediction, PredictionAccuracyStats } from '@fno/shared';
 
 const POLL_INTERVAL_MS = 60000; // matches the backend's own 60s snapshot/bias cache TTL
 
+/** snapshot falls back to realistic mock data (isLive: false) when the backend is unreachable — same pattern as useLiveIndices. */
 export function useInstitutionalFlow(): {
   snapshot: InstitutionalFlowSnapshot | null;
   biases: NextDayBias[];
@@ -13,7 +15,7 @@ export function useInstitutionalFlow(): {
   loading: boolean;
   isLive: boolean;
 } {
-  const [snapshot, setSnapshot] = useState<InstitutionalFlowSnapshot | null>(null);
+  const [snapshot, setSnapshot] = useState<InstitutionalFlowSnapshot | null>(MOCK_INSTITUTIONAL_SNAPSHOT);
   const [biases, setBiases] = useState<NextDayBias[]>([]);
   const [commentary, setCommentary] = useState<InstitutionalCommentary | null>(null);
   const [loading, setLoading] = useState(true);
