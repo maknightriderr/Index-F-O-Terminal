@@ -4,10 +4,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useAlerts } from '@/lib/use-alerts';
 import { relativeTime } from '@/lib/relative-time';
 import { SeverityBadge } from '@/components/common/badges';
-import { useAssetTabsStore, useMarketStore } from '@/stores';
+import { useAssetTabsStore, useMarketStore, useUISettingsStore } from '@/stores';
 import type { Exchange } from '@fno/shared';
-
-const RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 export function AlertBell() {
   const { alerts } = useAlerts(15);
@@ -15,6 +13,8 @@ export function AlertBell() {
   const ref = useRef<HTMLDivElement>(null);
   const openTab = useAssetTabsStore((s) => s.openTab);
   const setActiveTab = useMarketStore((s) => s.setActiveTab);
+  const lastSeenAt = useUISettingsStore((s) => s.lastAlertsSeenAt);
+  const markAlertsSeen = useUISettingsStore((s) => s.markAlertsSeen);
 
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
@@ -31,7 +31,11 @@ export function AlertBell() {
     };
   }, []);
 
-  const recentCount = alerts.filter((a) => Date.now() - a.createdAt < RECENT_WINDOW_MS).length;
+  // Unread = newer than the last time the bell was opened, not a rolling
+  // time window — the old version counted every alert from the last 24h
+  // regardless of whether the user had already seen it, so the badge never
+  // actually cleared from opening the dropdown.
+  const unreadCount = alerts.filter((a) => a.createdAt > lastSeenAt).length;
 
   const handleAlertClick = (symbol: string, exchange?: string) => {
     if (exchange) openTab(symbol, exchange as Exchange);
@@ -41,14 +45,20 @@ export function AlertBell() {
   return (
     <div ref={ref} className="relative">
       <button
-        onClick={() => setOpen((o) => !o)}
+        onClick={() =>
+          setOpen((o) => {
+            const next = !o;
+            if (next) markAlertsSeen();
+            return next;
+          })
+        }
         className="relative w-7 h-7 flex items-center justify-center rounded-lg text-gray-400 light:text-slate-500 hover:text-gray-200 light:hover:text-slate-800 hover:bg-gray-800/60 light:hover:bg-slate-100 transition-colors"
         title="Alerts"
       >
         🔔
-        {recentCount > 0 && (
+        {unreadCount > 0 && (
           <span className="absolute -top-0.5 -right-0.5 min-w-[15px] h-[15px] px-0.5 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center leading-none">
-            {recentCount > 9 ? '9+' : recentCount}
+            {unreadCount > 9 ? '9+' : unreadCount}
           </span>
         )}
       </button>

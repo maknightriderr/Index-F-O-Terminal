@@ -271,6 +271,8 @@ interface UISettingsState {
   bottomPanelHeight: number;
   theme: ThemeName;
   addAssetModalOpen: boolean;
+  /** Timestamp of the last time the user opened the alert bell — the bell's unread count is alerts newer than this, not a rolling time window. */
+  lastAlertsSeenAt: number;
 
   toggleSidebar: () => void;
   toggleRightPanel: () => void;
@@ -279,6 +281,7 @@ interface UISettingsState {
   setTheme: (theme: ThemeName) => void;
   openAddAssetModal: () => void;
   closeAddAssetModal: () => void;
+  markAlertsSeen: () => void;
 }
 
 export const useUISettingsStore = create<UISettingsState>()(
@@ -290,6 +293,7 @@ export const useUISettingsStore = create<UISettingsState>()(
       bottomPanelHeight: 350,
       theme: 'dark',
       addAssetModalOpen: false,
+      lastAlertsSeenAt: 0,
 
       toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
       toggleRightPanel: () => set((s) => ({ rightPanelOpen: !s.rightPanelOpen })),
@@ -298,6 +302,7 @@ export const useUISettingsStore = create<UISettingsState>()(
       setTheme: (theme) => set({ theme }),
       openAddAssetModal: () => set({ addAssetModalOpen: true }),
       closeAddAssetModal: () => set({ addAssetModalOpen: false }),
+      markAlertsSeen: () => set({ lastAlertsSeenAt: Date.now() }),
     }),
     {
       name: 'fno-ui-settings',
@@ -308,6 +313,7 @@ export const useUISettingsStore = create<UISettingsState>()(
         bottomPanelOpen: state.bottomPanelOpen,
         bottomPanelHeight: state.bottomPanelHeight,
         theme: state.theme,
+        lastAlertsSeenAt: state.lastAlertsSeenAt,
       }),
     }
   )
