@@ -5,7 +5,7 @@ import { useMarketStore } from '@/stores';
 import { api, ApiError } from '@/lib/api';
 import { useMarketBias } from '@/lib/use-market-bias';
 import { useCorporateActionsForSymbol } from '@/lib/use-corporate-actions';
-import { formatIndianNumber, formatCompact, isMarketOpen } from '@fno/shared';
+import { formatIndianNumber, formatCompact, isMarketOpen, DEFAULT_RISK_CONFIG } from '@fno/shared';
 import type {
   Exchange,
   OptionChain,
@@ -786,6 +786,18 @@ function TradeSetupCard({ setup }: { setup: TradeSetup }) {
           <div className="text-emerald-400 font-bold tabular-nums text-base text-glow-emerald">{setup.target!.toFixed(2)}</div>
         </div>
       </div>
+      {setup.positionSize && (
+        <div className="mt-1.5 bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-1.5 flex items-center justify-between text-[10px]">
+          <span className="text-gray-500 light:text-slate-500">
+            {setup.positionSize.lots > 0
+              ? `${setup.positionSize.lots} lot(s) · ${setup.positionSize.quantity} qty`
+              : 'No lot count stays under target risk'}
+          </span>
+          <span className={setup.positionSize.riskPct > DEFAULT_RISK_CONFIG.maxRiskPerTrade ? 'text-amber-400 font-semibold' : 'text-gray-400 light:text-slate-500 font-semibold'}>
+            ₹{setup.positionSize.riskAmount.toFixed(0)} risk ({setup.positionSize.riskPct}% of ₹{(setup.positionSize.capital / 100000).toFixed(1)}L)
+          </span>
+        </div>
+      )}
       {liveMark}
       <p className="text-[10px] text-gray-600 mt-2.5 leading-snug">
         Heuristic from live data — not investment advice.{lockedNote}

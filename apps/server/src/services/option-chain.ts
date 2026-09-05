@@ -270,6 +270,9 @@ async function buildOptionChainUncached(
     dte,
     strikeInterval,
     atmStrike,
+    // All strikes/expiries of the same underlying share one contract lot
+    // size in Indian F&O — any option instrument's own value is correct.
+    lotSize: optionInstruments[0]?.lotSize ?? 1,
     strikes,
     pcr: pcrDetail.oiPCR,
     pcrDetail: {

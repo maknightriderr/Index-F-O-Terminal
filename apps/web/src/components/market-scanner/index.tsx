@@ -197,6 +197,11 @@ function CandidateCard({
               <span className="text-red-400">SL ₹{formatIndianNumber(ts.stopLoss!)}</span>
               <span className="text-emerald-400">Target ₹{formatIndianNumber(ts.target!)}</span>
               {ts.riskReward != null && <span>R:R 1:{ts.riskReward.toFixed(1)}</span>}
+              {ts.positionSize && (
+                <span className={ts.positionSize.lots > 0 ? '' : 'text-amber-400'}>
+                  {ts.positionSize.lots > 0 ? `${ts.positionSize.lots} lot(s), ₹${ts.positionSize.riskAmount.toFixed(0)} risk` : 'No safe lot size'}
+                </span>
+              )}
             </div>
           )}
           <ScoreBadge score={candidate.score} large />

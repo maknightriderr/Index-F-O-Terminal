@@ -205,6 +205,7 @@ export interface OptionChain {
   dte: number;
   strikeInterval: number;
   atmStrike: number;
+  lotSize: number;
   strikes: OptionChainStrike[];
   pcr: number;
   pcrDetail: { oiPCR: number; volumePCR: number; changeOiPCR: number; nearAtmPCR: number };
@@ -329,6 +330,26 @@ export interface TradeSetup {
   currentValue?: number | null;
   /** currentValue minus entry (naked long) or minus netPremium (spread) — positive is profit. Null/absent alongside currentValue. */
   unrealizedPnl?: number | null;
+
+  /** Suggested quantity sized so a stop-out risks a fixed % of trading capital, not just the SL's % of premium. Naked long only — absent for a spread or an unavailable setup. */
+  positionSize?: PositionSize;
+}
+
+/**
+ * quantity = floor((capital * riskPct/100) / (entry - stopLoss) / lotSize) * lotSize
+ * — the standard sizing formula: however wide the stop is in premium terms,
+ * the number of lots is chosen so a stop-out only costs `riskPct`% of
+ * `capital`, not a fixed lot count regardless of stop width.
+ */
+export interface PositionSize {
+  lots: number;
+  quantity: number; // lots * lotSize
+  /** Capital this position actually risks if stopped out — quantity * (entry - stopLoss). Rounds down to whole lots, so this is <= the target riskAmount, never over. */
+  riskAmount: number;
+  /** riskAmount as a % of capital — the real number to check against your intended risk%, since whole-lot rounding means it rarely lands exactly on it. */
+  riskPct: number;
+  capital: number;
+  lotSize: number;
 }
 
 // --- Greeks ---

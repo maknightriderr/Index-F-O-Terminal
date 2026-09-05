@@ -19,7 +19,8 @@
 // numbers were derived so it can be checked, not just trusted.
 // ============================================================
 
-import type { OptionChainStrike, OptionType, BiasDirection, TradeSetup } from '@fno/shared';
+import type { OptionChainStrike, OptionType, BiasDirection, TradeSetup, PositionSize } from '@fno/shared';
+import { DEFAULT_RISK_CONFIG } from '@fno/shared';
 
 // 30% premium stop for an intraday hold — standard retail heuristic for
 // long options. A positional hold (days/weeks) needs a wider stop since
@@ -93,12 +94,41 @@ const MAX_ATM_SPREAD_PCT = 5;
 // beyond the mid-price this setup is sized from all eat into the real
 // P&L. Deliberately NOT threaded into a structured field or subtracted
 // from riskReward itself: brokerage is a flat rupee amount per order, so
-// its % impact depends on lot size, which this module doesn't have (and
-// pulling it in would drag this into position-sizing territory — out of
-// scope, see market-bias.ts's own file header). This is a rough,
-// broker-independent rule of thumb surfaced as a note, not a number the
-// UI should present as precise — real costs vary by broker/plan.
+// its % impact depends on lot size — this is a rough, broker-independent
+// rule of thumb surfaced as a note, not a number the UI should present
+// as precise (real costs vary by broker/plan), unlike position sizing
+// below, which now IS a structured field once a real lot size is known.
 const ESTIMATED_ROUND_TRIP_COST_PCT = 3; // brokerage-equivalent + STT + residual spread, as a % of entry premium
+
+// Position sizing: quantity chosen so a stop-out risks a fixed % of
+// trading capital, whatever the SL's own % of premium happens to be —
+// previously out of scope (this module had no lot size to work with), but
+// without it the premium-%-based SL silently became the user's real
+// capital risk whenever they bought a fixed lot count regardless of stop
+// width. DEFAULT_RISK_CONFIG is this app's only source for capital/risk%
+// today (no per-user settings UI exists yet) — same single-user-terminal
+// assumption the rest of this app already makes.
+function calculatePositionSize(entry: number, stopLoss: number, lotSize: number): PositionSize | null {
+  const riskPerUnit = Math.abs(entry - stopLoss);
+  if (riskPerUnit <= 0 || lotSize <= 0) return null;
+
+  const capital = DEFAULT_RISK_CONFIG.tradingCapital;
+  const riskPct = DEFAULT_RISK_CONFIG.maxRiskPerTrade;
+  const maxRiskAmount = capital * (riskPct / 100);
+  const riskPerLot = riskPerUnit * lotSize;
+  const lots = Math.max(0, Math.floor(maxRiskAmount / riskPerLot));
+  const quantity = lots * lotSize;
+  const riskAmount = round2(quantity * riskPerUnit);
+
+  return {
+    lots,
+    quantity,
+    riskAmount,
+    riskPct: capital > 0 ? round2((riskAmount / capital) * 100) : 0,
+    capital,
+    lotSize,
+  };
+}
 
 // A defined-risk spread's max profit/loss are only realized if held to (or
 // very near) expiry — exiting early at a fraction of each is the standard
@@ -116,7 +146,8 @@ export function buildTradeSetup(
   expectedMovePoints: number,
   slPremiumPct: number = DEFAULT_SL_PREMIUM_PCT,
   vix: number | null = null,
-  dte: number | null = null
+  dte: number | null = null,
+  lotSize: number = 1
 ): TradeSetup {
   if (confidence < MIN_CONFIDENCE) {
     return {
@@ -130,7 +161,7 @@ export function buildTradeSetup(
   }
 
   const side: OptionType = direction === 'BULLISH' ? 'CE' : 'PE';
-  return buildNakedLong(strikes, atmStrike, direction, side, confidence, expectedMovePoints, slPremiumPct, vix, dte);
+  return buildNakedLong(strikes, atmStrike, direction, side, confidence, expectedMovePoints, slPremiumPct, vix, dte, lotSize);
 }
 
 // ============================================================
@@ -146,7 +177,8 @@ function buildNakedLong(
   expectedMovePoints: number,
   slPremiumPct: number,
   vix: number | null,
-  dte: number | null = null
+  dte: number | null = null,
+  lotSize: number = 1
 ): TradeSetup {
   const atmEntry = strikes.find((s) => s.strike === atmStrike);
   const leg = side === 'CE' ? atmEntry?.call : atmEntry?.put;
@@ -223,6 +255,17 @@ function buildNakedLong(
   }
 
   const estimatedCost = round2(entry * (ESTIMATED_ROUND_TRIP_COST_PCT / 100));
+  const positionSize = calculatePositionSize(entry, stopLoss, lotSize);
+  const oneLotRiskPct = lotSize > 0 && positionSize && positionSize.capital > 0 ? round2(((entry - stopLoss) * lotSize / positionSize.capital) * 100) : null;
+
+  let sizingNote: string;
+  if (!positionSize) {
+    sizingNote = ' Position size unavailable — no valid lot size for this contract.';
+  } else if (positionSize.lots === 0) {
+    sizingNote = ` Even 1 lot (${lotSize} qty) risks ~${oneLotRiskPct}% of the ₹${(positionSize.capital / 100000).toFixed(1)}L default capital — above the ${DEFAULT_RISK_CONFIG.maxRiskPerTrade}% target, so no lot count keeps this trade within it; size down or skip.`;
+  } else {
+    sizingNote = ` Suggested size: ${positionSize.lots} lot(s) (${positionSize.quantity} qty) risks ₹${positionSize.riskAmount.toFixed(0)} (${positionSize.riskPct}% of ₹${(positionSize.capital / 100000).toFixed(1)}L default capital) if SL hits.`;
+  }
 
   return {
     available: true,
@@ -233,12 +276,14 @@ function buildNakedLong(
     stopLoss,
     target,
     riskReward,
+    positionSize: positionSize ?? undefined,
     reason:
       `${direction} bias at ${confidence}/100 confidence — ATM ${side} ${atmStrike} @ ${entry.toFixed(2)}${hasQuote ? ' (bid-ask mid)' : ''}. ` +
       `Target ${target.toFixed(2)} from delta (${leg.delta.toFixed(2)}) × IV-implied expected move (${expectedMovePoints.toFixed(0)} pts). ` +
       `SL ${stopLoss.toFixed(2)} — a ${Math.round(effectiveSlPct * 100)}% premium stop${vixNote}${expiryNote}.` +
       (dte != null ? ` DTE ${dte}.` : '') +
-      ` None of the numbers above subtract real trading costs — brokerage, STT, and slippage beyond this mid-price entry typically run ~${ESTIMATED_ROUND_TRIP_COST_PCT}% of premium round-trip (~${estimatedCost.toFixed(2)} here), a rough estimate that varies by broker, not a precise deduction.`,
+      ` None of the numbers above subtract real trading costs — brokerage, STT, and slippage beyond this mid-price entry typically run ~${ESTIMATED_ROUND_TRIP_COST_PCT}% of premium round-trip (~${estimatedCost.toFixed(2)} here), a rough estimate that varies by broker, not a precise deduction.` +
+      sizingNote,
   };
 }
 

@@ -1558,7 +1558,7 @@ async function resolveStickyTradeSetup(
         return oneDayMove * Math.sqrt(remainingSessionFraction(exchange));
       })();
 
-  const fresh = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, targetExpectedMovePoints, slPremiumPct, vix, chain.dte);
+  const fresh = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, targetExpectedMovePoints, slPremiumPct, vix, chain.dte, chain.lotSize);
 
   if (!fresh.available) {
     // Clear any previously locked setup now that conditions no longer
