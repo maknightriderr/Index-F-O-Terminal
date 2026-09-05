@@ -38,6 +38,14 @@ export function AlertBell() {
   const unreadCount = alerts.filter((a) => a.createdAt > lastSeenAt).length;
 
   const handleAlertClick = (symbol: string, exchange?: string) => {
+    // Digest alerts (OI/IV extremes across the whole universe) use this
+    // pseudo-symbol since they summarize many stocks, not one — nothing to
+    // open a tab for; view the full per-symbol breakdown on the Alerts page instead.
+    if (symbol === 'NSE_FNO_UNIVERSE') {
+      setActiveTab('alerts');
+      setOpen(false);
+      return;
+    }
     if (exchange) openTab(symbol, exchange as Exchange);
     setOpen(false);
   };
@@ -88,7 +96,9 @@ export function AlertBell() {
                   className="px-3.5 py-2.5 hover:bg-gray-800/30 light:hover:bg-slate-50 cursor-pointer transition-colors"
                 >
                   <div className="flex items-center justify-between gap-2 mb-1">
-                    <span className="text-xs font-semibold text-gray-200 light:text-slate-800">{a.symbol}</span>
+                    <span className="text-xs font-semibold text-gray-200 light:text-slate-800">
+                      {a.symbol === 'NSE_FNO_UNIVERSE' ? 'F&O Universe' : a.symbol}
+                    </span>
                     <div className="flex items-center gap-1.5 shrink-0">
                       <SeverityBadge severity={a.severity} />
                       <span className="text-[10px] text-gray-500 light:text-slate-400">{relativeTime(a.createdAt)}</span>

@@ -39,16 +39,26 @@ export function createAlertRoutes(): Router {
   const router = Router();
 
   /**
-   * GET /api/alerts?limit=50
-   * Most recent alerts, newest first.
+   * GET /api/alerts?limit=50&type=IV_SPIKE&severity=WARNING
+   * Most recent alerts, newest first. `type`/`severity` filter server-side
+   * so a filtered view isn't silently limited to whatever happened to be
+   * in the last `limit` unfiltered rows (e.g. a CRITICAL-only filter
+   * previously could show nothing even with real CRITICAL alerts further
+   * back than the fetch window, since filtering only ever happened
+   * client-side after the fact).
    */
   router.get('/', async (req: Request, res: Response) => {
     try {
       const limit = Math.min(Math.max(parseInt((req.query.limit as string) || '50', 10) || 50, 1), 200);
+      const type = (req.query.type as string) || null;
+      const severity = (req.query.severity as string) || null;
 
       const rows = await sql<AlertRow[]>`
         SELECT id, symbol, alert_type, message, severity, channels, condition, triggered, triggered_at, created_at
         FROM alerts
+        WHERE 1=1
+          ${type ? sql`AND alert_type = ${type}` : sql``}
+          ${severity ? sql`AND severity = ${severity}` : sql``}
         ORDER BY created_at DESC
         LIMIT ${limit}
       `;

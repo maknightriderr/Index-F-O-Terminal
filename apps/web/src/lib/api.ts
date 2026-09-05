@@ -241,8 +241,11 @@ class ApiClient {
     return this.get<any>('/api/health');
   }
 
-  async getAlerts(limit = 50) {
-    return this.get<Alert[]>(`/api/alerts?limit=${limit}`);
+  async getAlerts(limit = 50, opts: { type?: string; severity?: string } = {}) {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (opts.type) params.set('type', opts.type);
+    if (opts.severity) params.set('severity', opts.severity);
+    return this.get<Alert[]>(`/api/alerts?${params.toString()}`);
   }
 
   async chatWithAssistant(message: string, history: Array<{ role: 'user' | 'assistant'; content: string }>) {

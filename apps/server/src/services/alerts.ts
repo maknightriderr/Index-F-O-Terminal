@@ -44,9 +44,13 @@ const SCAN_INTERVAL_MS = 120_000; // 2 minutes
 const INITIAL_DELAY_MS = 30_000; // let the provider/cache warm up after boot before the first tick
 const SCANNER_CACHE_TTL_SECONDS = 180; // must match instruments.ts's fno-scanner cache TTL — same key, shared cache
 
-const OI_CHANGE_PCT_THRESHOLD = 8;
-const IV_RANK_SPIKE_THRESHOLD = 85;
-const IV_RANK_CRUSH_THRESHOLD = 15;
+// Raised from 8/85/15 after a real-world complaint: at the old bar these
+// fired for dozens of the ~180-stock F&O universe on an ordinary day —
+// common enough to be noise, not "unusual." These are meant to be the
+// genuinely rare tail, not routine intraday moves.
+const OI_CHANGE_PCT_THRESHOLD = 15;
+const IV_RANK_SPIKE_THRESHOLD = 92;
+const IV_RANK_CRUSH_THRESHOLD = 8;
 
 // --- Institutional Flow (Section 8) thresholds ---
 const VIX_SPIKE_LEVEL = 20; // conventional India VIX "elevated" band
@@ -165,6 +169,20 @@ async function checkInstitutionalFlowAlerts(provider: MarketDataProvider): Promi
 }
 
 // --- OI / IV extremes (universe scan) ---
+//
+// Digested, not per-symbol: on a genuinely volatile day, a dozen-plus
+// stocks can cross these thresholds in the same scan. Firing one alert
+// row per stock (the original behavior) is exactly what produced "100s
+// of alerts a day" — this collects everyone who qualifies THIS tick and
+// fires a single summary alert per type per day instead, with the full
+// list preserved in `condition.symbols` for the UI to expand on demand.
+const DIGEST_PREVIEW_COUNT = 3; // how many symbols the message text itself names before "+N more"
+
+function summarizeDigest(items: string[]): string {
+  const preview = items.slice(0, DIGEST_PREVIEW_COUNT).join(', ');
+  const rest = items.length - DIGEST_PREVIEW_COUNT;
+  return rest > 0 ? `${preview} +${rest} more` : preview;
+}
 
 async function checkOiAndIvAlerts(provider: MarketDataProvider): Promise<void> {
   if (!provider.isAuthenticated()) return;
@@ -179,43 +197,56 @@ async function checkOiAndIvAlerts(provider: MarketDataProvider): Promise<void> {
 
   const today = istDay();
 
-  for (const row of rows) {
-    if (row.futuresOi > 0 && Math.abs(row.futuresChangeOiPercent) >= OI_CHANGE_PCT_THRESHOLD) {
-      const direction = row.futuresChangeOiPercent > 0 ? 'built up' : 'unwound';
-      await maybeFireDailyAlert({
-        dedupeKey: `alert_sent:FUTURES_OI_SPIKE:${row.symbol}:${today}`,
-        symbol: row.symbol,
-        exchange: row.exchange,
-        alertType: 'FUTURES_OI_SPIKE',
-        severity: 'WARNING',
-        message: `⚡ ${row.symbol}: futures OI ${direction} ${row.futuresChangeOiPercent >= 0 ? '+' : ''}${row.futuresChangeOiPercent.toFixed(1)}% today (${row.oiInterpretation.replace(/_/g, ' ').toLowerCase()})`,
-        condition: { threshold: OI_CHANGE_PCT_THRESHOLD, futuresChangeOiPercent: row.futuresChangeOiPercent, oiInterpretation: row.oiInterpretation },
-      });
-    }
+  const oiSpikes = rows.filter((r) => r.futuresOi > 0 && Math.abs(r.futuresChangeOiPercent) >= OI_CHANGE_PCT_THRESHOLD);
+  const ivSpikes = rows.filter((r) => r.ivRank != null && r.ivRank >= IV_RANK_SPIKE_THRESHOLD);
+  const ivCrushes = rows.filter((r) => r.ivRank != null && r.ivRank <= IV_RANK_CRUSH_THRESHOLD);
 
-    if (row.ivRank != null) {
-      if (row.ivRank >= IV_RANK_SPIKE_THRESHOLD) {
-        await maybeFireDailyAlert({
-          dedupeKey: `alert_sent:IV_SPIKE:${row.symbol}:${today}`,
-          symbol: row.symbol,
-          exchange: row.exchange,
-          alertType: 'IV_SPIKE',
-          severity: 'WARNING',
-          message: `📈 ${row.symbol}: IV Rank at ${row.ivRank} — options unusually expensive vs its own recent range (ATM IV ${row.atmIv.toFixed(1)}%)`,
-          condition: { threshold: IV_RANK_SPIKE_THRESHOLD, ivRank: row.ivRank, atmIv: row.atmIv },
-        });
-      } else if (row.ivRank <= IV_RANK_CRUSH_THRESHOLD) {
-        await maybeFireDailyAlert({
-          dedupeKey: `alert_sent:IV_CRUSH:${row.symbol}:${today}`,
-          symbol: row.symbol,
-          exchange: row.exchange,
-          alertType: 'IV_CRUSH',
-          severity: 'INFO',
-          message: `📉 ${row.symbol}: IV Rank at ${row.ivRank} — options unusually cheap vs its own recent range (ATM IV ${row.atmIv.toFixed(1)}%)`,
-          condition: { threshold: IV_RANK_CRUSH_THRESHOLD, ivRank: row.ivRank, atmIv: row.atmIv },
-        });
-      }
-    }
+  if (oiSpikes.length > 0) {
+    const sorted = [...oiSpikes].sort((a, b) => Math.abs(b.futuresChangeOiPercent) - Math.abs(a.futuresChangeOiPercent));
+    await maybeFireDailyAlert({
+      dedupeKey: `alert_sent:FUTURES_OI_SPIKE_DIGEST:${today}`,
+      symbol: 'NSE_FNO_UNIVERSE',
+      exchange: 'NSE',
+      alertType: 'FUTURES_OI_SPIKE',
+      severity: 'WARNING',
+      message: `⚡ ${oiSpikes.length} stock${oiSpikes.length === 1 ? '' : 's'} showed unusual futures OI activity (≥${OI_CHANGE_PCT_THRESHOLD}%) today: ${summarizeDigest(sorted.map((r) => `${r.symbol} ${r.futuresChangeOiPercent >= 0 ? '+' : ''}${r.futuresChangeOiPercent.toFixed(1)}%`))}`,
+      condition: {
+        threshold: OI_CHANGE_PCT_THRESHOLD,
+        symbols: sorted.map((r) => ({ symbol: r.symbol, exchange: r.exchange, changePercent: r.futuresChangeOiPercent, oiInterpretation: r.oiInterpretation })),
+      },
+    });
+  }
+
+  if (ivSpikes.length > 0) {
+    const sorted = [...ivSpikes].sort((a, b) => (b.ivRank ?? 0) - (a.ivRank ?? 0));
+    await maybeFireDailyAlert({
+      dedupeKey: `alert_sent:IV_SPIKE_DIGEST:${today}`,
+      symbol: 'NSE_FNO_UNIVERSE',
+      exchange: 'NSE',
+      alertType: 'IV_SPIKE',
+      severity: 'WARNING',
+      message: `📈 ${ivSpikes.length} stock${ivSpikes.length === 1 ? '' : 's'} have unusually expensive IV (rank ≥${IV_RANK_SPIKE_THRESHOLD}) today: ${summarizeDigest(sorted.map((r) => `${r.symbol} (IVR ${r.ivRank})`))}`,
+      condition: {
+        threshold: IV_RANK_SPIKE_THRESHOLD,
+        symbols: sorted.map((r) => ({ symbol: r.symbol, exchange: r.exchange, ivRank: r.ivRank, atmIv: r.atmIv })),
+      },
+    });
+  }
+
+  if (ivCrushes.length > 0) {
+    const sorted = [...ivCrushes].sort((a, b) => (a.ivRank ?? 0) - (b.ivRank ?? 0));
+    await maybeFireDailyAlert({
+      dedupeKey: `alert_sent:IV_CRUSH_DIGEST:${today}`,
+      symbol: 'NSE_FNO_UNIVERSE',
+      exchange: 'NSE',
+      alertType: 'IV_CRUSH',
+      severity: 'INFO',
+      message: `📉 ${ivCrushes.length} stock${ivCrushes.length === 1 ? '' : 's'} have unusually cheap IV (rank ≤${IV_RANK_CRUSH_THRESHOLD}) today: ${summarizeDigest(sorted.map((r) => `${r.symbol} (IVR ${r.ivRank})`))}`,
+      condition: {
+        threshold: IV_RANK_CRUSH_THRESHOLD,
+        symbols: sorted.map((r) => ({ symbol: r.symbol, exchange: r.exchange, ivRank: r.ivRank, atmIv: r.atmIv })),
+      },
+    });
   }
 }
 
