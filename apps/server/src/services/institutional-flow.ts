@@ -1,17 +1,17 @@
 // ============================================================
 // INSTITUTIONAL FLOW INTELLIGENCE
 // ============================================================
-// Sentiment composite + next-day bias engine, built entirely from
-// data this app can actually get live from Angel One: India VIX,
-// NIFTY/BANKNIFTY PCR + expected move (via the existing option-chain
-// engine), NIFTY/BANKNIFTY futures OI (via the existing futures
-// engine), and F&O-universe-wide futures/PCR aggregates (via the
-// existing scanner). FII/DII cash flow, participant-wise OI, FII
-// futures positioning, and global-market inputs (USDINR/DXY/S&P500/
-// Nasdaq/Dow/GIFT Nifty/Asian markets) are NSE-report or global-feed
-// data this app has no source for — every read below discloses
-// exactly which real inputs it used via availableInputs/
-// unavailableInputs rather than silently omitting or faking them.
+// Sentiment composite + next-day bias engine, built from data this app
+// can get live from Angel One (India VIX, NIFTY/BANKNIFTY PCR + expected
+// move via the option-chain engine, NIFTY/BANKNIFTY futures OI, and
+// F&O-universe-wide futures/PCR aggregates) plus NSE's own daily FII/DII
+// cash-activity figures (see fii-dii.ts — unofficial endpoint, EOD-only,
+// can go unavailable if NSE changes it). Participant-wise OI, FII futures
+// positioning, and global-market inputs (USDINR/DXY/S&P500/Nasdaq/Dow/
+// GIFT Nifty/Asian markets) are still NSE-report or global-feed data
+// this app has no source for — every read below discloses exactly which
+// real inputs it used via availableInputs/unavailableInputs rather than
+// silently omitting or faking them.
 // ============================================================
 
 import type {
@@ -32,6 +32,7 @@ import { buildOptionChain } from './option-chain.js';
 import { buildFuturesData } from './futures.js';
 import { scanFnoUniverse } from './fno-scanner.js';
 import { buildMarketBias } from './market-bias.js';
+import { getFiiDiiActivity } from './fii-dii.js';
 import { cached } from '../lib/cache.js';
 import { logger } from '../lib/logger.js';
 import { askClaude, isAnthropicConfigured } from '../lib/anthropic.js';
@@ -51,8 +52,6 @@ function clamp(n: number, min: number, max: number): number {
 export async function buildSentimentSnapshot(provider: MarketDataProvider): Promise<InstitutionalFlowSnapshot> {
   const availableInputs: string[] = [];
   const unavailableInputs: string[] = [
-    'FII Cash Activity',
-    'DII Cash Activity',
     'USDINR',
     'DXY',
     'Global Crude Oil (WTI/Brent)',
@@ -61,7 +60,7 @@ export async function buildSentimentSnapshot(provider: MarketDataProvider): Prom
     'GIFT Nifty',
   ];
 
-  const [vixQuotes, chains, futuresData, universe] = await Promise.all([
+  const [vixQuotes, chains, futuresData, universe, fiiDii] = await Promise.all([
     getLiveIndexQuotes(provider, [{ symbol: 'INDIAVIX', exchange: 'NSE' }]).catch(() => []),
     Promise.all(
       INSTITUTIONAL_SYMBOLS.map((s) =>
@@ -83,11 +82,15 @@ export async function buildSentimentSnapshot(provider: MarketDataProvider): Prom
       logger.warn({ error: err.message }, 'Institutional flow: F&O universe scan unavailable');
       return [];
     }),
+    getFiiDiiActivity(),
   ]);
 
   const vix = vixQuotes[0] ? { value: vixQuotes[0].ltp, changePercent: vixQuotes[0].changePercent } : null;
   if (vix) availableInputs.push('India VIX');
   else unavailableInputs.unshift('India VIX');
+
+  if (fiiDii) availableInputs.push('FII/DII Cash Activity');
+  else unavailableInputs.unshift('FII/DII Cash Activity');
 
   const niftyChain = chains[0];
   const bankNiftyChain = chains[1];
@@ -140,7 +143,7 @@ export async function buildSentimentSnapshot(provider: MarketDataProvider): Prom
   // weighted-mean formula below naturally renormalizes over whichever
   // subset is actually available, so a missing input doesn't need
   // special-casing.
-  const WEIGHT = { vix: 30, indexFutures: 30, blendedPcr: 20, stockBuildup: 12, optionOiSkew: 8 };
+  const WEIGHT = { vix: 30, indexFutures: 30, fiiDii: 25, blendedPcr: 20, stockBuildup: 12, optionOiSkew: 8 };
   const scores: Array<{ value: number; weight: number }> = [];
   const reasoning: string[] = [];
 
@@ -181,6 +184,21 @@ export async function buildSentimentSnapshot(provider: MarketDataProvider): Prom
     reasoning.push(`Option OI skew across ${optionOiLean.sampledSymbols} stocks: ${optionOiLean.putHeavyPct}% put-heavy, ${optionOiLean.callHeavyPct}% call-heavy`);
   }
 
+  // FII/DII net combined cash flow: ₹5,000 Cr net either way maps to the
+  // score's 0/100 extreme — a big single-session net is a real, high-
+  // conviction institutional signal on Indian markets, comparable in
+  // weight to VIX/index futures OI, not a minor secondary input. This is
+  // NSE's last-published figure (see fii-dii.ts) — same-day only once NSE
+  // has actually published it, otherwise still the prior session's.
+  const netFiiDiiCr = fiiDii ? fiiDii.fii.netValue + fiiDii.dii.netValue : null;
+  if (netFiiDiiCr != null) {
+    const fiiDiiScore = clamp(Math.round(50 + (netFiiDiiCr / 5000) * 50), 0, 100);
+    scores.push({ value: fiiDiiScore, weight: WEIGHT.fiiDii });
+    reasoning.push(
+      `FII/DII combined net ₹${netFiiDiiCr >= 0 ? '+' : ''}${netFiiDiiCr.toFixed(0)} Cr on ${fiiDii!.date} (FII ${fiiDii!.fii.netValue >= 0 ? '+' : ''}${fiiDii!.fii.netValue.toFixed(0)} Cr, DII ${fiiDii!.dii.netValue >= 0 ? '+' : ''}${fiiDii!.dii.netValue.toFixed(0)} Cr)`
+    );
+  }
+
   const totalWeight = scores.reduce((sum, s) => sum + s.weight, 0);
   const sentimentScore = totalWeight > 0 ? clamp(Math.round(scores.reduce((sum, s) => sum + s.value * s.weight, 0) / totalWeight), 0, 100) : 50;
   const sentimentLabel = classifySentiment(sentimentScore);
@@ -189,7 +207,14 @@ export async function buildSentimentSnapshot(provider: MarketDataProvider): Prom
   const agreeing = scores.filter((s) => (overallLean === 1 && s.value > 55) || (overallLean === -1 && s.value < 45) || (overallLean === 0 && s.value >= 40 && s.value <= 60)).length;
   const confidenceScore = scores.length > 0 ? clamp(Math.round((agreeing / scores.length) * 100), 10, 95) : 10;
 
-  reasoning.push(`Sentiment score is a weighted average of ${scores.length} available input${scores.length === 1 ? '' : 's'} (VIX and index futures OI weighted highest as direct market-wide reads) — ${unavailableInputs.length} more (FII/DII flows, global markets) aren't connected yet and are excluded rather than estimated.`);
+  // Magnitude, not direction — a big net flow either way means conviction,
+  // near-zero means institutions are on the sidelines. Same ₹5,000 Cr
+  // scale as the sentiment score's own FII/DII component above.
+  const institutionalConvictionScore = netFiiDiiCr != null ? clamp(Math.round((Math.abs(netFiiDiiCr) / 5000) * 100), 0, 100) : null;
+
+  reasoning.push(
+    `Sentiment score is a weighted average of ${scores.length} available input${scores.length === 1 ? '' : 's'} (VIX, index futures OI, and FII/DII flow weighted highest as direct market-wide reads) — ${unavailableInputs.length} more (global markets) aren't connected yet and are excluded rather than estimated.`
+  );
 
   return {
     vix,
@@ -198,10 +223,11 @@ export async function buildSentimentSnapshot(provider: MarketDataProvider): Prom
     indexFuturesLean,
     stockFuturesBuildup: buildupCounts,
     optionOiLean,
+    fiiDii,
     sentimentScore,
     sentimentLabel,
     confidenceScore,
-    institutionalConvictionScore: null, // needs FII/DII/participant-wise OI — not connected
+    institutionalConvictionScore,
     sentimentReasoning: reasoning,
     availableInputs,
     unavailableInputs,

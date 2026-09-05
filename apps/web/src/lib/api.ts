@@ -25,6 +25,7 @@ import type {
   NewsArticle,
   CorporateAction,
   MarketScanResult,
+  FiiDiiActivity,
 } from '@fno/shared';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
@@ -134,6 +135,10 @@ class ApiClient {
 
   async getMarketScan() {
     return this.get<MarketScanResult>('/api/market-scanner');
+  }
+
+  async getFiiDii() {
+    return this.get<FiiDiiActivity | null>('/api/fii-dii');
   }
 
   async getExpiries(symbol: string, exchange = 'NSE') {

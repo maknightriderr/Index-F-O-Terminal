@@ -1039,6 +1039,20 @@ export interface HistoricalParams {
 
 export type SentimentLabel = 'EXTREMELY_BEARISH' | 'BEARISH' | 'NEUTRAL' | 'BULLISH' | 'EXTREMELY_BULLISH';
 
+/**
+ * NSE's own daily FII/DII cash-market activity — published once, after
+ * market close (~5:30-6:30pm IST). `date` is NSE's own label for the
+ * session this covers, which can be the previous trading day's figure
+ * until NSE publishes today's, especially early in the next session.
+ * All values in Rs crore.
+ */
+export interface FiiDiiActivity {
+  date: string;
+  fii: { buyValue: number; sellValue: number; netValue: number };
+  dii: { buyValue: number; sellValue: number; netValue: number };
+  fetchedAt: number;
+}
+
 export interface InstitutionalFlowSnapshot {
   vix: { value: number; changePercent: number } | null;
   niftyPcr: number | null;
@@ -1057,12 +1071,18 @@ export interface InstitutionalFlowSnapshot {
   // leg, which the universe scanner doesn't track) — a real but weaker
   // signal than Section 2's example implies, named accordingly.
   optionOiLean: { putHeavyPct: number; callHeavyPct: number; sampledSymbols: number } | null;
+  /** NSE's last-published daily FII/DII net cash activity — null when NSE's endpoint was unreachable this poll (unofficial, can break without notice) or hasn't published yet today. */
+  fiiDii: FiiDiiActivity | null;
   sentimentScore: number; // 0-100
   sentimentLabel: SentimentLabel;
   // How much the available inputs agree with each other (0-100) — distinct
-  // from institutionalConvictionScore, which needs FII/DII/participant data
-  // this app doesn't have and is reported null rather than approximated.
+  // from institutionalConvictionScore below.
   confidenceScore: number;
+  // Magnitude of FII+DII combined net flow, not direction — a big move
+  // either way (buying or selling) means institutions are convicted, a
+  // near-zero net means they're sitting on their hands. Null only when
+  // fiiDii itself is unavailable, same as institutionalConvictionScore's
+  // old placeholder meaning before FII/DII was connected.
   institutionalConvictionScore: number | null;
   sentimentReasoning: string[];
   availableInputs: string[];

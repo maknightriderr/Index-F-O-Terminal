@@ -16,6 +16,7 @@ import { SkeletonTableRow } from '@/components/common/skeleton';
 import { ChartPatternsPanel } from '@/components/common/chart-patterns-panel';
 import { getPriceHistory } from '@/lib/price-history-store';
 import { useChartPatterns } from '@/lib/use-chart-patterns';
+import { useFiiDii } from '@/lib/use-fii-dii';
 import { useAssetTabsStore, useMarketStore } from '@/stores';
 
 const TOP_MOVERS_COUNT = 5;
@@ -82,6 +83,8 @@ export function Dashboard() {
   const { indices: allIndices } = useAllIndices();
   const { rows: fnoRows, isLive: fnoLive, loading: fnoLoading } = useFnoScanner('NSE');
   const { patterns, loading: patternsLoading } = useChartPatterns();
+  const { data: fiiDii } = useFiiDii();
+  const vixQuote = allIndices.find((i) => i.symbol === 'INDIAVIX') ?? null;
   const setActiveTab = useMarketStore((s) => s.setActiveTab);
 
   // Screener controls
@@ -272,16 +275,33 @@ export function Dashboard() {
             {/* India VIX */}
             <div className="flex items-center gap-1.5 bg-gray-900/40 light:bg-slate-100 px-2.5 py-1 rounded-lg border border-gray-800/40 light:border-slate-200 text-xs">
               <span className="text-[10px] font-medium text-gray-400 light:text-slate-500">INDIA VIX</span>
-              <span className="font-bold text-gray-200 light:text-slate-800 tabular-nums">13.82</span>
-              <span className="text-[10px] font-medium text-emerald-400">-2.3%</span>
+              <span className="font-bold text-gray-200 light:text-slate-800 tabular-nums">{vixQuote ? vixQuote.ltp.toFixed(2) : '—'}</span>
+              {vixQuote && (
+                <span className={`text-[10px] font-medium ${vixQuote.changePercent >= 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                  {vixQuote.changePercent >= 0 ? '+' : ''}{vixQuote.changePercent.toFixed(2)}%
+                </span>
+              )}
             </div>
 
-            {/* FII/DII Net Flow */}
-            <div className="hidden lg:flex items-center gap-2 bg-gray-900/40 light:bg-slate-100 px-2.5 py-1 rounded-lg border border-gray-800/40 light:border-slate-200 text-xs">
+            {/* FII/DII Net Flow — NSE's last-published daily figure (EOD-only, see fii-dii.ts) */}
+            <div
+              className="hidden lg:flex items-center gap-2 bg-gray-900/40 light:bg-slate-100 px-2.5 py-1 rounded-lg border border-gray-800/40 light:border-slate-200 text-xs"
+              title={fiiDii ? `NSE FII/DII cash activity for ${fiiDii.date}` : 'FII/DII data unavailable this poll'}
+            >
               <span className="text-[10px] font-medium text-gray-400 light:text-slate-500">FII / DII</span>
-              <span className="font-bold text-emerald-400 tabular-nums">+₹1,420 Cr</span>
-              <span className="text-gray-600 light:text-slate-400">|</span>
-              <span className="font-bold text-emerald-400 tabular-nums">+₹890 Cr</span>
+              {fiiDii ? (
+                <>
+                  <span className={`font-bold tabular-nums ${fiiDii.fii.netValue >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {fiiDii.fii.netValue >= 0 ? '+' : ''}₹{fiiDii.fii.netValue.toFixed(0)} Cr
+                  </span>
+                  <span className="text-gray-600 light:text-slate-400">|</span>
+                  <span className={`font-bold tabular-nums ${fiiDii.dii.netValue >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {fiiDii.dii.netValue >= 0 ? '+' : ''}₹{fiiDii.dii.netValue.toFixed(0)} Cr
+                  </span>
+                </>
+              ) : (
+                <span className="text-gray-500 light:text-slate-400">—</span>
+              )}
             </div>
 
             <AddAssetButton />

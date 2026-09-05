@@ -31,6 +31,7 @@ import { startInstitutionalFlowScanner } from './services/institutional-flow-sca
 import { startTradeSetupPriceMonitor } from './services/trade-setup-monitor.js';
 import { createMarketScannerRoutes } from './api/market-scanner.js';
 import { startMarketScanner } from './services/market-scanner.js';
+import { createFiiDiiRoutes } from './api/fii-dii.js';
 
 // --- Initialize Provider + Subscription Manager ---
 
@@ -90,6 +91,7 @@ app.use('/api/backtesting', createBacktestingRoutes());
 app.use('/api/news', createNewsRoutes());
 app.use('/api/corporate-actions', createCorporateActionsRoutes());
 app.use('/api/market-scanner', createMarketScannerRoutes(provider));
+app.use('/api/fii-dii', createFiiDiiRoutes());
 
 // --- Health Check ---
 
