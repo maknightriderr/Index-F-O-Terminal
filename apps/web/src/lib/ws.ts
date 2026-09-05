@@ -33,6 +33,14 @@ interface WsHealthMessage {
 type TickHandler = (ticks: Tick[]) => void;
 type HealthHandler = (health: WsHealthMessage) => void;
 
+// Mobile browsers (screen lock, app switch to background) frequently kill a
+// WebSocket connection outright without ever firing onclose — readyState can
+// keep reporting OPEN on a socket that's actually dead. Ticks/health pings
+// should arrive far more often than this when genuinely connected, so no
+// message for this long is treated as a dead connection, not just relying
+// on onclose to notice.
+const STALE_CONNECTION_MS = 20000;
+
 class MarketWebSocketClient {
   private socket: WebSocket | null = null;
   private reconnectAttempts = 0;
@@ -40,6 +48,7 @@ class MarketWebSocketClient {
   private tickHandlers = new Set<TickHandler>();
   private healthHandlers = new Set<HealthHandler>();
   private activeSubscriptions = new Map<string, WsSubscriptionTarget>();
+  private lastMessageAt = 0;
 
   connect(): void {
     if (this.socket && this.socket.readyState <= WebSocket.OPEN) return;
@@ -56,6 +65,7 @@ class MarketWebSocketClient {
     };
 
     socket.onmessage = (event) => {
+      this.lastMessageAt = Date.now();
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === 'tick') this.tickHandlers.forEach((h) => h(msg.data));
@@ -100,6 +110,29 @@ class MarketWebSocketClient {
     }
   }
 
+  /**
+   * Call when the tab becomes visible/foregrounded again — a phone that was
+   * locked or had this tab backgrounded may have had its WebSocket silently
+   * killed by the OS/browser without onclose ever firing, so `connect()`'s
+   * own `readyState <= OPEN` guard would wrongly think it's still fine and
+   * do nothing. Forces a fresh connection whenever the socket isn't OPEN,
+   * or hasn't received anything in a while despite claiming to be OPEN.
+   */
+  reconnectIfStale(): void {
+    const notOpen = !this.socket || this.socket.readyState !== WebSocket.OPEN;
+    const stale = this.lastMessageAt > 0 && Date.now() - this.lastMessageAt > STALE_CONNECTION_MS;
+    if (!notOpen && !stale) return;
+
+    this.socket?.close();
+    this.socket = null;
+    this.reconnectAttempts = 0;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.connect();
+  }
+
   private scheduleReconnect(): void {
     if (this.reconnectTimer) return;
     const delay = Math.min(1000 * 2 ** this.reconnectAttempts, 30000);
@@ -129,7 +162,18 @@ export function useMarketWebSocket(): void {
     const c = getClient();
     c.connect();
 
-    return c.onHealth((health) => {
+    // A phone locking its screen or backgrounding this tab can silently
+    // kill the WebSocket without onclose ever firing — reconnectIfStale()
+    // checks for that and forces a fresh connection whenever the tab/app
+    // comes back to the foreground or the device regains network.
+    const onForeground = () => {
+      if (document.visibilityState === 'visible') c.reconnectIfStale();
+    };
+    document.addEventListener('visibilitychange', onForeground);
+    window.addEventListener('focus', onForeground);
+    window.addEventListener('online', onForeground);
+
+    const unsubscribeHealth = c.onHealth((health) => {
       updateHealth({
         websocket: {
           status: health.connected ? 'HEALTHY' : 'DOWN',
@@ -144,8 +188,15 @@ export function useMarketWebSocket(): void {
           ? { status: 'LIVE', lastUpdate: health.lastTickAt || Date.now(), missingDataPercent: 0 }
           : { status: 'DISCONNECTED', lastUpdate: health.lastTickAt || 0, missingDataPercent: 0 },
       });
-      // eslint-disable-next-line react-hooks/exhaustive-deps
     });
+
+    return () => {
+      document.removeEventListener('visibilitychange', onForeground);
+      window.removeEventListener('focus', onForeground);
+      window.removeEventListener('online', onForeground);
+      unsubscribeHealth();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 }
 
