@@ -915,6 +915,8 @@ export interface WatchlistItem {
   changeOi?: number;
   pcr?: number;
   iv?: number;
+  /** Pinned items sort to the top of their watchlist. */
+  pinned?: boolean;
 }
 
 // --- System Health ---

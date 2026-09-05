@@ -141,6 +141,10 @@ class ApiClient {
     return this.get<FiiDiiActivity | null>('/api/fii-dii');
   }
 
+  async getFiiDiiHistory(limit = 30) {
+    return this.get<FiiDiiActivity[]>(`/api/fii-dii/history?limit=${limit}`);
+  }
+
   async getExpiries(symbol: string, exchange = 'NSE') {
     return this.get<string[]>(`/api/instruments/expiries/${symbol}?exchange=${exchange}`);
   }

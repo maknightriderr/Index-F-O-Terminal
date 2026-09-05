@@ -24,6 +24,7 @@
 
 import type { FiiDiiActivity } from '@fno/shared';
 import { cached } from '../lib/cache.js';
+import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 
 const NSE_HOME_URL = 'https://www.nseindia.com/';
@@ -101,6 +102,76 @@ async function fetchFiiDiiActivity(): Promise<FiiDiiActivity | null> {
   }
 }
 
+async function persistFiiDiiSnapshot(activity: FiiDiiActivity): Promise<void> {
+  try {
+    await sql`
+      INSERT INTO fii_dii_history (date, fii_buy, fii_sell, fii_net, dii_buy, dii_sell, dii_net, fetched_at)
+      VALUES (${activity.date}, ${activity.fii.buyValue}, ${activity.fii.sellValue}, ${activity.fii.netValue}, ${activity.dii.buyValue}, ${activity.dii.sellValue}, ${activity.dii.netValue}, NOW())
+      ON CONFLICT (date) DO UPDATE SET
+        fii_buy = EXCLUDED.fii_buy, fii_sell = EXCLUDED.fii_sell, fii_net = EXCLUDED.fii_net,
+        dii_buy = EXCLUDED.dii_buy, dii_sell = EXCLUDED.dii_sell, dii_net = EXCLUDED.dii_net,
+        fetched_at = NOW()
+    `;
+  } catch (err: any) {
+    // History is a nice-to-have on top of the live snapshot — a DB hiccup
+    // here must not take down getFiiDiiActivity's own return value.
+    logger.warn({ error: err.message }, 'FII/DII history persist failed');
+  }
+}
+
 export async function getFiiDiiActivity(): Promise<FiiDiiActivity | null> {
-  return cached('fii_dii:latest', CACHE_TTL_SECONDS, fetchFiiDiiActivity, (value) => value != null);
+  return cached(
+    'fii_dii:latest',
+    CACHE_TTL_SECONDS,
+    async () => {
+      const activity = await fetchFiiDiiActivity();
+      if (activity) await persistFiiDiiSnapshot(activity);
+      return activity;
+    },
+    (value) => value != null
+  );
+}
+
+export async function getFiiDiiHistory(limit = 30): Promise<FiiDiiActivity[]> {
+  try {
+    const rows = await sql<
+      { date: string; fii_buy: string; fii_sell: string; fii_net: string; dii_buy: string; dii_sell: string; dii_net: string; fetched_at: Date }[]
+    >`
+      SELECT date, fii_buy, fii_sell, fii_net, dii_buy, dii_sell, dii_net, fetched_at
+      FROM fii_dii_history
+      ORDER BY fetched_at DESC
+      LIMIT ${limit}
+    `;
+    return rows
+      .map((r) => ({
+        date: r.date,
+        fii: { buyValue: Number(r.fii_buy), sellValue: Number(r.fii_sell), netValue: Number(r.fii_net) },
+        dii: { buyValue: Number(r.dii_buy), sellValue: Number(r.dii_sell), netValue: Number(r.dii_net) },
+        fetchedAt: new Date(r.fetched_at).getTime(),
+      }))
+      .reverse(); // oldest-first, the natural order for a time-series chart
+  } catch (err: any) {
+    logger.warn({ error: err.message }, 'FII/DII history fetch failed');
+    return [];
+  }
+}
+
+// --- Background tracker ---
+
+const TRACKER_INTERVAL_MS = 60 * 60 * 1000; // hourly — ensures today's snapshot gets fetched+persisted even if nobody opens the app that evening
+const TRACKER_INITIAL_DELAY_MS = 90_000;
+
+let trackerStarted = false;
+
+export function startFiiDiiTracker(): void {
+  if (trackerStarted) return;
+  trackerStarted = true;
+
+  const tick = () => {
+    getFiiDiiActivity().catch((err: any) => logger.error({ error: err.message }, 'FII/DII tracker tick failed'));
+  };
+
+  setTimeout(tick, TRACKER_INITIAL_DELAY_MS);
+  setInterval(tick, TRACKER_INTERVAL_MS);
+  logger.info({ intervalMs: TRACKER_INTERVAL_MS }, 'FII/DII tracker started');
 }

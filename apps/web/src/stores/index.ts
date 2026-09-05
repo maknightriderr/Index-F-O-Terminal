@@ -162,6 +162,7 @@ interface WatchlistState {
   addItem: (watchlistId: string, item: WatchlistItem) => void;
   removeItem: (watchlistId: string, itemId: string) => void;
   updateItemQuote: (symbol: string, quote: Partial<WatchlistItem>) => void;
+  togglePin: (watchlistId: string, itemId: string) => void;
 }
 
 export const useWatchlistStore = create<WatchlistState>()(
@@ -223,6 +224,15 @@ export const useWatchlistStore = create<WatchlistState>()(
               i.symbol === symbol ? { ...i, ...quote } : i
             ),
           })),
+        })),
+
+      togglePin: (watchlistId, itemId) =>
+        set((state) => ({
+          watchlists: state.watchlists.map((w) =>
+            w.id === watchlistId
+              ? { ...w, items: w.items.map((i) => (i.id === itemId ? { ...i, pinned: !i.pinned } : i)) }
+              : w
+          ),
         })),
     }),
     { name: 'fno-watchlists' }
@@ -291,7 +301,7 @@ export const useUISettingsStore = create<UISettingsState>()(
       rightPanelOpen: true,
       bottomPanelOpen: false,
       bottomPanelHeight: 350,
-      theme: 'dark',
+      theme: 'light',
       addAssetModalOpen: false,
       lastAlertsSeenAt: 0,
 

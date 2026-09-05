@@ -37,6 +37,13 @@
   --accent-blue: #60a5fa;
   --accent-cyan: #22d3ee;
   --accent-purple: #a78bfa;
+  /* Primary brand accent (deep indigo) and a champagne/gold highlight for
+     premium/high-conviction moments — distinct from the functional accent
+     colors above, which stay tied to their existing meanings (bullish/
+     bearish/etc). Brighter than the light-theme values below since dark
+     backgrounds need more luminance for the same perceived weight. */
+  --accent-indigo: #818cf8;
+  --accent-gold: #d4b877;
 
   --positive: #34d399;
   --negative: #f87171;
@@ -66,6 +73,8 @@
   --accent-blue: #2563eb;
   --accent-cyan: #0891b2;
   --accent-purple: #7c3aed;
+  --accent-indigo: #4338ca;
+  --accent-gold: #b8935f;
 
   --positive: #059669;
   --negative: #dc2626;
@@ -535,6 +544,19 @@ html, body {
   box-shadow: 0 0 12px -2px rgba(139, 92, 246, 0.35), 0 0 4px rgba(139, 92, 246, 0.15);
 }
 
+/* Light theme reads as a premium financial product, not a neon terminal —
+   glows are a dark-mode-only accent (per the design brief's own "very
+   subtle glow effects" note under the dark theme specifically). Drop the
+   outer glow entirely in light mode; a plain soft box-shadow already
+   comes from .card-premium/.badge-glass where these are used alongside. */
+[data-theme="light"] .glow-emerald,
+[data-theme="light"] .glow-red,
+[data-theme="light"] .glow-cyan,
+[data-theme="light"] .glow-amber,
+[data-theme="light"] .glow-purple {
+  box-shadow: none;
+}
+
 /* ============================================================
    SKELETON LOADERS
    ============================================================ */
@@ -781,6 +803,17 @@ html, body {
     0 0 0 1px rgba(59, 130, 246, 0.2) inset,
     0 0 8px -2px rgba(59, 130, 246, 0.35);
 }
+
+/* Keep the inset ring for definition (badges still need a visible edge on
+   a white card) but drop the outer glow — same "no neon in light mode"
+   reasoning as .glow-* above. */
+[data-theme="light"] .badge-glow-emerald { box-shadow: 0 0 0 1px rgba(5, 150, 105, 0.25) inset; }
+[data-theme="light"] .badge-glow-red { box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.25) inset; }
+[data-theme="light"] .badge-glow-yellow { box-shadow: 0 0 0 1px rgba(217, 119, 6, 0.25) inset; }
+[data-theme="light"] .badge-glow-cyan { box-shadow: 0 0 0 1px rgba(8, 145, 178, 0.25) inset; }
+[data-theme="light"] .badge-glow-purple { box-shadow: 0 0 0 1px rgba(124, 58, 237, 0.25) inset; }
+[data-theme="light"] .badge-glow-orange { box-shadow: 0 0 0 1px rgba(234, 88, 12, 0.25) inset; }
+[data-theme="light"] .badge-glow-blue { box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.25) inset; }
 
 /* ============================================================
    RADAR PULSE & LIVE INDICATORS
