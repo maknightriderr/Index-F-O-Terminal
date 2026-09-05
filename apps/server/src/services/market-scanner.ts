@@ -114,6 +114,8 @@ function shortlistStocks(sector: SectorRank, fnoRows: FnoScannerRow[], trend: Ma
 // --- Step 3: per-candidate scoring ---
 
 interface BiasInputsSubset {
+  spotPrice: number;
+  vwap: number;
   ema20: number | null;
   ema50: number | null;
   emaAligned: 'BULLISH' | 'BEARISH' | null;
@@ -154,21 +156,29 @@ function scoreCandidate(
 
   // Price Action / Setup: BREAKOUT/BREAKDOWN regime agreeing with side is
   // the strongest single read here (a leading, volume-confirmed signal);
-  // chart-structure pattern agreement adds up to 6 more, scaled by its own
-  // confidence rather than being all-or-nothing.
+  // chart-structure pattern agreement, VWAP position, and a BOS/CHoCH
+  // structure event each add a slice on top. VWAP lives here (rather than
+  // as its own category) because the spec treats it as an intraday price-
+  // action confirmation, not an independent signal — "price sustains above
+  // breakout, VWAP supports the move" in the spec's own entry-trigger flow.
   let priceActionScore = 0;
   if ((wantsBullish && stockBias.regime === 'BREAKOUT') || (!wantsBullish && stockBias.regime === 'BREAKDOWN')) {
-    priceActionScore += 10;
+    priceActionScore += 8;
     reasoning.push(`Volume-confirmed ${stockBias.regime.toLowerCase()} regime agrees with ${side}`);
   }
   const patternDir = inputs.chartStructureLong?.direction ?? inputs.chartStructureShort?.direction ?? null;
   const patternConfidence = inputs.chartStructureLong?.confidence ?? inputs.chartStructureShort?.confidence ?? 0;
   if (patternDir === (wantsBullish ? 'BULLISH' : 'BEARISH')) {
-    priceActionScore += Math.round((patternConfidence / 100) * 6);
+    priceActionScore += Math.round((patternConfidence / 100) * 5);
     reasoning.push(`Chart structure pattern agrees with ${side} (${patternConfidence}% confidence)`);
   }
+  const vwapAgrees = wantsBullish ? inputs.spotPrice > inputs.vwap : inputs.spotPrice < inputs.vwap;
+  if (vwapAgrees) {
+    priceActionScore += 4;
+    reasoning.push(`Price ${wantsBullish ? 'above' : 'below'} VWAP, confirming ${side}`);
+  }
   if (inputs.lastStructureEvent && inputs.lastStructureEvent.direction === (wantsBullish ? 'BULLISH' : 'BEARISH')) {
-    priceActionScore += inputs.lastStructureEvent.type === 'CHOCH' ? 4 : 2;
+    priceActionScore += inputs.lastStructureEvent.type === 'CHOCH' ? 3 : 2;
     reasoning.push(`${inputs.lastStructureEvent.type === 'CHOCH' ? 'Change of Character' : 'Break of Structure'} agrees with ${side}`);
   }
   priceActionScore = Math.min(20, priceActionScore);
