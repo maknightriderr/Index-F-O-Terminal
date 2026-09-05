@@ -125,9 +125,10 @@ function MarketStatusBanner({ data }: { data: NonNullable<ReturnType<typeof useM
           <span className="text-[10px] text-gray-500 light:text-slate-500">Market Trend score {score}/15</span>
         </div>
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
         <StatCell label="NIFTY" value={`${niftyBias.direction} ${niftyBias.confidence}%`} />
         <StatCell label="BANK NIFTY" value={`${bankNiftyBias.direction} ${bankNiftyBias.confidence}%`} />
+        <StatCell label="FIN NIFTY" value={`${data.marketTrend.finniftyBias.direction} ${data.marketTrend.finniftyBias.confidence}%`} />
         <StatCell label="India VIX" value={vix != null ? vix.toFixed(2) : '—'} />
         <StatCell label="Breadth" value={`${breadth.advances} Adv / ${breadth.declines} Dec`} />
       </div>

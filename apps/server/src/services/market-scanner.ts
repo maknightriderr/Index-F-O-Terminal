@@ -57,31 +57,44 @@ function tierFor(score: number): ScannerSetupTier {
 // --- Step 1: overall market trend ---
 
 async function assessMarketTrend(provider: MarketDataProvider, fnoRows: FnoScannerRow[]): Promise<MarketTrendRead> {
-  const [{ bias: niftyBias }, { bias: bankNiftyBias }, vixQuotes] = await Promise.all([
+  const [{ bias: niftyBias }, { bias: bankNiftyBias }, { bias: finniftyBias }, vixQuotes] = await Promise.all([
     buildMarketBias(provider, 'NIFTY', 'NSE'),
     buildMarketBias(provider, 'BANKNIFTY', 'NSE'),
+    buildMarketBias(provider, 'FINNIFTY', 'NSE'),
     getLiveIndexQuotes(provider, [{ symbol: 'INDIAVIX', exchange: 'NSE' }]).catch(() => []),
   ]);
   const vix = vixQuotes[0]?.ltp ?? null;
   const breadth = computeMarketBreadth(fnoRows);
 
-  const niftyBullish = niftyBias.direction === 'BULLISH' && niftyBias.confidence >= NIFTY_TREND_MIN_CONFIDENCE;
-  const niftyBearish = niftyBias.direction === 'BEARISH' && niftyBias.confidence >= NIFTY_TREND_MIN_CONFIDENCE;
+  // Three-index confirmation: NIFTY, BANKNIFTY, and FINNIFTY must ALL
+  // independently clear the confidence bar in the same direction — a
+  // single index's own bias engine can be noisy, and BANKNIFTY/FINNIFTY
+  // previously weren't actually part of the gate at all (fetched but only
+  // shown for context), which meant the "market trend" verdict was really
+  // just "NIFTY + breadth." Stricter by design: this reads SIDEWAYS more
+  // often than before whenever the three disagree, which is the point —
+  // a real market-wide trend should show up across more than one index.
+  const isBullish = (b: typeof niftyBias) => b.direction === 'BULLISH' && b.confidence >= NIFTY_TREND_MIN_CONFIDENCE;
+  const isBearish = (b: typeof niftyBias) => b.direction === 'BEARISH' && b.confidence >= NIFTY_TREND_MIN_CONFIDENCE;
+  const allBullish = isBullish(niftyBias) && isBullish(bankNiftyBias) && isBullish(finniftyBias);
+  const allBearish = isBearish(niftyBias) && isBearish(bankNiftyBias) && isBearish(finniftyBias);
 
   let trend: MarketTrend;
   const reasoning: string[] = [];
-  if (niftyBullish && breadth.isBullishBias) {
+  if (allBullish && breadth.isBullishBias) {
     trend = 'BULLISH';
-    reasoning.push(`NIFTY bullish at ${niftyBias.confidence}% confidence, breadth favors advances (${breadth.advances} vs ${breadth.declines})`);
-  } else if (niftyBearish && !breadth.isBullishBias) {
+    reasoning.push(
+      `NIFTY (${niftyBias.confidence}%), BANK NIFTY (${bankNiftyBias.confidence}%) and FIN NIFTY (${finniftyBias.confidence}%) all bullish, breadth favors advances (${breadth.advances} vs ${breadth.declines})`
+    );
+  } else if (allBearish && !breadth.isBullishBias) {
     trend = 'BEARISH';
-    reasoning.push(`NIFTY bearish at ${niftyBias.confidence}% confidence, breadth favors declines (${breadth.declines} vs ${breadth.advances})`);
+    reasoning.push(
+      `NIFTY (${niftyBias.confidence}%), BANK NIFTY (${bankNiftyBias.confidence}%) and FIN NIFTY (${finniftyBias.confidence}%) all bearish, breadth favors declines (${breadth.declines} vs ${breadth.advances})`
+    );
   } else {
     trend = 'SIDEWAYS';
     reasoning.push(
-      niftyBias.direction === 'NEUTRAL'
-        ? 'NIFTY reading NEUTRAL — no clear directional lean'
-        : `NIFTY ${niftyBias.direction.toLowerCase()} but only ${niftyBias.confidence}% confidence or breadth disagrees — not a clean market-wide trend`
+      `NIFTY ${niftyBias.direction} ${niftyBias.confidence}%, BANK NIFTY ${bankNiftyBias.direction} ${bankNiftyBias.confidence}%, FIN NIFTY ${finniftyBias.direction} ${finniftyBias.confidence}% — not all three agree (or breadth disagrees), so no clean market-wide trend`
     );
   }
 
@@ -89,14 +102,16 @@ async function assessMarketTrend(provider: MarketDataProvider, fnoRows: FnoScann
   // consistency across the app: low VIX (calm) scores high, elevated VIX
   // (fear/uncertainty) scores low, clamped 0-100.
   const vixScore = vix != null ? Math.max(0, Math.min(100, 100 - (vix - 10) * 4)) : 50;
-  const confidenceComponent = Math.round((niftyBias.confidence / 100) * 10);
+  const avgConfidence =
+    trend !== 'SIDEWAYS' ? (niftyBias.confidence + bankNiftyBias.confidence + finniftyBias.confidence) / 3 : niftyBias.confidence;
+  const confidenceComponent = Math.round((avgConfidence / 100) * 10);
   const breadthComponent = (trend === 'BULLISH' && breadth.isBullishBias) || (trend === 'BEARISH' && !breadth.isBullishBias) ? 3 : 0;
   const vixComponent = Math.round((vixScore / 100) * 2);
   const score = trend === 'SIDEWAYS' ? Math.round(confidenceComponent * 0.5) : Math.min(15, confidenceComponent + breadthComponent + vixComponent);
 
   if (vix != null) reasoning.push(`India VIX at ${vix.toFixed(2)}`);
 
-  return { trend, score, niftyBias, bankNiftyBias, vix, breadth, reasoning };
+  return { trend, score, niftyBias, bankNiftyBias, finniftyBias, vix, breadth, reasoning };
 }
 
 // --- Step 2: sector + stock shortlist ---
@@ -248,7 +263,7 @@ export async function runMarketScan(provider: MarketDataProvider, exchange: Exch
     return { marketTrend, sector: null, candidates: [], scannedAt: Date.now() };
   }
 
-  const sectorRanks = rankSectors(fnoRows);
+  const sectorRanks = await rankSectors(provider, fnoRows);
   const sector = marketTrend.trend === 'BULLISH' ? sectorRanks[0] : sectorRanks[sectorRanks.length - 1];
   if (!sector) {
     return { marketTrend, sector: null, candidates: [], scannedAt: Date.now() };

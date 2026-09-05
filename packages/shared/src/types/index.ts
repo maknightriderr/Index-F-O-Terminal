@@ -676,6 +676,7 @@ export interface MarketTrendRead {
   score: number;
   niftyBias: MarketBias;
   bankNiftyBias: MarketBias;
+  finniftyBias: MarketBias;
   vix: number | null;
   breadth: MarketBreadth;
   reasoning: string[];
