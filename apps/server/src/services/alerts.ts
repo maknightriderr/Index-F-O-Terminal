@@ -225,7 +225,7 @@ async function checkOiAndIvAlerts(provider: MarketDataProvider): Promise<void> {
       exchange: 'NSE',
       alertType: 'IV_SPIKE',
       severity: 'WARNING',
-      message: `📈 ${ivSpikes.length} stock${ivSpikes.length === 1 ? '' : 's'} have unusually expensive IV (rank ≥${IV_RANK_SPIKE_THRESHOLD}) today: ${summarizeDigest(sorted.map((r) => `${r.symbol} (IVR ${r.ivRank})`))}`,
+      message: `📈 ${ivSpikes.length} stock${ivSpikes.length === 1 ? ' has' : 's have'} unusually expensive IV (rank ≥${IV_RANK_SPIKE_THRESHOLD}) today: ${summarizeDigest(sorted.map((r) => `${r.symbol} (IVR ${r.ivRank})`))}`,
       condition: {
         threshold: IV_RANK_SPIKE_THRESHOLD,
         symbols: sorted.map((r) => ({ symbol: r.symbol, exchange: r.exchange, ivRank: r.ivRank, atmIv: r.atmIv })),
@@ -241,7 +241,7 @@ async function checkOiAndIvAlerts(provider: MarketDataProvider): Promise<void> {
       exchange: 'NSE',
       alertType: 'IV_CRUSH',
       severity: 'INFO',
-      message: `📉 ${ivCrushes.length} stock${ivCrushes.length === 1 ? '' : 's'} have unusually cheap IV (rank ≤${IV_RANK_CRUSH_THRESHOLD}) today: ${summarizeDigest(sorted.map((r) => `${r.symbol} (IVR ${r.ivRank})`))}`,
+      message: `📉 ${ivCrushes.length} stock${ivCrushes.length === 1 ? ' has' : 's have'} unusually cheap IV (rank ≤${IV_RANK_CRUSH_THRESHOLD}) today: ${summarizeDigest(sorted.map((r) => `${r.symbol} (IVR ${r.ivRank})`))}`,
       condition: {
         threshold: IV_RANK_CRUSH_THRESHOLD,
         symbols: sorted.map((r) => ({ symbol: r.symbol, exchange: r.exchange, ivRank: r.ivRank, atmIv: r.atmIv })),
