@@ -9,6 +9,7 @@
 import axios, { type AxiosInstance } from 'axios';
 import { authenticator } from 'otplib';
 import { logger } from '../../lib/logger.js';
+import { RateLimiter } from '../../lib/rate-limiter.js';
 import type {
   Exchange,
   ExchangeSegment,
@@ -56,6 +57,40 @@ import type {
 const BASE_URL = 'https://apiconnect.angelone.in';
 const SCRIP_MASTER_URL = 'https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json';
 const WS_URL = 'wss://smartapisocket.angelone.in/smart-stream';
+
+// Every request through `this.api` passes through one of these queues
+// first — see lib/rate-limiter.ts for why. Historical candles and Greeks
+// are Angel One's most rate-limit-sensitive endpoints in practice
+// (confirmed live), so they get the tightest pacing; quotes and
+// everything else (auth, order-adjacent calls) tolerate more.
+const historicalLimiter = new RateLimiter(2);
+const greeksLimiter = new RateLimiter(2);
+const quoteLimiter = new RateLimiter(5);
+const defaultLimiter = new RateLimiter(5);
+
+function limiterFor(url: string | undefined): RateLimiter {
+  if (!url) return defaultLimiter;
+  if (url.includes('/historical/')) return historicalLimiter;
+  if (url.includes('optionGreek')) return greeksLimiter;
+  if (url.includes('/quote/')) return quoteLimiter;
+  return defaultLimiter;
+}
+
+// Angel One's rate-limit rejection is a 403 whose body can be either a
+// JSON {message: "..."} or (confirmed live, at least for optionGreek) a
+// bare plain-text string — check both shapes rather than assuming one.
+function isRateLimitResponse(error: any): boolean {
+  const data = error?.response?.data;
+  const text = typeof data === 'string' ? data : data?.message ?? '';
+  return error?.response?.status === 403 && /exceeding access rate/i.test(text);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const MAX_RATE_LIMIT_RETRIES = 3;
+const RATE_LIMIT_RETRY_BASE_DELAY_MS = 500;
 
 const EXCHANGE_MAP: Record<string, Exchange> = {
   NSE: 'NSE',
@@ -134,6 +169,38 @@ export class AngelOneProvider implements MarketDataProvider {
       timeout: 30000,
       headers: { 'Content-Type': 'application/json' },
     });
+
+    // Paces every outgoing request through the category-appropriate queue
+    // above — the single choke point that stops this app's several
+    // independent background jobs (plus normal browser polling) from
+    // collectively exceeding Angel One's own rate limits, regardless of
+    // which feature initiated any given call.
+    this.api.interceptors.request.use(async (config) => {
+      await limiterFor(config.url).acquire();
+      return config;
+    });
+
+    // A request can still get rate-limited despite the queue above (the
+    // exact per-endpoint limits aren't publicly precise, so the queue's
+    // pacing is a conservative estimate, not a guarantee) — retry a
+    // handful of times with backoff rather than letting one rejected
+    // request cascade into "not enough candles" failures downstream.
+    this.api.interceptors.response.use(
+      (response) => response,
+      async (error) => {
+        if (!isRateLimitResponse(error) || !error.config) return Promise.reject(error);
+        const config = error.config as typeof error.config & { __rateLimitRetries?: number };
+        config.__rateLimitRetries = (config.__rateLimitRetries ?? 0) + 1;
+        if (config.__rateLimitRetries > MAX_RATE_LIMIT_RETRIES) return Promise.reject(error);
+
+        logger.warn(
+          { url: config.url, attempt: config.__rateLimitRetries },
+          'Angel One rate limit hit — retrying with backoff'
+        );
+        await delay(RATE_LIMIT_RETRY_BASE_DELAY_MS * config.__rateLimitRetries);
+        return this.api.request(config); // re-enters the request interceptor, so it re-queues through the same throttle
+      }
+    );
   }
 
   // --- Authentication ---
