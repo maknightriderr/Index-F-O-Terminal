@@ -19,6 +19,16 @@
 // weakest sector is still surfaced as market context — it just no
 // longer gates which stocks get a chance to be scored at all.
 //
+// A related gap: `candidates` is always aligned to the single overall
+// market direction (CE-only on a bullish day, PE-only on a bearish one),
+// so a stock defying the broader tape on its own strength (real example:
+// LODHA rallying hard on a bearish-market day) could never appear there no
+// matter how strong its own setup was. `stockSpecificMovers` is a second,
+// independent pass that scores high-confidence own-direction standouts
+// regardless of the market's call — it's the only non-empty output on a
+// SIDEWAYS day, and on a trending day it surfaces genuine counter-trend
+// strength that `candidates` structurally can't.
+//
 // Deliberately reuses the existing per-symbol engine (buildMarketBias)
 // rather than re-deriving RSI/VWAP/Supertrend/OI/SMC signals a second
 // time — it already computes everything this scoring model needs, and
@@ -144,6 +154,38 @@ function shortlistStocks(fnoRows: FnoScannerRow[], trend: MarketTrend): FnoScann
   return liquid.slice(0, SHORTLIST_SIZE);
 }
 
+// --- Step 2b: stock-specific movers (independent of / against the market's own trend) ---
+// The main shortlist above only ever looks one direction (whichever side the
+// overall market favors), sorted so the strongest names in that direction
+// win. That structurally excludes a stock like LODHA rallying hard on its
+// own strength while the broader tape reads bearish — it would sort to the
+// wrong end of that same list. This is a separate, independent pass: pick
+// the highest-confidence own-direction movers in EITHER direction, run the
+// same signal engine on them, and surface them as their own category so a
+// standout never goes unseen just because it defies the day's market call.
+const STOCK_SPECIFIC_MIN_CONFIDENCE = 65; // fno-scanner.ts's lightweight per-row confidence, not the full engine's
+const STOCK_SPECIFIC_PER_DIRECTION = 5;
+
+function shortlistStockSpecificMovers(fnoRows: FnoScannerRow[], excludeSymbols: Set<string>): FnoScannerRow[] {
+  const eligible = fnoRows.filter(
+    (r) =>
+      !excludeSymbols.has(r.symbol) &&
+      r.direction !== 'NEUTRAL' &&
+      r.confidence >= STOCK_SPECIFIC_MIN_CONFIDENCE &&
+      r.volume >= MIN_STOCK_VOLUME &&
+      (r.atmSpreadPct == null || r.atmSpreadPct <= LIQUID_SPREAD_MAX_PCT)
+  );
+  const bullish = eligible
+    .filter((r) => r.direction === 'BULLISH')
+    .sort((a, b) => b.relativeStrength - a.relativeStrength)
+    .slice(0, STOCK_SPECIFIC_PER_DIRECTION);
+  const bearish = eligible
+    .filter((r) => r.direction === 'BEARISH')
+    .sort((a, b) => a.relativeStrength - b.relativeStrength)
+    .slice(0, STOCK_SPECIFIC_PER_DIRECTION);
+  return [...bullish, ...bearish];
+}
+
 // --- Step 3: per-candidate scoring ---
 
 interface BiasInputsSubset {
@@ -174,13 +216,23 @@ function scoreCandidate(
   const inputs = stockBias.inputs as unknown as BiasInputsSubset;
   const reasoning: string[] = [];
 
-  // Market Trend: the shared step-1 score, but zeroed if this stock's own
-  // read contradicts the market's preferred side — the spec's "market +
-  // sector + stock alignment" requirement, not just "NIFTY is bullish
-  // somewhere out there."
+  // Market Trend: the shared step-1 score, but zeroed unless BOTH (a) this
+  // stock's own read confirms `side`, AND (b) `side` itself is the market's
+  // own preferred direction this cycle — the spec's "market + sector +
+  // stock alignment" requirement, not just "NIFTY is bullish somewhere out
+  // there." Condition (b) matters for stock-specific movers scored against
+  // their OWN direction even when it defies the broader market (e.g. a
+  // bullish stock on a bearish-market day) — those should never collect
+  // market-trend credit they haven't earned.
   const stockAgrees = (wantsBullish && stockBias.direction === 'BULLISH') || (!wantsBullish && stockBias.direction === 'BEARISH');
-  const marketTrendScore = stockAgrees ? marketTrend.score : 0;
-  if (!stockAgrees) reasoning.push(`Stock's own bias (${stockBias.direction}) doesn't confirm the market's ${marketTrend.trend} read — Market Trend score zeroed`);
+  const marketSide: OptionType | null = marketTrend.trend === 'BULLISH' ? 'CE' : marketTrend.trend === 'BEARISH' ? 'PE' : null;
+  const alignedWithMarket = marketSide === side;
+  const marketTrendScore = stockAgrees && alignedWithMarket ? marketTrend.score : 0;
+  if (!stockAgrees) {
+    reasoning.push(`Stock's own bias (${stockBias.direction}) doesn't confirm ${side} — Market Trend score zeroed`);
+  } else if (!alignedWithMarket) {
+    reasoning.push(`Independent of today's ${marketTrend.trend} market read — standalone stock-specific setup, Market Trend score zeroed`);
+  }
 
   // Sector Strength: this candidate's OWN sector (looked up per-stock, not
   // one shared "picked" sector for the whole batch) — a clear sector leader
@@ -274,28 +326,20 @@ function sumBreakdown(b: ScannerScoreBreakdown): number {
 
 // --- Pipeline entry point ---
 
-export async function runMarketScan(provider: MarketDataProvider, exchange: Exchange = 'NSE'): Promise<MarketScanResult> {
-  const fnoRows = await scanFnoUniverse(provider, exchange);
-  const marketTrend = await assessMarketTrend(provider, fnoRows);
-
-  if (marketTrend.trend === 'SIDEWAYS') {
-    return { marketTrend, sector: null, candidates: [], scannedAt: Date.now() };
-  }
-
-  // Still computed for context (the top-level "today's strongest/weakest
-  // sector" display) and as the source each candidate's OWN sector rank is
-  // looked up from below — it just no longer restricts which stocks are
-  // even considered (see shortlistStocks).
-  const sectorRanks = await rankSectors(provider, fnoRows);
-  const sectorRankByName = new Map(sectorRanks.map((s) => [s.sector, s]));
-  const contextSector = marketTrend.trend === 'BULLISH' ? sectorRanks[0] : sectorRanks[sectorRanks.length - 1];
-
-  const shortlist = shortlistStocks(fnoRows, marketTrend.trend);
-  const side: OptionType = marketTrend.trend === 'BULLISH' ? 'CE' : 'PE';
-
-  const candidates: ScannedCandidate[] = [];
+async function scoreShortlist(
+  provider: MarketDataProvider,
+  exchange: Exchange,
+  shortlist: FnoScannerRow[],
+  marketTrend: MarketTrendRead,
+  sectorRankByName: Map<string, SectorRank>,
+  sideFor: (row: FnoScannerRow) => OptionType | null
+): Promise<ScannedCandidate[]> {
+  const results: ScannedCandidate[] = [];
   for (const row of shortlist) {
     try {
+      const side = sideFor(row);
+      if (!side) continue;
+
       const { bias, tradeSetup } = await buildMarketBias(provider, row.symbol, exchange);
       if (!tradeSetup.available) continue;
 
@@ -306,7 +350,7 @@ export async function runMarketScan(provider: MarketDataProvider, exchange: Exch
       const score = sumBreakdown(breakdown);
       if (score < SCORE_SURFACE_FLOOR) continue;
 
-      candidates.push({
+      results.push({
         symbol: row.symbol,
         exchange,
         sector: ownSectorName,
@@ -321,9 +365,43 @@ export async function runMarketScan(provider: MarketDataProvider, exchange: Exch
       logger.warn({ error: err.message, symbol: row.symbol }, 'Market scanner: one candidate failed, skipping');
     }
   }
+  results.sort((a, b) => b.score - a.score);
+  return results;
+}
 
-  candidates.sort((a, b) => b.score - a.score);
-  return { marketTrend, sector: contextSector ?? null, candidates, scannedAt: Date.now() };
+export async function runMarketScan(provider: MarketDataProvider, exchange: Exchange = 'NSE'): Promise<MarketScanResult> {
+  const fnoRows = await scanFnoUniverse(provider, exchange);
+  const marketTrend = await assessMarketTrend(provider, fnoRows);
+
+  // Still computed for context (the top-level "today's strongest/weakest
+  // sector" display) and as the source each candidate's OWN sector rank is
+  // looked up from below — it just no longer restricts which stocks are
+  // even considered (see shortlistStocks). Also needed on a SIDEWAYS day,
+  // since stock-specific movers still run then.
+  const sectorRanks = await rankSectors(provider, fnoRows);
+  const sectorRankByName = new Map(sectorRanks.map((s) => [s.sector, s]));
+  const contextSector =
+    marketTrend.trend === 'BULLISH' ? sectorRanks[0] : marketTrend.trend === 'BEARISH' ? sectorRanks[sectorRanks.length - 1] : null;
+
+  // Main, market-aligned candidates — only meaningful when the market has
+  // an actual trend to align to. On a SIDEWAYS day there's no side to hunt.
+  let candidates: ScannedCandidate[] = [];
+  if (marketTrend.trend !== 'SIDEWAYS') {
+    const shortlist = shortlistStocks(fnoRows, marketTrend.trend);
+    const side: OptionType = marketTrend.trend === 'BULLISH' ? 'CE' : 'PE';
+    candidates = await scoreShortlist(provider, exchange, shortlist, marketTrend, sectorRankByName, () => side);
+  }
+
+  // Stock-specific movers — high-confidence own-direction standouts, scored
+  // regardless of (and possibly against) the overall market read. Always
+  // runs, including on SIDEWAYS days when it's the only useful output.
+  const excludeSymbols = new Set(candidates.map((c) => c.symbol));
+  const stockSpecificShortlist = shortlistStockSpecificMovers(fnoRows, excludeSymbols);
+  const stockSpecificMovers = await scoreShortlist(provider, exchange, stockSpecificShortlist, marketTrend, sectorRankByName, (row) =>
+    row.direction === 'BULLISH' ? 'CE' : row.direction === 'BEARISH' ? 'PE' : null
+  );
+
+  return { marketTrend, sector: contextSector ?? null, candidates, stockSpecificMovers, scannedAt: Date.now() };
 }
 
 export async function getMarketScan(provider: MarketDataProvider, exchange: Exchange = 'NSE'): Promise<MarketScanResult> {

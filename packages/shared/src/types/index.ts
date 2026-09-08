@@ -719,6 +719,16 @@ export interface MarketScanResult {
   marketTrend: MarketTrendRead;
   sector: SectorRank | null;
   candidates: ScannedCandidate[];
+  /**
+   * High-confidence stocks moving independently of (or against) today's
+   * overall market read — e.g. a stock rallying hard on its own news while
+   * the broader tape is bearish. `candidates` only ever contains setups
+   * aligned with `marketTrend`, so a genuine standout like that would
+   * otherwise never surface at all. Scored with the same 8-category model,
+   * but its Market Trend category is zeroed since these are explicitly not
+   * confirmed by the broader market.
+   */
+  stockSpecificMovers: ScannedCandidate[];
   scannedAt: number;
 }
 

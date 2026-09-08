@@ -66,10 +66,10 @@ export function MarketScannerPage() {
 
       {data && data.marketTrend.trend === 'SIDEWAYS' && (
         <div className="bg-gray-900/40 light:bg-slate-100 border border-gray-800/50 light:border-slate-200 rounded-xl p-6 text-center">
-          <div className="text-sm font-bold text-gray-200 light:text-slate-800">No setups — index is sideways</div>
+          <div className="text-sm font-bold text-gray-200 light:text-slate-800">No market-aligned setups — index is sideways</div>
           <p className="text-xs text-gray-500 light:text-slate-500 mt-1 max-w-md mx-auto">
-            No trade is also a position. Sector/stock scanning is skipped while NIFTY has no clean directional lean — the scanner will
-            pick back up automatically once a real trend read emerges.
+            No trade is also a position. Sector/stock scanning aligned to an overall trend is skipped while NIFTY has no clean
+            directional lean — check Stock-Specific Movers below for standout stocks moving on their own strength.
           </p>
         </div>
       )}
@@ -91,13 +91,34 @@ export function MarketScannerPage() {
 
       {data && data.marketTrend.trend !== 'SIDEWAYS' && data.candidates.length === 0 && (
         <div className="bg-gray-900/40 light:bg-slate-100 border border-gray-800/50 light:border-slate-200 rounded-xl p-6 text-center text-xs text-gray-500 light:text-slate-500">
-          No candidates cleared the 60-point bar this cycle.
+          No market-aligned candidates cleared the 60-point bar this cycle.
         </div>
       )}
 
       {data && data.candidates.length > 0 && (
         <div className="space-y-2">
           {data.candidates.map((c) => (
+            <CandidateCard
+              key={c.symbol}
+              candidate={c}
+              expanded={expanded === c.symbol}
+              onToggle={() => setExpanded(expanded === c.symbol ? null : c.symbol)}
+              onOpen={() => openTab(c.symbol, c.exchange)}
+            />
+          ))}
+        </div>
+      )}
+
+      {data && data.stockSpecificMovers.length > 0 && (
+        <div className="space-y-2 pt-2">
+          <div>
+            <h2 className="text-xs font-bold text-gray-300 light:text-slate-700 uppercase tracking-wide">Stock-Specific Movers</h2>
+            <p className="text-[11px] text-gray-500 light:text-slate-500 mt-0.5">
+              High-confidence setups moving on their own strength, independent of (or against) today's overall market read — their
+              Market Trend score is zeroed since the broader tape doesn't confirm them.
+            </p>
+          </div>
+          {data.stockSpecificMovers.map((c) => (
             <CandidateCard
               key={c.symbol}
               candidate={c}
