@@ -68,8 +68,17 @@ import { logger } from '../lib/logger.js';
 
 // Wider than the old single-sector top-5 — this is now drawn from the
 // ENTIRE F&O universe, so a real mover in an untagged or otherwise-quiet
-// sector still gets a shot at being scored.
-const SHORTLIST_SIZE = 15;
+// sector still gets a shot at being scored. Was briefly 15: each shortlisted
+// symbol runs the FULL multi-call signal engine (buildMarketBias: quote +
+// historical candles + option chain + Greeks + futures), and 15 main + up
+// to 10 stock-specific movers per 5-minute cycle (~25 symbols, ~125+ calls
+// in a burst) pushed Angel One's real rate limit hard enough to trip a
+// live, sustained 403 storm across the WHOLE app (confirmed via Railway
+// logs) — not just the scanner. Pulled back to keep this feature's own
+// background load in a safe range; the hysteresis carryover (see
+// shortlistStocks) means a genuine standout that's outside this smaller
+// top-N still doesn't just vanish once it's already surfaced.
+const SHORTLIST_SIZE = 8;
 const MIN_STOCK_VOLUME = 50_000; // floor beneath which a "liquid" spread reading isn't trustworthy either
 const SCORE_SURFACE_FLOOR = 60; // spec's own "Weak setup, generally avoid" cutoff — nothing below this is shown at all
 // Stock-specific movers always score 0 on the 15-point Market Trend
@@ -233,7 +242,11 @@ function shortlistStocks(fnoRows: FnoScannerRow[], trend: MarketTrend, previousl
 // cross-checked against the stock's own raw price change so relative
 // "strength" from merely falling less than the index doesn't count.
 const STOCK_SPECIFIC_MIN_RELATIVE_STRENGTH = 1.5; // real move vs NIFTY, not everyday dispersion noise
-const STOCK_SPECIFIC_PER_DIRECTION = 5;
+// Was 5 (10 total): combined with SHORTLIST_SIZE above, this was the other
+// half of the load that tripped a live rate-limit storm — see that
+// comment. 3 per direction (6 total) still gives real counter-trend
+// coverage at a fraction of the API cost.
+const STOCK_SPECIFIC_PER_DIRECTION = 3;
 
 function shortlistStockSpecificMovers(fnoRows: FnoScannerRow[], excludeSymbols: Set<string>, previouslyShown: Set<string>): FnoScannerRow[] {
   const eligible = fnoRows.filter(
