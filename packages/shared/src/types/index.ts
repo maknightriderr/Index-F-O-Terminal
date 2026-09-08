@@ -782,12 +782,40 @@ export interface ScanPortfolioRisk {
   warnings: string[];
 }
 
+/**
+ * A stock that was moving hard enough to be shortlisted and had a confirmed
+ * directional read, but produced no tradeable naked long — and WHY.
+ *
+ * These used to be dropped on the floor with a bare `continue`, so a scan
+ * returning zero candidates was indistinguishable from a quiet market. It
+ * isn't: on a strongly trending day the scanner can shortlist eight genuine
+ * movers (BPCL -2.9%, 360ONE -2.4%, all at 95% confidence) and decline every
+ * one of them on structure, showing nothing at all. Surfacing the decline —
+ * with the move that earned the shortlist spot and the reason it failed —
+ * is the difference between "nothing is happening" and "plenty is happening,
+ * none of it buyable as a naked long".
+ */
+export interface DeclinedMover {
+  symbol: string;
+  exchange: Exchange;
+  direction: BiasDirection;
+  confidence: number;
+  /** The move that got it shortlisted, so the decline can be judged against it. */
+  changePercent: number;
+  relativeStrength: number;
+  /** Days to expiry of the chain it was priced off — usually the reason. */
+  dte: number | null;
+  reason: string;
+}
+
 export interface MarketScanResult {
   marketTrend: MarketTrendRead;
   sector: SectorRank | null;
   candidates: ScannedCandidate[];
   /** Book-level view of `candidates` — see ScanPortfolioRisk. */
   portfolioRisk: ScanPortfolioRisk;
+  /** Shortlisted movers that produced no tradeable setup, and why — see DeclinedMover. */
+  declined: DeclinedMover[];
   /**
    * High-confidence stocks moving independently of (or against) today's
    * overall market read — e.g. a stock rallying hard on its own news while

@@ -43,6 +43,7 @@
 
 import { getOIDescription } from '@fno/analytics';
 import type {
+  DeclinedMover,
   Exchange,
   FnoScannerRow,
   MarketBias,
@@ -536,7 +537,8 @@ async function scoreShortlist(
   sideFor: (row: FnoScannerRow) => OptionType | null,
   scoreFloor: number,
   shownStateKey: string,
-  maxPossibleScore: number
+  maxPossibleScore: number,
+  declined: DeclinedMover[]
 ): Promise<ScannedCandidate[]> {
   const previouslyShown = await readShownSymbols(shownStateKey);
   const exitFloor = Math.max(0, scoreFloor - HYSTERESIS_MARGIN);
@@ -551,7 +553,22 @@ async function scoreShortlist(
 
       attempted += 1;
       const { bias, tradeSetup } = await buildMarketBias(provider, row.symbol, exchange);
-      if (!tradeSetup.available) continue;
+      if (!tradeSetup.available) {
+        // Record rather than discard — this symbol earned its shortlist spot
+        // on a real move, and "declined for structure" is information the
+        // silent `continue` here used to throw away.
+        declined.push({
+          symbol: row.symbol,
+          exchange,
+          direction: bias.direction,
+          confidence: bias.confidence,
+          changePercent: row.changePercent,
+          relativeStrength: row.relativeStrength,
+          dte: (bias.inputs as { dte?: number | null }).dte ?? null,
+          reason: tradeSetup.reason,
+        });
+        continue;
+      }
 
       const ownSectorName = sectorForSymbol(row.symbol);
       const ownSector = sectorRankByName.get(ownSectorName) ?? neutralSectorRank(ownSectorName);
@@ -613,6 +630,8 @@ export async function runMarketScan(provider: MarketDataProvider, exchange: Exch
   const contextSector =
     marketTrend.trend === 'BULLISH' ? sectorRanks[0] : marketTrend.trend === 'BEARISH' ? sectorRanks[sectorRanks.length - 1] : null;
 
+  const declined: DeclinedMover[] = [];
+
   // Main, market-aligned candidates — only meaningful when the market has
   // an actual trend to align to. On a SIDEWAYS day there's no side to hunt.
   let candidates: ScannedCandidate[] = [];
@@ -629,7 +648,8 @@ export async function runMarketScan(provider: MarketDataProvider, exchange: Exch
       () => side,
       SCORE_SURFACE_FLOOR,
       SHOWN_CANDIDATES_KEY,
-      MAX_SCORE
+      MAX_SCORE,
+      declined
     );
   }
 
@@ -653,14 +673,19 @@ export async function runMarketScan(provider: MarketDataProvider, exchange: Exch
     (row) => (row.changePercent > 0 ? 'CE' : row.changePercent < 0 ? 'PE' : null),
     STOCK_SPECIFIC_SCORE_FLOOR,
     SHOWN_STOCK_SPECIFIC_KEY,
-    STOCK_SPECIFIC_MAX_SCORE
+    STOCK_SPECIFIC_MAX_SCORE,
+    declined
   );
+
+  // Biggest move first — the whole point is to see what you're missing.
+  declined.sort((a, b) => Math.abs(b.changePercent) - Math.abs(a.changePercent));
 
   return {
     marketTrend,
     sector: contextSector ?? null,
     candidates,
     portfolioRisk: computePortfolioRisk(candidates),
+    declined,
     stockSpecificMovers,
     scannedAt: Date.now(),
   };

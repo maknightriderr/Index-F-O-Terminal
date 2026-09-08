@@ -114,6 +114,39 @@ export function MarketScannerPage() {
         </div>
       )}
 
+      {data && data.declined && data.declined.length > 0 && (
+        <div className="space-y-2 pt-2">
+          <div>
+            <h2 className="text-xs font-bold text-gray-300 light:text-slate-700 uppercase tracking-wide">
+              Moving — but not buyable as a naked long
+            </h2>
+            <p className="text-[11px] text-gray-400 light:text-slate-600 mt-0.5">
+              These cleared the liquidity and momentum filters on a real move, then failed on structure. Shown so a scan with no
+              candidates doesn&apos;t look the same as a quiet market — the move is real, the option just can&apos;t pay for it.
+            </p>
+          </div>
+          <div className="bg-[#12121c] light:bg-white border border-gray-800/50 light:border-slate-200 rounded-xl divide-y divide-gray-800/40 light:divide-slate-200">
+            {data.declined.map((m) => (
+              <div key={m.symbol} className="px-4 py-2.5 flex items-start gap-3 flex-wrap">
+                <span className="text-sm font-bold text-gray-100 light:text-slate-900 w-24 shrink-0">{m.symbol}</span>
+                <span
+                  className={`text-xs font-semibold tabular-nums w-20 shrink-0 ${
+                    m.changePercent >= 0 ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700'
+                  }`}
+                >
+                  {m.changePercent >= 0 ? '▲ +' : '▼ '}
+                  {m.changePercent.toFixed(2)}%
+                </span>
+                <span className="text-[11px] text-gray-400 light:text-slate-600 tabular-nums w-32 shrink-0">
+                  {m.direction} {m.confidence}%{m.dte != null ? ` · ${m.dte} DTE` : ''}
+                </span>
+                <span className="text-[11px] text-gray-400 light:text-slate-600 flex-1 min-w-[16rem]">{m.reason}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {data && data.stockSpecificMovers.length > 0 && (
         <div className="space-y-2 pt-2">
           <div>
