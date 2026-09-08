@@ -165,6 +165,15 @@ function MarketStatusBanner({ data }: { data: NonNullable<ReturnType<typeof useM
   );
 }
 
+function StatChip({ label, value, valueClassName }: { label: string; value: string; valueClassName?: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-gray-900/60 light:bg-slate-100 border border-gray-800/60 light:border-slate-200 text-[11px] tabular-nums">
+      <span className="text-gray-500 light:text-slate-500">{label}</span>
+      <span className={`font-semibold text-gray-200 light:text-slate-800 ${valueClassName ?? ''}`}>{value}</span>
+    </span>
+  );
+}
+
 function StatCell({ label, value }: { label: string; value: string }) {
   return (
     <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-2">
@@ -212,23 +221,29 @@ function CandidateCard({
         <span className={`text-xs font-bold ${isCE ? 'text-emerald-400' : 'text-red-400'}`}>{candidate.side}</span>
         <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold badge-glass ${tier.className}`}>{tier.label}</span>
 
-        <div className="ml-auto flex items-center gap-4">
-          {ts.entry != null && (
-            <div className="hidden md:flex items-center gap-3 text-[11px] tabular-nums text-gray-400 light:text-slate-500">
-              <span>Entry ₹{formatIndianNumber(ts.entry)}</span>
-              <span className="text-red-400">SL ₹{formatIndianNumber(ts.stopLoss!)}</span>
-              <span className="text-emerald-400">Target ₹{formatIndianNumber(ts.target!)}</span>
-              {ts.riskReward != null && <span>R:R 1:{ts.riskReward.toFixed(1)}</span>}
-              {ts.positionSize && (
-                <span className={ts.positionSize.lots > 0 ? '' : 'text-amber-400'}>
-                  {ts.positionSize.lots > 0 ? `${ts.positionSize.lots} lot(s), ₹${ts.positionSize.riskAmount.toFixed(0)} risk` : 'No safe lot size'}
-                </span>
-              )}
-            </div>
-          )}
+        <div className="ml-auto">
           <ScoreBadge score={candidate.score} large />
         </div>
       </div>
+
+      {ts.entry != null && (
+        <div className="hidden md:flex flex-wrap items-center gap-1.5 px-4 pb-3 -mt-1">
+          {ts.strike != null && <StatChip label="Strike" value={`₹${formatIndianNumber(ts.strike)}`} />}
+          <StatChip label="Entry" value={`₹${formatIndianNumber(ts.entry)}`} />
+          <StatChip label="SL" value={`₹${formatIndianNumber(ts.stopLoss!)}`} valueClassName="text-red-400" />
+          <StatChip label="Target" value={`₹${formatIndianNumber(ts.target!)}`} valueClassName="text-emerald-400" />
+          {ts.riskReward != null && <StatChip label="R:R" value={`1:${ts.riskReward.toFixed(1)}`} />}
+          <StatChip label="IV" value={candidate.atmIv > 0 ? `${candidate.atmIv.toFixed(1)}%` : '—'} />
+          <StatChip label="IV Rank" value={candidate.ivRank != null ? String(candidate.ivRank) : '—'} />
+          {ts.positionSize && (
+            <StatChip
+              label="Position"
+              value={ts.positionSize.lots > 0 ? `${ts.positionSize.lots} lot(s), ₹${ts.positionSize.riskAmount.toFixed(0)} risk` : 'No safe lot size'}
+              valueClassName={ts.positionSize.lots > 0 ? undefined : 'text-amber-400'}
+            />
+          )}
+        </div>
+      )}
 
       {expanded && (
         <div className="px-4 pb-4 pt-1 border-t border-gray-800/40 light:border-slate-200 grid md:grid-cols-2 gap-4">

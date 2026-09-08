@@ -713,6 +713,10 @@ export interface ScannedCandidate {
   scoreBreakdown: ScannerScoreBreakdown;
   tradeSetup: TradeSetup;
   reasoning: string[];
+  /** ATM implied volatility, %, as of the scan tick — same lightweight fno-scanner.ts reading used across the app's other IV tables. */
+  atmIv: number;
+  /** 0-100 min-max IV rank over recent daily history — null until at least MIN_IV_HISTORY_DAYS of history exists. */
+  ivRank: number | null;
 }
 
 export interface MarketScanResult {

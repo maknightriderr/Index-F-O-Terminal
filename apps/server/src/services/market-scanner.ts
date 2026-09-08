@@ -360,6 +360,8 @@ async function scoreShortlist(
         scoreBreakdown: breakdown,
         tradeSetup,
         reasoning,
+        atmIv: row.atmIv,
+        ivRank: row.ivRank,
       });
     } catch (err: any) {
       logger.warn({ error: err.message, symbol: row.symbol }, 'Market scanner: one candidate failed, skipping');
