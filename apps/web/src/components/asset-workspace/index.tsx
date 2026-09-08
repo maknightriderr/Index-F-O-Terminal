@@ -5,6 +5,7 @@ import { useMarketStore } from '@/stores';
 import { api, ApiError } from '@/lib/api';
 import { useMarketBias } from '@/lib/use-market-bias';
 import { useCorporateActionsForSymbol } from '@/lib/use-corporate-actions';
+import { InstrumentChart, type OiLevel } from '@/components/dashboard/instrument-chart';
 import { formatIndianNumber, formatCompact, isMarketOpen, DEFAULT_RISK_CONFIG } from '@fno/shared';
 import type {
   Exchange,
@@ -241,6 +242,24 @@ export function AssetWorkspace() {
       {loading && !chain && !futures && (
         <div className="text-sm text-gray-400 light:text-slate-600 py-16 text-center">Loading workspace…</div>
       )}
+
+      {/* Price chart. The Dashboard had one from the start but opening an
+          individual stock or index — the place you actually go to study one
+          — showed every derived number about it and no price history at
+          all. Same component, so it carries the live ticks, the reversal
+          markers and the auto-drawn S/R with it.
+          Support/resistance come from the bias engine's OI walls, the same
+          levels the Dashboard chart draws. */}
+      <div>
+        <SectionLabel icon="📈">Price Chart</SectionLabel>
+        <InstrumentChart
+          symbol={selectedSymbol}
+          exchange={selectedExchange as Exchange}
+          hasSpot={selectedExchange !== 'MCX'}
+          supportLevels={(bias.inputs.supportLevels as OiLevel[] | undefined) ?? []}
+          resistanceLevels={(bias.inputs.resistanceLevels as OiLevel[] | undefined) ?? []}
+        />
+      </div>
 
       {/* Market Intelligence */}
       <div>

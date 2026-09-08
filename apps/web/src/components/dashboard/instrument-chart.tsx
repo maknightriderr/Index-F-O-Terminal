@@ -75,6 +75,7 @@ function isSwingExtreme(
 // can hammer the API, which this app has already had one outage from.
 const REFRESH_MS: Record<Timeframe, number> = {
   '1m': 60_000,
+  '3m': 60_000,
   '5m': 60_000,
   '15m': 120_000,
   '30m': 180_000,
@@ -91,10 +92,10 @@ function formatPatternName(pattern: string): string {
   return pattern.split('_').map((w) => w[0] + w.slice(1).toLowerCase()).join(' ');
 }
 
-type Timeframe = '1m' | '5m' | '15m' | '30m' | '1H' | '1D' | '5D' | '1M' | '3M' | '6M' | '1Y';
+type Timeframe = '1m' | '3m' | '5m' | '15m' | '30m' | '1H' | '1D' | '5D' | '1M' | '3M' | '6M' | '1Y';
 type ChartMode = 'SPOT' | 'FUTURES';
 
-const TIMEFRAMES: Timeframe[] = ['1m', '5m', '15m', '30m', '1H', '1D', '5D', '1M', '3M', '6M', '1Y'];
+const TIMEFRAMES: Timeframe[] = ['1m', '3m', '5m', '15m', '30m', '1H', '1D', '5D', '1M', '3M', '6M', '1Y'];
 
 // Lookback needs a real safety margin, not just "how far back this label
 // implies" — a tight window can land entirely AFTER the last trading
@@ -111,6 +112,7 @@ const TIMEFRAMES: Timeframe[] = ['1m', '5m', '15m', '30m', '1H', '1D', '5D', '1M
 // a wrong-looking chart.
 const TIMEFRAME_CONFIG: Record<Timeframe, { interval: CandleInterval; days: number }> = {
   '1m': { interval: 'ONE_MINUTE', days: 5 },
+  '3m': { interval: 'THREE_MINUTE', days: 5 },
   '5m': { interval: 'FIVE_MINUTE', days: 6 },
   '15m': { interval: 'FIFTEEN_MINUTE', days: 6 },
   '30m': { interval: 'THIRTY_MINUTE', days: 8 },
@@ -171,6 +173,9 @@ export function InstrumentChart({
   // The bar currently forming, kept so incoming ticks can extend it in
   // place rather than waiting for the next refetch.
   const lastBarRef = useRef<{ time: UTCTimestamp; open: number; high: number; low: number; close: number } | null>(null);
+  // What the chart is currently showing, so a re-run of the fetch effect can
+  // tell a periodic refresh apart from an actual instrument/timeframe change.
+  const identityRef = useRef<string>('');
   const [resolvedToken, setResolvedToken] = useState<string | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
   const [reversalCount, setReversalCount] = useState(0);
@@ -280,7 +285,16 @@ export function InstrumentChart({
     // A periodic refresh must not look like a fresh load: showing the
     // skeleton and re-running fitContent() every minute would blank the
     // chart and throw away whatever the user had zoomed or scrolled to.
-    const isRefresh = refreshTick > 0 && seriesRef.current != null && candleTimesRef.current.length > 0;
+    //
+    // What counts as "refresh" has to be decided by WHAT CHANGED, not by
+    // whether the timer has ever fired. The first version tested
+    // `refreshTick > 0`, which is true forever after the first tick — so a
+    // minute into a session every symbol and timeframe switch was being
+    // treated as a refresh and silently skipped fitContent(), which is
+    // exactly the "chart doesn't adjust when I switch" symptom.
+    const identity = `${symbol}|${exchange}|${timeframe}|${mode}`;
+    const isRefresh = identityRef.current === identity && seriesRef.current != null && candleTimesRef.current.length > 0;
+    identityRef.current = identity;
     if (!isRefresh) setLoading(true);
 
     const resolveToken = async (): Promise<string | null> => {
@@ -341,7 +355,10 @@ export function InstrumentChart({
             position: bullish ? 'belowBar' : 'aboveBar',
             color: bullish ? cc.up : cc.down,
             shape: bullish ? 'arrowUp' : 'arrowDown',
-            text: formatPatternName(hit.pattern),
+            // No per-candle label. The arrow alone says "price turned here",
+            // which is the whole ask — printing the pattern name on every
+            // one of them turned the chart into a running commentary.
+            text: '',
           });
         }
         seriesRef.current.setMarkers(markers);
