@@ -1274,7 +1274,22 @@ export interface WinRateBucket {
   expired: number;
   open: number;
   winRatePercent: number | null; // wins / (wins + losses) — expired/open excluded from the denominator
+  /**
+   * Mean of each closed trade's return as a % of ITS OWN entry premium.
+   * Useful as "how far did the premium typically move", but NOT a measure
+   * of whether the system makes money: each % is struck against a different
+   * premium basis, so averaging them equal-weights a 5% move on a ₹400
+   * option with a 5% move on a ₹15 one. Read `avgRMultiple` for that.
+   */
   avgReturnPercent: number | null;
+  /**
+   * Mean result in R — multiples of each trade's own risk (return% ÷ the
+   * stop's own distance as a % of entry). This is the expectancy number:
+   * positive means the system makes money per unit of risk taken, negative
+   * means it loses, regardless of how the individual premiums were priced.
+   * Null when no closed trade carried a usable stop leg to normalise by.
+   */
+  avgRMultiple: number | null;
   /**
    * WIN only ever means "hit its exact fixed target" — a position that got
    * closed EXPIRED because the bias reversed still records its real P&L at

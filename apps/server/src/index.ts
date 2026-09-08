@@ -25,6 +25,7 @@ import { startPatternScanner } from './services/chart-patterns.js';
 import { createAiAssistantRoutes } from './api/ai-assistant.js';
 import { createInstitutionalFlowRoutes } from './api/institutional-flow.js';
 import { createBacktestingRoutes } from './api/backtesting.js';
+import { startAbandonedSetupSweep } from './services/backtesting.js';
 import { createNewsRoutes } from './api/news.js';
 import { createCorporateActionsRoutes } from './api/corporate-actions.js';
 import { startInstitutionalFlowScanner } from './services/institutional-flow-scanner.js';
@@ -204,6 +205,7 @@ startInstitutionalFlowScanner(provider);
 startTradeSetupPriceMonitor(provider);
 startMarketScanner(provider);
 startFiiDiiTracker();
+startAbandonedSetupSweep();
 
 setInterval(() => {
   const { apiKey, clientId, password, totpSecret } = config.angelOne;

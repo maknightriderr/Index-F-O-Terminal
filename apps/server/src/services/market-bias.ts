@@ -583,7 +583,23 @@ async function computeMarketBias(
   // actual Bias direction/confidence, despite both being fully-formed
   // votes (bollingerVote already has its own breakout/volume-confirmation
   // guard). Added here as baseline votes, same tier as VWAP/RSI/Supertrend.
-  const directionVotes: Vote[] = [vwapVote, rsiVote, st15Vote, st1hVote, futuresOiVote, pcrVote, optionOiFlowVote, macdVote, bollingerVote, emaTrendVote];
+  // --- Votes, grouped by INFORMATION SOURCE ---
+  //
+  // These used to be one flat array, which treated every vote as an
+  // independent opinion. They aren't. VWAP, RSI, both Supertrends, MACD,
+  // Bollinger and the EMA stack are all transforms of the SAME price
+  // series; BOS/CHoCH, FVG, liquidity sweeps, order blocks and chart
+  // patterns all come out of ONE swing-structure model. Only the
+  // futures-OI / PCR / option-flow reads are genuinely different
+  // information — and they were outnumbered roughly 7-to-3 by price
+  // derivatives, so a "10-vote consensus" was mostly one source repeated.
+  //
+  // Grouping them means each source is aggregated first and then capped
+  // (see clusterContribution), so no single feed can dominate the verdict
+  // by virtue of having more indicators derived from it.
+  const priceVotes: Vote[] = [vwapVote, rsiVote, st15Vote, st1hVote, macdVote, bollingerVote, emaTrendVote];
+  const structureVotes: Vote[] = [];
+  const positioningVotes: Vote[] = [futuresOiVote, pcrVote, optionOiFlowVote];
 
   // RSI divergence (price makes a higher high/lower low while RSI weakens)
   // is a genuinely stronger, more reliable reversal signal than a plain
@@ -599,7 +615,7 @@ async function computeMarketBias(
   // whether divergence is even relevant right now.
   const rsiDivergenceVote: Vote = rsiDivergence.signal === 'BULLISH' ? 1 : rsiDivergence.signal === 'BEARISH' ? -1 : 0;
   if (rsiDivergenceVote !== 0) {
-    directionVotes.push(rsiDivergenceVote, rsiDivergenceVote);
+    priceVotes.push(rsiDivergenceVote, rsiDivergenceVote);
   }
 
   // Fair Value Gap: price actively sitting inside an unfilled imbalance
@@ -612,7 +628,7 @@ async function computeMarketBias(
   // more common ticks where price isn't inside any open gap.
   const fvgVote: Vote = activeFvg == null ? 0 : activeFvg.gap.type === 'BULLISH' ? 1 : -1;
   if (fvgVote !== 0) {
-    directionVotes.push(fvgVote);
+    structureVotes.push(fvgVote);
   }
 
   // VCP breakout: bullish-only (see vcp/index.ts — no standard bearish
@@ -623,7 +639,7 @@ async function computeMarketBias(
   // ordinary equal-weight read. Only added when confirmed, same dilution
   // reasoning as the other event-based votes above.
   if (vcpBreakoutConfirmed) {
-    directionVotes.push(1, 1);
+    priceVotes.push(1, 1);
   }
 
   // Change of Character (CHoCH): the swing structure just broke AGAINST
@@ -635,9 +651,9 @@ async function computeMarketBias(
   // established trend — a real but ordinary trend-confirmation read, so
   // single weight, same as any other baseline vote.
   if (marketStructure.lastEvent?.type === 'CHOCH') {
-    directionVotes.push(marketStructure.lastEvent.direction === 'BULLISH' ? 1 : -1, marketStructure.lastEvent.direction === 'BULLISH' ? 1 : -1);
+    structureVotes.push(marketStructure.lastEvent.direction === 'BULLISH' ? 1 : -1, marketStructure.lastEvent.direction === 'BULLISH' ? 1 : -1);
   } else if (marketStructure.lastEvent?.type === 'BOS') {
-    directionVotes.push(marketStructure.lastEvent.direction === 'BULLISH' ? 1 : -1);
+    structureVotes.push(marketStructure.lastEvent.direction === 'BULLISH' ? 1 : -1);
   }
 
   // Liquidity sweep: a BUY_SIDE sweep ran the stops resting above a
@@ -646,7 +662,7 @@ async function computeMarketBias(
   // signal, not a proven-strength reversal read like CHoCH/divergence),
   // only added on an actual sweep this bar.
   if (liquiditySweep) {
-    directionVotes.push(liquiditySweep.type === 'SELL_SIDE' ? 1 : -1);
+    structureVotes.push(liquiditySweep.type === 'SELL_SIDE' ? 1 : -1);
   }
 
   // Order block test: price is sitting inside an unmitigated order block
@@ -654,7 +670,7 @@ async function computeMarketBias(
   // vote above, single weight for the same reason.
   const orderBlockVote: Vote = activeOrderBlock == null ? 0 : activeOrderBlock.block.type === 'BULLISH' ? 1 : -1;
   if (orderBlockVote !== 0) {
-    directionVotes.push(orderBlockVote);
+    structureVotes.push(orderBlockVote);
   }
 
   // Chart structure (Double Top/H&S/Triangle/Wedge/Flag/...) was
@@ -680,14 +696,37 @@ async function computeMarketBias(
   const patternsAgree = shortTermPatternVotes && longTermPatternVotes && shortTermPattern!.direction === longTermPattern!.direction;
   if (shortTermPatternVotes) {
     const v: Vote = shortTermPattern!.direction === 'BULLISH' ? 1 : -1;
-    directionVotes.push(v);
-    if (patternsAgree) directionVotes.push(v);
+    structureVotes.push(v);
+    if (patternsAgree) structureVotes.push(v);
   }
   if (longTermPatternVotes) {
     const v: Vote = longTermPattern!.direction === 'BULLISH' ? 1 : -1;
-    directionVotes.push(v);
-    if (patternsAgree) directionVotes.push(v);
+    structureVotes.push(v);
+    if (patternsAgree) structureVotes.push(v);
   }
+
+  // Aggregate each information source, then cap what it can contribute.
+  //
+  // Within a cluster the votes still add up normally — that's what lets a
+  // double-weighted CHoCH or RSI divergence outweigh an ordinary read, as
+  // intended. What's capped is how far ANY single source can push the
+  // final verdict, so that "7 price-derived indicators agree" can no
+  // longer simply outvote the option-positioning read on its own. Three
+  // clusters x 3 = 9 possible decisive votes, versus the ~14 before, where
+  // half could come from one feed.
+  const CLUSTER_MAX_WEIGHT = 3;
+  const clusterContribution = (votes: Vote[]): Vote[] => {
+    const net = votes.reduce((a: number, b) => a + b, 0);
+    if (net === 0) return [];
+    const sign: Vote = net > 0 ? 1 : -1;
+    return Array<Vote>(Math.min(Math.abs(net), CLUSTER_MAX_WEIGHT)).fill(sign);
+  };
+
+  const directionVotes: Vote[] = [
+    ...clusterContribution(priceVotes),
+    ...clusterContribution(structureVotes),
+    ...clusterContribution(positioningVotes),
+  ];
 
   const voteSum = directionVotes.reduce((a: number, b) => a + b, 0);
   const votesFor = directionVotes.filter((v) => v === 1).length;
@@ -697,9 +736,12 @@ async function computeMarketBias(
   const direction: BiasDirection = voteSum > 0 ? 'BULLISH' : voteSum < 0 ? 'BEARISH' : 'NEUTRAL';
   const directionSign = direction === 'BULLISH' ? 1 : direction === 'BEARISH' ? -1 : 0;
 
+  // A cluster that nets zero contributes nothing at all, so `total` is 0
+  // when every information source is internally balanced — genuinely "no
+  // read", and the only case where these ratios would divide by zero.
   const total = directionVotes.length;
-  const bullishProbability = Math.round((votesFor / total) * 100);
-  const bearishProbability = Math.round((votesAgainst / total) * 100);
+  const bullishProbability = total > 0 ? Math.round((votesFor / total) * 100) : 0;
+  const bearishProbability = total > 0 ? Math.round((votesAgainst / total) * 100) : 0;
   const neutralProbability = 100 - bullishProbability - bearishProbability;
 
   // Confidence = agreement among the votes that actually HAVE an opinion,
@@ -714,16 +756,27 @@ async function computeMarketBias(
   // VWAP/volume data was penalised as though its indicators disagreed.
   //
   // Excluding flats fixes the dilution, but on its own would let a lone
-  // 1-for/0-against read print 100%, so it's scaled by how much evidence
-  // there is: below MIN_DECISIVE_VOTES the score is pro-rated down.
-  const MIN_DECISIVE_VOTES = 6;
+  // read print 100%, so it's scaled by how much INDEPENDENT evidence there
+  // is. Now that votes are clustered by information source, the honest
+  // measure of evidence is how many separate sources actually spoke — not
+  // how many indicators did, since seven price-derived indicators agreeing
+  // is one source, not seven. Two independent sources agreeing is real
+  // evidence; one source alone is capped at half.
+  const clustersWithOpinion = [priceVotes, structureVotes, positioningVotes].filter(
+    (c) => c.reduce((a: number, b) => a + b, 0) !== 0
+  ).length;
+  const MIN_INDEPENDENT_SOURCES = 2;
   const decisiveVotes = votesFor + votesAgainst;
   const agreementCount = direction === 'BULLISH' ? votesFor : direction === 'BEARISH' ? votesAgainst : votesFlat;
   const rawAgreement = decisiveVotes > 0 ? agreementCount / decisiveVotes : 0;
-  const evidenceFactor = Math.min(1, decisiveVotes / MIN_DECISIVE_VOTES);
+  const evidenceFactor = Math.min(1, clustersWithOpinion / MIN_INDEPENDENT_SOURCES);
   const confidence =
     direction === 'NEUTRAL'
-      ? clamp(Math.round((votesFlat / total) * 100), 15, 95)
+      ? // Two different "neutral"s: every source silent (no read at all), or
+        // sources actively cancelling each other out (a contested market).
+        // Neither deserves a confident number; the contested case deserves
+        // the floor.
+        clamp(total === 0 ? 50 : 15, 15, 95)
       : clamp(Math.round(rawAgreement * evidenceFactor * 100), 15, 95);
 
   // --- Regime: leading breakout/breakdown (fresh, volume-confirmed Bollinger break) takes priority over the lagging ADX-based trend read, overridden by expiry-day gamma when DTE<=1 ---

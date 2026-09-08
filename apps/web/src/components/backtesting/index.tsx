@@ -215,11 +215,30 @@ function OverallSummary({ bucket }: { bucket: WinRateBucket }) {
         <div className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-1.5">Losses</div>
         <div className="text-3xl font-bold tabular-nums text-red-400">{bucket.losses}</div>
       </Card>
-      <Card>
-        <div className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-1.5">Avg Return</div>
-        <div className={`text-3xl font-bold tabular-nums ${bucket.avgReturnPercent == null ? 'text-gray-400' : bucket.avgReturnPercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-          {bucket.avgReturnPercent != null ? `${bucket.avgReturnPercent >= 0 ? '+' : ''}${bucket.avgReturnPercent}%` : '—'}
+      {/*
+        Expectancy in R leads; the raw % average is kept underneath as
+        context. Each trade's return% is struck against its own premium, so
+        averaging them equal-weights a 5% move on a ₹400 option with one on
+        a ₹15 option — informative about premium movement, but not about
+        whether the system makes money. R is the comparable unit.
+      */}
+      <Card accent="border-t-emerald-500/50">
+        <div
+          className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-1.5"
+          title="Average result per trade in R — multiples of that trade's own risk. Positive means the system makes money per unit of risk; negative means it loses. This is the expectancy figure."
+        >
+          Expectancy (R)
         </div>
+        <div className={`text-3xl font-bold tabular-nums ${bucket.avgRMultiple == null ? 'text-gray-400' : bucket.avgRMultiple >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+          {bucket.avgRMultiple != null ? `${bucket.avgRMultiple >= 0 ? '+' : ''}${bucket.avgRMultiple}R` : '—'}
+        </div>
+        <div className="text-[10px] text-gray-500 light:text-slate-500 mt-1">
+          {bucket.avgReturnPercent != null ? `${bucket.avgReturnPercent >= 0 ? '+' : ''}${bucket.avgReturnPercent}% avg premium move` : '—'}
+        </div>
+      </Card>
+      <Card>
+        <div className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-1.5">Unresolved</div>
+        <div className="text-3xl font-bold tabular-nums text-gray-100 light:text-slate-900">{bucket.open}</div>
         <div className="text-[10px] text-gray-500 light:text-slate-500 mt-1">{bucket.expired} expired · {bucket.open} open</div>
       </Card>
     </div>

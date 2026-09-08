@@ -28,6 +28,65 @@ import { logger } from '../lib/logger.js';
 
 const HISTORY_LIMIT = 5000; // generous — trade setups are at most a handful per symbol per day
 
+// ============================================================
+// ABANDONED-SETUP SWEEP
+// ============================================================
+// A setup is resolved by the price-level monitor, which works off the
+// LOCKED setup in Redis. If that key goes away without an outcome ever
+// being written — Redis eviction, a TTL expiring over a weekend, or a
+// deliberate cache clear after a scoring change — the DB row has no path
+// back to a terminal state and sits as "open" forever, inflating the open
+// count and never contributing to any statistic.
+//
+// Two days is deliberately well past any legitimate resolution window:
+// an INTRADAY setup closes at the day's rollover and a POSITIONAL one is
+// still actively monitored while its Redis key lives, so anything still
+// open after two full days has definitively lost its monitor. Closed as
+// EXPIRED with NO exit price and NO return, because the honest answer is
+// "we stopped tracking this" — inventing an exit price to make the row
+// look resolved would put fabricated P&L into the win-rate stats, which
+// is far worse than an unresolved row.
+const ABANDONED_AFTER_DAYS = 2;
+
+const ABANDONED_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000; // 4x/day — this is housekeeping, not a live signal
+const ABANDONED_SWEEP_INITIAL_DELAY_MS = 60_000; // let boot settle (DB pool, auth) before touching the table
+
+let abandonedSweepStarted = false;
+
+/** Periodically retires trade-setup rows whose price-level monitor is gone. See ABANDONED_AFTER_DAYS. */
+export function startAbandonedSetupSweep(): void {
+  if (abandonedSweepStarted) return;
+  abandonedSweepStarted = true;
+  const tick = () => {
+    closeAbandonedTradeSetups().catch((err: any) =>
+      logger.error({ error: err.message }, 'Backtesting: abandoned-setup sweep tick failed')
+    );
+  };
+  setTimeout(tick, ABANDONED_SWEEP_INITIAL_DELAY_MS);
+  setInterval(tick, ABANDONED_SWEEP_INTERVAL_MS);
+  logger.info({ intervalMs: ABANDONED_SWEEP_INTERVAL_MS, afterDays: ABANDONED_AFTER_DAYS }, 'Abandoned trade-setup sweep started');
+}
+
+export async function closeAbandonedTradeSetups(): Promise<number> {
+  try {
+    const rows = await sql<{ id: string }[]>`
+      UPDATE signals
+      SET inputs = inputs || ${sql.json({ outcome: 'EXPIRED', exitPrice: null, exitTime: null, abandoned: true })}
+      WHERE signal_type = 'TRADE_SETUP'
+        AND inputs->>'outcome' IS NULL
+        AND time < NOW() - ${`${ABANDONED_AFTER_DAYS} days`}::interval
+      RETURNING id
+    `;
+    if (rows.length > 0) {
+      logger.info({ count: rows.length }, 'Backtesting: closed abandoned trade setups that lost their price-level monitor');
+    }
+    return rows.length;
+  } catch (err: any) {
+    logger.error({ error: err.message }, 'Backtesting: abandoned-setup sweep failed');
+    return 0;
+  }
+}
+
 interface SignalRow {
   id: string;
   time: Date;
@@ -105,6 +164,9 @@ function bucketStats(records: TradeSetupRecord[]): Omit<WinRateBucket, 'period'>
   const open = records.filter((r) => r.outcome === null).length;
   const decisive = wins + losses;
   const returns = records.filter((r) => r.returnPercent != null).map((r) => r.returnPercent!);
+  // Expectancy in R — the unit that's actually comparable across trades
+  // priced at wildly different premiums. See avgRMultiple's doc comment.
+  const rMultiples = records.map(toRMultiple).filter((r): r is number => r != null);
 
   // An EXPIRED close (bias reversed before the fixed target was reached)
   // still has a real P&L at the moment it closed — see the WinRateBucket
@@ -123,6 +185,7 @@ function bucketStats(records: TradeSetupRecord[]): Omit<WinRateBucket, 'period'>
     open,
     winRatePercent: decisive > 0 ? Math.round((wins / decisive) * 1000) / 10 : null,
     avgReturnPercent: returns.length > 0 ? Math.round((returns.reduce((a, b) => a + b, 0) / returns.length) * 100) / 100 : null,
+    avgRMultiple: rMultiples.length > 0 ? Math.round((rMultiples.reduce((a, b) => a + b, 0) / rMultiples.length) * 100) / 100 : null,
     profitableCloses,
     unprofitableCloses,
     profitableCloseRatePercent: profitableDecisive > 0 ? Math.round((profitableCloses / profitableDecisive) * 1000) / 10 : null,

@@ -96,7 +96,17 @@ const MARKET_TREND_MAX = 15;
 // and the tier bands are scaled to this ceiling instead.
 const STOCK_SPECIFIC_MAX_SCORE = MAX_SCORE - MARKET_TREND_MAX;
 const STOCK_SPECIFIC_SCORE_FLOOR = Math.round(SCORE_SURFACE_FLOOR * (STOCK_SPECIFIC_MAX_SCORE / MAX_SCORE));
-const NIFTY_TREND_MIN_CONFIDENCE = 55;
+// Recalibrated alongside the confidence metric itself. Confidence used to
+// be agreement over ALL votes including flats, where 55 was a genuinely
+// hard bar; it's now agreement among the votes that took a side, where 55
+// is barely better than a coin flip among them (a 6-for/5-against split
+// scores exactly 55). Raised to match the supermajority the surrounding
+// comment always claimed this gate enforced — and it's the same bar
+// buildTradeSetup applies to an individual symbol, which is the right
+// relationship: the market read shouldn't be looser than a stock read.
+// Provisional: worth re-checking against a live distribution once a few
+// sessions have run under the new metric.
+const NIFTY_TREND_MIN_CONFIDENCE = 65;
 
 const SCAN_CACHE_KEY = 'market_scan:latest';
 const SCAN_CACHE_TTL_SECONDS = 360; // a little over the 5-minute background interval, so the API never serves a fully-expired read
@@ -133,18 +143,24 @@ async function assessMarketTrend(provider: MarketDataProvider, fnoRows: FnoScann
   const vix = vixQuotes[0]?.ltp ?? null;
   const breadth = computeMarketBreadth(fnoRows);
 
-  // Three-index confirmation: NIFTY, BANKNIFTY, and FINNIFTY must ALL
-  // independently clear the confidence bar in the same direction — a
-  // single index's own bias engine can be noisy, and BANKNIFTY/FINNIFTY
-  // previously weren't actually part of the gate at all (fetched but only
-  // shown for context), which meant the "market trend" verdict was really
-  // just "NIFTY + breadth." Stricter by design: this reads SIDEWAYS more
-  // often than before whenever the three disagree, which is the point —
-  // a real market-wide trend should show up across more than one index.
+  // Two-BLOCK confirmation, not three-index.
+  //
+  // This used to require NIFTY, BANKNIFTY and FINNIFTY to agree and be
+  // called "three independent confirmations" — but FINNIFTY is roughly
+  // two-thirds the same constituents as BANKNIFTY, so a banks move
+  // satisfied two of the three votes on its own, and NIFTY is itself ~35%
+  // financials. In practice the gate was "NIFTY + banks counted twice."
+  //
+  // BANKNIFTY and FINNIFTY are now collapsed into a single FINANCIALS
+  // block that has to agree with itself before it counts once. That's a
+  // genuinely stricter test of the same idea: the broad market and the
+  // financials complex must independently point the same way.
   const isBullish = (b: typeof niftyBias) => b.direction === 'BULLISH' && b.confidence >= NIFTY_TREND_MIN_CONFIDENCE;
   const isBearish = (b: typeof niftyBias) => b.direction === 'BEARISH' && b.confidence >= NIFTY_TREND_MIN_CONFIDENCE;
-  const allBullish = isBullish(niftyBias) && isBullish(bankNiftyBias) && isBullish(finniftyBias);
-  const allBearish = isBearish(niftyBias) && isBearish(bankNiftyBias) && isBearish(finniftyBias);
+  const financialsBullish = isBullish(bankNiftyBias) && isBullish(finniftyBias);
+  const financialsBearish = isBearish(bankNiftyBias) && isBearish(finniftyBias);
+  const allBullish = isBullish(niftyBias) && financialsBullish;
+  const allBearish = isBearish(niftyBias) && financialsBearish;
 
   // breadth.isBullishBias is null when the F&O universe scan came back
   // empty that tick (no data, not a real reading) — in that case it must
@@ -156,7 +172,7 @@ async function assessMarketTrend(provider: MarketDataProvider, fnoRows: FnoScann
   if (allBullish && breadth.isBullishBias !== false) {
     trend = 'BULLISH';
     reasoning.push(
-      `NIFTY (${niftyBias.confidence}%), BANK NIFTY (${bankNiftyBias.confidence}%) and FIN NIFTY (${finniftyBias.confidence}%) all bullish` +
+      `Broad market (NIFTY ${niftyBias.confidence}%) and the financials block (BANK NIFTY ${bankNiftyBias.confidence}%, FIN NIFTY ${finniftyBias.confidence}% — counted once, they largely share constituents) both bullish` +
         (breadth.isBullishBias == null
           ? ', breadth unavailable this tick'
           : `, breadth favors advances (${breadth.advances} vs ${breadth.declines})`)
@@ -164,7 +180,7 @@ async function assessMarketTrend(provider: MarketDataProvider, fnoRows: FnoScann
   } else if (allBearish && breadth.isBullishBias !== true) {
     trend = 'BEARISH';
     reasoning.push(
-      `NIFTY (${niftyBias.confidence}%), BANK NIFTY (${bankNiftyBias.confidence}%) and FIN NIFTY (${finniftyBias.confidence}%) all bearish` +
+      `Broad market (NIFTY ${niftyBias.confidence}%) and the financials block (BANK NIFTY ${bankNiftyBias.confidence}%, FIN NIFTY ${finniftyBias.confidence}% — counted once, they largely share constituents) both bearish` +
         (breadth.isBullishBias == null
           ? ', breadth unavailable this tick'
           : `, breadth favors declines (${breadth.declines} vs ${breadth.advances})`)
@@ -172,7 +188,7 @@ async function assessMarketTrend(provider: MarketDataProvider, fnoRows: FnoScann
   } else {
     trend = 'SIDEWAYS';
     reasoning.push(
-      `NIFTY ${niftyBias.direction} ${niftyBias.confidence}%, BANK NIFTY ${bankNiftyBias.direction} ${bankNiftyBias.confidence}%, FIN NIFTY ${finniftyBias.direction} ${finniftyBias.confidence}% — not all three agree (or breadth disagrees), so no clean market-wide trend`
+      `NIFTY ${niftyBias.direction} ${niftyBias.confidence}%, BANK NIFTY ${bankNiftyBias.direction} ${bankNiftyBias.confidence}%, FIN NIFTY ${finniftyBias.direction} ${finniftyBias.confidence}% — the broad market and the financials block don't both clear ${NIFTY_TREND_MIN_CONFIDENCE}% in the same direction (or breadth disagrees), so no clean market-wide trend`
     );
   }
 
