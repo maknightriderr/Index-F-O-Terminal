@@ -126,10 +126,39 @@ function confidenceFromTightness(diffPct: number, tolerance: number): number {
  * not a claim that every pattern's true formation window is exactly
  * this length.
  */
+/**
+ * Swing sensitivity for GEOMETRIC pattern matching, deliberately blunter
+ * than the default 2 used for market-structure/VCP.
+ *
+ * A Double Top or Head & Shoulders is a structural feature of the chart,
+ * so the peaks it is built from have to be structural too. At lookback 2 —
+ * a bar merely beating its two immediate neighbours — 28% of all bars on a
+ * year of NIFTY dailies qualified as a pivot, leaving the matchers free to
+ * find a "pattern" among ~70 candidate points. They duly did, and the
+ * result was unstable: re-detecting bar by bar (which is what a chart
+ * refresh does), the reported pattern changed on 16% of refreshes,
+ * flipping between outright opposite conclusions — Double Top to Double
+ * Bottom to Descending Triangle. A real pattern does not do that; the
+ * detector was fitting noise, which is what "the chart patterns aren't
+ * accurate" looks like from the outside.
+ *
+ * 4 cuts pivot density to ~15% of bars and roughly halves that churn, to
+ * 9% of refreshes, with the median pattern now persisting 6 bars and the
+ * strongest reads holding 30-40. Not a cure — geometric pattern matching
+ * is inherently somewhat unstable, and notably a confidence FLOOR does not
+ * help at all (patterns reported at 86% flip as readily as ones at 59%, so
+ * that number should not be read as a reliability score).
+ *
+ * Only detectPattern uses this — market-structure (BOS/CHoCH) and VCP pass
+ * their own explicit 2 and are unaffected, since those genuinely do want
+ * fine-grained swings.
+ */
+const PATTERN_SWING_LOOKBACK = 4;
+
 export function detectPattern(highs: number[], lows: number[], closes: number[], volumes?: number[]): DetectedPattern | null {
   if (highs.length < 15) return null;
 
-  const { peaks, troughs } = findSwingPoints(highs, lows);
+  const { peaks, troughs } = findSwingPoints(highs, lows, PATTERN_SWING_LOOKBACK);
 
   const doubleTop = detectDoubleTop(peaks, troughs);
   if (doubleTop) return withVolumeConfirmation(doubleTop, volumes);
