@@ -1374,9 +1374,20 @@ async function checkCounterToIndex(
   // relationship to check against.
   const isNseStock = exchange === 'NSE' && !(INDEX_SYMBOLS as readonly string[]).includes(underlying);
   if (!isNseStock || direction === 'NEUTRAL') return null;
+
+  // The index's own technical direction right now.
   const niftyDirection = await lookupCachedBiasDirection('NSE', 'NIFTY', mode);
   if (niftyDirection != null && niftyDirection !== 'NEUTRAL' && niftyDirection !== direction) {
     return niftyDirection;
+  }
+
+  // Institutional Flow's next-day read for the index — a different source
+  // (FII/DII positioning rather than price structure) for the same
+  // question, so it belongs on the same footing rather than as a second
+  // hard block behind this one.
+  const predicted = await lookupInstitutionalDirection('NIFTY');
+  if (predicted != null && predicted !== 'NEUTRAL' && predicted !== direction) {
+    return predicted;
   }
   return null;
 }
@@ -1416,18 +1427,16 @@ async function checkReliabilityFilters(
   // precisely to catch stocks moving on their own story, and this gate made
   // that section structurally incapable of ever producing a result.
 
-  // Institutional Flow's next-day read for the relevant broad index —
-  // BANKNIFTY's own prediction when the setup IS BANKNIFTY, NIFTY's
-  // otherwise. Institutional Flow only covers these two symbols, and only
-  // NIFTY/BANKNIFTY themselves plus NSE stocks have a real relationship to
-  // either — MCX/BSE are skipped, same reasoning as the alignment check.
-  if (exchange === 'NSE') {
-    const relevantIndex = underlying === 'BANKNIFTY' ? 'BANKNIFTY' : 'NIFTY';
-    const predicted = await lookupInstitutionalDirection(relevantIndex);
-    if (predicted != null && predicted !== 'NEUTRAL' && predicted !== direction) {
-      return `Institutional Flow's next-day read for ${relevantIndex} is ${predicted}, disagreeing with this ${direction} setup.`;
-    }
-  }
+  // NOTE: Institutional Flow's next-day index read was ALSO a hard block
+  // here, and relaxing only the NIFTY-direction check above achieved
+  // nothing — the counter-index movers it was meant to release
+  // (GVT&D +8.77%, BANDHANBNK +4.18%) simply fell through to this one and
+  // were refused all the same, leaving Stock-Specific Movers at zero.
+  //
+  // It's the same class of test — "the broad index disagrees with this
+  // stock" — just sourced from FII/DII positioning rather than price
+  // structure, and it's a NEXT-DAY read being applied to an intraday
+  // setup. Both now travel together through checkCounterToIndex.
 
   return null;
 }
