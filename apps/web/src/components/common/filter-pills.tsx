@@ -16,7 +16,7 @@ export function FilterPills<T extends string>({
   return (
     <div className="flex items-center gap-2">
       {label && (
-        <span className="text-[10px] font-bold text-gray-500 light:text-slate-500 uppercase tracking-wider whitespace-nowrap">
+        <span className="text-[10px] font-bold text-gray-400 light:text-slate-600 uppercase tracking-wider whitespace-nowrap">
           {label}
         </span>
       )}

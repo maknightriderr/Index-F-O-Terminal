@@ -44,11 +44,11 @@ export function NewsPanel({ symbol }: { symbol: string }) {
   return (
     <div className="bg-gradient-to-b from-[#151522] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 border-t-2 border-t-indigo-500/50 rounded-xl shadow-[0_8px_28px_-14px_rgba(0,0,0,0.75)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.15)] hover:border-gray-700/80 light:hover:border-slate-300 transition-all duration-200 p-4">
       <h3 className="text-xs font-bold text-gray-300 light:text-slate-700 uppercase tracking-wide mb-3">
-        Latest News <span className="text-gray-500 light:text-slate-500 font-medium normal-case">— {symbol}</span>
+        Latest News <span className="text-gray-400 light:text-slate-600 font-medium normal-case">— {symbol}</span>
       </h3>
 
       {loading && (
-        <div className="text-xs text-gray-500 light:text-slate-500 py-6 text-center">Loading news…</div>
+        <div className="text-xs text-gray-400 light:text-slate-600 py-6 text-center">Loading news…</div>
       )}
 
       {!loading && error && (
@@ -56,7 +56,7 @@ export function NewsPanel({ symbol }: { symbol: string }) {
       )}
 
       {!loading && !error && articles && articles.length === 0 && (
-        <div className="text-xs text-gray-500 light:text-slate-500 py-6 text-center">No recent news found for {symbol}.</div>
+        <div className="text-xs text-gray-400 light:text-slate-600 py-6 text-center">No recent news found for {symbol}.</div>
       )}
 
       {!loading && !error && articles && articles.length > 0 && (
@@ -73,9 +73,9 @@ export function NewsPanel({ symbol }: { symbol: string }) {
                 {a.title}
               </div>
               {a.snippet && (
-                <p className="text-[10px] text-gray-500 light:text-slate-500 mt-1 leading-snug line-clamp-2">{a.snippet}</p>
+                <p className="text-[10px] text-gray-400 light:text-slate-600 mt-1 leading-snug line-clamp-2">{a.snippet}</p>
               )}
-              <div className="flex items-center gap-2 mt-1.5 text-[10px] text-gray-500 light:text-slate-500">
+              <div className="flex items-center gap-2 mt-1.5 text-[10px] text-gray-400 light:text-slate-600">
                 <span className="font-medium text-gray-400 light:text-slate-600">{a.source}</span>
                 <span>·</span>
                 <span>{relativeTime(new Date(a.publishedAt).getTime())}</span>

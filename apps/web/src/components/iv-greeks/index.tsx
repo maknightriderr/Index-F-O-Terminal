@@ -71,13 +71,13 @@ export function IvGreeksPage() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-lg font-bold text-gray-100 light:text-slate-900">IV & Greeks</h1>
-          <p className="text-xs text-gray-500 light:text-slate-500 mt-0.5">
+          <p className="text-xs text-gray-400 light:text-slate-600 mt-0.5">
             ATM IV, IV Rank/Percentile, CE-PE skew, and ATM Gamma/Theta/Vega — every NSE stock with F&O contracts.
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <span className="flex items-center gap-1.5 text-[11px] text-gray-500 light:text-slate-500">
-            <span className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
+          <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-[11px] text-gray-400 light:text-slate-600">
+            <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
             {isLive ? `${filtered.length} of ${rows.length} stocks` : loading ? 'Loading…' : 'Unreachable'}
           </span>
           <input
@@ -113,7 +113,7 @@ export function IvGreeksPage() {
       )}
 
       {rows.length > 0 && filtered.length === 0 && (
-        <div className="text-sm text-gray-500 light:text-slate-500 py-16 text-center">No stocks match the current filters.</div>
+        <div className="text-sm text-gray-400 light:text-slate-600 py-16 text-center">No stocks match the current filters.</div>
       )}
 
       {filtered.length > 0 && (
@@ -121,7 +121,7 @@ export function IvGreeksPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="bg-gradient-to-b from-gray-900/90 to-gray-900/60 light:from-slate-100 light:to-slate-50 text-gray-500 light:text-slate-500 uppercase tracking-wider">
+                <tr className="bg-gradient-to-b from-gray-900/90 to-gray-900/60 light:from-slate-100 light:to-slate-50 text-gray-400 light:text-slate-600 uppercase tracking-wider">
                   <SortTh label="Stock" active={sortKey === 'symbol'} desc={sortDesc} onClick={() => toggleSort('symbol')} align="left" />
                   <SortTh label="Price" active={sortKey === 'price'} desc={sortDesc} onClick={() => toggleSort('price')} />
                   <SortTh label="ATM IV" active={sortKey === 'atmIv'} desc={sortDesc} onClick={() => toggleSort('atmIv')} />
@@ -144,30 +144,30 @@ export function IvGreeksPage() {
                   >
                     <td className="px-4 py-2.5 font-semibold text-gray-200 light:text-slate-800">{stock.symbol}</td>
                     <td className="text-right px-3 py-2.5 tabular-nums text-gray-200 light:text-slate-800">{formatIndianNumber(stock.price, 2)}</td>
-                    <td className="text-right px-3 py-2.5 tabular-nums text-gray-400 light:text-slate-500">
+                    <td className="text-right px-3 py-2.5 tabular-nums text-gray-400 light:text-slate-600">
                       {stock.atmIv > 0 ? `${stock.atmIv.toFixed(1)}%` : '—'}
                     </td>
                     <td className="text-right px-3 py-2.5">
-                      {stock.ivRank != null ? <MetricBar value={stock.ivRank} /> : <span className="text-gray-600 light:text-slate-300">—</span>}
+                      {stock.ivRank != null ? <MetricBar value={stock.ivRank} /> : <span className="text-gray-400 light:text-slate-300">—</span>}
                     </td>
                     <td className="text-right px-3 py-2.5">
-                      {stock.ivPercentile != null ? <MetricBar value={stock.ivPercentile} /> : <span className="text-gray-600 light:text-slate-300">—</span>}
+                      {stock.ivPercentile != null ? <MetricBar value={stock.ivPercentile} /> : <span className="text-gray-400 light:text-slate-300">—</span>}
                     </td>
                     <td className={`text-right px-3 py-2.5 tabular-nums font-medium ${
-                      stock.ivSkew === 0 ? 'text-gray-400 light:text-slate-500' : stock.ivSkew > 0 ? 'text-emerald-400' : 'text-red-400'
+                      stock.ivSkew === 0 ? 'text-gray-400 light:text-slate-600' : stock.ivSkew > 0 ? 'text-emerald-400' : 'text-red-400'
                     }`}>
                       {stock.ivSkew !== 0 ? `${stock.ivSkew >= 0 ? '+' : ''}${stock.ivSkew.toFixed(1)}` : '—'}
                     </td>
-                    <td className="text-right px-3 py-2.5 tabular-nums text-gray-400 light:text-slate-500">
+                    <td className="text-right px-3 py-2.5 tabular-nums text-gray-400 light:text-slate-600">
                       {stock.atmGamma > 0 ? stock.atmGamma.toFixed(4) : '—'}
                     </td>
                     <td className="text-right px-3 py-2.5 tabular-nums text-red-400/90">
                       {stock.atmTheta !== 0 ? stock.atmTheta.toFixed(2) : '—'}
                     </td>
-                    <td className="text-right px-3 py-2.5 tabular-nums text-gray-400 light:text-slate-500">
+                    <td className="text-right px-3 py-2.5 tabular-nums text-gray-400 light:text-slate-600">
                       {stock.atmVega > 0 ? stock.atmVega.toFixed(2) : '—'}
                     </td>
-                    <td className={`text-right px-3 py-2.5 tabular-nums ${stock.pcr > 1 ? 'text-emerald-400' : stock.pcr < 0.7 ? 'text-red-400' : 'text-gray-400 light:text-slate-500'}`}>
+                    <td className={`text-right px-3 py-2.5 tabular-nums ${stock.pcr > 1 ? 'text-emerald-400' : stock.pcr < 0.7 ? 'text-red-400' : 'text-gray-400 light:text-slate-600'}`}>
                       {stock.pcr > 0 ? stock.pcr.toFixed(2) : '—'}
                     </td>
                     <td className="text-center px-3 py-2.5">
@@ -182,7 +182,7 @@ export function IvGreeksPage() {
       )}
 
       {rows.length > 0 && (
-        <p className="text-[10px] text-gray-600 light:text-slate-400 leading-snug">
+        <p className="text-[10px] text-gray-400 light:text-slate-600 leading-snug">
           IV Rank/Percentile need daily history the terminal only started collecting recently, so they read "—" until at least two
           days of data exist per stock. Gamma/Theta/Vega are per-share ATM Greeks (average of the nearest-expiry ATM call and put,
           from our own Black-Scholes engine) — Theta is the combined call+put daily decay. Skew is Call IV minus Put IV at the ATM
@@ -226,7 +226,7 @@ function MetricBar({ value }: { value: number }) {
       <div className="w-12 h-1.5 bg-gray-900/70 light:bg-slate-200 rounded-full overflow-hidden">
         <div className={`h-full rounded-full ${color}`} style={{ width: `${value}%` }} />
       </div>
-      <span className="text-[10px] tabular-nums text-gray-400 light:text-slate-500 w-6 text-right">{value}</span>
+      <span className="text-[10px] tabular-nums text-gray-400 light:text-slate-600 w-6 text-right">{value}</span>
     </div>
   );
 }

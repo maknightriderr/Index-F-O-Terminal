@@ -74,14 +74,14 @@ export function AlertsPage() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-lg font-bold text-gray-100 light:text-slate-900">Alerts</h1>
-          <p className="text-xs text-gray-500 light:text-slate-500 mt-0.5">
+          <p className="text-xs text-gray-400 light:text-slate-600 mt-0.5">
             Unusual futures OI moves, IV extremes, and Trade Setup closures — scanned every 2 minutes across the NSE F&O
             universe. OI/IV extremes are digested into one summary per type per day, not one row per stock.
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <span className="flex items-center gap-1.5 text-[11px] text-gray-500 light:text-slate-500">
-            <span className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
+          <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-[11px] text-gray-400 light:text-slate-600">
+            <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
             {isLive ? `${filtered.length} of ${alerts.length}` : loading ? 'Loading…' : 'Unreachable'}
           </span>
           <input
@@ -119,13 +119,13 @@ export function AlertsPage() {
       )}
 
       {!loading && alerts.length === 0 && isLive && (
-        <div className="text-sm text-gray-500 light:text-slate-500 py-16 text-center">
+        <div className="text-sm text-gray-400 light:text-slate-600 py-16 text-center">
           No alerts yet. This page fills in as the scanner finds unusual OI/IV activity or a Trade Setup closes.
         </div>
       )}
 
       {alerts.length > 0 && filtered.length === 0 && (
-        <div className="text-sm text-gray-500 light:text-slate-500 py-16 text-center">No alerts match the current filters.</div>
+        <div className="text-sm text-gray-400 light:text-slate-600 py-16 text-center">No alerts match the current filters.</div>
       )}
 
       {filtered.length > 0 && (
@@ -153,9 +153,9 @@ export function AlertsPage() {
                         {a.symbol === 'NSE_FNO_UNIVERSE' ? 'F&O Universe' : a.symbol}
                       </span>
                       <SeverityBadge severity={a.severity} />
-                      <span className="text-[10px] text-gray-600 light:text-slate-400 uppercase tracking-wide">{a.type.replace(/_/g, ' ')}</span>
+                      <span className="text-[10px] text-gray-400 light:text-slate-600 uppercase tracking-wide">{a.type.replace(/_/g, ' ')}</span>
                     </div>
-                    <p className="text-xs text-gray-400 light:text-slate-500 leading-snug">{a.message}</p>
+                    <p className="text-xs text-gray-400 light:text-slate-600 leading-snug">{a.message}</p>
                     {symbols && (
                       <button
                         onClick={(e) => {
@@ -187,7 +187,7 @@ export function AlertsPage() {
                       </div>
                     )}
                   </div>
-                  <span className="text-[11px] text-gray-500 light:text-slate-400 shrink-0 whitespace-nowrap">{relativeTime(a.createdAt)}</span>
+                  <span className="text-[11px] text-gray-400 light:text-slate-600 shrink-0 whitespace-nowrap">{relativeTime(a.createdAt)}</span>
                 </div>
               </div>
             );

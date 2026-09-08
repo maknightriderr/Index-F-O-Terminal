@@ -41,12 +41,12 @@ export function MarketScannerPage() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-lg font-bold text-gray-100 light:text-slate-900">Market Scanner</h1>
-          <p className="text-xs text-gray-500 light:text-slate-500 mt-0.5">
+          <p className="text-xs text-gray-400 light:text-slate-600 mt-0.5">
             NIFTY trend → strongest/weakest sector → top liquid F&amp;O stocks, scored 0-100 across 8 categories. Refreshes every 5 minutes.
           </p>
         </div>
-        <span className="flex items-center gap-1.5 text-[11px] text-gray-500 light:text-slate-500">
-          <span className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
+        <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-[11px] text-gray-400 light:text-slate-600">
+          <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
           {isLive ? `Scanned ${data ? new Date(data.scannedAt).toLocaleTimeString('en-IN') : ''}` : loading ? 'Loading…' : 'Unreachable'}
         </span>
       </div>
@@ -58,7 +58,7 @@ export function MarketScannerPage() {
       )}
 
       {loading && !data && (
-        <div className="bg-gradient-to-b from-[#141420] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 rounded-xl p-8 text-center text-xs text-gray-500 light:text-slate-500 animate-pulse">
+        <div className="bg-gradient-to-b from-[#141420] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 rounded-xl p-8 text-center text-xs text-gray-400 light:text-slate-600 animate-pulse">
           Running the top-down scan…
         </div>
       )}
@@ -68,7 +68,7 @@ export function MarketScannerPage() {
       {data && data.marketTrend.trend === 'SIDEWAYS' && (
         <div className="bg-gray-900/40 light:bg-slate-100 border border-gray-800/50 light:border-slate-200 rounded-xl p-6 text-center">
           <div className="text-sm font-bold text-gray-200 light:text-slate-800">No market-aligned setups — index is sideways</div>
-          <p className="text-xs text-gray-500 light:text-slate-500 mt-1 max-w-md mx-auto">
+          <p className="text-xs text-gray-400 light:text-slate-600 mt-1 max-w-md mx-auto">
             No trade is also a position. Sector/stock scanning aligned to an overall trend is skipped while NIFTY has no clean
             directional lean — check Stock-Specific Movers below for standout stocks moving on their own strength.
           </p>
@@ -78,12 +78,12 @@ export function MarketScannerPage() {
       {data && data.marketTrend.trend !== 'SIDEWAYS' && data.sector && (
         <div className="bg-gray-900/40 light:bg-slate-100 border border-gray-800/50 light:border-slate-200 rounded-xl px-4 py-3 flex items-center justify-between flex-wrap gap-2">
           <div>
-            <span className="text-[10px] text-gray-500 light:text-slate-500 uppercase tracking-wide">
+            <span className="text-[10px] text-gray-400 light:text-slate-600 uppercase tracking-wide">
               {data.marketTrend.trend === 'BULLISH' ? 'Strongest sector' : 'Weakest sector'}
             </span>
             <div className="text-sm font-bold text-gray-100 light:text-slate-900">{data.sector.sector}</div>
           </div>
-          <div className="text-xs text-gray-400 light:text-slate-500">
+          <div className="text-xs text-gray-400 light:text-slate-600">
             Avg relative strength {data.sector.avgRelativeStrength > 0 ? '+' : ''}
             {data.sector.avgRelativeStrength}% vs NIFTY · {data.sector.memberCount} liquid F&amp;O members
           </div>
@@ -91,7 +91,7 @@ export function MarketScannerPage() {
       )}
 
       {data && data.marketTrend.trend !== 'SIDEWAYS' && data.candidates.length === 0 && (
-        <div className="bg-gray-900/40 light:bg-slate-100 border border-gray-800/50 light:border-slate-200 rounded-xl p-6 text-center text-xs text-gray-500 light:text-slate-500">
+        <div className="bg-gray-900/40 light:bg-slate-100 border border-gray-800/50 light:border-slate-200 rounded-xl p-6 text-center text-xs text-gray-400 light:text-slate-600">
           No market-aligned candidates cleared the 60-point bar this cycle.
         </div>
       )}
@@ -118,7 +118,7 @@ export function MarketScannerPage() {
         <div className="space-y-2 pt-2">
           <div>
             <h2 className="text-xs font-bold text-gray-300 light:text-slate-700 uppercase tracking-wide">Stock-Specific Movers</h2>
-            <p className="text-[11px] text-gray-500 light:text-slate-500 mt-0.5">
+            <p className="text-[11px] text-gray-400 light:text-slate-600 mt-0.5">
               Setups moving on their own strength, independent of (or against) today's overall market read — their
               Market Trend score is zeroed since the broader tape doesn't confirm them.
             </p>
@@ -148,7 +148,7 @@ function MarketStatusBanner({ data }: { data: NonNullable<ReturnType<typeof useM
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${trend.dot}`} />
           <span className={`text-sm font-bold ${trend.className}`}>{trend.label}</span>
-          <span className="text-[10px] text-gray-500 light:text-slate-500">Market Trend score {score}/15</span>
+          <span className="text-[10px] text-gray-400 light:text-slate-600">Market Trend score {score}/15</span>
         </div>
       </div>
       <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
@@ -160,8 +160,8 @@ function MarketStatusBanner({ data }: { data: NonNullable<ReturnType<typeof useM
       </div>
       <ul className="mt-3 space-y-1">
         {data.marketTrend.reasoning.map((r, i) => (
-          <li key={i} className="text-[11px] text-gray-400 light:text-slate-500 flex gap-1.5">
-            <span className="text-gray-600 light:text-slate-400">▸</span>
+          <li key={i} className="text-[11px] text-gray-400 light:text-slate-600 flex gap-1.5">
+            <span className="text-gray-400 light:text-slate-600">▸</span>
             {r}
           </li>
         ))}
@@ -203,7 +203,7 @@ function PortfolioRiskPanel({ risk }: { risk: ScanPortfolioRisk }) {
 function StatChip({ label, value, valueClassName }: { label: string; value: string; valueClassName?: string }) {
   return (
     <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-gray-900/60 light:bg-slate-100 border border-gray-800/60 light:border-slate-200 text-[11px] tabular-nums">
-      <span className="text-gray-500 light:text-slate-500">{label}</span>
+      <span className="text-gray-400 light:text-slate-600">{label}</span>
       <span className={`font-semibold text-gray-200 light:text-slate-800 ${valueClassName ?? ''}`}>{value}</span>
     </span>
   );
@@ -212,7 +212,7 @@ function StatChip({ label, value, valueClassName }: { label: string; value: stri
 function StatCell({ label, value }: { label: string; value: string }) {
   return (
     <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-2">
-      <div className="text-gray-500 light:text-slate-500 mb-1 text-[10px] uppercase tracking-wide">{label}</div>
+      <div className="text-gray-400 light:text-slate-600 mb-1 text-[10px] uppercase tracking-wide">{label}</div>
       <div className="text-gray-200 light:text-slate-800 font-semibold text-xs tabular-nums">{value}</div>
     </div>
   );
@@ -283,21 +283,21 @@ function CandidateCard({
       {expanded && (
         <div className="px-4 pb-4 pt-1 border-t border-gray-800/40 light:border-slate-200 grid md:grid-cols-2 gap-4">
           <div>
-            <div className="text-[10px] text-gray-500 light:text-slate-500 uppercase tracking-wide mb-2">Score breakdown</div>
+            <div className="text-[10px] text-gray-400 light:text-slate-600 uppercase tracking-wide mb-2">Score breakdown</div>
             <div className="space-y-1.5">
               {BREAKDOWN_LABELS.map(({ key, label, max }) => {
                 const value = candidate.scoreBreakdown[key];
                 const pct = Math.round((value / max) * 100);
                 return (
                   <div key={key} className="flex items-center gap-2">
-                    <span className="text-[10px] text-gray-400 light:text-slate-500 w-24 shrink-0">{label}</span>
+                    <span className="text-[10px] text-gray-400 light:text-slate-600 w-24 shrink-0">{label}</span>
                     <div className="flex-1 h-1.5 bg-gray-800/80 light:bg-slate-200 rounded-full overflow-hidden">
                       <div
                         className={`h-full rounded-full ${pct >= 70 ? 'bg-emerald-500' : pct >= 40 ? 'bg-yellow-500' : 'bg-red-500'}`}
                         style={{ width: `${pct}%` }}
                       />
                     </div>
-                    <span className="text-[10px] text-gray-500 light:text-slate-500 tabular-nums w-10 text-right">
+                    <span className="text-[10px] text-gray-400 light:text-slate-600 tabular-nums w-10 text-right">
                       {value}/{max}
                     </span>
                   </div>
@@ -306,11 +306,11 @@ function CandidateCard({
             </div>
           </div>
           <div>
-            <div className="text-[10px] text-gray-500 light:text-slate-500 uppercase tracking-wide mb-2">Reasoning</div>
+            <div className="text-[10px] text-gray-400 light:text-slate-600 uppercase tracking-wide mb-2">Reasoning</div>
             <ul className="space-y-1">
               {candidate.reasoning.map((r, i) => (
-                <li key={i} className="text-[11px] text-gray-400 light:text-slate-500 flex gap-1.5">
-                  <span className="text-gray-600 light:text-slate-400">▸</span>
+                <li key={i} className="text-[11px] text-gray-400 light:text-slate-600 flex gap-1.5">
+                  <span className="text-gray-400 light:text-slate-600">▸</span>
                   {r}
                 </li>
               ))}

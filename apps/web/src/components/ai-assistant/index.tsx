@@ -58,7 +58,7 @@ export function AiAssistantPage() {
     <div className="p-4 flex flex-col h-full min-h-0">
       <div className="mb-3">
         <h1 className="text-lg font-bold text-gray-100 light:text-slate-900">AI Assistant</h1>
-        <p className="text-xs text-gray-500 light:text-slate-500 mt-0.5">
+        <p className="text-xs text-gray-400 light:text-slate-600 mt-0.5">
           Grounded in a live snapshot of indices, the F&O universe scan, and recent alerts — ask about current conditions,
           signals, or strategies. Not investment advice.
         </p>
@@ -77,7 +77,7 @@ export function AiAssistantPage() {
         {messages.length === 0 && !notConfigured && (
           <div className="h-full flex flex-col items-center justify-center gap-4 text-center py-8">
             <div className="text-4xl opacity-70">🤖</div>
-            <p className="text-sm text-gray-500 light:text-slate-500 max-w-sm">
+            <p className="text-sm text-gray-400 light:text-slate-600 max-w-sm">
               Ask about current market conditions, unusual OI/IV activity, or which stocks have a Strategy Scanner setup.
             </p>
             <div className="flex flex-wrap items-center justify-center gap-2 max-w-lg">
@@ -112,7 +112,7 @@ export function AiAssistantPage() {
 
         {loading && (
           <div className="flex justify-start">
-            <div className="rounded-2xl px-4 py-2.5 bg-gray-800/60 light:bg-slate-100 text-gray-500 light:text-slate-400 text-sm flex items-center gap-1.5">
+            <div className="rounded-2xl px-4 py-2.5 bg-gray-800/60 light:bg-slate-100 text-gray-400 light:text-slate-600 text-sm flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.3s]" />
               <span className="w-1.5 h-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.15s]" />
               <span className="w-1.5 h-1.5 rounded-full bg-current animate-bounce" />

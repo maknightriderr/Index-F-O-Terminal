@@ -35,7 +35,7 @@ export function TopMoversList({
         <h3 className="text-xs font-bold text-gray-200 light:text-slate-800">{title}</h3>
       </div>
       {items.length === 0 ? (
-        <div className="text-xs text-gray-500 light:text-slate-400 py-5 px-3.5 text-center font-medium">No data</div>
+        <div className="text-xs text-gray-400 light:text-slate-600 py-5 px-3.5 text-center font-medium">No data</div>
       ) : (
         <div className="py-1.5 divide-y divide-gray-800/20 light:divide-slate-100">
           {items.map((item, idx) => (
@@ -48,7 +48,7 @@ export function TopMoversList({
                 {idx < 3 ? MEDALS[idx] : idx + 1}
               </span>
               <span className="text-gray-200 light:text-slate-800 font-bold flex-1 truncate group-hover:text-white transition-colors">{item.symbol}</span>
-              <span className="text-gray-400 light:text-slate-500 tabular-nums text-[11px] font-medium">{formatIndianNumber(item.ltp, 2)}</span>
+              <span className="text-gray-400 light:text-slate-600 tabular-nums text-[11px] font-medium">{formatIndianNumber(item.ltp, 2)}</span>
               <span className={`tabular-nums w-14 text-right font-bold text-xs ${rankText}`}>{formatPercent(item.changePercent)}</span>
             </div>
           ))}

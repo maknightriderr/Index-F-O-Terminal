@@ -60,12 +60,12 @@ export function AlertBell() {
             return next;
           })
         }
-        className="relative w-7 h-7 flex items-center justify-center rounded-lg text-gray-400 light:text-slate-500 hover:text-gray-200 light:hover:text-slate-800 hover:bg-gray-800/60 light:hover:bg-slate-100 transition-colors"
+        className="relative w-7 h-7 flex items-center justify-center rounded-lg text-gray-400 light:text-slate-600 hover:text-gray-200 light:hover:text-slate-800 hover:bg-gray-800/60 light:hover:bg-slate-100 transition-colors"
         title="Alerts"
       >
         🔔
         {unreadCount > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 min-w-[15px] h-[15px] px-0.5 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center leading-none">
+          <span className="absolute -top-0.5 -right-0.5 min-w-[15px] h-[15px] px-0.5 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center leading-none">
             {unreadCount > 9 ? '9+' : unreadCount}
           </span>
         )}
@@ -86,7 +86,7 @@ export function AlertBell() {
             </button>
           </div>
           {alerts.length === 0 ? (
-            <div className="text-xs text-gray-500 light:text-slate-500 py-8 text-center">No alerts yet</div>
+            <div className="text-xs text-gray-400 light:text-slate-600 py-8 text-center">No alerts yet</div>
           ) : (
             <div className="divide-y divide-gray-800/40 light:divide-slate-100">
               {alerts.map((a) => (
@@ -101,10 +101,10 @@ export function AlertBell() {
                     </span>
                     <div className="flex items-center gap-1.5 shrink-0">
                       <SeverityBadge severity={a.severity} />
-                      <span className="text-[10px] text-gray-500 light:text-slate-400">{relativeTime(a.createdAt)}</span>
+                      <span className="text-[10px] text-gray-400 light:text-slate-600">{relativeTime(a.createdAt)}</span>
                     </div>
                   </div>
-                  <p className="text-[11px] text-gray-400 light:text-slate-500 leading-snug">{a.message}</p>
+                  <p className="text-[11px] text-gray-400 light:text-slate-600 leading-snug">{a.message}</p>
                 </div>
               ))}
             </div>

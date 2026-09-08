@@ -89,14 +89,14 @@ export function EventCalendarPanel({
   return (
     <div className="bg-gradient-to-b from-[#151522] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 border-t-2 border-t-fuchsia-500/50 rounded-xl shadow-[0_8px_28px_-14px_rgba(0,0,0,0.75)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.15)] hover:border-gray-700/80 light:hover:border-slate-300 transition-all duration-200 p-4">
       <h3 className="text-xs font-bold text-gray-300 light:text-slate-700 uppercase tracking-wide mb-1">
-        Event Calendar <span className="text-gray-500 light:text-slate-500 font-medium normal-case">— {symbol}</span>
+        Event Calendar <span className="text-gray-400 light:text-slate-600 font-medium normal-case">— {symbol}</span>
       </h3>
-      <p className="text-[10px] text-gray-600 light:text-slate-400 mb-3 leading-snug">
+      <p className="text-[10px] text-gray-400 light:text-slate-600 mb-3 leading-snug">
         F&amp;O expiries and corporate actions (dividend/bonus/split/rights/buyback) — earnings/RBI/macro dates aren&apos;t tracked yet.
       </p>
 
       {events.length === 0 && (
-        <div className="text-xs text-gray-500 light:text-slate-500 py-6 text-center">No upcoming events for {symbol} yet.</div>
+        <div className="text-xs text-gray-400 light:text-slate-600 py-6 text-center">No upcoming events for {symbol} yet.</div>
       )}
 
       {events.length > 0 && (
@@ -125,7 +125,7 @@ export function EventCalendarPanel({
                   <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${KIND_DOT[e.kind]}`} />
                   <div className="min-w-0">
                     <div className="text-[11px] font-medium text-gray-200 light:text-slate-800 truncate">{e.label}</div>
-                    <div className="text-[10px] text-gray-500 light:text-slate-500">
+                    <div className="text-[10px] text-gray-400 light:text-slate-600">
                       {new Date(e.date).toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' })}
                     </div>
                   </div>

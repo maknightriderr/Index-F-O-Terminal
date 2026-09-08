@@ -143,7 +143,7 @@ export function Sidebar() {
             )}
             {/* Section Title */}
             {sidebarOpen && (
-              <div className="px-2.5 pt-2 pb-1.5 text-[9px] font-bold text-gray-600 light:text-slate-400 uppercase tracking-[0.14em]">
+              <div className="px-2.5 pt-2 pb-1.5 text-[10px] font-bold text-gray-400 light:text-slate-600 uppercase tracking-[0.14em]">
                 {section.title}
               </div>
             )}
@@ -157,7 +157,7 @@ export function Sidebar() {
                     className={`sidebar-item relative w-full flex items-center px-2.5 py-2 text-sm rounded-lg transition-all duration-200 ${
                       isActive
                         ? 'bg-gradient-to-r from-emerald-500/15 via-emerald-500/8 to-transparent light:from-emerald-500/15 light:to-emerald-500/5 text-emerald-300 light:text-emerald-700 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.2),0_0_12px_-4px_rgba(16,185,129,0.15)]'
-                        : 'text-gray-400 light:text-slate-500 hover:text-gray-200 light:hover:text-slate-900 hover:bg-gray-800/40 light:hover:bg-slate-100 hover:scale-[1.02]'
+                        : 'text-gray-400 light:text-slate-600 hover:text-gray-200 light:hover:text-slate-900 hover:bg-gray-800/40 light:hover:bg-slate-100 hover:scale-[1.02]'
                     }`}
                   >
                     {/* Active indicator line */}
@@ -190,7 +190,7 @@ export function Sidebar() {
           {sidebarOpen ? (
             <div className="flex items-center gap-2">
               <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-breathe" />
-              <div className="text-[10px] text-gray-600 light:text-slate-400 tracking-wide font-medium">
+              <div className="text-[10px] text-gray-400 light:text-slate-600 tracking-wide font-medium">
                 F&O TERMINAL <span className="text-gray-700 light:text-slate-300">v0.1</span>
               </div>
             </div>

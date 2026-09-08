@@ -40,11 +40,11 @@ export function WatchlistPanel({ allIndices, fnoRows }: { allIndices: MarketQuot
     <div className="card-premium overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-800/40 light:border-slate-200 flex items-center justify-between">
         <h3 className="text-sm font-bold text-gray-100 light:text-slate-900">⭐ {activeWatchlist?.name ?? 'Watchlist'}</h3>
-        <span className="text-[10px] text-gray-500 light:text-slate-500">{rows.length} symbols</span>
+        <span className="text-[10px] text-gray-400 light:text-slate-600">{rows.length} symbols</span>
       </div>
 
       {rows.length === 0 ? (
-        <div className="p-6 text-xs text-gray-500 light:text-slate-500 text-center">
+        <div className="p-6 text-xs text-gray-400 light:text-slate-600 text-center">
           Your watchlist is empty — add symbols via Add Asset.
         </div>
       ) : (
@@ -61,7 +61,7 @@ export function WatchlistPanel({ allIndices, fnoRows }: { allIndices: MarketQuot
                     e.stopPropagation();
                     if (activeWatchlist) togglePin(activeWatchlist.id, r.id);
                   }}
-                  className={`text-sm shrink-0 ${r.pinned ? 'text-amber-400' : 'text-gray-600 light:text-slate-300 opacity-0 group-hover:opacity-100'} transition-opacity`}
+                  className={`text-sm shrink-0 ${r.pinned ? 'text-amber-400' : 'text-gray-400 light:text-slate-300 opacity-0 group-hover:opacity-100'} transition-opacity`}
                   title={r.pinned ? 'Unpin' : 'Pin to top'}
                 >
                   {r.pinned ? '★' : '☆'}
@@ -69,7 +69,7 @@ export function WatchlistPanel({ allIndices, fnoRows }: { allIndices: MarketQuot
 
                 <div onClick={() => openTab(r.symbol, r.exchange)} className="flex-1 min-w-0 cursor-pointer">
                   <div className="text-xs font-bold text-gray-100 light:text-slate-900 truncate">{r.symbol}</div>
-                  <div className="text-[10px] text-gray-500 light:text-slate-500 tabular-nums">
+                  <div className="text-[10px] text-gray-400 light:text-slate-600 tabular-nums">
                     {r.exchange}
                     {r.oi != null ? ` · OI ${formatCompact(r.oi)}` : ''}
                     {r.volume != null ? ` · Vol ${formatCompact(r.volume)}` : ''}
@@ -93,7 +93,7 @@ export function WatchlistPanel({ allIndices, fnoRows }: { allIndices: MarketQuot
                     e.stopPropagation();
                     setActiveTab('alerts');
                   }}
-                  className="text-gray-500 light:text-slate-400 hover:text-amber-400 text-sm shrink-0"
+                  className="text-gray-400 light:text-slate-600 hover:text-amber-400 text-sm shrink-0"
                   title="Manage alerts for this symbol"
                 >
                   🔔
@@ -103,7 +103,7 @@ export function WatchlistPanel({ allIndices, fnoRows }: { allIndices: MarketQuot
                     e.stopPropagation();
                     if (activeWatchlist) removeItem(activeWatchlist.id, r.id);
                   }}
-                  className="text-gray-600 light:text-slate-300 hover:text-red-400 text-xs shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                  className="text-gray-400 light:text-slate-300 hover:text-red-400 text-xs shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
                   title="Remove from watchlist"
                 >
                   ✕

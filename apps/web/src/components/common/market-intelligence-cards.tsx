@@ -9,7 +9,7 @@ export function MarketBiasCard({ bias, symbol }: { bias: MarketBias; symbol: str
   return (
     <div className="bg-gradient-to-b from-[#151522] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 border-t-2 border-t-cyan-500/50 rounded-xl shadow-[0_8px_28px_-14px_rgba(0,0,0,0.75)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.15)] hover:border-gray-700/80 light:hover:border-slate-300 transition-all duration-200 p-4">
       <div className="flex items-center justify-between mb-3.5">
-        <h3 className="text-xs font-bold text-gray-300 light:text-slate-700 uppercase tracking-wide">Market Bias <span className="text-gray-500 light:text-slate-500 font-medium normal-case">— {symbol}</span></h3>
+        <h3 className="text-xs font-bold text-gray-300 light:text-slate-700 uppercase tracking-wide">Market Bias <span className="text-gray-400 light:text-slate-600 font-medium normal-case">— {symbol}</span></h3>
         <BiasBadge bias={bias.direction} large />
       </div>
       {/* Probability Bars */}
@@ -19,7 +19,7 @@ export function MarketBiasCard({ bias, symbol }: { bias: MarketBias; symbol: str
         <ProbBar label="Bearish" value={bias.bearishProbability} color="red" />
       </div>
       <div className="flex items-center justify-between text-xs bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-1.5">
-        <span className="text-gray-500 light:text-slate-500">Confidence</span>
+        <span className="text-gray-400 light:text-slate-600">Confidence</span>
         <span className="text-gray-200 light:text-slate-800 font-semibold tabular-nums">{bias.confidence}/100</span>
       </div>
       {/* Reasoning */}
@@ -51,7 +51,7 @@ const REGIME_LABELS: Record<string, { label: string; className: string; dot: str
 };
 
 export function MarketRegimeCard({ bias }: { bias: MarketBias }) {
-  const info = REGIME_LABELS[bias.regime] || { label: bias.regime, className: 'text-gray-400 light:text-slate-500', dot: 'bg-gray-400' };
+  const info = REGIME_LABELS[bias.regime] || { label: bias.regime, className: 'text-gray-400 light:text-slate-600', dot: 'bg-gray-400' };
   const inputs = bias.inputs as Record<string, number | string | null>;
 
   const expectedRangeLow = inputs.expectedRangeLow as number | null;
@@ -70,17 +70,17 @@ export function MarketRegimeCard({ bias }: { bias: MarketBias }) {
         <span className={`w-2 h-2 rounded-full ${info.dot} animate-pulse`} />
         <div className={`text-lg font-bold ${info.className}`}>{info.label}</div>
         {adx != null && (
-          <span className="text-[10px] text-gray-500 light:text-slate-500 font-medium" title="Regime measures trend STRENGTH (ADX), not directional agreement — this can differ from Market Bias, which counts how many signals agree on direction. ADX >=25 is a strong trend, >=18 weak, below that the regime falls back to a volatility read.">
+          <span className="text-[10px] text-gray-400 light:text-slate-600 font-medium" title="Regime measures trend STRENGTH (ADX), not directional agreement — this can differ from Market Bias, which counts how many signals agree on direction. ADX >=25 is a strong trend, >=18 weak, below that the regime falls back to a volatility read.">
             ADX {adx.toFixed(1)}
           </span>
         )}
       </div>
-      <p className="text-[10px] text-gray-600 light:text-slate-400 mb-3 leading-snug">
+      <p className="text-[10px] text-gray-400 light:text-slate-600 mb-3 leading-snug">
         Trend strength — a separate read from Market Bias&apos;s directional agreement. Early-stage trends often show high bias confidence before ADX catches up.
       </p>
       <div className="grid grid-cols-2 gap-2.5 text-xs">
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-2">
-          <div className="text-gray-500 light:text-slate-500 mb-1 text-[10px] uppercase tracking-wide">Expected Range</div>
+          <div className="text-gray-400 light:text-slate-600 mb-1 text-[10px] uppercase tracking-wide">Expected Range</div>
           <div className="text-gray-200 light:text-slate-800 font-semibold tabular-nums">
             {expectedRangeLow != null && expectedRangeHigh != null
               ? `${formatIndianNumber(expectedRangeLow, 0)} — ${formatIndianNumber(expectedRangeHigh, 0)}`
@@ -88,23 +88,23 @@ export function MarketRegimeCard({ bias }: { bias: MarketBias }) {
           </div>
         </div>
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-2">
-          <div className="text-gray-500 light:text-slate-500 mb-1 text-[10px] uppercase tracking-wide">Max Pain</div>
+          <div className="text-gray-400 light:text-slate-600 mb-1 text-[10px] uppercase tracking-wide">Max Pain</div>
           <div className="text-gray-200 light:text-slate-800 font-semibold tabular-nums">{maxPain != null ? formatIndianNumber(maxPain, 0) : '—'}</div>
         </div>
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-2">
-          <div className="text-gray-500 light:text-slate-500 mb-1 text-[10px] uppercase tracking-wide">Support</div>
+          <div className="text-gray-400 light:text-slate-600 mb-1 text-[10px] uppercase tracking-wide">Support</div>
           <div className="text-emerald-400 font-semibold tabular-nums">{support != null ? formatIndianNumber(support, 0) : '—'}</div>
         </div>
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-2">
-          <div className="text-gray-500 light:text-slate-500 mb-1 text-[10px] uppercase tracking-wide">Resistance</div>
+          <div className="text-gray-400 light:text-slate-600 mb-1 text-[10px] uppercase tracking-wide">Resistance</div>
           <div className="text-red-400 font-semibold tabular-nums">{resistance != null ? formatIndianNumber(resistance, 0) : '—'}</div>
         </div>
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-2">
-          <div className="text-gray-500 light:text-slate-500 mb-1 text-[10px] uppercase tracking-wide">PCR</div>
+          <div className="text-gray-400 light:text-slate-600 mb-1 text-[10px] uppercase tracking-wide">PCR</div>
           <div className="text-gray-200 light:text-slate-800 font-semibold tabular-nums">{pcr != null ? pcr.toFixed(2) : '—'}</div>
         </div>
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-2">
-          <div className="text-gray-500 light:text-slate-500 mb-1 text-[10px] uppercase tracking-wide">ATM IV</div>
+          <div className="text-gray-400 light:text-slate-600 mb-1 text-[10px] uppercase tracking-wide">ATM IV</div>
           <div className="text-gray-200 light:text-slate-800 font-semibold tabular-nums">{atmIv != null ? `${atmIv.toFixed(1)}%` : '—'}</div>
         </div>
       </div>
@@ -129,7 +129,7 @@ export function IntelligenceScoreCard({ score, symbol }: { score: IntelligenceSc
   return (
     <div className="bg-gradient-to-b from-[#151522] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 border-t-2 border-t-amber-500/50 rounded-xl shadow-[0_8px_28px_-14px_rgba(0,0,0,0.75)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.15)] hover:border-gray-700/80 light:hover:border-slate-300 transition-all duration-200 p-4">
       <div className="flex items-center justify-between mb-3.5">
-        <h3 className="text-xs font-bold text-gray-300 light:text-slate-700 uppercase tracking-wide">Intelligence Score <span className="text-gray-500 light:text-slate-500 font-medium normal-case">— {symbol}</span></h3>
+        <h3 className="text-xs font-bold text-gray-300 light:text-slate-700 uppercase tracking-wide">Intelligence Score <span className="text-gray-400 light:text-slate-600 font-medium normal-case">— {symbol}</span></h3>
         <ScoreBadge score={score.score} large />
       </div>
       <div className="space-y-2">
@@ -137,7 +137,7 @@ export function IntelligenceScoreCard({ score, symbol }: { score: IntelligenceSc
           const barColor = value >= 70 ? 'bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.5)]' : value >= 40 ? 'bg-yellow-500 shadow-[0_0_6px_rgba(234,179,8,0.4)]' : 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.4)]';
           return (
             <div key={label} className="flex items-center gap-2">
-              <span className="text-[10px] text-gray-400 light:text-slate-500 w-20 shrink-0">{label}</span>
+              <span className="text-[10px] text-gray-400 light:text-slate-600 w-20 shrink-0">{label}</span>
               <div className="flex-1 h-2 bg-gray-900/70 light:bg-slate-200 rounded-full overflow-hidden">
                 <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${value}%` }} />
               </div>
@@ -188,13 +188,13 @@ export function SupportResistanceCard({ bias }: { bias: MarketBias }) {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {hasOiLevels && (
           <div>
-            <div className="text-[10px] text-gray-500 light:text-slate-500 uppercase tracking-wide mb-1.5" title="Top strikes by open interest on each side — OI concentration is where positioning is heaviest, a real trading-activity signal.">
+            <div className="text-[10px] text-gray-400 light:text-slate-600 uppercase tracking-wide mb-1.5" title="Top strikes by open interest on each side — OI concentration is where positioning is heaviest, a real trading-activity signal.">
               OI Walls
             </div>
             <div className="space-y-1">
               {resistanceLevels.length > 0 && (
                 <>
-                  <div className="text-[9px] font-bold text-red-400 uppercase tracking-wide">▲ Resistance</div>
+                  <div className="text-[10px] font-bold text-red-400 uppercase tracking-wide">▲ Resistance</div>
                   {resistanceLevels.map((r, i) => (
                     <OiLevelRow key={`r-${i}`} strike={r.strike} strengthPct={r.strengthPct} color="red" />
                   ))}
@@ -203,13 +203,13 @@ export function SupportResistanceCard({ bias }: { bias: MarketBias }) {
               {spotPrice != null && (
                 <div className="flex items-center gap-2 py-1">
                   <div className="flex-1 h-px bg-gray-700 light:bg-slate-300" />
-                  <span className="text-[10px] text-gray-400 light:text-slate-500 font-semibold tabular-nums whitespace-nowrap">Spot {formatIndianNumber(spotPrice, 0)}</span>
+                  <span className="text-[10px] text-gray-400 light:text-slate-600 font-semibold tabular-nums whitespace-nowrap">Spot {formatIndianNumber(spotPrice, 0)}</span>
                   <div className="flex-1 h-px bg-gray-700 light:bg-slate-300" />
                 </div>
               )}
               {supportLevels.length > 0 && (
                 <>
-                  <div className="text-[9px] font-bold text-emerald-400 uppercase tracking-wide">▼ Support</div>
+                  <div className="text-[10px] font-bold text-emerald-400 uppercase tracking-wide">▼ Support</div>
                   {supportLevels.map((s, i) => (
                     <OiLevelRow key={`s-${i}`} strike={s.strike} strengthPct={s.strengthPct} color="emerald" />
                   ))}
@@ -220,7 +220,7 @@ export function SupportResistanceCard({ bias }: { bias: MarketBias }) {
         )}
         {hasPivots && (
           <div>
-            <div className="text-[10px] text-gray-500 light:text-slate-500 uppercase tracking-wide mb-1.5" title="Classic pivot ladder from the prior session's high/low/close — where price itself has previously reacted, independent of current positioning.">
+            <div className="text-[10px] text-gray-400 light:text-slate-600 uppercase tracking-wide mb-1.5" title="Classic pivot ladder from the prior session's high/low/close — where price itself has previously reacted, independent of current positioning.">
               Pivot Ladder
             </div>
             <div className="space-y-1">
@@ -228,7 +228,7 @@ export function SupportResistanceCard({ bias }: { bias: MarketBias }) {
                 <div key={p.label} className="flex items-center justify-between text-xs bg-gray-900/50 light:bg-slate-100 rounded px-2 py-1">
                   <span
                     className={`text-[10px] font-bold w-6 ${
-                      p.kind === 'resistance' ? 'text-red-400' : p.kind === 'support' ? 'text-emerald-400' : 'text-gray-400 light:text-slate-500'
+                      p.kind === 'resistance' ? 'text-red-400' : p.kind === 'support' ? 'text-emerald-400' : 'text-gray-400 light:text-slate-600'
                     }`}
                   >
                     {p.label}
@@ -253,7 +253,7 @@ function OiLevelRow({ strike, strengthPct, color }: { strike: number; strengthPc
       <div className="flex-1 h-1.5 bg-gray-900/70 light:bg-slate-200 rounded-full overflow-hidden">
         <div className={`h-full rounded-full ${barColor}`} style={{ width: `${strengthPct}%` }} />
       </div>
-      <span className="text-gray-500 light:text-slate-500 tabular-nums w-8 text-right">{strengthPct}%</span>
+      <span className="text-gray-400 light:text-slate-600 tabular-nums w-8 text-right">{strengthPct}%</span>
     </div>
   );
 }
@@ -267,7 +267,7 @@ const PROB_BAR_COLORS: Record<string, string> = {
 function ProbBar({ label, value, color }: { label: string; value: number; color: string }) {
   return (
     <div className="flex items-center gap-2">
-      <span className="text-[10px] text-gray-400 light:text-slate-500 w-12 shrink-0">{label}</span>
+      <span className="text-[10px] text-gray-400 light:text-slate-600 w-12 shrink-0">{label}</span>
       <div className="flex-1 h-2 bg-gray-900/70 light:bg-slate-200 rounded-full overflow-hidden">
         <div className={`h-full rounded-full bar-animated ${PROB_BAR_COLORS[color] || 'bg-gray-500'}`} style={{ width: `${value}%` }} />
       </div>

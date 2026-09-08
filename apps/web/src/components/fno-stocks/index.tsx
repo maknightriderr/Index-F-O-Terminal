@@ -83,13 +83,13 @@ export function FnoStocksPage() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-lg font-bold text-gray-100 light:text-slate-900">F&O Stocks</h1>
-          <p className="text-xs text-gray-500 light:text-slate-500 mt-0.5">
+          <p className="text-xs text-gray-400 light:text-slate-600 mt-0.5">
             Live price, futures OI, near-ATM PCR/IV and a lightweight OI+PCR+price bias — every NSE stock with F&O contracts.
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <span className="flex items-center gap-1.5 text-[11px] text-gray-500 light:text-slate-500">
-            <span className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
+          <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-[11px] text-gray-400 light:text-slate-600">
+            <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
             {isLive ? `${filtered.length} of ${rows.length} stocks` : loading ? 'Loading…' : 'Unreachable'}
           </span>
           <input
@@ -104,7 +104,7 @@ export function FnoStocksPage() {
       <div className="flex items-center flex-wrap gap-4">
         <FilterPills label="Bias" options={BIAS_OPTIONS} value={biasFilter} onChange={setBiasFilter} />
         <FilterPills label="Activity" options={ACTIVITY_OPTIONS} value={activityFilter} onChange={setActivityFilter} />
-        <label className="flex items-center gap-1.5 text-xs text-gray-400 light:text-slate-500 cursor-pointer select-none" title={`ATM bid-ask spread <= ${LIQUID_SPREAD_MAX_PCT}% of mid — the same threshold Trade Setup gates naked longs on. Hides anything wider, and anything with no spread data this tick.`}>
+        <label className="flex items-center gap-1.5 text-xs text-gray-400 light:text-slate-600 cursor-pointer select-none" title={`ATM bid-ask spread <= ${LIQUID_SPREAD_MAX_PCT}% of mid — the same threshold Trade Setup gates naked longs on. Hides anything wider, and anything with no spread data this tick.`}>
           <input
             type="checkbox"
             checked={liquidOnly}
@@ -134,7 +134,7 @@ export function FnoStocksPage() {
       )}
 
       {rows.length > 0 && filtered.length === 0 && (
-        <div className="text-sm text-gray-500 light:text-slate-500 py-16 text-center">No stocks match the current filters.</div>
+        <div className="text-sm text-gray-400 light:text-slate-600 py-16 text-center">No stocks match the current filters.</div>
       )}
 
       {filtered.length > 0 && (
@@ -142,7 +142,7 @@ export function FnoStocksPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="bg-gradient-to-b from-gray-900/90 to-gray-900/60 light:from-slate-100 light:to-slate-50 text-gray-500 light:text-slate-500 uppercase tracking-wider">
+                <tr className="bg-gradient-to-b from-gray-900/90 to-gray-900/60 light:from-slate-100 light:to-slate-50 text-gray-400 light:text-slate-600 uppercase tracking-wider">
                   <SortTh label="Stock" active={sortKey === 'symbol'} desc={sortDesc} onClick={() => toggleSort('symbol')} align="left" />
                   <SortTh label="Price" active={sortKey === 'price'} desc={sortDesc} onClick={() => toggleSort('price')} />
                   <SortTh label="Chg%" active={sortKey === 'changePercent'} desc={sortDesc} onClick={() => toggleSort('changePercent')} />
@@ -170,25 +170,25 @@ export function FnoStocksPage() {
                     <td className={`text-right px-3 py-2.5 tabular-nums font-medium ${stock.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                       {formatPercent(stock.changePercent)}
                     </td>
-                    <td className="text-right px-3 py-2.5 tabular-nums text-gray-400 light:text-slate-500">{formatCompact(stock.volume)}</td>
+                    <td className="text-right px-3 py-2.5 tabular-nums text-gray-400 light:text-slate-600">{formatCompact(stock.volume)}</td>
                     <td className="text-right px-3 py-2.5 tabular-nums">
                       <SpreadCell value={stock.atmSpreadPct} />
                     </td>
-                    <td className="text-right px-3 py-2.5 tabular-nums text-gray-400 light:text-slate-500">{formatCompact(stock.futuresOi)}</td>
+                    <td className="text-right px-3 py-2.5 tabular-nums text-gray-400 light:text-slate-600">{formatCompact(stock.futuresOi)}</td>
                     <td className={`text-right px-3 py-2.5 tabular-nums font-medium ${stock.futuresChangeOi >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                       {stock.futuresChangeOi >= 0 ? '+' : ''}{formatCompact(stock.futuresChangeOi)}
                     </td>
                     <td className="px-3 py-2.5">
                       <OIBadge type={stock.oiInterpretation} />
                     </td>
-                    <td className={`text-right px-3 py-2.5 tabular-nums ${stock.pcr > 1 ? 'text-emerald-400' : stock.pcr < 0.7 ? 'text-red-400' : 'text-gray-400 light:text-slate-500'}`}>
+                    <td className={`text-right px-3 py-2.5 tabular-nums ${stock.pcr > 1 ? 'text-emerald-400' : stock.pcr < 0.7 ? 'text-red-400' : 'text-gray-400 light:text-slate-600'}`}>
                       {stock.pcr > 0 ? stock.pcr.toFixed(2) : '—'}
                     </td>
-                    <td className="text-right px-3 py-2.5 tabular-nums text-gray-400 light:text-slate-500">
+                    <td className="text-right px-3 py-2.5 tabular-nums text-gray-400 light:text-slate-600">
                       {stock.atmIv > 0 ? `${stock.atmIv.toFixed(1)}%` : '—'}
                     </td>
                     <td className="text-right px-3 py-2.5">
-                      {stock.ivRank != null ? <IVRankBar value={stock.ivRank} /> : <span className="text-gray-600 light:text-slate-300">—</span>}
+                      {stock.ivRank != null ? <IVRankBar value={stock.ivRank} /> : <span className="text-gray-400 light:text-slate-300">—</span>}
                     </td>
                     <td className="text-center px-3 py-2.5">
                       <BiasBadge bias={stock.direction} />
@@ -205,7 +205,7 @@ export function FnoStocksPage() {
       )}
 
       {rows.length > 0 && (
-        <p className="text-[10px] text-gray-600 light:text-slate-400 leading-snug">
+        <p className="text-[10px] text-gray-400 light:text-slate-600 leading-snug">
           Bias/Score here are a lighter OI + PCR + price-change composite (no historical technicals) — built for scanning the whole
           universe fast without hitting Angel One's stricter historical/Greeks rate limits. For a full technical read (RSI, VWAP,
           Supertrend, ADX) on one stock, open it as a tab. IV Rank needs daily history the terminal only started collecting today,
@@ -246,7 +246,7 @@ function SortTh({
 // direction from IVRankBar's (low is good here, not bad) — green under
 // 2%, yellow up to the LIQUID_SPREAD_MAX_PCT gate, red past it.
 function SpreadCell({ value }: { value: number | null }) {
-  if (value == null) return <span className="text-gray-600 light:text-slate-300">—</span>;
+  if (value == null) return <span className="text-gray-400 light:text-slate-300">—</span>;
   const color = value <= 2 ? 'text-emerald-400' : value <= LIQUID_SPREAD_MAX_PCT ? 'text-yellow-400' : 'text-red-400';
   return <span className={`font-medium ${color}`}>{value.toFixed(2)}%</span>;
 }
@@ -258,7 +258,7 @@ function IVRankBar({ value }: { value: number }) {
       <div className="w-12 h-1.5 bg-gray-900/70 light:bg-slate-200 rounded-full overflow-hidden">
         <div className={`h-full rounded-full ${color}`} style={{ width: `${value}%` }} />
       </div>
-      <span className="text-[10px] tabular-nums text-gray-400 light:text-slate-500 w-6 text-right">{value}</span>
+      <span className="text-[10px] tabular-nums text-gray-400 light:text-slate-600 w-6 text-right">{value}</span>
     </div>
   );
 }

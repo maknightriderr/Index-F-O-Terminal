@@ -125,7 +125,7 @@ function StatusDot({ label, on, pulse }: { label: string; on: boolean; pulse?: b
           <span className="absolute inset-[-2px] rounded-full border border-emerald-400/40 animate-breathe" />
         )}
       </span>
-      <span className={`${on ? 'text-gray-300 light:text-slate-700' : 'text-gray-500 light:text-slate-500'}`}>{label}</span>
+      <span className={`${on ? 'text-gray-300 light:text-slate-700' : 'text-gray-400 light:text-slate-600'}`}>{label}</span>
     </div>
   );
 }
@@ -169,7 +169,7 @@ function IndexChip({
         strokeWidth={1.2}
         points={20}
       />
-      <span className="text-gray-500 light:text-slate-500 font-semibold tracking-wide">{symbol}</span>
+      <span className="text-gray-400 light:text-slate-600 font-semibold tracking-wide">{symbol}</span>
       <span className={`text-gray-50 light:text-slate-900 font-bold tabular-nums text-sm ${isPositive ? 'text-glow-emerald' : 'text-glow-red'}`}>
         {formatIndianNumber(price, 2)}
       </span>

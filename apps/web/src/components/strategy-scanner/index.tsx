@@ -85,14 +85,14 @@ export function StrategyScannerPage() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-lg font-bold text-gray-100 light:text-slate-900">Strategy Scanner</h1>
-          <p className="text-xs text-gray-500 light:text-slate-500 mt-0.5">
+          <p className="text-xs text-gray-400 light:text-slate-600 mt-0.5">
             A strategy shape for every NSE F&O stock with a clear bias — matched from direction, score, IV Rank, and ATM
             theta. Stocks with no directional edge and cheap IV are left out — there's no attractive setup either way.
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <span className="flex items-center gap-1.5 text-[11px] text-gray-500 light:text-slate-500">
-            <span className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
+          <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-[11px] text-gray-400 light:text-slate-600">
+            <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
             {isLive ? `${filtered.length} of ${withStrategy.length} setups` : loading ? 'Loading…' : 'Unreachable'}
           </span>
           <input
@@ -128,7 +128,7 @@ export function StrategyScannerPage() {
       )}
 
       {withStrategy.length > 0 && filtered.length === 0 && (
-        <div className="text-sm text-gray-500 light:text-slate-500 py-16 text-center">No setups match the current filters.</div>
+        <div className="text-sm text-gray-400 light:text-slate-600 py-16 text-center">No setups match the current filters.</div>
       )}
 
       {filtered.length > 0 && (
@@ -136,7 +136,7 @@ export function StrategyScannerPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="bg-gradient-to-b from-gray-900/90 to-gray-900/60 light:from-slate-100 light:to-slate-50 text-gray-500 light:text-slate-500 uppercase tracking-wider">
+                <tr className="bg-gradient-to-b from-gray-900/90 to-gray-900/60 light:from-slate-100 light:to-slate-50 text-gray-400 light:text-slate-600 uppercase tracking-wider">
                   <SortTh label="Stock" active={sortKey === 'symbol'} desc={sortDesc} onClick={() => toggleSort('symbol')} align="left" />
                   <SortTh label="Price" active={sortKey === 'price'} desc={sortDesc} onClick={() => toggleSort('price')} />
                   <SortTh label="Chg%" active={sortKey === 'changePercent'} desc={sortDesc} onClick={() => toggleSort('changePercent')} />
@@ -165,7 +165,7 @@ export function StrategyScannerPage() {
                     <td className="text-center px-3 py-2.5">
                       <ScoreBadge score={row.score} />
                     </td>
-                    <td className="text-right px-3 py-2.5 tabular-nums text-gray-400 light:text-slate-500 whitespace-nowrap">
+                    <td className="text-right px-3 py-2.5 tabular-nums text-gray-400 light:text-slate-600 whitespace-nowrap">
                       {row.ivRank != null ? row.ivRank : '—'}
                     </td>
                     <td className="px-3 py-2.5 pl-6 whitespace-nowrap">
@@ -174,7 +174,7 @@ export function StrategyScannerPage() {
                         {riskProfile === 'DEFINED_RISK' ? 'Defined risk' : 'Undefined risk'} · {category === 'DIRECTIONAL' ? 'Directional' : 'Premium selling'}
                       </div>
                     </td>
-                    <td className="px-3 py-2.5 text-gray-400 light:text-slate-500 leading-snug max-w-md">{rationale}</td>
+                    <td className="px-3 py-2.5 text-gray-400 light:text-slate-600 leading-snug max-w-md">{rationale}</td>
                   </tr>
                 ))}
               </tbody>
@@ -184,7 +184,7 @@ export function StrategyScannerPage() {
       )}
 
       {withStrategy.length > 0 && (
-        <p className="text-[10px] text-gray-600 light:text-slate-400 leading-snug">
+        <p className="text-[10px] text-gray-400 light:text-slate-600 leading-snug">
           Strategy shapes are matched from bias direction, score, IV Rank, and ATM theta only — the same lightweight
           signals as the other universe scanners, no historical technicals or ADX (that needs per-symbol historical
           candles, which is why it's reserved for the full Market Regime read on a single asset's tab). This isn't

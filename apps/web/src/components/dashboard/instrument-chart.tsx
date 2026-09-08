@@ -284,7 +284,7 @@ export function InstrumentChart({
               className={`px-2.5 py-1 text-[11px] font-semibold rounded-md whitespace-nowrap transition-colors ${
                 timeframe === tf
                   ? 'bg-indigo-500/15 text-indigo-500 light:text-indigo-700'
-                  : 'text-gray-400 light:text-slate-500 hover:bg-gray-800/40 light:hover:bg-slate-100'
+                  : 'text-gray-400 light:text-slate-600 hover:bg-gray-800/40 light:hover:bg-slate-100'
               }`}
             >
               {tf}
@@ -298,7 +298,7 @@ export function InstrumentChart({
             disabled={!hasSpot}
             title={hasSpot ? undefined : 'No spot instrument for this symbol — futures/options only'}
             className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors ${
-              mode === 'SPOT' ? 'bg-indigo-500/20 text-indigo-500 light:text-indigo-700' : hasSpot ? 'text-gray-400 light:text-slate-500' : 'text-gray-700 light:text-slate-300 cursor-not-allowed'
+              mode === 'SPOT' ? 'bg-indigo-500/20 text-indigo-500 light:text-indigo-700' : hasSpot ? 'text-gray-400 light:text-slate-600' : 'text-gray-700 light:text-slate-300 cursor-not-allowed'
             }`}
           >
             Spot
@@ -306,7 +306,7 @@ export function InstrumentChart({
           <button
             onClick={() => setMode('FUTURES')}
             className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors ${
-              mode === 'FUTURES' ? 'bg-indigo-500/20 text-indigo-500 light:text-indigo-700' : 'text-gray-400 light:text-slate-500'
+              mode === 'FUTURES' ? 'bg-indigo-500/20 text-indigo-500 light:text-indigo-700' : 'text-gray-400 light:text-slate-600'
             }`}
           >
             Futures
@@ -316,7 +316,7 @@ export function InstrumentChart({
 
       <div ref={containerRef} className="w-full h-[360px] relative">
         {(loading || !hasData) && (
-          <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-500 light:text-slate-400 pointer-events-none">
+          <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-400 light:text-slate-600 pointer-events-none">
             {loading ? 'Loading chart…' : 'No chart data for this range'}
           </div>
         )}

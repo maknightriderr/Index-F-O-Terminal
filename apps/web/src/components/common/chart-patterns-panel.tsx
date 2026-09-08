@@ -63,7 +63,7 @@ export function ChartPatternsPanel({ patterns, loading }: { patterns: DetectedCh
               {filtered.length} Formations
             </span>
           </div>
-          <p className="text-[10px] text-gray-400 light:text-slate-500 mt-0.5">
+          <p className="text-[10px] text-gray-400 light:text-slate-600 mt-0.5">
             Algorithmic swing-pivot geometry detected across 15m &amp; 1h candle structures
           </p>
         </div>
@@ -98,11 +98,11 @@ export function ChartPatternsPanel({ patterns, loading }: { patterns: DetectedCh
       </div>
 
       {loading && patterns.length === 0 ? (
-        <div className="p-8 text-xs text-gray-400 light:text-slate-500 text-center font-medium animate-pulse">
+        <div className="p-8 text-xs text-gray-400 light:text-slate-600 text-center font-medium animate-pulse">
           Scanning chart geometry across tracked contracts…
         </div>
       ) : filtered.length === 0 ? (
-        <div className="p-8 text-xs text-gray-500 light:text-slate-400 text-center font-medium">
+        <div className="p-8 text-xs text-gray-400 light:text-slate-600 text-center font-medium">
           No clean chart patterns detected matching the filter right now.
         </div>
       ) : (
@@ -131,11 +131,11 @@ export function ChartPatternsPanel({ patterns, loading }: { patterns: DetectedCh
                     <span className="text-xs font-bold text-gray-100 light:text-slate-900 truncate group-hover:text-purple-400 transition-colors">
                       {p.symbol}
                     </span>
-                    <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-gray-800 light:bg-slate-100 text-gray-400 light:text-slate-600 shrink-0 font-mono">
+                    <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-gray-800 light:bg-slate-100 text-gray-400 light:text-slate-600 shrink-0 font-mono">
                       {p.interval}
                     </span>
                   </div>
-                  <div className="text-[11px] text-gray-400 light:text-slate-500 font-medium truncate">
+                  <div className="text-[11px] text-gray-400 light:text-slate-600 font-medium truncate">
                     {PATTERN_LABELS[p.pattern] ?? p.pattern}
                   </div>
                 </div>
@@ -159,7 +159,7 @@ export function ChartPatternsPanel({ patterns, loading }: { patterns: DetectedCh
                         style={{ width: `${p.confidence}%` }}
                       />
                     </div>
-                    <span className="text-[9px] font-bold text-gray-400 light:text-slate-500 tabular-nums">
+                    <span className="text-[10px] font-bold text-gray-400 light:text-slate-600 tabular-nums">
                       {p.confidence}%
                     </span>
                   </div>

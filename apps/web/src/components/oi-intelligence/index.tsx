@@ -78,13 +78,13 @@ export function OiIntelligencePage() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-lg font-bold text-gray-100 light:text-slate-900">OI Intelligence</h1>
-          <p className="text-xs text-gray-500 light:text-slate-500 mt-0.5">
+          <p className="text-xs text-gray-400 light:text-slate-600 mt-0.5">
             Futures OI buildup classification and change-OI% — every NSE stock with F&O contracts, ranked by unusual activity.
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <span className="flex items-center gap-1.5 text-[11px] text-gray-500 light:text-slate-500">
-            <span className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
+          <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-[11px] text-gray-400 light:text-slate-600">
+            <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
             {isLive ? `${filtered.length} of ${rows.length} stocks` : loading ? 'Loading…' : 'Unreachable'}
           </span>
           <input
@@ -120,7 +120,7 @@ export function OiIntelligencePage() {
       )}
 
       {rows.length > 0 && filtered.length === 0 && (
-        <div className="text-sm text-gray-500 light:text-slate-500 py-16 text-center">No stocks match the current filters.</div>
+        <div className="text-sm text-gray-400 light:text-slate-600 py-16 text-center">No stocks match the current filters.</div>
       )}
 
       {rows.length > 0 && (
@@ -153,7 +153,7 @@ export function OiIntelligencePage() {
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="bg-gradient-to-b from-gray-900/90 to-gray-900/60 light:from-slate-100 light:to-slate-50 text-gray-500 light:text-slate-500 uppercase tracking-wider">
+                <tr className="bg-gradient-to-b from-gray-900/90 to-gray-900/60 light:from-slate-100 light:to-slate-50 text-gray-400 light:text-slate-600 uppercase tracking-wider">
                   <SortTh label="Stock" active={sortKey === 'symbol'} desc={sortDesc} onClick={() => toggleSort('symbol')} align="left" />
                   <SortTh label="Price" active={sortKey === 'price'} desc={sortDesc} onClick={() => toggleSort('price')} />
                   <SortTh label="Chg%" active={sortKey === 'changePercent'} desc={sortDesc} onClick={() => toggleSort('changePercent')} />
@@ -184,8 +184,8 @@ export function OiIntelligencePage() {
                       <td className={`text-right px-3 py-2.5 tabular-nums font-medium ${stock.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                         {formatPercent(stock.changePercent)}
                       </td>
-                      <td className="text-right px-3 py-2.5 tabular-nums text-gray-400 light:text-slate-500">{formatCompact(stock.volume)}</td>
-                      <td className="text-right px-3 py-2.5 tabular-nums text-gray-400 light:text-slate-500">{formatCompact(stock.futuresOi)}</td>
+                      <td className="text-right px-3 py-2.5 tabular-nums text-gray-400 light:text-slate-600">{formatCompact(stock.volume)}</td>
+                      <td className="text-right px-3 py-2.5 tabular-nums text-gray-400 light:text-slate-600">{formatCompact(stock.futuresOi)}</td>
                       <td className={`text-right px-3 py-2.5 tabular-nums font-medium ${stock.futuresChangeOi >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                         {stock.futuresChangeOi >= 0 ? '+' : ''}{formatCompact(stock.futuresChangeOi)}
                       </td>
@@ -195,7 +195,7 @@ export function OiIntelligencePage() {
                       <td className="px-3 py-2.5">
                         <OIBadge type={stock.oiInterpretation} />
                       </td>
-                      <td className={`text-right px-3 py-2.5 tabular-nums ${stock.pcr > 1 ? 'text-emerald-400' : stock.pcr < 0.7 ? 'text-red-400' : 'text-gray-400 light:text-slate-500'}`}>
+                      <td className={`text-right px-3 py-2.5 tabular-nums ${stock.pcr > 1 ? 'text-emerald-400' : stock.pcr < 0.7 ? 'text-red-400' : 'text-gray-400 light:text-slate-600'}`}>
                         {stock.pcr > 0 ? stock.pcr.toFixed(2) : '—'}
                       </td>
                       <td className="text-center px-3 py-2.5">
@@ -214,7 +214,7 @@ export function OiIntelligencePage() {
       )}
 
       {rows.length > 0 && (
-        <p className="text-[10px] text-gray-600 light:text-slate-400 leading-snug">
+        <p className="text-[10px] text-gray-400 light:text-slate-600 leading-snug">
           Buildup classification compares today's futures price change against futures OI change since the day's opening baseline
           (Long/Short Buildup = OI rising with price up/down, Short Covering/Long Unwinding = OI falling with price up/down). 🔥
           flags the 10 stocks with the largest OI% swing right now, regardless of direction. Click a row to open its full option

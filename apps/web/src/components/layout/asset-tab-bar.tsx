@@ -37,7 +37,7 @@ export function AssetTabBar() {
                 e.stopPropagation();
                 closeTab(tab.id);
               }}
-              className="ml-0.5 w-4 h-4 flex items-center justify-center rounded text-gray-500 opacity-0 group-hover:opacity-100 hover:bg-gray-700/60 light:hover:bg-slate-300 hover:text-gray-200 light:hover:text-slate-900 hover:scale-110 transition-all duration-150"
+              className="ml-0.5 w-4 h-4 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover:opacity-100 hover:bg-gray-700/60 light:hover:bg-slate-300 hover:text-gray-200 light:hover:text-slate-900 hover:scale-110 transition-all duration-150"
             >
               ×
             </span>

@@ -149,12 +149,12 @@ export function PayoffDiagram({ setup, chain }: { setup: TradeSetup; chain: Opti
   return (
     <div className="bg-gradient-to-b from-[#151522] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 border-t-2 border-t-emerald-500/50 rounded-xl p-4 shadow-[0_8px_28px_-14px_rgba(0,0,0,0.75)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.15)]">
       <div className="flex items-center justify-between mb-0.5">
-        <h3 className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider">Payoff Diagram — At Expiry</h3>
+        <h3 className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider">Payoff Diagram — At Expiry</h3>
         <span className={`text-[10px] font-semibold tabular-nums ${spotPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
           At spot ({formatIndianNumber(chain.spotPrice, 0)}): {spotPnl >= 0 ? '+' : ''}{spotPnl.toFixed(2)}
         </span>
       </div>
-      <p className="text-[10px] text-gray-600 light:text-slate-400 mb-2 leading-snug">
+      <p className="text-[10px] text-gray-400 light:text-slate-600 mb-2 leading-snug">
         Profit/loss <span className="text-emerald-400">(green)</span> or <span className="text-red-400">(red)</span> if held to expiry at each possible spot price — not a live price, a projection.
       </p>
 
@@ -208,13 +208,13 @@ export function PayoffDiagram({ setup, chain }: { setup: TradeSetup; chain: Opti
       </div>
       {/* X-axis labels as plain HTML — crisp at any container width, unlike
           SVG text which scales (and can shrink to illegible) with the viewBox. */}
-      <div className="flex items-center justify-between text-[10px] text-gray-500 light:text-slate-400 tabular-nums px-0.5 mt-1">
+      <div className="flex items-center justify-between text-[10px] text-gray-400 light:text-slate-600 tabular-nums px-0.5 mt-1">
         <span>{formatIndianNumber(xMin, 0)}</span>
-        <span className="text-gray-600 light:text-slate-400">Spot price at expiry</span>
+        <span className="text-gray-400 light:text-slate-600">Spot price at expiry</span>
         <span>{formatIndianNumber(xMax, 0)}</span>
       </div>
 
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-gray-500 light:text-slate-500 mt-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-gray-400 light:text-slate-600 mt-2">
         <LegendItem color="rgb(34 211 238)" label={`Spot ${formatIndianNumber(chain.spotPrice, 0)}`} />
         {breakevens.length > 0 && <LegendItem color="rgb(168 85 247)" label={`Breakeven ${breakevens.map((b) => formatIndianNumber(b, 0)).join(' / ')}`} dashed />}
         <LegendItem color="rgb(250 204 21)" label={`Max Pain ${formatIndianNumber(chain.maxPain, 0)}`} dashed />

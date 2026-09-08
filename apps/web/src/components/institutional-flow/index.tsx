@@ -25,12 +25,12 @@ export function InstitutionalFlowPage() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-lg font-bold text-gray-100 light:text-slate-900">Institutional Flow Intelligence</h1>
-          <p className="text-xs text-gray-500 light:text-slate-500 mt-0.5">
+          <p className="text-xs text-gray-400 light:text-slate-600 mt-0.5">
             Sentiment, next-day bias, and prediction tracking built from what's genuinely live — India VIX, PCR, F&O universe OI activity, and the existing market-bias engine.
           </p>
         </div>
-        <span className="flex items-center gap-1.5 text-[11px] text-gray-500 light:text-slate-500">
-          <span className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
+        <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-[11px] text-gray-400 light:text-slate-600">
+          <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
           {isLive ? 'Live' : loading ? 'Loading…' : 'Unreachable'}
         </span>
       </div>
@@ -92,7 +92,7 @@ function SectionHeader({ title, subtitle }: { title: string; subtitle: string })
   return (
     <div className="pt-1">
       <h2 className="text-sm font-bold text-gray-200 light:text-slate-800">{title}</h2>
-      <p className="text-[11px] text-gray-500 light:text-slate-500 mt-0.5">{subtitle}</p>
+      <p className="text-[11px] text-gray-400 light:text-slate-600 mt-0.5">{subtitle}</p>
     </div>
   );
 }
@@ -117,7 +117,7 @@ function SentimentGauge({ score, label, confidence }: { score: number; label: Se
   const meta = SENTIMENT_META[label];
   return (
     <Card accent="border-t-cyan-500/50">
-      <div className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-3">Market Sentiment Score</div>
+      <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-3">Market Sentiment Score</div>
       <div className={`text-4xl font-bold tabular-nums ${meta.color} mb-1`}>{score}</div>
       <div className={`text-sm font-semibold mb-3 ${meta.color}`}>{meta.label}</div>
       <div className="h-2.5 bg-gray-800 light:bg-slate-200 rounded-full overflow-hidden relative mb-1">
@@ -130,17 +130,17 @@ function SentimentGauge({ score, label, confidence }: { score: number; label: Se
         </div>
         <div className="absolute top-0 bottom-0 w-1 bg-white shadow-[0_0_6px_rgba(255,255,255,0.8)] rounded-full" style={{ left: `calc(${score}% - 2px)` }} />
       </div>
-      <div className="flex justify-between text-[9px] text-gray-500 light:text-slate-500 mb-3">
+      <div className="flex justify-between text-[10px] text-gray-400 light:text-slate-600 mb-3">
         <span>Extremely Bearish</span>
         <span>Extremely Bullish</span>
       </div>
       <div className="flex items-center justify-between pt-2.5 border-t border-gray-800/60 light:border-slate-200 text-xs">
-        <span className="text-gray-500 light:text-slate-500">Confidence Score</span>
+        <span className="text-gray-400 light:text-slate-600">Confidence Score</span>
         <span className="font-semibold text-gray-200 light:text-slate-800 tabular-nums">{confidence}/100</span>
       </div>
       <div className="flex items-center justify-between pt-1.5 text-xs">
-        <span className="text-gray-500 light:text-slate-500">Institutional Conviction</span>
-        <span className="text-gray-600 light:text-slate-400 italic">not connected</span>
+        <span className="text-gray-400 light:text-slate-600">Institutional Conviction</span>
+        <span className="text-gray-400 light:text-slate-600 italic">not connected</span>
       </div>
     </Card>
   );
@@ -149,11 +149,11 @@ function SentimentGauge({ score, label, confidence }: { score: number; label: Se
 function SentimentBreakdown({ snapshot }: { snapshot: NonNullable<ReturnType<typeof useInstitutionalFlow>['snapshot']> }) {
   return (
     <Card>
-      <div className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-2.5">Reasoning</div>
+      <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-2.5">Reasoning</div>
       <ul className="space-y-1.5 mb-3">
         {snapshot.sentimentReasoning.map((r, i) => (
           <li key={i} className="text-xs text-gray-300 light:text-slate-700 leading-snug flex gap-1.5">
-            <span className="text-gray-600 light:text-slate-400">•</span>
+            <span className="text-gray-400 light:text-slate-600">•</span>
             {r}
           </li>
         ))}
@@ -163,7 +163,7 @@ function SentimentBreakdown({ snapshot }: { snapshot: NonNullable<ReturnType<typ
           <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 light:text-emerald-700 font-medium">✓ {i}</span>
         ))}
         {snapshot.unavailableInputs.map((i) => (
-          <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-gray-800 light:bg-slate-100 text-gray-500 light:text-slate-400 font-medium">
+          <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-gray-800 light:bg-slate-100 text-gray-400 light:text-slate-600 font-medium">
             ✕ {i}
           </span>
         ))}
@@ -178,7 +178,7 @@ function ProbabilityBar({ label, value, color }: { label: string; value: number;
   return (
     <div>
       <div className="flex items-center justify-between text-[11px] mb-1">
-        <span className="text-gray-400 light:text-slate-500">{label}</span>
+        <span className="text-gray-400 light:text-slate-600">{label}</span>
         <span className="font-semibold text-gray-200 light:text-slate-800 tabular-nums">{value}%</span>
       </div>
       <div className="h-1.5 bg-gray-800 light:bg-slate-200 rounded-full overflow-hidden">
@@ -204,7 +204,7 @@ function NextDayBiasCard({ bias }: { bias: NextDayBias }) {
       </div>
       <ProbabilityBar label="Volatile Session" value={bias.volatileSessionProbability} color="bg-fuchsia-500" />
       <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-800/60 light:border-slate-200">
-        <span className="text-[11px] text-gray-500 light:text-slate-500">Expected Range</span>
+        <span className="text-[11px] text-gray-400 light:text-slate-600">Expected Range</span>
         <span className="text-xs font-bold text-gray-200 light:text-slate-800 tabular-nums">
           {formatIndianNumber(bias.expectedRangeLow, 0)} – {formatIndianNumber(bias.expectedRangeHigh, 0)}
         </span>
@@ -219,7 +219,7 @@ function CommentaryCard({ commentary }: { commentary: NonNullable<ReturnType<typ
   if (!commentary.detailedAnalysis && !commentary.bullCase) {
     return (
       <Card>
-        <p className="text-xs text-gray-500 light:text-slate-500">{commentary.oneLineSummary || 'AI commentary unavailable right now.'}</p>
+        <p className="text-xs text-gray-400 light:text-slate-600">{commentary.oneLineSummary || 'AI commentary unavailable right now.'}</p>
       </Card>
     );
   }
@@ -242,7 +242,7 @@ function CommentaryCard({ commentary }: { commentary: NonNullable<ReturnType<typ
           <div className="text-[10px] font-bold text-amber-400 uppercase tracking-wider mb-1.5">Risk Factors</div>
           <ul className="space-y-1">
             {commentary.riskFactors.map((r, i) => (
-              <li key={i} className="text-xs text-gray-400 light:text-slate-500 flex gap-1.5">
+              <li key={i} className="text-xs text-gray-400 light:text-slate-600 flex gap-1.5">
                 <span className="text-amber-500">⚠</span>
                 {r}
               </li>
@@ -277,7 +277,7 @@ function AccuracySection({
             key={s}
             onClick={() => onSymbolChange(s)}
             className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${
-              symbol === s ? 'bg-emerald-500/15 text-emerald-400 light:text-emerald-700' : 'bg-gray-800/50 light:bg-slate-100 text-gray-400 light:text-slate-500'
+              symbol === s ? 'bg-emerald-500/15 text-emerald-400 light:text-emerald-700' : 'bg-gray-800/50 light:bg-slate-100 text-gray-400 light:text-slate-600'
             }`}
           >
             {s}
@@ -295,16 +295,16 @@ function AccuracySection({
       )}
 
       <Card>
-        <div className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-2.5">Recent Predictions — {symbol}</div>
+        <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-2.5">Recent Predictions — {symbol}</div>
         {predictions.length === 0 ? (
-          <p className="text-xs text-gray-500 light:text-slate-500 py-4 text-center">
+          <p className="text-xs text-gray-400 light:text-slate-600 py-4 text-center">
             {loading ? 'Loading…' : 'No predictions yet — the tracking scanner logs one per trading day. Check back after the next session.'}
           </p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="text-gray-500 light:text-slate-500 uppercase tracking-wider text-[10px]">
+                <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
                   <th className="text-left px-2 py-1.5 font-medium">Date</th>
                   <th className="text-center px-2 py-1.5 font-medium">Predicted</th>
                   <th className="text-right px-2 py-1.5 font-medium">Range</th>
@@ -317,19 +317,19 @@ function AccuracySection({
               <tbody>
                 {predictions.map((p) => (
                   <tr key={p.id} className="border-t border-gray-800/40 light:border-slate-200">
-                    <td className="px-2 py-1.5 text-gray-400 light:text-slate-500">{p.predictionDate}</td>
+                    <td className="px-2 py-1.5 text-gray-400 light:text-slate-600">{p.predictionDate}</td>
                     <td className="text-center px-2 py-1.5 font-medium">{p.predictedDirection}</td>
-                    <td className="text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-500">
+                    <td className="text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600">
                       {formatIndianNumber(p.predictedRangeLow, 0)}–{formatIndianNumber(p.predictedRangeHigh, 0)}
                     </td>
-                    <td className="text-center px-2 py-1.5">{p.resolved ? p.actualDirection ?? '—' : <span className="text-gray-600 light:text-slate-400 italic">pending</span>}</td>
+                    <td className="text-center px-2 py-1.5">{p.resolved ? p.actualDirection ?? '—' : <span className="text-gray-400 light:text-slate-600 italic">pending</span>}</td>
                     <td className="text-center px-2 py-1.5">
                       {p.directionCorrect == null ? '—' : p.directionCorrect ? <span className="text-emerald-400">✓</span> : <span className="text-red-400">✕</span>}
                     </td>
                     <td className="text-center px-2 py-1.5">
                       {p.rangeAccurate == null ? '—' : p.rangeAccurate ? <span className="text-emerald-400">✓</span> : <span className="text-red-400">✕</span>}
                     </td>
-                    <td className={`text-right px-2 py-1.5 tabular-nums font-medium ${p.forwardReturnPercent == null ? 'text-gray-500' : p.forwardReturnPercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    <td className={`text-right px-2 py-1.5 tabular-nums font-medium ${p.forwardReturnPercent == null ? 'text-gray-400' : p.forwardReturnPercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                       {p.forwardReturnPercent != null ? `${p.forwardReturnPercent >= 0 ? '+' : ''}${p.forwardReturnPercent.toFixed(2)}%` : '—'}
                     </td>
                   </tr>
@@ -346,14 +346,14 @@ function AccuracySection({
 function AccuracyWindowCard({ title, window: w }: { title: string; window: PredictionAccuracyWindow }) {
   return (
     <Card>
-      <div className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-2">{title}</div>
+      <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-2">{title}</div>
       {w.resolvedCount === 0 ? (
-        <p className="text-[11px] text-gray-500 light:text-slate-500">Not enough data yet</p>
+        <p className="text-[11px] text-gray-400 light:text-slate-600">Not enough data yet</p>
       ) : (
         <>
           <div className="text-2xl font-bold tabular-nums text-gray-100 light:text-slate-900">{w.directionAccuracyPercent ?? '—'}%</div>
-          <div className="text-[10px] text-gray-500 light:text-slate-500 mb-2">direction accuracy · {w.resolvedCount} resolved</div>
-          <div className="flex justify-between text-[10px] text-gray-500 light:text-slate-500">
+          <div className="text-[10px] text-gray-400 light:text-slate-600 mb-2">direction accuracy · {w.resolvedCount} resolved</div>
+          <div className="flex justify-between text-[10px] text-gray-400 light:text-slate-600">
             <span>Range hit: {w.rangeAccuracyPercent ?? '—'}%</span>
             <span>Avg: {w.avgForwardReturnPercent != null ? `${w.avgForwardReturnPercent >= 0 ? '+' : ''}${w.avgForwardReturnPercent}%` : '—'}</span>
           </div>
@@ -376,14 +376,14 @@ function AlertsStatusCard({ onViewAlerts }: { onViewAlerts: () => void }) {
             <span key={l} className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 light:text-emerald-700 font-medium">✓ {l}</span>
           ))}
           {pending.map((l) => (
-            <span key={l} className="text-[10px] px-2 py-0.5 rounded-full bg-gray-800 light:bg-slate-100 text-gray-500 light:text-slate-400 font-medium">✕ {l} (needs FII data)</span>
+            <span key={l} className="text-[10px] px-2 py-0.5 rounded-full bg-gray-800 light:bg-slate-100 text-gray-400 light:text-slate-600 font-medium">✕ {l} (needs FII data)</span>
           ))}
         </div>
         <button onClick={onViewAlerts} className="text-[11px] text-emerald-400 light:text-emerald-700 hover:text-emerald-300 font-medium shrink-0 ml-3">
           View all alerts →
         </button>
       </div>
-      <p className="text-[11px] text-gray-500 light:text-slate-500">Delivered via Terminal + Telegram, same channel as every other alert in this app.</p>
+      <p className="text-[11px] text-gray-400 light:text-slate-600">Delivered via Terminal + Telegram, same channel as every other alert in this app.</p>
     </Card>
   );
 }
@@ -402,12 +402,12 @@ function NotConnectedPanel() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {rows.map((r) => (
           <div key={r.section} className="bg-gray-900/40 light:bg-slate-50 rounded-lg p-3 border border-gray-800/40 light:border-slate-200">
-            <div className="text-xs font-semibold text-gray-400 light:text-slate-500 mb-1">{r.section}</div>
-            <div className="text-[11px] text-gray-600 light:text-slate-400">Needs: {r.needs}</div>
+            <div className="text-xs font-semibold text-gray-400 light:text-slate-600 mb-1">{r.section}</div>
+            <div className="text-[11px] text-gray-400 light:text-slate-600">Needs: {r.needs}</div>
           </div>
         ))}
       </div>
-      <p className="text-[11px] text-gray-500 light:text-slate-500 mt-3 pt-3 border-t border-gray-800/60 light:border-slate-200">
+      <p className="text-[11px] text-gray-400 light:text-slate-600 mt-3 pt-3 border-t border-gray-800/60 light:border-slate-200">
         None of this is available through Angel One's API. Connecting an NSE data source (official feed, paid vendor, or a manual daily import) would unlock these sections without changing anything else on this page.
       </p>
     </Card>

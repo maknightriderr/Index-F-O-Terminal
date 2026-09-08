@@ -51,13 +51,13 @@ export function CorporateActionsPage() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-lg font-bold text-gray-100 light:text-slate-900">Corporate Actions</h1>
-          <p className="text-xs text-gray-500 light:text-slate-500 mt-0.5">
+          <p className="text-xs text-gray-400 light:text-slate-600 mt-0.5">
             Upcoming dividends, bonuses, splits, rights issues, and buybacks across NSE — ex-date today or later, nearest first. Sourced from NSE's own corporate-filings data.
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <span className="flex items-center gap-1.5 text-[11px] text-gray-500 light:text-slate-500">
-            <span className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
+          <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-[11px] text-gray-400 light:text-slate-600">
+            <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
             {isLive ? `${filtered.length} of ${actions.length}` : loading ? 'Loading…' : 'Unreachable'}
           </span>
           <input
@@ -92,13 +92,13 @@ export function CorporateActionsPage() {
       )}
 
       {!loading && actions.length === 0 && isLive && (
-        <div className="text-sm text-gray-500 light:text-slate-500 py-16 text-center">
+        <div className="text-sm text-gray-400 light:text-slate-600 py-16 text-center">
           No upcoming corporate actions found right now.
         </div>
       )}
 
       {actions.length > 0 && filtered.length === 0 && (
-        <div className="text-sm text-gray-500 light:text-slate-500 py-16 text-center">No corporate actions match the current filters.</div>
+        <div className="text-sm text-gray-400 light:text-slate-600 py-16 text-center">No corporate actions match the current filters.</div>
       )}
 
       {filtered.length > 0 && (
@@ -115,15 +115,15 @@ export function CorporateActionsPage() {
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-sm font-semibold text-gray-200 light:text-slate-800">{a.symbol}</span>
                     <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${TYPE_BADGE[a.type]}`}>{a.type}</span>
-                    <span className="text-[10px] text-gray-600 light:text-slate-400 truncate">{a.company}</span>
+                    <span className="text-[10px] text-gray-400 light:text-slate-600 truncate">{a.company}</span>
                   </div>
-                  <p className="text-xs text-gray-400 light:text-slate-500 leading-snug">{a.purpose}</p>
+                  <p className="text-xs text-gray-400 light:text-slate-600 leading-snug">{a.purpose}</p>
                 </div>
                 <div className="text-right shrink-0">
                   <div className="text-xs text-gray-300 light:text-slate-700 font-medium tabular-nums">
                     {new Date(a.exDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' })}
                   </div>
-                  <div className={`text-[10px] font-semibold ${dte <= 3 ? 'text-amber-400' : 'text-gray-500 light:text-slate-400'}`}>
+                  <div className={`text-[10px] font-semibold ${dte <= 3 ? 'text-amber-400' : 'text-gray-400 light:text-slate-600'}`}>
                     {dte === 0 ? 'Ex-date today' : dte === 1 ? 'Ex-date tomorrow' : `${dte}d to ex-date`}
                   </div>
                 </div>

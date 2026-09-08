@@ -174,7 +174,7 @@ export function Dashboard() {
       {!indicesLive && !fnoLive && (
         <div className={`rounded-xl px-4 py-2.5 text-xs font-medium animate-slide-in backdrop-blur-sm flex items-center justify-between border ${
           marketClosed
-            ? 'bg-gray-800/40 light:bg-slate-100 border-gray-700/40 light:border-slate-200 text-gray-400 light:text-slate-500'
+            ? 'bg-gray-800/40 light:bg-slate-100 border-gray-700/40 light:border-slate-200 text-gray-400 light:text-slate-600'
             : 'bg-amber-500/10 border-amber-500/20 text-amber-400 light:text-amber-700'
         }`}>
           <div className="flex items-center gap-2">
@@ -185,7 +185,7 @@ export function Dashboard() {
                 : 'Live broker connection offline — displaying simulated real-time intelligence feeds.'}
             </span>
           </div>
-          <span className={`text-[11px] font-mono ${marketClosed ? 'text-gray-500 light:text-slate-400' : 'text-amber-400/70'}`}>
+          <span className={`text-[11px] font-mono ${marketClosed ? 'text-gray-400 light:text-slate-600' : 'text-amber-400/70'}`}>
             {marketClosed ? 'Market Closed' : 'Simulated Market Feeds Active'}
           </span>
         </div>
@@ -204,9 +204,9 @@ export function Dashboard() {
             </span>
           </div>
           <div className="flex items-center gap-3 bg-gray-900/60 light:bg-slate-100 px-3.5 py-1.5 rounded-xl border border-gray-800/50 light:border-slate-200">
-            <div className="text-[10px] font-semibold text-gray-400 light:text-slate-500 uppercase tracking-wider">Breadth</div>
+            <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider">Breadth</div>
             <div className="w-32 space-y-1">
-              <div className="flex justify-between text-[9px] font-bold tabular-nums">
+              <div className="flex justify-between text-[10px] font-bold tabular-nums">
                 <span className="text-emerald-400">{breadth.advances} Adv</span>
                 <span className="text-red-400">{breadth.declines} Dec</span>
               </div>
@@ -256,7 +256,7 @@ export function Dashboard() {
           <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
             <div>
               <h2 className="text-sm font-bold text-gray-100 light:text-slate-900">{instrument.label} Market Intelligence</h2>
-              <div className="flex items-center gap-3 mt-1 text-[11px] text-gray-400 light:text-slate-500">
+              <div className="flex items-center gap-3 mt-1 text-[11px] text-gray-400 light:text-slate-600">
                 <span className="tabular-nums font-semibold text-gray-200 light:text-slate-800">
                   {instrumentPrice != null ? formatIndianNumber(instrumentPrice, 2) : '—'}
                 </span>
@@ -280,7 +280,7 @@ export function Dashboard() {
                   key={inst.symbol}
                   onClick={() => setInstrumentIdx(i)}
                   className={`px-2.5 py-1 text-[11px] font-semibold rounded-md whitespace-nowrap transition-colors ${
-                    instrumentIdx === i ? 'bg-indigo-500/20 text-indigo-500 light:text-indigo-700' : 'text-gray-400 light:text-slate-500'
+                    instrumentIdx === i ? 'bg-indigo-500/20 text-indigo-500 light:text-indigo-700' : 'text-gray-400 light:text-slate-600'
                   }`}
                 >
                   {inst.label}
@@ -335,7 +335,7 @@ export function Dashboard() {
                 key={t.id}
                 onClick={() => setMoversTab(t.id)}
                 className={`px-2.5 py-1 text-[11px] font-semibold rounded-md whitespace-nowrap transition-colors ${
-                  moversTab === t.id ? 'bg-indigo-500/15 text-indigo-500 light:text-indigo-700' : 'text-gray-400 light:text-slate-500'
+                  moversTab === t.id ? 'bg-indigo-500/15 text-indigo-500 light:text-indigo-700' : 'text-gray-400 light:text-slate-600'
                 }`}
               >
                 {t.label}
@@ -346,7 +346,7 @@ export function Dashboard() {
         <div className="overflow-x-auto">
           <table className="w-full text-xs table-premium">
             <thead>
-              <tr className="bg-gray-900/60 light:bg-slate-50 text-gray-400 light:text-slate-500 uppercase tracking-wider text-[10px]">
+              <tr className="bg-gray-900/60 light:bg-slate-50 text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
                 <th className="text-left px-4 py-2.5 font-semibold">Stock</th>
                 <th className="text-right px-3 py-2.5 font-semibold">Price</th>
                 <th className="text-right px-3 py-2.5 font-semibold">Change</th>
@@ -357,7 +357,7 @@ export function Dashboard() {
             </thead>
             <tbody>
               {moversRows.length === 0 ? (
-                <tr><td colSpan={6} className="text-center py-6 text-gray-500 light:text-slate-400">No stocks match this filter right now.</td></tr>
+                <tr><td colSpan={6} className="text-center py-6 text-gray-400 light:text-slate-600">No stocks match this filter right now.</td></tr>
               ) : (
                 moversRows.map((r) => {
                   const isPos = r.changePercent >= 0;
@@ -409,7 +409,7 @@ export function Dashboard() {
                   {fnoRows.length} Contracts
                 </span>
               </h2>
-              <p className="text-[11px] text-gray-400 light:text-slate-500 mt-0.5">
+              <p className="text-[11px] text-gray-400 light:text-slate-600 mt-0.5">
                 Real-time Open Interest buildup, ATM Volatility, Put-Call Ratio, and Directional Momentum
               </p>
             </div>
@@ -422,9 +422,9 @@ export function Dashboard() {
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="w-40 md:w-52 pl-7 pr-3 py-1 text-xs bg-gray-900/60 light:bg-slate-100 border border-gray-800/60 light:border-slate-200 rounded-lg text-gray-200 light:text-slate-800 placeholder-gray-500 focus:outline-none focus:border-emerald-500/50"
                 />
-                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500 text-[11px]">🔍</span>
+                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-[11px]">🔍</span>
                 {searchQuery && (
-                  <button onClick={() => setSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 text-xs">✕</button>
+                  <button onClick={() => setSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-300 text-xs">✕</button>
                 )}
               </div>
               <div className="flex items-center bg-gray-900/60 light:bg-slate-100 p-0.5 rounded-lg border border-gray-800/40 light:border-slate-200">
@@ -469,7 +469,7 @@ export function Dashboard() {
           <div className="overflow-x-auto">
             <table className="w-full text-xs table-premium">
               <thead>
-                <tr className="bg-gray-900/60 light:bg-slate-50 text-gray-400 light:text-slate-500 uppercase tracking-wider text-[10px]">
+                <tr className="bg-gray-900/60 light:bg-slate-50 text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
                   <th className="text-left px-4 py-3 font-semibold">Stock</th>
                   <th className="text-center px-2 py-3 font-semibold">Trend</th>
                   <th className="text-right px-3 py-3 font-semibold">LTP (₹)</th>
@@ -503,7 +503,7 @@ export function Dashboard() {
                           <div>
                             <div className="font-bold text-xs text-gray-100 light:text-slate-900 flex items-center gap-1.5">
                               <span>{stock.symbol}</span>
-                              <span className="text-[9px] px-1 py-0.2 rounded bg-gray-800/80 light:bg-slate-200 text-gray-400 light:text-slate-600 font-mono">{stock.exchange}</span>
+                              <span className="text-[10px] px-1 py-0.2 rounded bg-gray-800/80 light:bg-slate-200 text-gray-400 light:text-slate-600 font-mono">{stock.exchange}</span>
                             </div>
                           </div>
                         </div>
@@ -523,12 +523,12 @@ export function Dashboard() {
                         {stock.futuresChangeOi >= 0 ? '+' : ''}{formatCompact(stock.futuresChangeOi)}
                       </td>
                       <td className="px-3 py-2.5"><OIBadge type={stock.oiInterpretation} /></td>
-                      <td className={`text-right px-3 py-2.5 tabular-nums font-semibold ${stock.pcr > 1.1 ? 'text-emerald-400 light:text-emerald-700' : stock.pcr < 0.8 ? 'text-red-400 light:text-red-700' : 'text-gray-400 light:text-slate-500'}`}>
+                      <td className={`text-right px-3 py-2.5 tabular-nums font-semibold ${stock.pcr > 1.1 ? 'text-emerald-400 light:text-emerald-700' : stock.pcr < 0.8 ? 'text-red-400 light:text-red-700' : 'text-gray-400 light:text-slate-600'}`}>
                         {stock.pcr > 0 ? stock.pcr.toFixed(2) : '—'}
                       </td>
                       <td className="text-right px-3 py-2.5 tabular-nums text-gray-300 light:text-slate-700 font-medium">{stock.atmIv > 0 ? `${stock.atmIv.toFixed(1)}%` : '—'}</td>
                       <td className="text-right px-3 py-2.5">
-                        {stock.ivRank != null ? <IVRankThermometer value={stock.ivRank} /> : <span className="text-gray-600 light:text-slate-400">—</span>}
+                        {stock.ivRank != null ? <IVRankThermometer value={stock.ivRank} /> : <span className="text-gray-400 light:text-slate-600">—</span>}
                       </td>
                       <td className="text-center px-3 py-2.5"><BiasBadge bias={stock.direction} /></td>
                       <td className="text-center px-3 py-2.5"><ScoreBadge score={stock.score} /></td>
@@ -564,10 +564,10 @@ function MarketStatusCard({ open }: { open: boolean }) {
         <span className="text-xs font-bold text-gray-200 light:text-slate-800 tracking-wide">Market Status</span>
         <span className={`w-2 h-2 rounded-full ${open ? 'bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.7)] animate-pulse' : 'bg-gray-500'}`} />
       </div>
-      <div className={`text-2xl font-bold tracking-tight ${open ? 'text-emerald-400 light:text-emerald-700' : 'text-gray-400 light:text-slate-500'}`}>
+      <div className={`text-2xl font-bold tracking-tight ${open ? 'text-emerald-400 light:text-emerald-700' : 'text-gray-400 light:text-slate-600'}`}>
         {open ? 'OPEN' : 'CLOSED'}
       </div>
-      <div className="text-[11px] text-gray-400 light:text-slate-500 mt-2">
+      <div className="text-[11px] text-gray-400 light:text-slate-600 mt-2">
         NSE {hours.open} – {hours.close} IST
       </div>
     </div>
@@ -578,14 +578,14 @@ function SentimentCard({ score, label }: { score: number | null; label: string |
   const isPositive = score != null && score >= 60;
   const isNegative = score != null && score <= 40;
   const color = isPositive ? 'emerald' : isNegative ? 'red' : 'gray';
-  const colorClasses = { emerald: 'text-emerald-400 light:text-emerald-700', red: 'text-red-400 light:text-red-700', gray: 'text-gray-400 light:text-slate-500' }[color];
+  const colorClasses = { emerald: 'text-emerald-400 light:text-emerald-700', red: 'text-red-400 light:text-red-700', gray: 'text-gray-400 light:text-slate-600' }[color];
   return (
     <div className="card-premium card-accent-top p-3.5" style={{ '--accent-gradient': isPositive ? 'linear-gradient(90deg, rgba(16, 185, 129, 0.8), rgba(6, 182, 212, 0.5))' : isNegative ? 'linear-gradient(90deg, rgba(239, 68, 68, 0.8), rgba(251, 146, 60, 0.5))' : 'linear-gradient(90deg, rgba(129, 140, 248, 0.7), rgba(168, 85, 247, 0.4))' } as React.CSSProperties}>
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs font-bold text-gray-200 light:text-slate-800 tracking-wide">Market Sentiment</span>
       </div>
       <div className={`text-2xl font-bold tracking-tight tabular-nums ${colorClasses}`}>{score != null ? score : '—'}</div>
-      <div className="text-[11px] text-gray-400 light:text-slate-500 mt-2 capitalize">
+      <div className="text-[11px] text-gray-400 light:text-slate-600 mt-2 capitalize">
         {label ? label.replace(/_/g, ' ').toLowerCase() : 'Awaiting data'}
       </div>
     </div>
@@ -613,7 +613,7 @@ function MarketIntelligencePanel({ bias, score, sentiment, fiiDii, breadth }: an
               style={{ width: `${bias.confidence}%` }}
             />
           </div>
-          <div className="text-[11px] text-gray-400 light:text-slate-500 mt-1 tabular-nums">{bias.confidence}% Confidence</div>
+          <div className="text-[11px] text-gray-400 light:text-slate-600 mt-1 tabular-nums">{bias.confidence}% Confidence</div>
         </div>
       </div>
 
@@ -633,7 +633,7 @@ function StatTile({ label, value, positive }: { label: string; value: string; po
   const colorClass = positive == null ? 'text-gray-100 light:text-slate-900' : positive ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700';
   return (
     <div className="bg-gray-900/40 light:bg-slate-50 rounded-lg p-2.5 border border-gray-800/30 light:border-slate-200">
-      <div className="text-[9px] uppercase tracking-wider text-gray-500 light:text-slate-500">{label}</div>
+      <div className="text-[10px] uppercase tracking-wider text-gray-400 light:text-slate-600">{label}</div>
       <div className={`text-sm font-bold tabular-nums mt-0.5 ${colorClass}`}>{value}</div>
     </div>
   );
@@ -651,7 +651,7 @@ function FiiDiiAnalytics({ today, history }: { today: import('@fno/shared').FiiD
       <div className="flex items-center justify-between mb-3">
         <div>
           <h2 className="text-sm font-bold text-gray-100 light:text-slate-900">FII / DII Analytics</h2>
-          <p className="text-[10px] text-gray-500 light:text-slate-500 mt-0.5">
+          <p className="text-[10px] text-gray-400 light:text-slate-600 mt-0.5">
             NSE's daily cash-market activity{today ? ` — ${today.date}` : ''} (published after market close)
           </p>
         </div>
@@ -667,7 +667,7 @@ function FiiDiiAnalytics({ today, history }: { today: import('@fno/shared').FiiD
       </div>
 
       {history.length === 0 ? (
-        <div className="text-center py-8 text-xs text-gray-500 light:text-slate-500">
+        <div className="text-center py-8 text-xs text-gray-400 light:text-slate-600">
           Building history — daily FII/DII figures accumulate here over time as NSE publishes them.
         </div>
       ) : (
@@ -686,7 +686,7 @@ function FiiDiiAnalytics({ today, history }: { today: import('@fno/shared').FiiD
           })}
         </div>
       )}
-      <div className="flex items-center gap-4 mt-2 text-[10px] text-gray-500 light:text-slate-500">
+      <div className="flex items-center gap-4 mt-2 text-[10px] text-gray-400 light:text-slate-600">
         <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-emerald-400" /> FII (green=buy)</span>
         <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-indigo-400" /> DII (indigo=buy)</span>
       </div>
@@ -783,21 +783,21 @@ function RiskSentimentCard({ vix, breadth, bias, sentiment }: any) {
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-sm font-bold text-gray-100 light:text-slate-900">Risk &amp; Sentiment</h3>
         <div className="text-right">
-          <div className="text-[9px] uppercase tracking-wider text-gray-500 light:text-slate-500">Market Risk</div>
+          <div className="text-[10px] uppercase tracking-wider text-gray-400 light:text-slate-600">Market Risk</div>
           <div className={`text-base font-bold ${riskColor}`}>{riskLevel}</div>
         </div>
       </div>
       <div className="space-y-2.5">
         {rows.map((r) => (
           <div key={r.label} className="flex items-center gap-3">
-            <span className="text-[11px] font-semibold text-gray-400 light:text-slate-500 w-32 shrink-0">{r.label}</span>
+            <span className="text-[11px] font-semibold text-gray-400 light:text-slate-600 w-32 shrink-0">{r.label}</span>
             <div className="flex-1 h-2 bg-gray-900/80 light:bg-slate-200 rounded-full overflow-hidden">
               <div
                 className={`h-full rounded-full bar-animated ${r.value >= 65 ? 'bg-emerald-400' : r.value >= 40 ? 'bg-amber-400' : 'bg-red-400'}`}
                 style={{ width: `${Math.round(r.value)}%` }}
               />
             </div>
-            <span className="text-[10px] text-gray-500 light:text-slate-500 w-28 text-right shrink-0 tabular-nums">{r.note}</span>
+            <span className="text-[10px] text-gray-400 light:text-slate-600 w-28 text-right shrink-0 tabular-nums">{r.note}</span>
           </div>
         ))}
       </div>
@@ -862,7 +862,7 @@ function IndexCard({ symbol, exchange, ltp, change, changePercent, open, high, l
       </div>
 
       <div className="space-y-1 mt-3">
-        <div className="flex justify-between text-[9px] text-gray-500 light:text-slate-500 tabular-nums font-mono">
+        <div className="flex justify-between text-[10px] text-gray-400 light:text-slate-600 tabular-nums font-mono">
           <span>L: {formatIndianNumber(low, 2)}</span>
           <span className="text-gray-400 font-semibold">{positionInRange.toFixed(0)}% Range</span>
           <span>H: {formatIndianNumber(high, 2)}</span>

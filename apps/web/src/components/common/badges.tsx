@@ -98,7 +98,7 @@ const OI_CONFIG: Record<OIInterpretation, { label: string; color: string; dot: s
   },
   NEUTRAL: {
     label: 'Neutral',
-    color: 'text-gray-400 light:text-slate-500 bg-gray-500/10 shadow-[0_0_0_1px_rgba(156,163,175,0.15)_inset]',
+    color: 'text-gray-400 light:text-slate-600 bg-gray-500/10 shadow-[0_0_0_1px_rgba(156,163,175,0.15)_inset]',
     dot: 'bg-gray-400',
   },
 };
@@ -117,7 +117,7 @@ export function OIBadge({ type }: { type: OIInterpretation | string }) {
 const BIAS_COLORS: Record<string, string> = {
   BULLISH: 'bg-emerald-500/15 text-emerald-400 light:text-emerald-700 shadow-[0_0_0_1px_rgba(16,185,129,0.25)_inset]',
   BEARISH: 'bg-red-500/15 text-red-400 light:text-red-700 shadow-[0_0_0_1px_rgba(239,68,68,0.25)_inset]',
-  NEUTRAL: 'bg-gray-500/15 text-gray-400 light:text-slate-500 shadow-[0_0_0_1px_rgba(156,163,175,0.2)_inset]',
+  NEUTRAL: 'bg-gray-500/15 text-gray-400 light:text-slate-600 shadow-[0_0_0_1px_rgba(156,163,175,0.2)_inset]',
 };
 
 const BIAS_ARROWS: Record<string, string> = {
@@ -131,7 +131,7 @@ export function BiasBadge({ bias, large }: { bias: BiasDirection | string; large
     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold badge-glass ${
       BIAS_COLORS[bias] || BIAS_COLORS.NEUTRAL
     } ${large ? 'text-xs' : 'text-[10px]'}`}>
-      <span className="text-[9px]">{BIAS_ARROWS[bias] || '—'}</span>
+      <span className="text-[10px]">{BIAS_ARROWS[bias] || '—'}</span>
       <span>{bias}</span>
     </span>
   );

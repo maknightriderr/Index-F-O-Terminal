@@ -62,7 +62,7 @@ export function ActivityList({
         <h3 className="text-xs font-bold text-gray-200 light:text-slate-800">{title}</h3>
       </div>
       {items.length === 0 ? (
-        <div className="text-xs text-gray-500 light:text-slate-400 py-5 px-3.5 text-center font-medium">No activity</div>
+        <div className="text-xs text-gray-400 light:text-slate-600 py-5 px-3.5 text-center font-medium">No activity</div>
       ) : (
         <div className="py-1.5 divide-y divide-gray-800/20 light:divide-slate-100">
           {items.map((s, idx) => {
@@ -87,7 +87,7 @@ export function ActivityList({
                   <span className={`tabular-nums font-bold ${s.changePercent >= 0 ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700'}`}>
                     {formatPercent(s.changePercent)}
                   </span>
-                  <span className="text-gray-400 light:text-slate-500 tabular-nums text-[10px] font-medium w-11 text-right">{formatCompact(s.futuresChangeOi)}</span>
+                  <span className="text-gray-400 light:text-slate-600 tabular-nums text-[10px] font-medium w-11 text-right">{formatCompact(s.futuresChangeOi)}</span>
                 </div>
               </div>
             );

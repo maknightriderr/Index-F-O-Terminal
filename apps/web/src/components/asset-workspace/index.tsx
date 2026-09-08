@@ -152,7 +152,7 @@ export function AssetWorkspace() {
       <div className="flex flex-col items-center justify-center h-full p-8 text-center">
         <div className="text-5xl mb-4">📈</div>
         <h2 className="text-xl font-bold text-gray-200 light:text-slate-800 mb-2">No Asset Selected</h2>
-        <p className="text-sm text-gray-500 light:text-slate-500 max-w-md">
+        <p className="text-sm text-gray-400 light:text-slate-600 max-w-md">
           Use "+ Add Asset" to pick an index or F&O stock and open its workspace.
         </p>
       </div>
@@ -171,10 +171,10 @@ export function AssetWorkspace() {
           <div>
             <div className="flex items-center gap-2 mb-1">
               <h1 className="text-2xl font-bold text-gray-50 light:text-slate-900 tracking-tight">{selectedSymbol}</h1>
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-800/70 light:bg-slate-100 text-gray-400 light:text-slate-500 border border-gray-700/50 light:border-slate-200">
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-800/70 light:bg-slate-100 text-gray-400 light:text-slate-600 border border-gray-700/50 light:border-slate-200">
                 {selectedExchange}
               </span>
-              <span className="flex items-center gap-1.5 text-[10px] text-gray-500 light:text-slate-500 bg-gray-900/50 light:bg-slate-100 rounded-full px-2 py-0.5">
+              <span className="flex items-center gap-1.5 text-[10px] text-gray-400 light:text-slate-600 bg-gray-900/50 light:bg-slate-100 rounded-full px-2 py-0.5">
                 <span className={`w-1.5 h-1.5 rounded-full ${marketOpen ? 'bg-emerald-400 shadow-[0_0_6px_rgba(16,185,129,0.7)] animate-pulse' : 'bg-gray-600 light:bg-slate-400'}`} />
                 {marketOpen ? 'Market Open' : 'Market Closed'}
               </span>
@@ -190,14 +190,14 @@ export function AssetWorkspace() {
             )}
           </div>
           {chain && (
-            <div className="flex items-center gap-4 text-xs text-gray-500 light:text-slate-500">
+            <div className="flex items-center gap-4 text-xs text-gray-400 light:text-slate-600">
               <span>DTE <span className="text-gray-200 light:text-slate-800 font-semibold">{chain.dte}</span></span>
               <span>Expiry <span className="text-gray-200 light:text-slate-800 font-semibold">{chain.expiry}</span></span>
             </div>
           )}
         </div>
         <div className="relative flex items-center gap-2">
-          <span className="text-xs text-gray-500 light:text-slate-500">Strikes</span>
+          <span className="text-xs text-gray-400 light:text-slate-600">Strikes</span>
           <select
             value={strikeRange}
             onChange={(e) => setStrikeRange(parseInt(e.target.value, 10))}
@@ -217,7 +217,7 @@ export function AssetWorkspace() {
       )}
 
       {loading && !chain && !futures && (
-        <div className="text-sm text-gray-500 light:text-slate-500 py-16 text-center">Loading workspace…</div>
+        <div className="text-sm text-gray-400 light:text-slate-600 py-16 text-center">Loading workspace…</div>
       )}
 
       {/* Market Intelligence */}
@@ -236,7 +236,7 @@ export function AssetWorkspace() {
                 className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wide transition-colors ${
                   biasMode === m
                     ? 'bg-emerald-500/90 text-white'
-                    : 'text-gray-400 light:text-slate-500 hover:text-gray-200 light:hover:text-slate-700'
+                    : 'text-gray-400 light:text-slate-600 hover:text-gray-200 light:hover:text-slate-700'
                 }`}
               >
                 {m === 'INTRADAY' ? 'Intraday' : 'Positional'}
@@ -304,7 +304,7 @@ export function AssetWorkspace() {
                     className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-150 ${
                       exp === chain.expiry
                         ? 'bg-gradient-to-b from-cyan-500/25 to-cyan-500/10 light:from-cyan-500/15 light:to-cyan-500/10 text-cyan-300 light:text-cyan-700 border border-cyan-500/40 shadow-[0_2px_8px_-2px_rgba(6,182,212,0.35)]'
-                        : 'bg-gray-800/40 light:bg-slate-100 text-gray-400 light:text-slate-500 border border-transparent hover:bg-gray-800/70 light:hover:bg-slate-200 hover:text-gray-200 light:hover:text-slate-800'
+                        : 'bg-gray-800/40 light:bg-slate-100 text-gray-400 light:text-slate-600 border border-transparent hover:bg-gray-800/70 light:hover:bg-slate-200 hover:text-gray-200 light:hover:text-slate-800'
                     }`}
                   >
                     {exp}
@@ -329,12 +329,12 @@ export function AssetWorkspace() {
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
                     <thead>
-                      <tr className="bg-gradient-to-b from-gray-900/90 to-gray-900/60 light:from-slate-100 light:to-slate-100 text-gray-400 light:text-slate-500 uppercase tracking-wider">
+                      <tr className="bg-gradient-to-b from-gray-900/90 to-gray-900/60 light:from-slate-100 light:to-slate-100 text-gray-400 light:text-slate-600 uppercase tracking-wider">
                         <th colSpan={8} className="text-center px-2 py-2 font-bold text-emerald-400/90 light:text-emerald-700 border-r border-gray-800/60 light:border-slate-200">Calls</th>
                         <th className="text-center px-2 py-2 font-medium">Strike</th>
                         <th colSpan={8} className="text-center px-2 py-2 font-bold text-red-400/90 light:text-red-700 border-l border-gray-800/60 light:border-slate-200">Puts</th>
                       </tr>
-                      <tr className="bg-gray-900/50 light:bg-slate-100 text-gray-500 light:text-slate-500 uppercase tracking-wider">
+                      <tr className="bg-gray-900/50 light:bg-slate-100 text-gray-400 light:text-slate-600 uppercase tracking-wider">
                         <Th>OI</Th><Th>Chg OI</Th><Th>Vol</Th><Th>IV</Th><Th>Delta</Th><Th>Theta</Th><Th>LTP</Th><Th right border>Activity</Th>
                         <th className="text-center px-2 py-1.5 font-medium">Price</th>
                         <Th left border>Activity</Th><Th>LTP</Th><Th>Theta</Th><Th>Delta</Th><Th>IV</Th><Th>Vol</Th><Th>Chg OI</Th><Th>OI</Th>
@@ -406,8 +406,8 @@ function FuturesCard({ contract }: { contract: FuturesData }) {
   return (
     <div className="bg-gradient-to-b from-[#151522] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 rounded-xl p-4 shadow-[0_8px_28px_-14px_rgba(0,0,0,0.75)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.12)] hover:border-gray-700/80 light:hover:border-slate-300 hover:shadow-[0_14px_36px_-14px_rgba(0,0,0,0.85)] transition-all duration-200">
       <div className="flex items-center justify-between mb-2">
-        <span className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider">{EXPIRY_LABEL_TEXT[contract.expiryLabel]}</span>
-        <span className="text-[10px] text-gray-500 light:text-slate-500">DTE {contract.dte}</span>
+        <span className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider">{EXPIRY_LABEL_TEXT[contract.expiryLabel]}</span>
+        <span className="text-[10px] text-gray-400 light:text-slate-600">DTE {contract.dte}</span>
       </div>
       <div
         className={`text-xl font-bold tabular-nums text-gray-50 light:text-slate-900 mb-1.5 ${
@@ -426,17 +426,17 @@ function FuturesCard({ contract }: { contract: FuturesData }) {
       </div>
       <div className="grid grid-cols-3 gap-2 text-[11px] pt-2.5 border-t border-gray-800/60 light:border-slate-200">
         <div>
-          <div className="text-gray-500 light:text-slate-500 mb-0.5">OI</div>
+          <div className="text-gray-400 light:text-slate-600 mb-0.5">OI</div>
           <div className="text-gray-300 light:text-slate-700 font-medium tabular-nums">{formatCompact(contract.oi)}</div>
         </div>
         <div>
-          <div className="text-gray-500 light:text-slate-500 mb-0.5">Chg OI</div>
+          <div className="text-gray-400 light:text-slate-600 mb-0.5">Chg OI</div>
           <div className={`font-medium tabular-nums ${contract.changeOi >= 0 ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700'}`}>
             {contract.changeOi >= 0 ? '+' : ''}{formatCompact(contract.changeOi)}
           </div>
         </div>
         <div>
-          <div className="text-gray-500 light:text-slate-500 mb-0.5">Volume</div>
+          <div className="text-gray-400 light:text-slate-600 mb-0.5">Volume</div>
           <div className="text-gray-300 light:text-slate-700 font-medium tabular-nums">{formatCompact(contract.volume)}</div>
         </div>
       </div>
@@ -479,11 +479,11 @@ function LegCells({
     </td>
   );
   const changeOiCell = (
-    <td className={`text-right px-2 py-1.5 tabular-nums ${bg} ${leg.changeOi > 0 ? 'text-emerald-400 light:text-emerald-700' : leg.changeOi < 0 ? 'text-red-400 light:text-red-700' : 'text-gray-400 light:text-slate-500'}`}>
+    <td className={`text-right px-2 py-1.5 tabular-nums ${bg} ${leg.changeOi > 0 ? 'text-emerald-400 light:text-emerald-700' : leg.changeOi < 0 ? 'text-red-400 light:text-red-700' : 'text-gray-400 light:text-slate-600'}`}>
       {leg.changeOi > 0 ? '+' : ''}{formatCompact(leg.changeOi)}
     </td>
   );
-  const volCell = <td className={`text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-500 ${bg}`}>{formatCompact(leg.volume)}</td>;
+  const volCell = <td className={`text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600 ${bg}`}>{formatCompact(leg.volume)}</td>;
   const ivCell = (
     <td
       className={`text-right px-2 py-1.5 tabular-nums ${bg} ${ivCalculated ? 'text-amber-400' : 'text-gray-300 light:text-slate-700'}`}
@@ -492,8 +492,8 @@ function LegCells({
       {leg.iv.toFixed(1)}%{ivCalculated && <sup>~</sup>}
     </td>
   );
-  const deltaCell = <td className={`text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-500 ${bg}`}>{leg.delta.toFixed(2)}</td>;
-  const thetaCell = <td className={`text-right px-2 py-1.5 tabular-nums text-gray-500 light:text-slate-500 ${bg}`}>{leg.theta.toFixed(2)}</td>;
+  const deltaCell = <td className={`text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600 ${bg}`}>{leg.delta.toFixed(2)}</td>;
+  const thetaCell = <td className={`text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600 ${bg}`}>{leg.theta.toFixed(2)}</td>;
   const ltpCell = <td className={`text-right px-2 py-1.5 tabular-nums font-medium text-gray-200 light:text-slate-800 ${bg}`}>{leg.ltp.toFixed(2)}</td>;
   const activityCell = (
     <td className={`px-2 py-1.5 ${bg} ${side === 'call' ? 'text-right border-r border-gray-800/50 light:border-slate-200' : 'text-left border-l border-gray-800/50 light:border-slate-200'}`}>
@@ -521,9 +521,9 @@ function SummaryTile({ label, value, sub, accent }: { label: string; value: stri
   const glow = accent === 'emerald' ? 'text-glow-emerald' : accent === 'red' ? 'text-glow-red' : 'text-glow-cyan';
   return (
     <div className="bg-gradient-to-b from-[#151522] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 rounded-xl p-3.5 shadow-[0_8px_28px_-14px_rgba(0,0,0,0.75)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.12)] hover:border-gray-700/80 light:hover:border-slate-300 hover:shadow-[0_14px_36px_-14px_rgba(0,0,0,0.85)] transition-all duration-200">
-      <div className="text-[10px] text-gray-500 light:text-slate-500 uppercase tracking-wider mb-1.5">{label}</div>
+      <div className="text-[10px] text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5">{label}</div>
       <div className={`text-2xl font-bold tabular-nums tracking-tight ${color} ${glow}`}>{value}</div>
-      {sub && <div className="text-[10px] text-gray-500 light:text-slate-500 mt-1">{sub}</div>}
+      {sub && <div className="text-[10px] text-gray-400 light:text-slate-600 mt-1">{sub}</div>}
     </div>
   );
 }
@@ -532,7 +532,7 @@ function SectionLabel({ children, icon }: { children: React.ReactNode; icon?: st
   return (
     <div className="flex items-center gap-2 mb-2.5">
       {icon && <span className="text-xs leading-none opacity-80">{icon}</span>}
-      <span className="text-[11px] font-bold text-gray-400 light:text-slate-500 uppercase tracking-wider whitespace-nowrap">{children}</span>
+      <span className="text-[11px] font-bold text-gray-400 light:text-slate-600 uppercase tracking-wider whitespace-nowrap">{children}</span>
       <div className="flex-1 h-px bg-gradient-to-r from-gray-700/70 via-gray-800/40 to-transparent" />
     </div>
   );
@@ -551,7 +551,7 @@ const INTEL_ACCENT: Record<string, string> = {
 function IntelCard({ title, children, accent = 'amber' }: { title: string; children: React.ReactNode; accent?: keyof typeof INTEL_ACCENT }) {
   return (
     <div className={`bg-gradient-to-b from-[#151522] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 border-t-2 ${INTEL_ACCENT[accent]} rounded-xl p-3.5 shadow-[0_8px_28px_-14px_rgba(0,0,0,0.75)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.12)] hover:border-gray-700/80 light:hover:border-slate-300 hover:shadow-[0_14px_36px_-14px_rgba(0,0,0,0.85)] transition-all duration-200`}>
-      <div className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-2.5">{title}</div>
+      <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-2.5">{title}</div>
       {children}
     </div>
   );
@@ -565,7 +565,7 @@ function OiTrapCard({ trap }: { trap: OiTrapAnalysis }) {
         <TrapPill label="Call side" side={trap.call} color="emerald" />
         <TrapPill label="Put side" side={trap.put} color="red" />
       </div>
-      <p className={`text-[11px] leading-snug ${active ? 'text-gray-300 light:text-slate-700' : 'text-gray-500 light:text-slate-500'}`}>{trap.summary}</p>
+      <p className={`text-[11px] leading-snug ${active ? 'text-gray-300 light:text-slate-700' : 'text-gray-400 light:text-slate-600'}`}>{trap.summary}</p>
     </IntelCard>
   );
 }
@@ -573,7 +573,7 @@ function OiTrapCard({ trap }: { trap: OiTrapAnalysis }) {
 function TrapPill({ label, side, color }: { label: string; side: { active: boolean; strike: number | null; strength: number }; color: 'emerald' | 'red' }) {
   const activeClass = color === 'emerald' ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' : 'bg-red-500/15 text-red-400 border-red-500/30';
   return (
-    <div className={`flex-1 text-center rounded-lg border px-2 py-2 ${side.active ? activeClass : 'bg-gray-900/40 light:bg-slate-100 text-gray-600 light:text-slate-400 border-gray-800/60 light:border-slate-200'}`}>
+    <div className={`flex-1 text-center rounded-lg border px-2 py-2 ${side.active ? activeClass : 'bg-gray-900/40 light:bg-slate-100 text-gray-400 light:text-slate-600 border-gray-800/60 light:border-slate-200'}`}>
       <div className="text-[10px] font-medium mb-0.5">{label}</div>
       {side.active ? (
         <div className="text-sm font-bold tabular-nums">{side.strength}</div>
@@ -605,10 +605,10 @@ function MomentumRow({
   activity: 'BUILDING' | 'REDUCING' | 'FLAT';
 }) {
   const activityClass =
-    activity === 'BUILDING' ? 'text-emerald-400 light:text-emerald-700 bg-emerald-500/15' : activity === 'REDUCING' ? 'text-red-400 light:text-red-700 bg-red-500/15' : 'text-gray-400 light:text-slate-500 bg-gray-800/50 light:bg-slate-200';
+    activity === 'BUILDING' ? 'text-emerald-400 light:text-emerald-700 bg-emerald-500/15' : activity === 'REDUCING' ? 'text-red-400 light:text-red-700 bg-red-500/15' : 'text-gray-400 light:text-slate-600 bg-gray-800/50 light:bg-slate-200';
   return (
     <div className="flex items-center justify-between text-xs py-1.5">
-      <span className="text-gray-400 light:text-slate-500 w-10">{label}</span>
+      <span className="text-gray-400 light:text-slate-600 w-10">{label}</span>
       <span className="text-gray-200 light:text-slate-800 font-medium tabular-nums flex-1 text-right pr-2">{formatCompact(oi)}</span>
       <span className={`tabular-nums pr-2 font-medium ${oiChange >= 0 ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700'}`}>
         {oiChange >= 0 ? '+' : ''}{formatCompact(oiChange)}
@@ -645,7 +645,7 @@ function OiShiftCard({ strikes }: { strikes: OptionChainStrike[] }) {
   if (rows.length === 0) {
     return (
       <IntelCard title="Where OI Is Shifting" accent="violet">
-        <p className="text-[11px] text-gray-500 light:text-slate-500 leading-snug">No OI change yet this session — nothing has moved.</p>
+        <p className="text-[11px] text-gray-400 light:text-slate-600 leading-snug">No OI change yet this session — nothing has moved.</p>
       </IntelCard>
     );
   }
@@ -657,7 +657,7 @@ function OiShiftCard({ strikes }: { strikes: OptionChainStrike[] }) {
       <div className="space-y-1.5">
         {rows.map((r) => (
           <div key={`${r.strike}-${r.side}`} className="flex items-center gap-2">
-            <span className={`text-[9px] font-bold px-1 py-0.5 rounded shrink-0 ${r.side === 'CE' ? 'text-emerald-400 bg-emerald-500/12' : 'text-red-400 bg-red-500/12'}`}>{r.side}</span>
+            <span className={`text-[10px] font-bold px-1 py-0.5 rounded shrink-0 ${r.side === 'CE' ? 'text-emerald-400 bg-emerald-500/12' : 'text-red-400 bg-red-500/12'}`}>{r.side}</span>
             <span className="text-[11px] text-gray-300 light:text-slate-700 tabular-nums w-12 shrink-0">{formatIndianNumber(r.strike, 0)}</span>
             <div className="flex-1 h-1.5 bg-gray-900/70 light:bg-slate-200 rounded-full overflow-hidden">
               <div
@@ -687,16 +687,16 @@ function DecayCard({ decay }: { decay: DecayAnalysis }) {
   return (
     <IntelCard title="Time Decay" accent="red">
       <div className="flex items-center justify-between mb-2.5">
-        <span className="text-xs text-gray-400 light:text-slate-500">DTE <span className="text-gray-200 light:text-slate-800 font-semibold">{decay.dte}</span></span>
+        <span className="text-xs text-gray-400 light:text-slate-600">DTE <span className="text-gray-200 light:text-slate-800 font-semibold">{decay.dte}</span></span>
         <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${DECAY_SPEED_CLASS[decay.speed]}`}>{decay.speed}</span>
       </div>
       <div className="grid grid-cols-2 gap-2 text-xs">
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-2">
-          <div className="text-gray-500 light:text-slate-500 text-[10px] mb-0.5">ATM Call θ/day</div>
+          <div className="text-gray-400 light:text-slate-600 text-[10px] mb-0.5">ATM Call θ/day</div>
           <div className="text-red-400 font-semibold tabular-nums">{decay.atmCallThetaPct.toFixed(2)}%</div>
         </div>
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-2">
-          <div className="text-gray-500 light:text-slate-500 text-[10px] mb-0.5">ATM Put θ/day</div>
+          <div className="text-gray-400 light:text-slate-600 text-[10px] mb-0.5">ATM Put θ/day</div>
           <div className="text-red-400 font-semibold tabular-nums">{decay.atmPutThetaPct.toFixed(2)}%</div>
         </div>
       </div>
@@ -708,7 +708,7 @@ function TradeSetupCard({ setup }: { setup: TradeSetup }) {
   if (!setup.available) {
     return (
       <IntelCard title="Trade Setup" accent="emerald">
-        <p className="text-[11px] text-gray-500 light:text-slate-500 leading-snug">{setup.reason}</p>
+        <p className="text-[11px] text-gray-400 light:text-slate-600 leading-snug">{setup.reason}</p>
       </IntelCard>
     );
   }
@@ -729,26 +729,26 @@ function TradeSetupCard({ setup }: { setup: TradeSetup }) {
           <span className="text-xs font-bold px-2 py-1 rounded-md bg-cyan-500/15 text-cyan-400 shadow-[0_0_10px_-2px_rgba(34,211,238,0.4)]">
             {setup.strategy}
           </span>
-          <span className="text-[10px] text-gray-400 light:text-slate-500 font-medium">R:R {setup.riskReward!.toFixed(2)}</span>
+          <span className="text-[10px] text-gray-400 light:text-slate-600 font-medium">R:R {setup.riskReward!.toFixed(2)}</span>
         </div>
-        <div className="text-[10px] text-gray-500 light:text-slate-500 mb-2 leading-snug">
+        <div className="text-[10px] text-gray-400 light:text-slate-600 mb-2 leading-snug">
           {setup.legs?.map((l) => `${l.action} ${l.side} ${formatIndianNumber(l.strike, 0)} @ ${l.premium.toFixed(2)}`).join(' · ')}
         </div>
         <div className="grid grid-cols-3 gap-1.5">
           <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
-            <div className="text-gray-500 light:text-slate-500 text-[10px]">Net {isCredit ? 'Credit' : 'Debit'}</div>
+            <div className="text-gray-400 light:text-slate-600 text-[10px]">Net {isCredit ? 'Credit' : 'Debit'}</div>
             <div className="text-gray-200 light:text-slate-800 font-bold tabular-nums text-base text-glow-cyan">{Math.abs(setup.netPremium ?? 0).toFixed(2)}</div>
           </div>
           <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
-            <div className="text-gray-500 light:text-slate-500 text-[10px]">Max Loss</div>
+            <div className="text-gray-400 light:text-slate-600 text-[10px]">Max Loss</div>
             <div className="text-red-400 font-bold tabular-nums text-base text-glow-red">{setup.maxLoss!.toFixed(2)}</div>
           </div>
           <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
-            <div className="text-gray-500 light:text-slate-500 text-[10px]">Max Profit</div>
+            <div className="text-gray-400 light:text-slate-600 text-[10px]">Max Profit</div>
             <div className="text-emerald-400 font-bold tabular-nums text-base text-glow-emerald">{setup.maxProfit!.toFixed(2)}</div>
           </div>
         </div>
-        <div className="text-[10px] text-gray-500 light:text-slate-500 mt-1.5">
+        <div className="text-[10px] text-gray-400 light:text-slate-600 mt-1.5">
           {setup.breakevenLower != null && setup.breakevenUpper != null
             ? `Breakeven range ${formatIndianNumber(setup.breakevenLower, 0)}–${formatIndianNumber(setup.breakevenUpper, 0)}`
             : setup.breakeven != null
@@ -756,7 +756,7 @@ function TradeSetupCard({ setup }: { setup: TradeSetup }) {
             : null}
         </div>
         {liveMark}
-        <p className="text-[10px] text-gray-600 mt-2.5 leading-snug">
+        <p className="text-[10px] text-gray-400 mt-2.5 leading-snug">
           Defined-risk spread — matches Strategy Scanner's IV-regime call for this symbol.{lockedNote}
         </p>
       </IntelCard>
@@ -770,36 +770,36 @@ function TradeSetupCard({ setup }: { setup: TradeSetup }) {
         <span className={`text-xs font-bold px-2 py-1 rounded-md ${isCall ? 'bg-emerald-500/15 text-emerald-400 shadow-[0_0_10px_-2px_rgba(16,185,129,0.4)]' : 'bg-red-500/15 text-red-400 shadow-[0_0_10px_-2px_rgba(239,68,68,0.4)]'}`}>
           {setup.side} {formatIndianNumber(setup.strike!, 0)}
         </span>
-        <span className="text-[10px] text-gray-400 light:text-slate-500 font-medium">R:R {setup.riskReward!.toFixed(2)}</span>
+        <span className="text-[10px] text-gray-400 light:text-slate-600 font-medium">R:R {setup.riskReward!.toFixed(2)}</span>
       </div>
       <div className="grid grid-cols-3 gap-1.5">
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
-          <div className="text-gray-500 light:text-slate-500 text-[10px]">Entry</div>
+          <div className="text-gray-400 light:text-slate-600 text-[10px]">Entry</div>
           <div className="text-gray-200 light:text-slate-800 font-bold tabular-nums text-base text-glow-cyan">{setup.entry!.toFixed(2)}</div>
         </div>
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
-          <div className="text-gray-500 light:text-slate-500 text-[10px]">SL</div>
+          <div className="text-gray-400 light:text-slate-600 text-[10px]">SL</div>
           <div className="text-red-400 font-bold tabular-nums text-base text-glow-red">{setup.stopLoss!.toFixed(2)}</div>
         </div>
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
-          <div className="text-gray-500 light:text-slate-500 text-[10px]">Target</div>
+          <div className="text-gray-400 light:text-slate-600 text-[10px]">Target</div>
           <div className="text-emerald-400 font-bold tabular-nums text-base text-glow-emerald">{setup.target!.toFixed(2)}</div>
         </div>
       </div>
       {setup.positionSize && (
         <div className="mt-1.5 bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-1.5 flex items-center justify-between text-[10px]">
-          <span className="text-gray-500 light:text-slate-500">
+          <span className="text-gray-400 light:text-slate-600">
             {setup.positionSize.lots > 0
               ? `${setup.positionSize.lots} lot(s) · ${setup.positionSize.quantity} qty`
               : 'No lot count stays under target risk'}
           </span>
-          <span className={setup.positionSize.riskPct > DEFAULT_RISK_CONFIG.maxRiskPerTrade ? 'text-amber-400 font-semibold' : 'text-gray-400 light:text-slate-500 font-semibold'}>
+          <span className={setup.positionSize.riskPct > DEFAULT_RISK_CONFIG.maxRiskPerTrade ? 'text-amber-400 font-semibold' : 'text-gray-400 light:text-slate-600 font-semibold'}>
             ₹{setup.positionSize.riskAmount.toFixed(0)} risk ({setup.positionSize.riskPct}% of ₹{(setup.positionSize.capital / 100000).toFixed(1)}L)
           </span>
         </div>
       )}
       {liveMark}
-      <p className="text-[10px] text-gray-600 mt-2.5 leading-snug">
+      <p className="text-[10px] text-gray-400 mt-2.5 leading-snug">
         Heuristic from live data — not investment advice.{lockedNote}
       </p>
     </IntelCard>
@@ -812,11 +812,11 @@ function TradeSetupCard({ setup }: { setup: TradeSetup }) {
 // "what I got in at" from "what it's actually worth right now" instead of
 // mistaking a since-moved market for a wrong number.
 function LiveMarkRow({ currentValue, unrealizedPnl }: { currentValue: number; unrealizedPnl: number | null }) {
-  const color = unrealizedPnl == null ? 'text-gray-400 light:text-slate-500' : unrealizedPnl > 0 ? 'text-emerald-400' : unrealizedPnl < 0 ? 'text-red-400' : 'text-gray-400 light:text-slate-500';
+  const color = unrealizedPnl == null ? 'text-gray-400 light:text-slate-600' : unrealizedPnl > 0 ? 'text-emerald-400' : unrealizedPnl < 0 ? 'text-red-400' : 'text-gray-400 light:text-slate-600';
   const sign = unrealizedPnl != null && unrealizedPnl > 0 ? '+' : '';
   return (
     <div className="flex items-center justify-between mt-1.5 bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-1.5">
-      <span className="text-[10px] text-gray-500 light:text-slate-500">Live</span>
+      <span className="text-[10px] text-gray-400 light:text-slate-600">Live</span>
       <span className="text-xs font-semibold tabular-nums">
         <span className="text-gray-200 light:text-slate-800">{currentValue.toFixed(2)}</span>
         {unrealizedPnl != null && (

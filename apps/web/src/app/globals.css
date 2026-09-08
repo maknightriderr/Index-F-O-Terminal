@@ -2,7 +2,7 @@
 
 /* ============================================================
    F&O TERMINAL — GLOBAL STYLES
-   Multi-theme trading terminal — Dark (default), Light, and
+   Multi-theme trading terminal — Light (default), Dark, and
    System (follows OS). Themed via a `data-theme` attribute on
    <html>, set by ThemeEffect (components/theme-effect.tsx) from
    the persisted useUISettingsStore theme value.
@@ -26,10 +26,16 @@
   --border-primary: rgba(255, 255, 255, 0.06);
   --border-secondary: rgba(255, 255, 255, 0.08);
 
+  /* Contrast-audited against --bg-primary AND the darkest card surface
+     (#12121a), since text sits on cards far more often than on the page
+     ground. --text-muted was #6b7280 (3.85:1 on a card) and --text-dimmed
+     #4b5563 (2.47:1) — the latter failed even the 3:1 non-text minimum,
+     and both were routinely used at 10-11px where WCAG allows no
+     large-text exemption at all. */
   --text-primary: #e5e7eb;
   --text-secondary: #9ca3af;
-  --text-muted: #6b7280;
-  --text-dimmed: #4b5563;
+  --text-muted: #9ca3af;
+  --text-dimmed: #7d8695;
 
   --accent-green: #34d399;
   --accent-red: #f87171;
@@ -61,15 +67,19 @@
 
   --text-primary: #0f172a;
   --text-secondary: #475569;
-  --text-muted: #64748b;
-  --text-dimmed: #94a3b8;
+  --text-muted: #475569;
+  /* Was #94a3b8 — 2.56:1 on white, below even the 3:1 non-text floor. */
+  --text-dimmed: #64748b;
 
   /* Accent hues stay recognizable (green=bullish, red=bearish, etc)
      across themes — only darkened slightly where the -400 shades
      used throughout the app would otherwise wash out on white. */
-  --accent-green: #059669;
+  /* Darkened from #059669 / #d97706, which measured 3.77:1 and 3.19:1 on
+     white — both below AA for normal text, and green/amber carry P&L and
+     warning meaning here, so they can't sit at large-text-only contrast. */
+  --accent-green: #047857;
   --accent-red: #dc2626;
-  --accent-yellow: #d97706;
+  --accent-yellow: #b45309;
   --accent-blue: #2563eb;
   --accent-cyan: #0891b2;
   --accent-purple: #7c3aed;
@@ -96,6 +106,49 @@ html, body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* ============================================================
+   KEYBOARD FOCUS
+   ============================================================
+   There was exactly one focus rule in this entire stylesheet, so
+   tabbing through a screen of ~40 buttons gave almost no visible
+   indication of position. :focus-visible (not :focus) keeps mouse
+   clicks clean while making keyboard navigation actually usable.
+   ============================================================ */
+
+:where(button, a, [role='button'], [role='tab'], input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent-indigo);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ============================================================
+   REDUCED MOTION
+   ============================================================
+   17 keyframe animations ran unconditionally — ambient gradient
+   flow, a breathing logo, radar rings, pulsing dots — on screens
+   whose numbers are already moving on their own. Anyone who has
+   asked their OS to reduce motion gets the data without the
+   decoration. Not `animation: none`: collapsing to a single final
+   frame preserves any state an animation was communicating (a
+   filled bar stays filled) instead of hiding it.
+   ============================================================ */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .noise-overlay::before,
+  .ambient-bg::after {
+    display: none;
+  }
 }
 
 /* ============================================================
