@@ -1346,6 +1346,41 @@ async function lookupCachedBiasDirection(exchange: Exchange, symbol: string, mod
 }
 
 /** Non-null return is the reason a fresh setup should NOT be generated right now. */
+/**
+ * NIFTY's direction when it disagrees with this setup's, else null.
+ *
+ * Was a hard refusal inside checkReliabilityFilters, which had a
+ * consequence nobody had noticed: it made the Market Scanner's
+ * Stock-Specific Movers section — built specifically to catch stocks
+ * running on their own story against the tape — incapable of EVER
+ * producing a result on a trending day, because every counter-index setup
+ * was killed upstream before that section saw it. Confirmed live: GVT&D
+ * +8.77% and BANDHANBNK +4.18% (both BULLISH at 71%/95% confidence) were
+ * refused solely because NIFTY was bearish.
+ *
+ * Reported rather than enforced now, so the caller decides: the
+ * market-aligned candidate list still rejects these, the stock-specific
+ * pass accepts them, and the setup is marked so no UI can present a
+ * counter-index trade as though the index agreed with it.
+ */
+async function checkCounterToIndex(
+  underlying: string,
+  exchange: Exchange,
+  direction: BiasDirection,
+  mode: TradingMode
+): Promise<BiasDirection | null> {
+  // Only meaningful for an individual stock against the index; an index
+  // can't fight itself, and MCX/BSE commodities have no real equity-index
+  // relationship to check against.
+  const isNseStock = exchange === 'NSE' && !(INDEX_SYMBOLS as readonly string[]).includes(underlying);
+  if (!isNseStock || direction === 'NEUTRAL') return null;
+  const niftyDirection = await lookupCachedBiasDirection('NSE', 'NIFTY', mode);
+  if (niftyDirection != null && niftyDirection !== 'NEUTRAL' && niftyDirection !== direction) {
+    return niftyDirection;
+  }
+  return null;
+}
+
 async function checkReliabilityFilters(
   underlying: string,
   exchange: Exchange,
@@ -1373,15 +1408,13 @@ async function checkReliabilityFilters(
 
   if (direction === 'NEUTRAL') return null; // nothing left to disagree with
 
-  // Broader-market alignment — only meaningful for an individual stock
-  // against the index; an index can't fight itself, and MCX/BSE commodities
-  // have no real equity-index relationship to check against.
-  if (isNseStock) {
-    const niftyDirection = await lookupCachedBiasDirection('NSE', 'NIFTY', mode);
-    if (niftyDirection != null && niftyDirection !== 'NEUTRAL' && niftyDirection !== direction) {
-      return `NIFTY itself is currently ${niftyDirection} — a ${direction} setup on ${underlying} would be fighting the broader market.`;
-    }
-  }
+  // NOTE: broader-market (NIFTY) alignment used to be a hard block here.
+  // It's now reported separately via `checkCounterToIndex` and surfaced as
+  // TradeSetup.counterIndex rather than refusing outright — see that
+  // function for why. It stays a block for the market-aligned candidate
+  // list, but the Market Scanner's Stock-Specific Movers pass exists
+  // precisely to catch stocks moving on their own story, and this gate made
+  // that section structurally incapable of ever producing a result.
 
   // Institutional Flow's next-day read for the relevant broad index —
   // BANKNIFTY's own prediction when the setup IS BANKNIFTY, NIFTY's
@@ -1637,6 +1670,10 @@ async function resolveStickyTradeSetup(
     return { available: false, reason: unreliableReason };
   }
 
+  // Reported, not enforced — see checkCounterToIndex. Attached to the built
+  // setup below so each consumer can apply its own policy.
+  const counterIndex = await checkCounterToIndex(underlying, exchange, direction, mode);
+
   const vix = await lookupIndiaVix(provider, exchange);
   const slPremiumPct = isPositional ? POSITIONAL_SL_PREMIUM_PCT : undefined;
 
@@ -1673,7 +1710,15 @@ async function resolveStickyTradeSetup(
         return oneDayMove * Math.sqrt(remainingSessionFraction(exchange));
       })();
 
-  const fresh = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, targetExpectedMovePoints, slPremiumPct, vix, chain.dte, chain.lotSize);
+  const built = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, targetExpectedMovePoints, slPremiumPct, vix, chain.dte, chain.lotSize);
+  const fresh: TradeSetup =
+    built.available && counterIndex
+      ? {
+          ...built,
+          counterIndex,
+          reason: `${built.reason} NOTE: NIFTY is ${counterIndex} — this runs against the broader market, so it stands on this stock's own move alone.`,
+        }
+      : built;
 
   if (!fresh.available) {
     // Clear any previously locked setup now that conditions no longer

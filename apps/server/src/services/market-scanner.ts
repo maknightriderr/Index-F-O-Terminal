@@ -538,7 +538,15 @@ async function scoreShortlist(
   scoreFloor: number,
   shownStateKey: string,
   maxPossibleScore: number,
-  declined: DeclinedMover[]
+  declined: DeclinedMover[],
+  /**
+   * Whether this pass will take a setup that runs against NIFTY. False for
+   * the market-aligned candidate list (unchanged behaviour); true for the
+   * stock-specific pass, whose entire purpose is stocks moving on their own
+   * story — until now an upstream hard block made that pass structurally
+   * incapable of ever returning anything on a trending day.
+   */
+  allowCounterIndex: boolean
 ): Promise<ScannedCandidate[]> {
   const previouslyShown = await readShownSymbols(shownStateKey);
   const exitFloor = Math.max(0, scoreFloor - HYSTERESIS_MARGIN);
@@ -566,6 +574,20 @@ async function scoreShortlist(
           relativeStrength: row.relativeStrength,
           dte: (bias.inputs as { dte?: number | null }).dte ?? null,
           reason: tradeSetup.reason,
+        });
+        continue;
+      }
+
+      if (tradeSetup.counterIndex && !allowCounterIndex) {
+        declined.push({
+          symbol: row.symbol,
+          exchange,
+          direction: bias.direction,
+          confidence: bias.confidence,
+          changePercent: row.changePercent,
+          relativeStrength: row.relativeStrength,
+          dte: (bias.inputs as { dte?: number | null }).dte ?? null,
+          reason: `NIFTY is ${tradeSetup.counterIndex} — kept out of the market-aligned list. See Stock-Specific Movers, which does take these.`,
         });
         continue;
       }
@@ -649,7 +671,8 @@ export async function runMarketScan(provider: MarketDataProvider, exchange: Exch
       SCORE_SURFACE_FLOOR,
       SHOWN_CANDIDATES_KEY,
       MAX_SCORE,
-      declined
+      declined,
+      false
     );
   }
 
@@ -674,7 +697,8 @@ export async function runMarketScan(provider: MarketDataProvider, exchange: Exch
     STOCK_SPECIFIC_SCORE_FLOOR,
     SHOWN_STOCK_SPECIFIC_KEY,
     STOCK_SPECIFIC_MAX_SCORE,
-    declined
+    declined,
+    true
   );
 
   // Both passes can shortlist the same symbol (the main list and the

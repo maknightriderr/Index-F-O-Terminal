@@ -287,6 +287,15 @@ function CandidateCard({
           {candidate.sector}
         </span>
         <span className={`text-xs font-bold ${isCE ? 'text-emerald-400' : 'text-red-400'}`}>{candidate.side}</span>
+        {/* A counter-index setup must never read as though the index agreed with it. */}
+        {candidate.tradeSetup.counterIndex && (
+          <span
+            className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 light:text-amber-700 shadow-[0_0_0_1px_rgba(245,158,11,0.3)_inset]"
+            title={`NIFTY is ${candidate.tradeSetup.counterIndex} — this setup runs against the broader market and stands on this stock's own move alone.`}
+          >
+            ⚠ vs NIFTY
+          </span>
+        )}
         <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold badge-glass ${tier.className}`}>{tier.label}</span>
 
         <div className="ml-auto">

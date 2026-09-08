@@ -310,6 +310,20 @@ export interface TradeSetup {
   /** 'SPREAD' when Strategy Recommender's own IV-regime logic calls for a defined-risk multi-leg structure instead of a naked long — absent (or 'NAKED_LONG') for the single-leg case. */
   structureType?: 'NAKED_LONG' | 'SPREAD';
 
+  /**
+   * NIFTY's direction, when this setup runs AGAINST it. Absent when the
+   * setup agrees with the index (the normal case) or the check doesn't
+   * apply (indices themselves, MCX/BSE).
+   *
+   * This used to be a hard refusal, which silently made the Market
+   * Scanner's Stock-Specific Movers section — the one built to catch
+   * exactly these — unable to fire at all. It's reported instead of
+   * enforced so each consumer can choose: the market-aligned candidate
+   * list rejects these, the stock-specific pass takes them, and any UI
+   * showing one is obliged to say the index disagrees.
+   */
+  counterIndex?: BiasDirection;
+
   // --- Naked long (structureType undefined or 'NAKED_LONG') ---
   side?: OptionType;
   strike?: number;
