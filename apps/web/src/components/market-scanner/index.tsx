@@ -114,7 +114,7 @@ export function MarketScannerPage() {
           <div>
             <h2 className="text-xs font-bold text-gray-300 light:text-slate-700 uppercase tracking-wide">Stock-Specific Movers</h2>
             <p className="text-[11px] text-gray-500 light:text-slate-500 mt-0.5">
-              High-confidence setups moving on their own strength, independent of (or against) today's overall market read — their
+              Setups moving on their own strength, independent of (or against) today's overall market read — their
               Market Trend score is zeroed since the broader tape doesn't confirm them.
             </p>
           </div>

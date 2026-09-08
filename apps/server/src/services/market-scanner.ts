@@ -24,10 +24,12 @@
 // so a stock defying the broader tape on its own strength (real example:
 // LODHA rallying hard on a bearish-market day) could never appear there no
 // matter how strong its own setup was. `stockSpecificMovers` is a second,
-// independent pass that scores high-confidence own-direction standouts
-// regardless of the market's call — it's the only non-empty output on a
-// SIDEWAYS day, and on a trending day it surfaces genuine counter-trend
-// strength that `candidates` structurally can't.
+// independent pass that scores strong own-direction standouts (picked by
+// relative-strength magnitude vs NIFTY, not a coarse confidence heuristic —
+// see shortlistStockSpecificMovers for why) regardless of the market's
+// call — it's the only non-empty output on a SIDEWAYS day, and on a
+// trending day it surfaces genuine counter-trend strength that
+// `candidates` structurally can't.
 //
 // Deliberately reuses the existing per-symbol engine (buildMarketBias)
 // rather than re-deriving RSI/VWAP/Supertrend/OI/SMC signals a second
@@ -160,27 +162,37 @@ function shortlistStocks(fnoRows: FnoScannerRow[], trend: MarketTrend): FnoScann
 // win. That structurally excludes a stock like LODHA rallying hard on its
 // own strength while the broader tape reads bearish — it would sort to the
 // wrong end of that same list. This is a separate, independent pass: pick
-// the highest-confidence own-direction movers in EITHER direction, run the
+// the strongest own-direction outperformers in EITHER direction, run the
 // same signal engine on them, and surface them as their own category so a
 // standout never goes unseen just because it defies the day's market call.
-const STOCK_SPECIFIC_MIN_CONFIDENCE = 65; // fno-scanner.ts's lightweight per-row confidence, not the full engine's
+//
+// Originally gated on fno-scanner.ts's lightweight per-row `confidence` —
+// a coarse 3-vote (price/OI/PCR) heuristic that can only ever read 33%,
+// 67%, or 100%. Requiring >=65% demanded 2 of those 3 signals agree, but
+// OI/PCR positioning routinely lags or sits neutral during a genuine price
+// rally, so a real move on price alone often scored only 33% and got
+// filtered out before it was ever scored by the real engine — the exact
+// bug that hid decent bull rallies on bearish-market days. Filters on
+// relative-strength magnitude instead (a direct, continuous measure of
+// "how much is this stock actually outperforming/underperforming today"),
+// cross-checked against the stock's own raw price change so relative
+// "strength" from merely falling less than the index doesn't count.
+const STOCK_SPECIFIC_MIN_RELATIVE_STRENGTH = 1.5; // real move vs NIFTY, not everyday dispersion noise
 const STOCK_SPECIFIC_PER_DIRECTION = 5;
 
 function shortlistStockSpecificMovers(fnoRows: FnoScannerRow[], excludeSymbols: Set<string>): FnoScannerRow[] {
   const eligible = fnoRows.filter(
     (r) =>
       !excludeSymbols.has(r.symbol) &&
-      r.direction !== 'NEUTRAL' &&
-      r.confidence >= STOCK_SPECIFIC_MIN_CONFIDENCE &&
       r.volume >= MIN_STOCK_VOLUME &&
       (r.atmSpreadPct == null || r.atmSpreadPct <= LIQUID_SPREAD_MAX_PCT)
   );
   const bullish = eligible
-    .filter((r) => r.direction === 'BULLISH')
+    .filter((r) => r.changePercent > 0 && r.relativeStrength >= STOCK_SPECIFIC_MIN_RELATIVE_STRENGTH)
     .sort((a, b) => b.relativeStrength - a.relativeStrength)
     .slice(0, STOCK_SPECIFIC_PER_DIRECTION);
   const bearish = eligible
-    .filter((r) => r.direction === 'BEARISH')
+    .filter((r) => r.changePercent < 0 && r.relativeStrength <= -STOCK_SPECIFIC_MIN_RELATIVE_STRENGTH)
     .sort((a, b) => a.relativeStrength - b.relativeStrength)
     .slice(0, STOCK_SPECIFIC_PER_DIRECTION);
   return [...bullish, ...bearish];
@@ -394,13 +406,18 @@ export async function runMarketScan(provider: MarketDataProvider, exchange: Exch
     candidates = await scoreShortlist(provider, exchange, shortlist, marketTrend, sectorRankByName, () => side);
   }
 
-  // Stock-specific movers — high-confidence own-direction standouts, scored
+  // Stock-specific movers — strong own-direction standouts, scored
   // regardless of (and possibly against) the overall market read. Always
-  // runs, including on SIDEWAYS days when it's the only useful output.
+  // runs, including on SIDEWAYS days when it's the only useful output. Side
+  // comes from the stock's own raw price change (matching how
+  // shortlistStockSpecificMovers filtered it in), not the lightweight
+  // vote-based `direction` field — that field can read NEUTRAL even while
+  // changePercent is clearly one-sided, which would wrongly drop a real
+  // mover here after it already earned its spot on relative strength.
   const excludeSymbols = new Set(candidates.map((c) => c.symbol));
   const stockSpecificShortlist = shortlistStockSpecificMovers(fnoRows, excludeSymbols);
   const stockSpecificMovers = await scoreShortlist(provider, exchange, stockSpecificShortlist, marketTrend, sectorRankByName, (row) =>
-    row.direction === 'BULLISH' ? 'CE' : row.direction === 'BEARISH' ? 'PE' : null
+    row.changePercent > 0 ? 'CE' : row.changePercent < 0 ? 'PE' : null
   );
 
   return { marketTrend, sector: contextSector ?? null, candidates, stockSpecificMovers, scannedAt: Date.now() };
