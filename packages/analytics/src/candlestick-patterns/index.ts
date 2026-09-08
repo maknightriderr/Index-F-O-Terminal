@@ -124,15 +124,23 @@ export function detectCandlestickPattern(candles: Candle[]): DetectedCandlestick
   }
 
   // --- 2-candle: Engulfing ---
+  // Requires a preceding trend to reverse, exactly as the single-candle
+  // shapes below already do. Without that check this fired on any two
+  // opposite-coloured bars where the second covered the first, including
+  // mid-chop where there is nothing to reverse — measured on live NIFTY
+  // 15m data it accounted for 11 of 13 "strong reversal" detections, which
+  // is a bar-shape census, not a signal. An engulfing IS a reversal
+  // pattern, so the trend it reverses is part of the definition.
   {
     const prev = candles[n - 2];
     const cur = candles[n - 1];
     const prevBody = body(prev);
+    const trend = precedingTrend(candles, n - 1);
 
-    if (prevBody > 0 && isBearish(prev) && isBullish(cur) && cur.open <= prev.close && cur.close >= prev.open) {
+    if (trend === 'DOWN' && prevBody > 0 && isBearish(prev) && isBullish(cur) && cur.open <= prev.close && cur.close >= prev.open) {
       return { pattern: 'BULLISH_ENGULFING', direction: 'BULLISH', confidence: 65, atIndex: n - 1 };
     }
-    if (prevBody > 0 && isBullish(prev) && isBearish(cur) && cur.open >= prev.close && cur.close <= prev.open) {
+    if (trend === 'UP' && prevBody > 0 && isBullish(prev) && isBearish(cur) && cur.open >= prev.close && cur.close <= prev.open) {
       return { pattern: 'BEARISH_ENGULFING', direction: 'BEARISH', confidence: 65, atIndex: n - 1 };
     }
   }

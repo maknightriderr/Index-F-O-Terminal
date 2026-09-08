@@ -4,10 +4,44 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createChart, ColorType, LineStyle, type IChartApi, type ISeriesApi, type IPriceLine, type UTCTimestamp } from 'lightweight-charts';
 import { useUISettingsStore } from '@/stores';
 import { api } from '@/lib/api';
-import { detectPattern } from '@fno/analytics';
+import { useMarketTicks } from '@/lib/ws';
+import { detectPattern, detectCandlestickPattern } from '@fno/analytics';
 import type { DetectedPattern } from '@fno/analytics';
-import { KNOWN_INDEX_TOKENS } from '@fno/shared';
+import { CM_SEGMENT, FO_SEGMENT, KNOWN_INDEX_TOKENS } from '@fno/shared';
 import type { CandleInterval, Exchange } from '@fno/shared';
+
+// Only genuine reversal shapes get marked. detectCandlestickPattern scores
+// Morning/Evening Star at 75, Engulfing at 65, Hammer/Shooting Star at 60,
+// Hanging Man/Inverted Hammer at 55 and Doji at 45 — a doji is indecision
+// rather than a reversal, so 60 drops it and the weakest single-candle
+// shapes.
+//
+// This threshold does less work than it looks like it does: measured on
+// live NIFTY 15m bars it only took 15 detections down to 13. What actually
+// made these markers mean something was requiring engulfing patterns to
+// have a trend to reverse (see candlestick-patterns/index.ts) — that took
+// the same sample from 13 marked bars to 2.
+const STRONG_REVERSAL_MIN_CONFIDENCE = 60;
+
+// How often to re-pull candles so newly-CLOSED bars appear. Live ticks
+// (below) already move the current bar in real time; this only exists to
+// roll it over and correct any drift, so it's tied to the bar duration
+// rather than run on a fixed fast timer — a 1-minute chart genuinely needs
+// a new bar each minute, a 1-year chart does not. Floored so no timeframe
+// can hammer the API, which this app has already had one outage from.
+const REFRESH_MS: Record<Timeframe, number> = {
+  '1m': 60_000,
+  '5m': 60_000,
+  '15m': 120_000,
+  '30m': 180_000,
+  '1H': 300_000,
+  '1D': 120_000,
+  '5D': 300_000,
+  '1M': 600_000,
+  '3M': 900_000,
+  '6M': 900_000,
+  '1Y': 900_000,
+};
 
 function formatPatternName(pattern: string): string {
   return pattern.split('_').map((w) => w[0] + w.slice(1).toLowerCase()).join(' ');
@@ -90,6 +124,12 @@ export function InstrumentChart({
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const patternSeriesRef = useRef<ISeriesApi<'Line'>[]>([]);
   const candleTimesRef = useRef<UTCTimestamp[]>([]);
+  // The bar currently forming, kept so incoming ticks can extend it in
+  // place rather than waiting for the next refetch.
+  const lastBarRef = useRef<{ time: UTCTimestamp; open: number; high: number; low: number; close: number } | null>(null);
+  const [resolvedToken, setResolvedToken] = useState<string | null>(null);
+  const [refreshTick, setRefreshTick] = useState(0);
+  const [reversalCount, setReversalCount] = useState(0);
   const [timeframe, setTimeframe] = useState<Timeframe>('1D');
   const [mode, setMode] = useState<ChartMode>(hasSpot ? 'SPOT' : 'FUTURES');
   const [loading, setLoading] = useState(true);
@@ -102,6 +142,45 @@ export function InstrumentChart({
   useEffect(() => {
     if (!hasSpot) setMode('FUTURES');
   }, [hasSpot, symbol]);
+
+  // --- Live price ---
+  // The chart used to be a single fetch per symbol/timeframe with nothing
+  // updating it afterwards, so it silently went stale the moment it
+  // rendered. This app already runs a tick WebSocket that nothing in the UI
+  // was consuming — using it means the chart moves in real time without
+  // adding a single REST call, which matters here: the one previous attempt
+  // to increase polling load took the whole backend down with broker rate
+  // limiting.
+  const tickTargets = React.useMemo(
+    () =>
+      resolvedToken
+        ? [{ token: resolvedToken, exchange, exchangeSegment: mode === 'SPOT' ? CM_SEGMENT[exchange] : FO_SEGMENT[exchange] }]
+        : [],
+    [resolvedToken, exchange, mode]
+  );
+  const ticks = useMarketTicks(tickTargets);
+  const liveTick = resolvedToken ? ticks[resolvedToken] : undefined;
+
+  // Extend the forming bar with each tick: a new high/low if the tick made
+  // one, and the latest price as its close. Deliberately does NOT invent a
+  // new bar when the interval rolls over — the refresh below brings that
+  // from the source rather than guessing where a bar boundary falls.
+  useEffect(() => {
+    if (!liveTick || !seriesRef.current || !lastBarRef.current) return;
+    const bar = lastBarRef.current;
+    const ltp = liveTick.ltp;
+    if (!isFinite(ltp) || ltp <= 0) return;
+    bar.high = Math.max(bar.high, ltp);
+    bar.low = Math.min(bar.low, ltp);
+    bar.close = ltp;
+    seriesRef.current.update(bar);
+  }, [liveTick]);
+
+  // Roll in newly-closed bars. Cadence follows the timeframe (see REFRESH_MS).
+  useEffect(() => {
+    const id = setInterval(() => setRefreshTick((n) => n + 1), REFRESH_MS[timeframe]);
+    return () => clearInterval(id);
+  }, [timeframe]);
 
   // Chart instance created once per mount, not per theme/timeframe change —
   // recreating it on every render would drop zoom/scroll state and flicker.
@@ -154,7 +233,11 @@ export function InstrumentChart({
   // token, or its current-month futures contract's token.
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    // A periodic refresh must not look like a fresh load: showing the
+    // skeleton and re-running fitContent() every minute would blank the
+    // chart and throw away whatever the user had zoomed or scrolled to.
+    const isRefresh = refreshTick > 0 && seriesRef.current != null && candleTimesRef.current.length > 0;
+    if (!isRefresh) setLoading(true);
 
     const resolveToken = async (): Promise<string | null> => {
       if (mode === 'SPOT') return KNOWN_INDEX_TOKENS[symbol] ?? null;
@@ -173,6 +256,7 @@ export function InstrumentChart({
     resolveToken()
       .then((token) => {
         if (cancelled || !token) throw new Error('no token');
+        setResolvedToken(token);
         return api.getHistoricalData(token, formatForApi(from), formatForApi(to), exchange, interval);
       })
       .then((candles: any[]) => {
@@ -185,10 +269,36 @@ export function InstrumentChart({
           close: c.close,
         }));
         seriesRef.current.setData(data);
-        chartRef.current?.timeScale().fitContent();
+        if (!isRefresh) chartRef.current?.timeScale().fitContent();
         candleTimesRef.current = data.map((d) => d.time);
+        lastBarRef.current = data.length > 0 ? { ...data[data.length - 1] } : null;
         setHasData(data.length > 0);
         setLoading(false);
+
+        // --- Strong reversal candles ---
+        // detectCandlestickPattern only ever reports the most recent match
+        // in whatever array it's given, so walking the series and asking it
+        // about each bar in turn is what turns a single "what is it doing
+        // now" read into every reversal visible on screen. Kept to the
+        // bar it actually confirms on (atIndex === i) so a pattern isn't
+        // re-reported on each later bar it's still technically inside.
+        const ohlc = candles.map((c) => ({ open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume ?? 0 }));
+        const markers: Array<{ time: UTCTimestamp; position: 'aboveBar' | 'belowBar'; color: string; shape: 'arrowUp' | 'arrowDown'; text: string }> = [];
+        const cc = CHART_COLORS[resolvedTheme];
+        for (let i = 2; i < ohlc.length; i++) {
+          const hit = detectCandlestickPattern(ohlc.slice(0, i + 1) as any);
+          if (!hit || hit.atIndex !== i || hit.confidence < STRONG_REVERSAL_MIN_CONFIDENCE) continue;
+          const bullish = hit.direction === 'BULLISH';
+          markers.push({
+            time: data[i].time,
+            position: bullish ? 'belowBar' : 'aboveBar',
+            color: bullish ? cc.up : cc.down,
+            shape: bullish ? 'arrowUp' : 'arrowDown',
+            text: formatPatternName(hit.pattern),
+          });
+        }
+        seriesRef.current.setMarkers(markers);
+        setReversalCount(markers.length);
 
         // Pattern detection runs on these EXACT candles — whatever timeframe
         // is on screen is what gets checked, not a separate fixed window —
@@ -211,7 +321,7 @@ export function InstrumentChart({
     return () => {
       cancelled = true;
     };
-  }, [symbol, exchange, timeframe, mode]);
+  }, [symbol, exchange, timeframe, mode, refreshTick, resolvedTheme]);
 
   // Auto-drawn support/resistance — the same OI-wall levels already
   // surfaced elsewhere in the app (Market Bias's supportLevels/
@@ -327,6 +437,36 @@ export function InstrumentChart({
             }`}
           >
             {formatPatternName(detectedPattern.pattern)} · {detectedPattern.direction === 'BULLISH' ? '▲' : '▼'} {detectedPattern.confidence}%
+          </div>
+        )}
+
+        {/* Live state and reversal count. The chart had no indication of
+            whether it was updating, so a stale chart and a quiet market
+            looked identical — the same failure mode as the scanner's
+            silent declines. */}
+        {hasData && (
+          <div className="absolute top-2 right-2 flex items-center gap-2 pointer-events-none">
+            {reversalCount > 0 && (
+              <span className="px-2 py-1 rounded-lg badge-glass text-[10px] font-semibold text-gray-300 light:text-slate-700">
+                {reversalCount} reversal{reversalCount === 1 ? '' : 's'}
+              </span>
+            )}
+            <span
+              className={`flex items-center gap-1.5 px-2 py-1 rounded-lg badge-glass text-[10px] font-semibold ${
+                liveTick ? 'text-emerald-400 light:text-emerald-700' : 'text-gray-400 light:text-slate-600'
+              }`}
+              title={
+                liveTick
+                  ? 'Streaming live ticks — the forming candle updates in real time'
+                  : 'No live ticks for this instrument right now; candles still refresh periodically'
+              }
+            >
+              <span
+                aria-hidden="true"
+                className={`w-1.5 h-1.5 rounded-full ${liveTick ? 'bg-emerald-400 animate-pulse' : 'bg-gray-500 light:bg-slate-400'}`}
+              />
+              {liveTick ? 'Live' : 'Delayed'}
+            </span>
           </div>
         )}
       </div>
