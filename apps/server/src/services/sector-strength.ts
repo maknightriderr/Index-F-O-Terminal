@@ -39,6 +39,24 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+let symbolToSectorCache: Map<string, string> | null = null;
+
+/** Which SECTOR_MAP sector (or OTHER_SECTOR) a given F&O symbol belongs to. */
+export function sectorForSymbol(symbol: string): string {
+  if (!symbolToSectorCache) {
+    symbolToSectorCache = new Map();
+    for (const [sector, symbols] of Object.entries(SECTOR_MAP)) {
+      for (const s of symbols) symbolToSectorCache.set(s, sector);
+    }
+  }
+  return symbolToSectorCache.get(symbol) ?? OTHER_SECTOR;
+}
+
+/** A neutral placeholder for a symbol whose sector didn't clear MIN_SECTOR_MEMBERS this cycle. */
+export function neutralSectorRank(sector: string): SectorRank {
+  return { sector, avgRelativeStrength: 0, memberCount: 0, symbols: [] };
+}
+
 export async function rankSectors(provider: MarketDataProvider, rows: FnoScannerRow[]): Promise<SectorRank[]> {
   const rowBySymbol = new Map(rows.map((r) => [r.symbol, r]));
   const mappedSymbols = new Set(Object.values(SECTOR_MAP).flat());

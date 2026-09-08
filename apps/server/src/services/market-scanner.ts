@@ -2,19 +2,31 @@
 // MARKET SCANNER
 // ============================================================
 // Automates the manual top-down workflow: read NIFTY/BANKNIFTY/VIX/
-// breadth for overall market trend -> pick the single strongest sector
-// when bullish (weakest when bearish) -> shortlist its top 5 liquid
-// F&O stocks -> run the full per-symbol signal engine on each -> score
-// every candidate 0-100 across 8 categories (Market Trend, Sector
-// Strength, Price Action, EMA Trend, Volume, Option Chain, OI Buildup,
-// SMC Structure) -> surface only the ones scoring >= 60.
+// breadth for overall market trend -> shortlist the top liquid movers
+// across the WHOLE F&O universe (any sector, not restricted to one) ->
+// run the full per-symbol signal engine on each -> score every
+// candidate 0-100 across 8 categories (Market Trend, Sector Strength,
+// Price Action, EMA Trend, Volume, Option Chain, OI Buildup, SMC
+// Structure) -> surface only the ones scoring >= 60.
+//
+// Originally restricted candidates to only the single strongest/
+// weakest sector's top 5 members — dropped after a real miss: a stock
+// (PNBHOUSING) rallied hard but was never even considered because it
+// wasn't sector-tagged and its "Other" bucket wasn't that cycle's
+// extreme sector. Sector strength is still computed and still feeds
+// each candidate's own Sector Strength score (via whichever sector
+// that specific stock actually belongs to), and the single strongest/
+// weakest sector is still surfaced as market context — it just no
+// longer gates which stocks get a chance to be scored at all.
 //
 // Deliberately reuses the existing per-symbol engine (buildMarketBias)
 // rather than re-deriving RSI/VWAP/Supertrend/OI/SMC signals a second
 // time — it already computes everything this scoring model needs, and
-// is only called for a handful of finalist stocks per cycle (not the
+// is only called for the shortlisted finalists per cycle (not the
 // whole ~180-stock universe, which stays on fno-scanner.ts's lighter
-// quote-only path for the initial ranking).
+// quote-only path for the initial ranking) — the shortlist is wider
+// than before (SHORTLIST_SIZE) precisely so a real mover anywhere in
+// the universe has a chance to surface, not just within one sector.
 // ============================================================
 
 import { getOIDescription } from '@fno/analytics';
@@ -37,12 +49,15 @@ import { buildMarketBias } from './market-bias.js';
 import { scanFnoUniverse } from './fno-scanner.js';
 import { getLiveIndexQuotes } from './indices.js';
 import { computeMarketBreadth } from './market-breadth.js';
-import { rankSectors } from './sector-strength.js';
+import { neutralSectorRank, rankSectors, sectorForSymbol } from './sector-strength.js';
 import { cached } from '../lib/cache.js';
 import { redis } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
 
-const SHORTLIST_SIZE = 5;
+// Wider than the old single-sector top-5 — this is now drawn from the
+// ENTIRE F&O universe, so a real mover in an untagged or otherwise-quiet
+// sector still gets a shot at being scored.
+const SHORTLIST_SIZE = 15;
 const MIN_STOCK_VOLUME = 50_000; // floor beneath which a "liquid" spread reading isn't trustworthy either
 const SCORE_SURFACE_FLOOR = 60; // spec's own "Weak setup, generally avoid" cutoff — nothing below this is shown at all
 const NIFTY_TREND_MIN_CONFIDENCE = 55;
@@ -114,14 +129,17 @@ async function assessMarketTrend(provider: MarketDataProvider, fnoRows: FnoScann
   return { trend, score, niftyBias, bankNiftyBias, finniftyBias, vix, breadth, reasoning };
 }
 
-// --- Step 2: sector + stock shortlist ---
+// --- Step 2: whole-universe stock shortlist ---
+// No longer restricted to one "picked" sector's members — ranks every
+// liquid F&O stock by relative strength (in the market's preferred
+// direction) and takes the top N, regardless of which sector it's in.
+// Sector strength still feeds each candidate's own score (see
+// scoreCandidate), it just no longer gates who's even considered.
 
-function shortlistStocks(sector: SectorRank, fnoRows: FnoScannerRow[], trend: MarketTrend): FnoScannerRow[] {
-  const rowBySymbol = new Map(fnoRows.map((r) => [r.symbol, r]));
-  const liquid = sector.symbols
-    .map((s) => rowBySymbol.get(s))
-    .filter((r): r is FnoScannerRow => r != null && r.volume >= MIN_STOCK_VOLUME && (r.atmSpreadPct == null || r.atmSpreadPct <= LIQUID_SPREAD_MAX_PCT));
-
+function shortlistStocks(fnoRows: FnoScannerRow[], trend: MarketTrend): FnoScannerRow[] {
+  const liquid = fnoRows.filter(
+    (r) => r.volume >= MIN_STOCK_VOLUME && (r.atmSpreadPct == null || r.atmSpreadPct <= LIQUID_SPREAD_MAX_PCT)
+  );
   liquid.sort((a, b) => (trend === 'BULLISH' ? b.relativeStrength - a.relativeStrength : a.relativeStrength - b.relativeStrength));
   return liquid.slice(0, SHORTLIST_SIZE);
 }
@@ -164,8 +182,9 @@ function scoreCandidate(
   const marketTrendScore = stockAgrees ? marketTrend.score : 0;
   if (!stockAgrees) reasoning.push(`Stock's own bias (${stockBias.direction}) doesn't confirm the market's ${marketTrend.trend} read — Market Trend score zeroed`);
 
-  // Sector Strength: a clear sector leader (big gap over the next-ranked
-  // sector) scores higher than a narrow win.
+  // Sector Strength: this candidate's OWN sector (looked up per-stock, not
+  // one shared "picked" sector for the whole batch) — a clear sector leader
+  // (big gap over the next-ranked sector) scores higher than a narrow win.
   const sectorStrengthScore = Math.min(10, Math.round(5 + Math.abs(sector.avgRelativeStrength) * 2));
   reasoning.push(`${sector.sector} sector relative strength ${sector.avgRelativeStrength > 0 ? '+' : ''}${sector.avgRelativeStrength}% vs NIFTY`);
 
@@ -263,13 +282,15 @@ export async function runMarketScan(provider: MarketDataProvider, exchange: Exch
     return { marketTrend, sector: null, candidates: [], scannedAt: Date.now() };
   }
 
+  // Still computed for context (the top-level "today's strongest/weakest
+  // sector" display) and as the source each candidate's OWN sector rank is
+  // looked up from below — it just no longer restricts which stocks are
+  // even considered (see shortlistStocks).
   const sectorRanks = await rankSectors(provider, fnoRows);
-  const sector = marketTrend.trend === 'BULLISH' ? sectorRanks[0] : sectorRanks[sectorRanks.length - 1];
-  if (!sector) {
-    return { marketTrend, sector: null, candidates: [], scannedAt: Date.now() };
-  }
+  const sectorRankByName = new Map(sectorRanks.map((s) => [s.sector, s]));
+  const contextSector = marketTrend.trend === 'BULLISH' ? sectorRanks[0] : sectorRanks[sectorRanks.length - 1];
 
-  const shortlist = shortlistStocks(sector, fnoRows, marketTrend.trend);
+  const shortlist = shortlistStocks(fnoRows, marketTrend.trend);
   const side: OptionType = marketTrend.trend === 'BULLISH' ? 'CE' : 'PE';
 
   const candidates: ScannedCandidate[] = [];
@@ -278,14 +299,17 @@ export async function runMarketScan(provider: MarketDataProvider, exchange: Exch
       const { bias, tradeSetup } = await buildMarketBias(provider, row.symbol, exchange);
       if (!tradeSetup.available) continue;
 
-      const { breakdown, reasoning } = scoreCandidate(marketTrend, sector, bias, side);
+      const ownSectorName = sectorForSymbol(row.symbol);
+      const ownSector = sectorRankByName.get(ownSectorName) ?? neutralSectorRank(ownSectorName);
+
+      const { breakdown, reasoning } = scoreCandidate(marketTrend, ownSector, bias, side);
       const score = sumBreakdown(breakdown);
       if (score < SCORE_SURFACE_FLOOR) continue;
 
       candidates.push({
         symbol: row.symbol,
         exchange,
-        sector: sector.sector,
+        sector: ownSectorName,
         side,
         score,
         tier: tierFor(score),
@@ -299,7 +323,7 @@ export async function runMarketScan(provider: MarketDataProvider, exchange: Exch
   }
 
   candidates.sort((a, b) => b.score - a.score);
-  return { marketTrend, sector, candidates, scannedAt: Date.now() };
+  return { marketTrend, sector: contextSector ?? null, candidates, scannedAt: Date.now() };
 }
 
 export async function getMarketScan(provider: MarketDataProvider, exchange: Exchange = 'NSE'): Promise<MarketScanResult> {
