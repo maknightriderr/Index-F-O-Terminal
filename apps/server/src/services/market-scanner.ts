@@ -677,15 +677,21 @@ export async function runMarketScan(provider: MarketDataProvider, exchange: Exch
     declined
   );
 
-  // Biggest move first — the whole point is to see what you're missing.
-  declined.sort((a, b) => Math.abs(b.changePercent) - Math.abs(a.changePercent));
+  // Both passes can shortlist the same symbol (the main list and the
+  // stock-specific list overlap by design via the hysteresis carryover), and
+  // each pushes its own decline — so dedupe by symbol before surfacing.
+  // Biggest move first: the whole point is to see what you're missing.
+  const declinedBySymbol = new Map(declined.map((m) => [m.symbol, m]));
+  const declinedUnique = [...declinedBySymbol.values()].sort(
+    (a, b) => Math.abs(b.changePercent) - Math.abs(a.changePercent)
+  );
 
   return {
     marketTrend,
     sector: contextSector ?? null,
     candidates,
     portfolioRisk: computePortfolioRisk(candidates),
-    declined,
+    declined: declinedUnique,
     stockSpecificMovers,
     scannedAt: Date.now(),
   };
