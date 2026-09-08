@@ -26,6 +26,12 @@ export function computeMarketBreadth(rows: FnoScannerRow[]): MarketBreadth {
     advPercent,
     decPercent,
     unchPercent,
-    isBullishBias: advances >= declines,
+    // An empty scan (rows.length === 0, so advances === declines === 0)
+    // isn't a real tie — it's no data at all. `advances >= declines` used
+    // to default that case to `true`, which silently forced a bullish
+    // read and could veto an otherwise-unanimous bearish call elsewhere
+    // (Market Scanner's assessMarketTrend) whenever a scan tick came back
+    // empty. Null makes "no data" distinguishable from an actual reading.
+    isBullishBias: rows.length === 0 ? null : advances >= declines,
   };
 }

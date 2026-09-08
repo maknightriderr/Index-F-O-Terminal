@@ -665,7 +665,8 @@ export interface MarketBreadth {
   advPercent: number;
   decPercent: number;
   unchPercent: number;
-  isBullishBias: boolean;
+  /** Null when there's no universe data to read at all (e.g. an empty scan tick) — advances===declines===0 is "no data," not a real 50/50 tie, so it must never be conflated with an actual bullish or bearish read. */
+  isBullishBias: boolean | null;
 }
 
 export type MarketTrend = 'BULLISH' | 'BEARISH' | 'SIDEWAYS';

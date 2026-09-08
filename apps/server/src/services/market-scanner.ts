@@ -106,17 +106,28 @@ async function assessMarketTrend(provider: MarketDataProvider, fnoRows: FnoScann
   const allBullish = isBullish(niftyBias) && isBullish(bankNiftyBias) && isBullish(finniftyBias);
   const allBearish = isBearish(niftyBias) && isBearish(bankNiftyBias) && isBearish(finniftyBias);
 
+  // breadth.isBullishBias is null when the F&O universe scan came back
+  // empty that tick (no data, not a real reading) — in that case it must
+  // never veto an otherwise-unanimous three-index call, so only an
+  // EXPLICIT contradicting breadth reading (=== false for a bullish call,
+  // === true for a bearish one) blocks the trend here.
   let trend: MarketTrend;
   const reasoning: string[] = [];
-  if (allBullish && breadth.isBullishBias) {
+  if (allBullish && breadth.isBullishBias !== false) {
     trend = 'BULLISH';
     reasoning.push(
-      `NIFTY (${niftyBias.confidence}%), BANK NIFTY (${bankNiftyBias.confidence}%) and FIN NIFTY (${finniftyBias.confidence}%) all bullish, breadth favors advances (${breadth.advances} vs ${breadth.declines})`
+      `NIFTY (${niftyBias.confidence}%), BANK NIFTY (${bankNiftyBias.confidence}%) and FIN NIFTY (${finniftyBias.confidence}%) all bullish` +
+        (breadth.isBullishBias == null
+          ? ', breadth unavailable this tick'
+          : `, breadth favors advances (${breadth.advances} vs ${breadth.declines})`)
     );
-  } else if (allBearish && !breadth.isBullishBias) {
+  } else if (allBearish && breadth.isBullishBias !== true) {
     trend = 'BEARISH';
     reasoning.push(
-      `NIFTY (${niftyBias.confidence}%), BANK NIFTY (${bankNiftyBias.confidence}%) and FIN NIFTY (${finniftyBias.confidence}%) all bearish, breadth favors declines (${breadth.declines} vs ${breadth.advances})`
+      `NIFTY (${niftyBias.confidence}%), BANK NIFTY (${bankNiftyBias.confidence}%) and FIN NIFTY (${finniftyBias.confidence}%) all bearish` +
+        (breadth.isBullishBias == null
+          ? ', breadth unavailable this tick'
+          : `, breadth favors declines (${breadth.declines} vs ${breadth.advances})`)
     );
   } else {
     trend = 'SIDEWAYS';
@@ -132,7 +143,10 @@ async function assessMarketTrend(provider: MarketDataProvider, fnoRows: FnoScann
   const avgConfidence =
     trend !== 'SIDEWAYS' ? (niftyBias.confidence + bankNiftyBias.confidence + finniftyBias.confidence) / 3 : niftyBias.confidence;
   const confidenceComponent = Math.round((avgConfidence / 100) * 10);
-  const breadthComponent = (trend === 'BULLISH' && breadth.isBullishBias) || (trend === 'BEARISH' && !breadth.isBullishBias) ? 3 : 0;
+  // Explicit === checks, not truthiness — with breadth.isBullishBias
+  // possibly null (no data this tick), `!null` is true and would wrongly
+  // award this bonus for a BEARISH trend whose breadth is actually unknown.
+  const breadthComponent = (trend === 'BULLISH' && breadth.isBullishBias === true) || (trend === 'BEARISH' && breadth.isBullishBias === false) ? 3 : 0;
   const vixComponent = Math.round((vixScore / 100) * 2);
   const score = trend === 'SIDEWAYS' ? Math.round(confidenceComponent * 0.5) : Math.min(15, confidenceComponent + breadthComponent + vixComponent);
 
