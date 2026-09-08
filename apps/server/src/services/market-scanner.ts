@@ -51,11 +51,12 @@ import type {
   MarketTrendRead,
   OptionType,
   ScannedCandidate,
+  ScanPortfolioRisk,
   ScannerScoreBreakdown,
   ScannerSetupTier,
   SectorRank,
 } from '@fno/shared';
-import { LIQUID_SPREAD_MAX_PCT, isMarketOpen } from '@fno/shared';
+import { DEFAULT_RISK_CONFIG, LIQUID_SPREAD_MAX_PCT, isMarketOpen } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { buildMarketBias } from './market-bias.js';
 import { scanFnoUniverse } from './fno-scanner.js';
@@ -81,22 +82,43 @@ import { logger } from '../lib/logger.js';
 const SHORTLIST_SIZE = 8;
 const MIN_STOCK_VOLUME = 50_000; // floor beneath which a "liquid" spread reading isn't trustworthy either
 const SCORE_SURFACE_FLOOR = 60; // spec's own "Weak setup, generally avoid" cutoff — nothing below this is shown at all
+
+// The 8 scoring categories sum to 100 (see ScannerScoreBreakdown).
+const MAX_SCORE = 100;
+const MARKET_TREND_MAX = 15;
 // Stock-specific movers always score 0 on the 15-point Market Trend
 // category by construction (see scoreCandidate) — the market's own read
 // disagrees with them, that's the whole point of the category. Their real
 // achievable max is 85, not 100, so applying the same flat 60 here would
 // demand ~70% of what's actually possible instead of 60% — a stricter bar
 // than intended, and the reason this section stayed empty even on days
-// with several genuine, sizeable counter-trend movers live. Scaled to the
-// same 60% standard, applied to the 85 points these candidates can earn.
-const STOCK_SPECIFIC_SCORE_FLOOR = Math.round(SCORE_SURFACE_FLOOR * 0.85);
+// with several genuine, sizeable counter-trend movers live. Both the floor
+// and the tier bands are scaled to this ceiling instead.
+const STOCK_SPECIFIC_MAX_SCORE = MAX_SCORE - MARKET_TREND_MAX;
+const STOCK_SPECIFIC_SCORE_FLOOR = Math.round(SCORE_SURFACE_FLOOR * (STOCK_SPECIFIC_MAX_SCORE / MAX_SCORE));
 const NIFTY_TREND_MIN_CONFIDENCE = 55;
 
 const SCAN_CACHE_KEY = 'market_scan:latest';
 const SCAN_CACHE_TTL_SECONDS = 360; // a little over the 5-minute background interval, so the API never serves a fully-expired read
 
-function tierFor(score: number): ScannerSetupTier {
-  return score >= 80 ? 'HIGH_CONVICTION' : score >= 70 ? 'WATCHLIST' : 'WEAK';
+// Tiers are judged against what the candidate could ACTUALLY have scored,
+// not a flat 100. A stock-specific mover forfeits the whole 15-point Market
+// Trend category by construction (the broader market disagrees with it —
+// that's what makes it stock-specific), so its ceiling is 85 and a flat
+// >=80 bar for HIGH_CONVICTION was very nearly unreachable: those setups
+// were labelled "Weak" almost regardless of how strong they actually were.
+// A null atmSpreadPct means neither ATM leg quoted a genuine two-sided
+// market this tick — that's evidence of ILLIQUIDITY, but the gate used to
+// read `atmSpreadPct == null || atmSpreadPct <= MAX` and let it through,
+// admitting exactly the names it was meant to keep out. Only a real,
+// measured, tight spread passes now.
+function isTradeablySpread(row: FnoScannerRow): boolean {
+  return row.atmSpreadPct != null && row.atmSpreadPct <= LIQUID_SPREAD_MAX_PCT;
+}
+
+function tierFor(score: number, maxPossible: number): ScannerSetupTier {
+  const pct = maxPossible > 0 ? (score / maxPossible) * 100 : 0;
+  return pct >= 80 ? 'HIGH_CONVICTION' : pct >= 70 ? 'WATCHLIST' : 'WEAK';
 }
 
 // --- Step 1: overall market trend ---
@@ -211,7 +233,7 @@ async function writeShownSymbols(key: string, symbols: Set<string>): Promise<voi
 
 function shortlistStocks(fnoRows: FnoScannerRow[], trend: MarketTrend, previouslyShown: Set<string>): FnoScannerRow[] {
   const liquid = fnoRows.filter(
-    (r) => r.volume >= MIN_STOCK_VOLUME && (r.atmSpreadPct == null || r.atmSpreadPct <= LIQUID_SPREAD_MAX_PCT)
+    (r) => r.volume >= MIN_STOCK_VOLUME && isTradeablySpread(r)
   );
   liquid.sort((a, b) => (trend === 'BULLISH' ? b.relativeStrength - a.relativeStrength : a.relativeStrength - b.relativeStrength));
   const topN = liquid.slice(0, SHORTLIST_SIZE);
@@ -253,7 +275,7 @@ function shortlistStockSpecificMovers(fnoRows: FnoScannerRow[], excludeSymbols: 
     (r) =>
       !excludeSymbols.has(r.symbol) &&
       r.volume >= MIN_STOCK_VOLUME &&
-      (r.atmSpreadPct == null || r.atmSpreadPct <= LIQUID_SPREAD_MAX_PCT)
+      isTradeablySpread(r)
   );
   const bullish = eligible
     .filter((r) => r.changePercent > 0 && r.relativeStrength >= STOCK_SPECIFIC_MIN_RELATIVE_STRENGTH)
@@ -282,6 +304,9 @@ interface BiasInputsSubset {
   ema50: number | null;
   emaAligned: 'BULLISH' | 'BEARISH' | null;
   volumeRatio: number;
+  /** False when the feed carries no volume for this symbol — volumeRatio is then a 1.0 stand-in, not a measurement. */
+  volumeDataAvailable: boolean;
+  dte: number | null;
   optionOiFlow: string | null;
   optionOiFlowNetSkew: number;
   futuresOi: string;
@@ -297,7 +322,8 @@ function scoreCandidate(
   marketTrend: MarketTrendRead,
   sector: SectorRank,
   stockBias: MarketBias,
-  side: OptionType
+  side: OptionType,
+  candidateIvRank: number | null
 ): { breakdown: ScannerScoreBreakdown; reasoning: string[] } {
   const wantsBullish = side === 'CE';
   const inputs = stockBias.inputs as unknown as BiasInputsSubset;
@@ -322,10 +348,30 @@ function scoreCandidate(
   }
 
   // Sector Strength: this candidate's OWN sector (looked up per-stock, not
-  // one shared "picked" sector for the whole batch) — a clear sector leader
-  // (big gap over the next-ranked sector) scores higher than a narrow win.
-  const sectorStrengthScore = Math.min(10, Math.round(5 + Math.abs(sector.avgRelativeStrength) * 2));
-  reasoning.push(`${sector.sector} sector relative strength ${sector.avgRelativeStrength > 0 ? '+' : ''}${sector.avgRelativeStrength}% vs NIFTY`);
+  // one shared "picked" sector for the whole batch), scored in the DIRECTION
+  // of the trade — a CE wants its sector outperforming, a PE wants it
+  // underperforming.
+  //
+  // Was `5 + Math.abs(avgRelativeStrength) * 2`, which had two bugs: the
+  // absolute value meant a CE candidate sitting in the day's WEAKEST sector
+  // scored a full 10/10 for "sector strength", and the +5 floor handed every
+  // candidate half the category for free — including ones whose sector is
+  // entirely unknown (neutralSectorRank, memberCount 0), which is missing
+  // data, not neutral-but-measured evidence.
+  const signedSectorStrength = wantsBullish ? sector.avgRelativeStrength : -sector.avgRelativeStrength;
+  const SECTOR_FULL_MARKS_PCT = 2.5; // outperformance vs NIFTY that earns the full 10
+  const sectorStrengthScore =
+    sector.memberCount === 0
+      ? 0
+      : Math.max(0, Math.min(10, Math.round((signedSectorStrength / SECTOR_FULL_MARKS_PCT) * 10)));
+  if (sector.memberCount === 0) {
+    reasoning.push(`No sector data for this symbol — Sector Strength scored 0 rather than assumed neutral`);
+  } else {
+    reasoning.push(
+      `${sector.sector} sector relative strength ${sector.avgRelativeStrength > 0 ? '+' : ''}${sector.avgRelativeStrength}% vs NIFTY` +
+        (signedSectorStrength <= 0 ? ` — moving against this ${side}, so no credit` : '')
+    );
+  }
 
   // Price Action / Setup: BREAKOUT/BREAKDOWN regime agreeing with side is
   // the strongest single read here (a leading, volume-confirmed signal);
@@ -362,9 +408,51 @@ function scoreCandidate(
   const emaTrendScore = inputs.emaAligned === (wantsBullish ? 'BULLISH' : 'BEARISH') ? 10 : 0;
   if (emaTrendScore > 0) reasoning.push(`Price > EMA20 > EMA50 stacked and sloping ${side === 'CE' ? 'bullish' : 'bearish'}`);
 
-  // Volume: current vs 20-bar average, already computed by market-bias.ts.
-  const volumeScore = Math.max(0, Math.min(10, Math.round((inputs.volumeRatio - 1) * 10)));
+  // Volume (/5): last COMPLETE bar vs its 20-bar average, from
+  // market-bias.ts. Scores 0 when the feed carries no volume at all rather
+  // than reading the 1.0 "no information" fallback as "exactly average".
+  const volumeScore = inputs.volumeDataAvailable
+    ? Math.max(0, Math.min(5, Math.round((inputs.volumeRatio - 1) * 5)))
+    : 0;
   if (volumeScore > 0) reasoning.push(`Volume ${inputs.volumeRatio.toFixed(2)}x its 20-bar average`);
+  else if (!inputs.volumeDataAvailable) reasoning.push(`No volume data on this feed — Volume scored 0 rather than assumed average`);
+
+  // IV Environment (/10): this app only ever proposes BUYING a naked option,
+  // so the volatility you pay on entry is a first-order term, not a detail —
+  // yet the model had no IV or DTE component at all. Buying at a high IV
+  // rank means paying up for a move that's already priced in and taking the
+  // crush risk; near-zero DTE means theta and gamma dominate whatever
+  // directional read got the candidate here.
+  let ivEnvironmentScore = 0;
+  if (candidateIvRank == null) {
+    // Unknown IV rank (needs several days of history) — award the neutral
+    // middle rather than 0 or full marks, and say so.
+    ivEnvironmentScore = 3;
+    reasoning.push(`IV rank unavailable (needs more daily history) — IV Environment scored as unknown, not favourable`);
+  } else {
+    // Low IV rank is what an option BUYER wants: 6 points at rank 0 sliding
+    // to 0 by rank 60, nothing above that.
+    const ivRankPoints = Math.max(0, Math.min(6, Math.round(((60 - candidateIvRank) / 60) * 6)));
+    ivEnvironmentScore += ivRankPoints;
+    reasoning.push(
+      candidateIvRank >= 60
+        ? `IV rank ${candidateIvRank} — expensive to buy, no IV credit`
+        : `IV rank ${candidateIvRank} — reasonable premium to be buying`
+    );
+  }
+  // DTE: 0-1 DTE is the worst case for a long option (theta/gamma dominate),
+  // a comfortable 5+ days is the best.
+  const dte = inputs.dte;
+  if (dte == null) {
+    ivEnvironmentScore += 2;
+  } else if (dte <= 1) {
+    reasoning.push(`${dte} DTE — expiry-day theta/gamma work directly against a long option, no DTE credit`);
+  } else if (dte <= 3) {
+    ivEnvironmentScore += 2;
+  } else {
+    ivEnvironmentScore += 4;
+  }
+  ivEnvironmentScore = Math.min(10, ivEnvironmentScore);
 
   // Option Chain: the real buying/writing/covering/unwinding flow read
   // (this session's addition to market-bias.ts), scaled by how skewed it
@@ -380,23 +468,31 @@ function scoreCandidate(
   const oiBuildupScore = (wantsBullish && futuresImplication === 'BULLISH') || (!wantsBullish && futuresImplication === 'BEARISH') ? 10 : 0;
   if (oiBuildupScore > 0) reasoning.push(`Futures OI (${inputs.futuresOi}) agrees with ${side}`);
 
-  // SMC Structure: BOS/CHoCH, liquidity sweep, FVG, order block — each
-  // worth a slice, only when its direction agrees with this side.
+  // SMC Structure (/5): liquidity sweep, FVG, order block — each worth a
+  // slice, only when its direction agrees with this side.
+  //
+  // lastStructureEvent (BOS/CHoCH) is deliberately NOT scored here any more:
+  // it already earns 2-3 points in Price Action above, and counting the same
+  // single event in two categories presented as independent was inflating
+  // one signal to as much as 6 points. It's also the same swing-structure
+  // model the sweep/FVG/order-block reads come from, so this whole category
+  // is one interpretation viewed four ways — which is why it's now worth 5
+  // rather than 10.
   let smcStructureScore = 0;
-  if (inputs.lastStructureEvent?.direction === (wantsBullish ? 'BULLISH' : 'BEARISH')) smcStructureScore += 3;
   if (inputs.liquiditySweep && (wantsBullish ? inputs.liquiditySweep.type === 'SELL_SIDE' : inputs.liquiditySweep.type === 'BUY_SIDE')) {
     smcStructureScore += 3;
     reasoning.push(`${inputs.liquiditySweep.type === 'SELL_SIDE' ? 'Sell-side' : 'Buy-side'} liquidity sweep agrees with ${side}`);
   }
-  if (inputs.activeFvg?.type === (wantsBullish ? 'BULLISH' : 'BEARISH')) smcStructureScore += 2;
-  if (inputs.activeOrderBlock?.type === (wantsBullish ? 'BULLISH' : 'BEARISH')) smcStructureScore += 2;
-  smcStructureScore = Math.min(10, smcStructureScore);
+  if (inputs.activeFvg?.type === (wantsBullish ? 'BULLISH' : 'BEARISH')) smcStructureScore += 1;
+  if (inputs.activeOrderBlock?.type === (wantsBullish ? 'BULLISH' : 'BEARISH')) smcStructureScore += 1;
+  smcStructureScore = Math.min(5, smcStructureScore);
 
   return {
     breakdown: {
       marketTrend: marketTrendScore,
       sectorStrength: sectorStrengthScore,
       priceAction: priceActionScore,
+      ivEnvironment: ivEnvironmentScore,
       emaTrend: emaTrendScore,
       volume: volumeScore,
       optionChain: optionChainScore,
@@ -408,7 +504,9 @@ function scoreCandidate(
 }
 
 function sumBreakdown(b: ScannerScoreBreakdown): number {
-  return b.marketTrend + b.sectorStrength + b.priceAction + b.emaTrend + b.volume + b.optionChain + b.oiBuildup + b.smcStructure;
+  return (
+    b.marketTrend + b.sectorStrength + b.priceAction + b.ivEnvironment + b.emaTrend + b.volume + b.optionChain + b.oiBuildup + b.smcStructure
+  );
 }
 
 // --- Pipeline entry point ---
@@ -421,24 +519,28 @@ async function scoreShortlist(
   sectorRankByName: Map<string, SectorRank>,
   sideFor: (row: FnoScannerRow) => OptionType | null,
   scoreFloor: number,
-  shownStateKey: string
+  shownStateKey: string,
+  maxPossibleScore: number
 ): Promise<ScannedCandidate[]> {
   const previouslyShown = await readShownSymbols(shownStateKey);
   const exitFloor = Math.max(0, scoreFloor - HYSTERESIS_MARGIN);
 
   const results: ScannedCandidate[] = [];
+  let attempted = 0;
+  let failed = 0;
   for (const row of shortlist) {
     try {
       const side = sideFor(row);
       if (!side) continue;
 
+      attempted += 1;
       const { bias, tradeSetup } = await buildMarketBias(provider, row.symbol, exchange);
       if (!tradeSetup.available) continue;
 
       const ownSectorName = sectorForSymbol(row.symbol);
       const ownSector = sectorRankByName.get(ownSectorName) ?? neutralSectorRank(ownSectorName);
 
-      const { breakdown, reasoning } = scoreCandidate(marketTrend, ownSector, bias, side);
+      const { breakdown, reasoning } = scoreCandidate(marketTrend, ownSector, bias, side, row.ivRank);
       const score = sumBreakdown(breakdown);
       // Hysteresis: a symbol already showing gets the lower exit floor, not
       // the entry floor — a small dip shouldn't flicker it out the moment
@@ -452,7 +554,7 @@ async function scoreShortlist(
         sector: ownSectorName,
         side,
         score,
-        tier: tierFor(score),
+        tier: tierFor(score, maxPossibleScore),
         scoreBreakdown: breakdown,
         tradeSetup,
         reasoning,
@@ -460,11 +562,24 @@ async function scoreShortlist(
         ivRank: row.ivRank,
       });
     } catch (err: any) {
+      failed += 1;
       logger.warn({ error: err.message, symbol: row.symbol }, 'Market scanner: one candidate failed, skipping');
     }
   }
   results.sort((a, b) => b.score - a.score);
-  await writeShownSymbols(shownStateKey, new Set(results.map((r) => r.symbol)));
+
+  // Only rewrite the hysteresis memory when this cycle actually learned
+  // something. An empty result set produced by a broker outage (every
+  // buildMarketBias throwing — exactly what a rate-limit storm looks like)
+  // used to overwrite the shown-set with {}, wiping the carryover state that
+  // hysteresis exists to provide and making a transient failure permanently
+  // reset the list it was meant to keep stable.
+  const cycleUsable = attempted === 0 || failed < attempted;
+  if (cycleUsable) {
+    await writeShownSymbols(shownStateKey, new Set(results.map((r) => r.symbol)));
+  } else {
+    logger.warn({ attempted, failed, shownStateKey }, 'Market scanner: every candidate failed — keeping previous hysteresis state');
+  }
   return results;
 }
 
@@ -497,7 +612,8 @@ export async function runMarketScan(provider: MarketDataProvider, exchange: Exch
       sectorRankByName,
       () => side,
       SCORE_SURFACE_FLOOR,
-      SHOWN_CANDIDATES_KEY
+      SHOWN_CANDIDATES_KEY,
+      MAX_SCORE
     );
   }
 
@@ -520,10 +636,86 @@ export async function runMarketScan(provider: MarketDataProvider, exchange: Exch
     sectorRankByName,
     (row) => (row.changePercent > 0 ? 'CE' : row.changePercent < 0 ? 'PE' : null),
     STOCK_SPECIFIC_SCORE_FLOOR,
-    SHOWN_STOCK_SPECIFIC_KEY
+    SHOWN_STOCK_SPECIFIC_KEY,
+    STOCK_SPECIFIC_MAX_SCORE
   );
 
-  return { marketTrend, sector: contextSector ?? null, candidates, stockSpecificMovers, scannedAt: Date.now() };
+  return {
+    marketTrend,
+    sector: contextSector ?? null,
+    candidates,
+    portfolioRisk: computePortfolioRisk(candidates),
+    stockSpecificMovers,
+    scannedAt: Date.now(),
+  };
+}
+
+// --- Book-level risk ---
+// Each setup is sized independently to risk maxRiskPerTrade, and nothing
+// ever looked at the resulting book. On a trending day every candidate is
+// the same side of the same market, so taking 9 of them is not nine
+// independent 2% bets — it's one directional bet at 9x size. DEFAULT_RISK_-
+// CONFIG has declared maxDailyLoss and maxPositions from the start but no
+// code read either of them; this is where they finally bind.
+function computePortfolioRisk(candidates: ScannedCandidate[]): ScanPortfolioRisk {
+  const capital = DEFAULT_RISK_CONFIG.tradingCapital;
+  const maxPositions = DEFAULT_RISK_CONFIG.maxPositions;
+  const maxDailyLoss = DEFAULT_RISK_CONFIG.maxDailyLoss;
+
+  const sized = candidates.filter((c) => c.tradeSetup.positionSize && c.tradeSetup.positionSize.lots > 0);
+  const totalRiskAmount = round2(sized.reduce((sum, c) => sum + (c.tradeSetup.positionSize?.riskAmount ?? 0), 0));
+  const totalPremiumOutlay = round2(
+    sized.reduce((sum, c) => sum + (c.tradeSetup.entry ?? 0) * (c.tradeSetup.positionSize?.quantity ?? 0), 0)
+  );
+  const sides = new Set(sized.map((c) => c.side));
+  const singleSided = sides.size === 1 && sized.length > 1;
+
+  // Walk the ranked list and count how many fit before either limit binds.
+  let running = 0;
+  let withinLimits = 0;
+  for (const c of sized) {
+    const risk = c.tradeSetup.positionSize?.riskAmount ?? 0;
+    if (withinLimits >= maxPositions || running + risk > maxDailyLoss) break;
+    running += risk;
+    withinLimits += 1;
+  }
+
+  const warnings: string[] = [];
+  if (sized.length > maxPositions) {
+    warnings.push(`${sized.length} setups surfaced but maxPositions is ${maxPositions} — only the top ${maxPositions} fit your own risk config.`);
+  }
+  if (totalRiskAmount > maxDailyLoss) {
+    warnings.push(
+      `Taking all ${sized.length} risks ₹${totalRiskAmount.toFixed(0)} against a ₹${maxDailyLoss} daily loss limit — the first ${withinLimits} stay inside it.`
+    );
+  }
+  if (singleSided) {
+    warnings.push(
+      `All ${sized.length} setups are ${[...sides][0]} — these are one correlated directional bet, not ${sized.length} independent ones. Size the book, not each trade.`
+    );
+  }
+  if (totalPremiumOutlay > capital * 0.25) {
+    warnings.push(
+      `₹${totalPremiumOutlay.toFixed(0)} of premium (${round2((totalPremiumOutlay / capital) * 100)}% of capital) to open all of these — a gap through the stops loses the premium, not the stop-based risk.`
+    );
+  }
+
+  return {
+    positions: sized.length,
+    maxPositions,
+    totalRiskAmount,
+    totalRiskPct: capital > 0 ? round2((totalRiskAmount / capital) * 100) : 0,
+    maxDailyLoss,
+    totalPremiumOutlay,
+    totalPremiumPct: capital > 0 ? round2((totalPremiumOutlay / capital) * 100) : 0,
+    singleSided,
+    withinLimits,
+    warnings,
+  };
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
 
 export async function getMarketScan(provider: MarketDataProvider, exchange: Exchange = 'NSE'): Promise<MarketScanResult> {

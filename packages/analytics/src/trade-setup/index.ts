@@ -30,12 +30,19 @@ import { DEFAULT_RISK_CONFIG } from '@fno/shared';
 // played out. Caller passes the mode-appropriate value; this default
 // covers the (more common) unspecified/intraday case.
 const DEFAULT_SL_PREMIUM_PCT = 0.3;
-// market-bias.ts's direction comes from 6 votes; confidence = % of them
-// agreeing with the verdict, in steps of ~16.7 (15/17/33/50/67/83/95 after
-// clamping). 50 only requires a bare 3-of-6 — indistinguishable from a
-// genuinely contested 3-for/2-against/1-flat split, since confidence counts
-// agreement, not margin over dissent. 65 requires a real supermajority
-// (>=4 of 6 actively agreeing) before a live entry/SL/target gets generated.
+// market-bias.ts's confidence is the share of DECISIVE votes (flats
+// excluded) agreeing with the verdict, pro-rated down when fewer than 6
+// indicators have an opinion at all. 65 therefore means roughly a 2:1
+// supermajority among indicators that actually took a side, on a decent
+// body of evidence, before a live entry/SL/target gets generated.
+//
+// This comment previously described a 6-vote engine with ~16.7% steps and
+// warned that confidence counted "agreement, not margin over dissent" —
+// both stale. The engine now runs 10 baseline votes plus event votes, and
+// the metric itself was reworked to exclude flats precisely because
+// counting them made a unanimous-but-quiet read score LOWER than a
+// contested one. 65 is a meaningfully different (and more honest) bar than
+// it was when this number was first chosen.
 const MIN_CONFIDENCE = 65;
 // A real single-leg long-option bet essentially never justifies a
 // reward:risk this large — with SL fixed at a 30%-of-entry stop, the risk
@@ -58,6 +65,42 @@ const MIN_CONFIDENCE = 65;
 // bar when deciding whether to keep trusting it, rather than a second,
 // possibly-drifting copy of the same threshold.
 export const MAX_RISK_REWARD = 6;
+
+// ============================================================
+// MINIMUM REWARD:RISK — the floor this module was missing
+// ============================================================
+// There was a ceiling (above) but never a floor, so setups risking ₹20
+// to make ₹12 (R:R 0.6) were emitted as tradeable. Every setup in a
+// live sample sat between 0.4 and 0.7, which is not a coincidence —
+// it's the geometry: the stop was a fixed % of the FULL option premium
+// (weeks of time value for a 25-DTE contract) while the target is
+// delta × a fraction of ONE day's expected move. Two different time
+// scales, so the ratio between them was an accident, not a choice.
+//
+// The recorded outcomes confirmed what that implies: across 166 tracked
+// setups, profit factor 0.60, average return -4.48%, and 95 of 119
+// closed setups EXPIRED without touching either leg. At R:R 0.6 the
+// breakeven win rate is ~63% (~69% after costs) against an actual
+// profitable-close rate of 40% — mathematically unwinnable.
+//
+// Fixed by making the two legs commensurate: the target still comes
+// from delta × realistically-achievable move (shrinking it further is
+// what caused the "targets never get hit" problem in the first place),
+// and the STOP is now sized to whatever width that target can actually
+// support — bounded below by MIN_SL_PREMIUM_PCT so it can't end up
+// inside the noise, and still bounded above by the existing VIX/expiry
+// premium stop. When no stop width satisfies both bounds, the setup is
+// refused outright rather than emitted at a losing ratio.
+// Exported for the same reason MAX_RISK_REWARD is: market-bias.ts re-applies
+// this identical bar to setups already locked in Redis on every poll, so
+// landing this fix immediately flushes the previously-generated sub-1.0 R:R
+// setups instead of leaving them live until the day rolls over.
+export const MIN_RISK_REWARD = 1.5;
+// A stop tighter than this is inside the friction: ~3% round-trip costs
+// plus a bid-ask spread that's allowed up to 5% of mid on the ATM leg
+// means anything under ~15% of premium gets taken out by the cost of
+// trading rather than by the market being wrong.
+const MIN_SL_PREMIUM_PCT = 0.15;
 
 // VIX-adjusted SL: a stop sized for VIX~15 (a typical calm reading) gets
 // widened as VIX rises above that, since higher-VIX regimes mean the same
@@ -241,11 +284,47 @@ function buildNakedLong(
   // Mid-price entry — more realistic than LTP, which can be stale on a thin
   // book and far from where an order would actually fill.
   const entry = round2(mid);
-  const stopLoss = round2(entry * (1 - effectiveSlPct));
   const target = round2(entry + deltaMove);
+  const grossReward = target - entry;
+
+  // Costs are charged against BOTH legs when judging whether the ratio is
+  // worth taking: a win pays the round trip out of the reward, a loss pays
+  // it on top of the stop. Deliberately used for the GATE only, never
+  // written into the displayed `riskReward` — brokerage is a flat rupee
+  // amount per order so its % impact varies with lot size, and this stays
+  // a broker-independent rule of thumb rather than a number the UI should
+  // present as precise (same reasoning as the note in `reason` below).
+  const roundTripCost = entry * (ESTIMATED_ROUND_TRIP_COST_PCT / 100);
+  const netReward = grossReward - roundTripCost;
+  if (netReward <= 0) {
+    return {
+      available: false,
+      reason: `Projected target (${target.toFixed(2)}) doesn't clear the ~${ESTIMATED_ROUND_TRIP_COST_PCT}% round-trip cost of trading it — no edge left after costs.`,
+    };
+  }
+
+  // Widest stop that still leaves MIN_RISK_REWARD after costs, solving
+  // (grossReward - cost) / (stopWidth + cost) >= MIN_RISK_REWARD.
+  const rrStopWidth = netReward / MIN_RISK_REWARD - roundTripCost;
+  const maxStopWidth = entry * effectiveSlPct;
+  const minStopWidth = entry * MIN_SL_PREMIUM_PCT;
+  const stopWidth = Math.min(maxStopWidth, rrStopWidth);
+
+  if (stopWidth < minStopWidth) {
+    const impliedRr = round2(netReward / (minStopWidth + roundTripCost));
+    return {
+      available: false,
+      reason:
+        `Reward:risk after costs (${impliedRr.toFixed(2)}) is below the ${MIN_RISK_REWARD} minimum even at the tightest tradeable stop ` +
+        `(${Math.round(MIN_SL_PREMIUM_PCT * 100)}% of premium). The ${deltaMove.toFixed(2)}-point projected move can't pay for the risk — skip, don't size down.`,
+    };
+  }
+
+  const stopLoss = round2(entry - stopWidth);
   const risk = entry - stopLoss;
-  const reward = target - entry;
+  const reward = grossReward;
   const riskReward = risk > 0 ? round2(reward / risk) : 0;
+  const riskRewardNet = round2(netReward / (risk + roundTripCost));
 
   if (riskReward > MAX_RISK_REWARD) {
     return {
@@ -254,7 +333,8 @@ function buildNakedLong(
     };
   }
 
-  const estimatedCost = round2(entry * (ESTIMATED_ROUND_TRIP_COST_PCT / 100));
+  const effectiveStopPct = entry > 0 ? risk / entry : 0;
+  const estimatedCost = round2(roundTripCost);
   const positionSize = calculatePositionSize(entry, stopLoss, lotSize);
   const oneLotRiskPct = lotSize > 0 && positionSize && positionSize.capital > 0 ? round2(((entry - stopLoss) * lotSize / positionSize.capital) * 100) : null;
 
@@ -280,9 +360,11 @@ function buildNakedLong(
     reason:
       `${direction} bias at ${confidence}/100 confidence — ATM ${side} ${atmStrike} @ ${entry.toFixed(2)}${hasQuote ? ' (bid-ask mid)' : ''}. ` +
       `Target ${target.toFixed(2)} from delta (${leg.delta.toFixed(2)}) × IV-implied expected move (${expectedMovePoints.toFixed(0)} pts). ` +
-      `SL ${stopLoss.toFixed(2)} — a ${Math.round(effectiveSlPct * 100)}% premium stop${vixNote}${expiryNote}.` +
+      `SL ${stopLoss.toFixed(2)} — a ${Math.round(effectiveStopPct * 100)}% premium stop, sized so the trade clears ${MIN_RISK_REWARD}:1 reward:risk after costs` +
+      (stopWidth < maxStopWidth ? ` (tighter than the ${Math.round(effectiveSlPct * 100)}% ceiling${vixNote}${expiryNote} this setup would otherwise allow)` : `${vixNote}${expiryNote}`) +
+      `. R:R ${riskReward.toFixed(2)} gross, ~${riskRewardNet.toFixed(2)} after costs.` +
       (dte != null ? ` DTE ${dte}.` : '') +
-      ` None of the numbers above subtract real trading costs — brokerage, STT, and slippage beyond this mid-price entry typically run ~${ESTIMATED_ROUND_TRIP_COST_PCT}% of premium round-trip (~${estimatedCost.toFixed(2)} here), a rough estimate that varies by broker, not a precise deduction.` +
+      ` The entry/SL/target figures themselves are pre-cost — brokerage, STT, and slippage beyond this mid-price entry typically run ~${ESTIMATED_ROUND_TRIP_COST_PCT}% of premium round-trip (~${estimatedCost.toFixed(2)} here), a rough broker-dependent estimate, which is why it gates the setup rather than being subtracted from the displayed prices.` +
       sizingNote,
   };
 }

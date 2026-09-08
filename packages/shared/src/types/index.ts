@@ -697,11 +697,23 @@ export interface ScannerScoreBreakdown {
   marketTrend: number;    // /15
   sectorStrength: number; // /10
   priceAction: number;    // /20
+  /**
+   * /10 — IV rank + DTE suitability for BUYING this option. Added after a
+   * review found the model had no volatility term at all despite the app
+   * only ever proposing naked longs: a stock could score 80 with its
+   * options at IV rank 95 and 0 DTE, which is the worst environment a
+   * buyer can be in. Funded by halving `volume` and `smcStructure` (see
+   * their comments) so the total stays 100 and the surfacing floor keeps
+   * its meaning.
+   */
+  ivEnvironment: number;
   emaTrend: number;       // /10
-  volume: number;         // /10
+  /** /5 — halved from 10 to fund `ivEnvironment`; the underlying ratio was also measuring partial-candle timing rather than real participation until that was fixed. */
+  volume: number;
   optionChain: number;    // /15
   oiBuildup: number;      // /10
-  smcStructure: number;   // /10
+  /** /5 — halved from 10 to fund `ivEnvironment`. BOS/CHoCH/sweep/FVG/order-block all derive from ONE swing-structure model, so this category was never worth as much independent weight as its size implied — and its BOS/CHoCH slice was additionally being counted a second time inside `priceAction`. */
+  smcStructure: number;
 }
 
 export interface ScannedCandidate {
@@ -720,10 +732,40 @@ export interface ScannedCandidate {
   ivRank: number | null;
 }
 
+/**
+ * Aggregate exposure if the surfaced candidates were actually taken at their
+ * suggested sizes. Exists because every setup was previously sized in
+ * isolation at `maxRiskPerTrade` with nothing looking at the book as a
+ * whole — and on a trending day EVERY candidate is the same side of the same
+ * market, so N of them is one directional bet at N× size, not N independent
+ * 2% bets. `maxDailyLoss`/`maxPositions` were declared in DEFAULT_RISK_CONFIG
+ * but never read by anything.
+ */
+export interface ScanPortfolioRisk {
+  /** Candidates counted here (those carrying a real position size). */
+  positions: number;
+  maxPositions: number;
+  /** Sum of every candidate's own stop-based risk, in rupees. */
+  totalRiskAmount: number;
+  /** That total as a % of configured trading capital. */
+  totalRiskPct: number;
+  maxDailyLoss: number;
+  /** Total premium outlay to open them all — the real money at risk if a gap blows through the stops. */
+  totalPremiumOutlay: number;
+  totalPremiumPct: number;
+  /** True when all surfaced candidates sit on the same side (CE or PE) — i.e. one correlated bet. */
+  singleSided: boolean;
+  /** How many of the ranked candidates fit inside maxPositions AND maxDailyLoss. */
+  withinLimits: number;
+  warnings: string[];
+}
+
 export interface MarketScanResult {
   marketTrend: MarketTrendRead;
   sector: SectorRank | null;
   candidates: ScannedCandidate[];
+  /** Book-level view of `candidates` — see ScanPortfolioRisk. */
+  portfolioRisk: ScanPortfolioRisk;
   /**
    * High-confidence stocks moving independently of (or against) today's
    * overall market read — e.g. a stock rallying hard on its own news while
@@ -1256,13 +1298,27 @@ export interface SymbolWinRate extends WinRateBucket {
  * bucket has too few trades for a drawdown/streak read to mean much).
  */
 export interface RiskMetrics {
-  /** Largest peak-to-trough decline in cumulative return%, walking resolved trades oldest-first. Additive (sum of each trade's own returnPercent), not compounded — there's no capital base to compound against here. Null when there's nothing resolved yet. */
-  maxDrawdownPercent: number | null;
+  /**
+   * Largest peak-to-trough decline of the equity curve in **R** (multiples
+   * of each trade's own risk), walking resolved trades oldest-first. "3.5R"
+   * means the worst losing run cost three and a half times a single trade's
+   * risk — at the configured 2% risk per trade, ~7% of capital.
+   *
+   * Was `maxDrawdownPercent`, a raw sum of each trade's returnPercent, which
+   * reported 555% — impossible for a drawdown, because those percentages
+   * were each struck against a different premium basis and summing them
+   * gives a figure proportional to nothing. R is the unit in which trades
+   * sized to a common risk budget are actually comparable.
+   *
+   * Null when nothing resolved yet, or no resolved trade carried a usable
+   * stop leg to normalise against.
+   */
+  maxDrawdownR: number | null;
   /** Longest streak of consecutive unprofitable closes (LOSS + negative-return EXPIRED) — the same "profitable close" population profitableCloseRatePercent uses, not the stricter WIN/LOSS-only one winRatePercent uses. */
   maxConsecutiveLosses: number;
   /** Mirror of the above, for context. */
   maxConsecutiveWins: number;
-  /** Gross profit ÷ gross loss across resolved trades. Null when there are no losses yet to divide by (undefined, not infinite). */
+  /** Gross profit ÷ gross loss across resolved trades, in R. Below 1.0 means the system loses money. Null when there are no losses yet to divide by (undefined, not infinite). */
   profitFactor: number | null;
 }
 

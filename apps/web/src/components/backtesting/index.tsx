@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { formatIndianNumber } from '@fno/shared';
+import { DEFAULT_RISK_CONFIG, formatIndianNumber } from '@fno/shared';
 import type { WinRateBucket, TradeSetupRecord, RiskMetrics } from '@fno/shared';
 import { useBacktesting } from '@/lib/use-backtesting';
 import { useAssetTabsStore } from '@/stores';
@@ -179,19 +179,29 @@ function OverallSummary({ bucket }: { bucket: WinRateBucket }) {
 
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-      <Card accent="border-t-cyan-500/50">
-        <div className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-1.5" title="Only counts a position as a win if it hit its exact fixed target — an early exit on a confirmed bias reversal is EXPIRED regardless of P&L, even if it closed up.">
-          Win Rate
-        </div>
-        <div className={`text-3xl font-bold tabular-nums ${winRateColor}`}>{bucket.winRatePercent != null ? `${bucket.winRatePercent}%` : '—'}</div>
-        <div className="text-[10px] text-gray-500 light:text-slate-500 mt-1">{bucket.wins}W / {bucket.losses}L</div>
-      </Card>
+      {/*
+        Profitable Close Rate leads, Win Rate follows. Win Rate counts only
+        WIN/LOSS and drops every EXPIRED close — which is the DOMINANT
+        outcome here (95 of 119 closed setups in a live sample), so it was
+        describing ~20% of closed trades while sitting in the headline slot
+        and reading ~18 points higher than reality. The honest "did this
+        make money" number is the one that belongs first.
+      */}
       <Card accent="border-t-violet-500/50">
-        <div className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-1.5" title="WIN plus any EXPIRED close (bias reversed before target) that was still profitable at the moment it closed — the more honest 'did this actually make money' read.">
+        <div className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-1.5" title="WIN plus any EXPIRED close (bias reversed, or the day rolled over, before target) that was still profitable at the moment it closed — the honest 'did this actually make money' read across every closed position.">
           Profitable Close Rate
         </div>
         <div className={`text-3xl font-bold tabular-nums ${profitableRateColor}`}>{bucket.profitableCloseRatePercent != null ? `${bucket.profitableCloseRatePercent}%` : '—'}</div>
-        <div className="text-[10px] text-gray-500 light:text-slate-500 mt-1">{bucket.profitableCloses}↑ / {bucket.unprofitableCloses}↓</div>
+        <div className="text-[10px] text-gray-500 light:text-slate-500 mt-1">{bucket.profitableCloses}↑ / {bucket.unprofitableCloses}↓ · all closes</div>
+      </Card>
+      <Card accent="border-t-cyan-500/50">
+        <div className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-1.5" title="Target-hit rate only: counts a position as a win solely if it reached its exact fixed target, and EXCLUDES every EXPIRED close regardless of P&L. Because expiries dominate, this covers only a small slice of closed trades — read Profitable Close Rate for the full picture.">
+          Target-Hit Rate
+        </div>
+        <div className={`text-3xl font-bold tabular-nums ${winRateColor}`}>{bucket.winRatePercent != null ? `${bucket.winRatePercent}%` : '—'}</div>
+        <div className="text-[10px] text-gray-500 light:text-slate-500 mt-1">
+          {bucket.wins}W / {bucket.losses}L · excludes {bucket.expired} expired
+        </div>
       </Card>
       <Card>
         <div className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-1.5">Total Setups</div>
@@ -225,7 +235,7 @@ function OverallSummary({ bucket }: { bucket: WinRateBucket }) {
 // columns in the grid above.
 
 function RiskMetricsSummary({ metrics }: { metrics: RiskMetrics }) {
-  if (metrics.maxDrawdownPercent == null) return null;
+  if (metrics.maxDrawdownR == null) return null;
 
   const profitFactorColor =
     metrics.profitFactor == null ? 'text-gray-400' : metrics.profitFactor >= 1.5 ? 'text-emerald-400' : metrics.profitFactor >= 1 ? 'text-yellow-400' : 'text-red-400';
@@ -233,10 +243,13 @@ function RiskMetricsSummary({ metrics }: { metrics: RiskMetrics }) {
   return (
     <div className="grid grid-cols-3 gap-3">
       <Card accent="border-t-red-500/50">
-        <div className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-1.5" title="Largest peak-to-trough decline in cumulative return%, walking resolved trades in the order they happened. Additive, not compounded against a capital base.">
+        <div className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-1.5" title="Largest peak-to-trough decline of the equity curve in R — multiples of a single trade's own risk — walking resolved trades in the order they happened. At the configured 2% risk per trade, 1R ≈ 2% of capital.">
           Max Drawdown
         </div>
-        <div className="text-3xl font-bold tabular-nums text-red-400">-{metrics.maxDrawdownPercent}%</div>
+        <div className="text-3xl font-bold tabular-nums text-red-400">-{metrics.maxDrawdownR}R</div>
+        <div className="text-[10px] text-gray-500 light:text-slate-500 mt-1">
+          ≈ {(metrics.maxDrawdownR * DEFAULT_RISK_CONFIG.maxRiskPerTrade).toFixed(1)}% of capital at {DEFAULT_RISK_CONFIG.maxRiskPerTrade}% risk/trade
+        </div>
       </Card>
       <Card accent="border-t-orange-500/50">
         <div className="text-[10px] font-semibold text-gray-500 light:text-slate-500 uppercase tracking-wider mb-1.5" title="Longest streak of consecutive unprofitable closes in a row — the same population Profitable Close Rate uses.">

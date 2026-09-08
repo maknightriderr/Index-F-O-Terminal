@@ -25,6 +25,7 @@ import {
   getOIDescription,
   buildTradeSetup,
   MAX_RISK_REWARD,
+  MIN_RISK_REWARD,
   evaluateSpreadProgress,
   calculateHistoricalVolatility,
   compareIvToHv,
@@ -265,10 +266,14 @@ async function computeMarketBias(
   // right now." `aligned` alone can be true on a flat/tangled EMA — only
   // `aligned && slopeOk` together mean a real trend structure.
   const emaTrend = detectEmaTrendStructure(c1h.closes);
-  const longVolSeries = c1h.volumes.slice(-20);
+  // Last COMPLETE bar, not the still-forming one — same partial-candle
+  // distortion documented on the 15m ratio below, and worse here since a
+  // 1H/Daily bar spends far longer partially formed.
+  const longCompletedVolumes = c1h.volumes.slice(0, -1);
+  const longVolSeries = longCompletedVolumes.slice(-20);
   const longAvgVolume = longVolSeries.length > 0 ? longVolSeries.reduce((a, b) => a + b, 0) / longVolSeries.length : 0;
-  const longLastVolume = c1h.volumes[c1h.volumes.length - 1] ?? 0;
-  const longVolumeRatio = longAvgVolume > 0 ? longLastVolume / longAvgVolume : 1;
+  const longLastVolume = longCompletedVolumes[longCompletedVolumes.length - 1] ?? 0;
+  const longVolumeRatio = longAvgVolume > 0 && longLastVolume > 0 ? longLastVolume / longAvgVolume : 1;
 
   // --- 15m signals ---
   const todaysCandles = filterToday(candles15m);
@@ -280,7 +285,14 @@ async function computeMarketBias(
         todaysCandles.map((c) => c.volume)
       )
     : vwap(c15.highs, c15.lows, c15.closes, c15.volumes);
-  const sessionVwap = sessionVwapSeries[sessionVwapSeries.length - 1] ?? spot;
+  // VWAP is volume-weighted, so a feed that carries no volume (indices,
+  // routinely) yields nothing usable here and this silently fell back to
+  // `spot` — which then reads out as "Price near VWAP (23,663.20 ≈
+  // 23,663.20)", presenting a missing input as though it were a finding,
+  // and left vwapVote permanently neutral with nothing flagging why.
+  const sessionVwapRaw = sessionVwapSeries[sessionVwapSeries.length - 1];
+  const vwapDataAvailable = sessionVwapRaw != null && Number.isFinite(sessionVwapRaw) && sessionVwapRaw > 0;
+  const sessionVwap = vwapDataAvailable ? sessionVwapRaw : spot;
 
   const rsi15Series = rsi(c15.closes, 14);
   const rsi15 = rsi15Series[rsi15Series.length - 1] ?? 50;
@@ -377,10 +389,25 @@ async function computeMarketBias(
       ? (spot - bbLowerNow) / (bbUpperNow - bbLowerNow)
       : 0.5;
 
-  const volSeries15 = c15.volumes.slice(-20);
+  // The most recent candle is still FORMING — poll at 12:52 and the
+  // 12:45-13:00 bar holds 7 of its 15 minutes. Comparing that partial bar
+  // against a 20-bar average of COMPLETE bars understated the ratio by
+  // roughly half on average and made it sawtooth within every bucket (near
+  // zero just after a bar opens, peaking as it closes), so "volume
+  // confirmation" was really measuring what time it happened to be. That
+  // silently withheld the Bollinger-breakout and Supertrend-flip votes
+  // below, and left the Market Scanner's whole 10-point Volume category
+  // reading ~0 almost always. Compare the last COMPLETE bar instead.
+  const completedVolumes = c15.volumes.slice(0, -1);
+  const volSeries15 = completedVolumes.slice(-20);
   const avgVolume15 = volSeries15.length > 0 ? volSeries15.reduce((a, b) => a + b, 0) / volSeries15.length : 0;
-  const lastVolume15 = c15.volumes[c15.volumes.length - 1] ?? 0;
-  const volumeRatio = avgVolume15 > 0 ? lastVolume15 / avgVolume15 : 1;
+  const lastVolume15 = completedVolumes[completedVolumes.length - 1] ?? 0;
+  // Indices (NIFTY/BANKNIFTY/FINNIFTY) often report no volume at all, which
+  // lands here as avgVolume15 === 0. The 1 fallback is "no information",
+  // NOT "exactly average" — volumeDataAvailable below is what downstream
+  // consumers should check before reading anything into the ratio.
+  const volumeDataAvailable = avgVolume15 > 0 && lastVolume15 > 0;
+  const volumeRatio = volumeDataAvailable ? lastVolume15 / avgVolume15 : 1;
 
   const todayOpen = todaysCandles[0]?.open ?? c15.closes[0];
   const todayChangePct = todayOpen > 0 ? ((spot - todayOpen) / todayOpen) * 100 : 0;
@@ -675,8 +702,29 @@ async function computeMarketBias(
   const bearishProbability = Math.round((votesAgainst / total) * 100);
   const neutralProbability = 100 - bullishProbability - bearishProbability;
 
+  // Confidence = agreement among the votes that actually HAVE an opinion,
+  // scaled down when few of them do.
+  //
+  // It used to be agreementCount / total, counting flat (0) votes in the
+  // denominator, which made it measure "how much is happening" rather than
+  // "how sure are we": 6-for/0-against/8-flat scored 43% (a UNANIMOUS read,
+  // rejected by every gate) while a genuinely contested 9-for/5-against
+  // scored 64% and passed. Flats came from indicators sitting neutral, and
+  // from inputs the feed simply didn't carry — so a symbol with missing
+  // VWAP/volume data was penalised as though its indicators disagreed.
+  //
+  // Excluding flats fixes the dilution, but on its own would let a lone
+  // 1-for/0-against read print 100%, so it's scaled by how much evidence
+  // there is: below MIN_DECISIVE_VOTES the score is pro-rated down.
+  const MIN_DECISIVE_VOTES = 6;
+  const decisiveVotes = votesFor + votesAgainst;
   const agreementCount = direction === 'BULLISH' ? votesFor : direction === 'BEARISH' ? votesAgainst : votesFlat;
-  const confidence = clamp(Math.round((agreementCount / total) * 100), 15, 95);
+  const rawAgreement = decisiveVotes > 0 ? agreementCount / decisiveVotes : 0;
+  const evidenceFactor = Math.min(1, decisiveVotes / MIN_DECISIVE_VOTES);
+  const confidence =
+    direction === 'NEUTRAL'
+      ? clamp(Math.round((votesFlat / total) * 100), 15, 95)
+      : clamp(Math.round(rawAgreement * evidenceFactor * 100), 15, 95);
 
   // --- Regime: leading breakout/breakdown (fresh, volume-confirmed Bollinger break) takes priority over the lagging ADX-based trend read, overridden by expiry-day gamma when DTE<=1 ---
   const regime = classifyRegime(adxValue, st1hDirectionConfirmed, atrPctZ, chain?.dte ?? null, chain?.gammaExposure?.regime ?? null, freshBreakoutUp, freshBreakoutDown, operatorActivityBullish, operatorActivityBearish);
@@ -772,7 +820,9 @@ async function computeMarketBias(
     );
   }
   reasoning.push(
-    vwapVote === 1
+    !vwapDataAvailable
+      ? `VWAP unavailable — this feed carries no volume for ${underlying}, so the VWAP vote is withheld rather than read off a stand-in`
+      : vwapVote === 1
       ? `Price above VWAP (${fmt(spot)} > ${fmt(sessionVwap)})`
       : vwapVote === -1
       ? `Price below VWAP (${fmt(spot)} < ${fmt(sessionVwap)})`
@@ -897,6 +947,16 @@ async function computeMarketBias(
       ema50: emaTrend?.ema50 ?? null,
       emaAligned: emaTrend?.aligned && emaTrend.slopeOk ? emaTrend.direction : null,
       volumeRatio: Math.round(volumeRatio * 100) / 100,
+      // Data-quality flags. Several inputs silently degrade to a neutral
+      // stand-in when the feed doesn't carry them (VWAP falls back to spot,
+      // volumeRatio to 1) — indices routinely hit BOTH at once, and a bias
+      // computed without VWAP and without volume confirmation was still
+      // reporting the same confidence as a fully-informed one, with nothing
+      // downstream able to tell the difference. These say which inputs were
+      // real so consumers can stop scoring off a fallback as if it were a
+      // measurement.
+      volumeDataAvailable,
+      vwapDataAvailable,
       maxPain: chain?.maxPain ?? null,
       expectedMove: chain?.expectedMove.points ?? null,
       expectedRangeLow: chain?.expectedMove.lowerBound ?? null,
@@ -1358,10 +1418,12 @@ async function resolveStickyTradeSetup(
   // oscillating IV solver inflating the target) can otherwise stay locked
   // in all day — its target is unreachable so hitSL/hitTarget below never
   // fires — silently serving a broken number for the rest of the session.
-  // Re-applying the same R:R plausibility bar buildTradeSetup itself
-  // enforces on every read closes that gap without needing a manual cache
-  // clear — this is what lets a fix land and immediately self-heal any
-  // setup already sitting in Redis, not just new ones generated after.
+  // Re-applying the same R:R band buildTradeSetup itself enforces on every
+  // read closes that gap without needing a manual cache clear — this is what
+  // lets a fix land and immediately self-heal any setup already sitting in
+  // Redis, not just new ones generated after. Now bounded on BOTH sides:
+  // the floor retires setups minted before the minimum-R:R fix, which were
+  // risking more than they could win (see MIN_RISK_REWARD's own comment).
   // The R:R cap only makes sense for a naked long, whose target comes from
   // a delta×expected-move projection that can run away on bad upstream
   // data — a spread's max profit/loss are geometrically bounded by real
@@ -1371,7 +1433,7 @@ async function resolveStickyTradeSetup(
     stored?.available &&
     (stored.structureType === 'SPREAD'
       ? stored.maxProfit != null && stored.maxProfit > 0 && stored.maxLoss != null && stored.maxLoss > 0
-      : stored.riskReward != null && stored.riskReward <= MAX_RISK_REWARD);
+      : stored.riskReward != null && stored.riskReward <= MAX_RISK_REWARD && stored.riskReward >= MIN_RISK_REWARD);
 
   // Self-heal a setup that's alive and trade-able in the terminal but
   // missing its Backtesting row — recordTradeSetupGenerated below can

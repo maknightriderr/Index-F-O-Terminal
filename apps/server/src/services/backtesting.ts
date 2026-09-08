@@ -142,7 +142,7 @@ function computeRiskMetrics(records: TradeSetupRecord[]): RiskMetrics {
     .sort((a, b) => a.generatedAt - b.generatedAt);
 
   if (resolved.length === 0) {
-    return { maxDrawdownPercent: null, maxConsecutiveLosses: 0, maxConsecutiveWins: 0, profitFactor: null };
+    return { maxDrawdownR: null, maxConsecutiveLosses: 0, maxConsecutiveWins: 0, profitFactor: null };
   }
 
   let cumulative = 0;
@@ -156,10 +156,17 @@ function computeRiskMetrics(records: TradeSetupRecord[]): RiskMetrics {
   let maxLossStreak = 0;
 
   for (const r of resolved) {
-    const ret = r.returnPercent!;
-    // Additive, not compounded — each trade's returnPercent is against
-    // ITS OWN entry basis (a different premium every time), and there's
-    // no shared capital base here to compound against.
+    // Measured in R — multiples of the trade's OWN risk — not raw
+    // returnPercent. Summing returnPercent produced a "maxDrawdownPercent"
+    // of 555%, which is not a drawdown at all: a drawdown can't exceed 100%,
+    // and adding up percentages each struck against a different premium
+    // basis gives a number that isn't proportional to money either. Every
+    // trade risks the same fraction of capital by construction (position
+    // sizing targets maxRiskPerTrade), so R is the unit where the trades
+    // ARE comparable and the equity curve means something.
+    const ret = toRMultiple(r);
+    if (ret == null) continue;
+
     cumulative += ret;
     peak = Math.max(peak, cumulative);
     maxDrawdown = Math.max(maxDrawdown, peak - cumulative);
@@ -181,11 +188,25 @@ function computeRiskMetrics(records: TradeSetupRecord[]): RiskMetrics {
   }
 
   return {
-    maxDrawdownPercent: Math.round(maxDrawdown * 100) / 100,
+    maxDrawdownR: Math.round(maxDrawdown * 100) / 100,
     maxConsecutiveLosses: maxLossStreak,
     maxConsecutiveWins: maxWinStreak,
     profitFactor: grossLoss > 0 ? Math.round((grossProfit / grossLoss) * 100) / 100 : null,
   };
+}
+
+/**
+ * A trade's result as a multiple of the risk it was taken with: its
+ * return as a % of entry, divided by the stop's own distance as a % of
+ * entry. A trade that hit its stop is -1R; one that made half its risk
+ * back is +0.5R. Null when the record has no usable stop leg (legacy
+ * spread rows), which the caller skips rather than mixing units.
+ */
+function toRMultiple(r: TradeSetupRecord): number | null {
+  if (r.returnPercent == null || r.entry == null || r.stopLoss == null || r.entry <= 0) return null;
+  const riskPct = ((r.entry - r.stopLoss) / r.entry) * 100;
+  if (!(riskPct > 0)) return null;
+  return r.returnPercent / riskPct;
 }
 
 function bucketBy(records: TradeSetupRecord[], keyFn: (r: TradeSetupRecord) => string): WinRateBucket[] {

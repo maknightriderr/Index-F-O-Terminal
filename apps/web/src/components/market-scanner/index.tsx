@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import { useMarketScanner } from '@/lib/use-market-scanner';
 import { useAssetTabsStore } from '@/stores';
 import { formatIndianNumber } from '@fno/shared';
-import type { ScannedCandidate, ScannerScoreBreakdown } from '@fno/shared';
+import type { ScannedCandidate, ScanPortfolioRisk, ScannerScoreBreakdown } from '@fno/shared';
 import { ScoreBadge } from '@/components/common/badges';
 
 const TREND_STYLES: Record<string, { label: string; className: string; dot: string }> = {
@@ -23,11 +23,12 @@ const BREAKDOWN_LABELS: Array<{ key: keyof ScannerScoreBreakdown; label: string;
   { key: 'marketTrend', label: 'Market Trend', max: 15 },
   { key: 'sectorStrength', label: 'Sector Strength', max: 10 },
   { key: 'priceAction', label: 'Price Action', max: 20 },
+  { key: 'ivEnvironment', label: 'IV / DTE', max: 10 },
   { key: 'emaTrend', label: 'EMA Trend', max: 10 },
-  { key: 'volume', label: 'Volume', max: 10 },
+  { key: 'volume', label: 'Volume', max: 5 },
   { key: 'optionChain', label: 'Option Chain', max: 15 },
   { key: 'oiBuildup', label: 'OI Build-up', max: 10 },
-  { key: 'smcStructure', label: 'SMC Structure', max: 10 },
+  { key: 'smcStructure', label: 'SMC Structure', max: 5 },
 ];
 
 export function MarketScannerPage() {
@@ -93,6 +94,10 @@ export function MarketScannerPage() {
         <div className="bg-gray-900/40 light:bg-slate-100 border border-gray-800/50 light:border-slate-200 rounded-xl p-6 text-center text-xs text-gray-500 light:text-slate-500">
           No market-aligned candidates cleared the 60-point bar this cycle.
         </div>
+      )}
+
+      {data && data.portfolioRisk && data.portfolioRisk.warnings.length > 0 && (
+        <PortfolioRiskPanel risk={data.portfolioRisk} />
       )}
 
       {data && data.candidates.length > 0 && (
@@ -161,6 +166,36 @@ function MarketStatusBanner({ data }: { data: NonNullable<ReturnType<typeof useM
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+// Book-level risk. Each setup below is sized independently to risk 2% of
+// capital, and on a trending day they're all the same side of the same
+// market — so the list is one correlated bet at N× size, not N independent
+// ones. This is the only place that says so.
+function PortfolioRiskPanel({ risk }: { risk: ScanPortfolioRisk }) {
+  return (
+    <div className="bg-amber-500/10 border border-amber-500/25 rounded-xl px-4 py-3 space-y-2">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <span className="text-xs font-bold text-amber-400 light:text-amber-700">⚠️ Book-level risk</span>
+        <span className="text-[11px] text-gray-400 light:text-slate-600 tabular-nums">
+          {risk.positions} setups · ₹{formatIndianNumber(risk.totalRiskAmount)} at risk ({risk.totalRiskPct}% of capital) · ₹
+          {formatIndianNumber(risk.totalPremiumOutlay)} premium ({risk.totalPremiumPct}%)
+        </span>
+      </div>
+      <ul className="space-y-1">
+        {risk.warnings.map((w, i) => (
+          <li key={i} className="text-[11px] text-amber-300/90 light:text-amber-800 flex gap-1.5">
+            <span className="opacity-60">▸</span>
+            {w}
+          </li>
+        ))}
+      </ul>
+      <div className="text-[11px] text-gray-400 light:text-slate-600">
+        Top <span className="font-semibold text-gray-200 light:text-slate-800">{risk.withinLimits}</span> of {risk.positions} fit inside your
+        configured {risk.maxPositions}-position / ₹{formatIndianNumber(risk.maxDailyLoss)} daily-loss limits.
+      </div>
     </div>
   );
 }
