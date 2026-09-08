@@ -200,6 +200,22 @@ export interface OptionChain {
   underlying: string;
   exchange: Exchange;
   spotPrice: number;
+  /**
+   * The underlying's own move since its previous close, in points and %.
+   *
+   * Every `oiInterpretation` on this chain is a DAY-SCALE read — it compares
+   * each leg's premium against that leg's previous close — but the chain had
+   * no day-scale reading of the UNDERLYING to sit beside them. So a chain
+   * legitimately showing "Call Buying / Put Writing" all the way down (an up
+   * day) could be read against an intraday pullback on the chart and look
+   * like a contradiction, with nothing on screen to resolve it. Reported
+   * live on CRUDEOIL, which is exactly what prompted this field.
+   *
+   * Null when the provider didn't return a usable previous close this tick —
+   * missing, not zero, so the UI shows "—" rather than a flat 0.00%.
+   */
+  underlyingChange: number | null;
+  underlyingChangePercent: number | null;
   expiry: string;
   availableExpiries: string[];
   dte: number;

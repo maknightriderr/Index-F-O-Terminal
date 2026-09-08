@@ -188,6 +188,28 @@ export function AssetWorkspace() {
                 {formatIndianNumber(spot, 2)}
               </div>
             )}
+            {/*
+              The underlying's DAY move, on the same LTP-vs-previous-close
+              basis every OI interpretation in the chain below uses. Without
+              it the header showed a bare price, so a chain reading "Call
+              Buying / Put Writing" throughout (an up day) could be compared
+              against an intraday dip on the chart and look self-
+              contradictory, with nothing on screen to settle it.
+            */}
+            {chain?.underlyingChangePercent != null && chain.underlyingChange != null && (
+              <div className="flex items-baseline gap-1.5 mt-0.5">
+                <span
+                  className={`text-sm font-semibold tabular-nums ${
+                    chain.underlyingChangePercent >= 0 ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700'
+                  }`}
+                >
+                  {chain.underlyingChangePercent >= 0 ? '▲ +' : '▼ '}
+                  {formatIndianNumber(chain.underlyingChange, 2)} ({chain.underlyingChangePercent >= 0 ? '+' : ''}
+                  {chain.underlyingChangePercent.toFixed(2)}%)
+                </span>
+                <span className="text-[10px] text-gray-400 light:text-slate-600">today</span>
+              </div>
+            )}
           </div>
           {chain && (
             <div className="flex items-center gap-4 text-xs text-gray-400 light:text-slate-600">

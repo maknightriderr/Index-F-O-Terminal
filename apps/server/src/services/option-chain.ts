@@ -87,7 +87,15 @@ async function buildOptionChainUncached(
       ? requestedExpiry
       : availableExpiries[0];
 
-  const { ltp: spotPrice } = await getSpotQuote(provider, underlying, exchange);
+  const { ltp: spotPrice, close: spotClose } = await getSpotQuote(provider, underlying, exchange);
+
+  // The underlying's own day move, on the same basis every leg's
+  // `changePercent` uses (LTP vs previous close) — so the chain's OI reads
+  // and the underlying figure shown beside them are measuring the same
+  // window and can't appear to contradict each other.
+  const underlyingChange = spotClose > 0 ? Math.round((spotPrice - spotClose) * 100) / 100 : null;
+  const underlyingChangePercent =
+    spotClose > 0 ? Math.round(((spotPrice - spotClose) / spotClose) * 10000) / 100 : null;
 
   if (spotPrice <= 0) {
     throw new Error(`Unable to resolve a live spot price for ${underlying}`);
@@ -174,9 +182,12 @@ async function buildOptionChainUncached(
     const quote = quoteByToken.get(inst.token);
     const broker = greeksByKey.get(`${strike}:${optionType}`);
     const changeOi = changeOiByToken.get(inst.token) ?? 0;
-    // Same self-computed % change as underlyingChangePercent above (not
-    // the provider's own percentChange field, which OHLC-mode payloads
-    // don't always populate) — this leg's OWN premium move, feeding
+    // Same self-computed % change as underlyingChangePercent above — this
+    // comment previously referred to a field that didn't actually exist,
+    // which is how the chain ended up with no day-scale reading of the
+    // underlying at all (see OptionChain.underlyingChangePercent). Computed
+    // rather than taken from the provider's own percentChange field, which
+    // OHLC-mode payloads don't always populate — this leg's OWN premium move, feeding
     // classifyOptionOI's real buying-vs-writing / covering-vs-unwinding
     // read below instead of the OI-direction-only guess it used to fall
     // back to when this was hardcoded to 0.
@@ -265,6 +276,8 @@ async function buildOptionChainUncached(
     underlying,
     exchange,
     spotPrice,
+    underlyingChange,
+    underlyingChangePercent,
     expiry,
     availableExpiries,
     dte,
