@@ -72,6 +72,15 @@ import { logger } from '../lib/logger.js';
 const SHORTLIST_SIZE = 15;
 const MIN_STOCK_VOLUME = 50_000; // floor beneath which a "liquid" spread reading isn't trustworthy either
 const SCORE_SURFACE_FLOOR = 60; // spec's own "Weak setup, generally avoid" cutoff — nothing below this is shown at all
+// Stock-specific movers always score 0 on the 15-point Market Trend
+// category by construction (see scoreCandidate) — the market's own read
+// disagrees with them, that's the whole point of the category. Their real
+// achievable max is 85, not 100, so applying the same flat 60 here would
+// demand ~70% of what's actually possible instead of 60% — a stricter bar
+// than intended, and the reason this section stayed empty even on days
+// with several genuine, sizeable counter-trend movers live. Scaled to the
+// same 60% standard, applied to the 85 points these candidates can earn.
+const STOCK_SPECIFIC_SCORE_FLOOR = Math.round(SCORE_SURFACE_FLOOR * 0.85);
 const NIFTY_TREND_MIN_CONFIDENCE = 55;
 
 const SCAN_CACHE_KEY = 'market_scan:latest';
@@ -155,19 +164,51 @@ async function assessMarketTrend(provider: MarketDataProvider, fnoRows: FnoScann
   return { trend, score, niftyBias, bankNiftyBias, finniftyBias, vix, breadth, reasoning };
 }
 
+// --- Hysteresis: a candidate shouldn't vanish the instant it dips just
+// under the entry bar. Persists which symbols were showing last cycle so a
+// small, temporary score dip (a momentary volume/OI/IV tick, not a real
+// reversal) doesn't flicker it out of the list every 5 minutes — it takes
+// a real drop below the lower EXIT floor to actually remove it. TTL is a
+// few scan cycles, not a full day: if scanning stops (market closes) the
+// carried-over state quietly expires instead of surviving into tomorrow.
+const HYSTERESIS_MARGIN = 10; // points below the entry floor a previously-shown candidate may still drift
+const SHOWN_STATE_TTL_SECONDS = 20 * 60;
+const SHOWN_CANDIDATES_KEY = 'market_scan:shown:candidates';
+const SHOWN_STOCK_SPECIFIC_KEY = 'market_scan:shown:stock_specific';
+
+async function readShownSymbols(key: string): Promise<Set<string>> {
+  try {
+    const raw = await redis.get(key);
+    return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+async function writeShownSymbols(key: string, symbols: Set<string>): Promise<void> {
+  await redis.set(key, JSON.stringify([...symbols]), 'EX', SHOWN_STATE_TTL_SECONDS);
+}
+
 // --- Step 2: whole-universe stock shortlist ---
 // No longer restricted to one "picked" sector's members — ranks every
 // liquid F&O stock by relative strength (in the market's preferred
 // direction) and takes the top N, regardless of which sector it's in.
 // Sector strength still feeds each candidate's own score (see
-// scoreCandidate), it just no longer gates who's even considered.
+// scoreCandidate), it just no longer gates who's even considered. Also
+// carries over any symbol still showing from last cycle (hysteresis) even
+// if it's since slipped out of the top-N rank cut, so scoreShortlist below
+// gets a chance to re-evaluate it against the lower exit floor rather than
+// dropping it purely because something else briefly outranked it.
 
-function shortlistStocks(fnoRows: FnoScannerRow[], trend: MarketTrend): FnoScannerRow[] {
+function shortlistStocks(fnoRows: FnoScannerRow[], trend: MarketTrend, previouslyShown: Set<string>): FnoScannerRow[] {
   const liquid = fnoRows.filter(
     (r) => r.volume >= MIN_STOCK_VOLUME && (r.atmSpreadPct == null || r.atmSpreadPct <= LIQUID_SPREAD_MAX_PCT)
   );
   liquid.sort((a, b) => (trend === 'BULLISH' ? b.relativeStrength - a.relativeStrength : a.relativeStrength - b.relativeStrength));
-  return liquid.slice(0, SHORTLIST_SIZE);
+  const topN = liquid.slice(0, SHORTLIST_SIZE);
+  const topNSymbols = new Set(topN.map((r) => r.symbol));
+  const carryover = liquid.filter((r) => previouslyShown.has(r.symbol) && !topNSymbols.has(r.symbol));
+  return [...topN, ...carryover];
 }
 
 // --- Step 2b: stock-specific movers (independent of / against the market's own trend) ---
@@ -194,7 +235,7 @@ function shortlistStocks(fnoRows: FnoScannerRow[], trend: MarketTrend): FnoScann
 const STOCK_SPECIFIC_MIN_RELATIVE_STRENGTH = 1.5; // real move vs NIFTY, not everyday dispersion noise
 const STOCK_SPECIFIC_PER_DIRECTION = 5;
 
-function shortlistStockSpecificMovers(fnoRows: FnoScannerRow[], excludeSymbols: Set<string>): FnoScannerRow[] {
+function shortlistStockSpecificMovers(fnoRows: FnoScannerRow[], excludeSymbols: Set<string>, previouslyShown: Set<string>): FnoScannerRow[] {
   const eligible = fnoRows.filter(
     (r) =>
       !excludeSymbols.has(r.symbol) &&
@@ -209,7 +250,14 @@ function shortlistStockSpecificMovers(fnoRows: FnoScannerRow[], excludeSymbols: 
     .filter((r) => r.changePercent < 0 && r.relativeStrength <= -STOCK_SPECIFIC_MIN_RELATIVE_STRENGTH)
     .sort((a, b) => a.relativeStrength - b.relativeStrength)
     .slice(0, STOCK_SPECIFIC_PER_DIRECTION);
-  return [...bullish, ...bearish];
+  // Hysteresis carryover: a previously-shown symbol still moving the same
+  // raw direction (changePercent sign unchanged) gets re-evaluated even if
+  // its relative-strength has since dipped below the entry threshold. A
+  // symbol that's fully reversed direction is a real invalidation, not
+  // noise, so it's deliberately NOT carried over.
+  const selected = new Set([...bullish, ...bearish].map((r) => r.symbol));
+  const carryover = eligible.filter((r) => previouslyShown.has(r.symbol) && !selected.has(r.symbol) && r.changePercent !== 0);
+  return [...bullish, ...bearish, ...carryover];
 }
 
 // --- Step 3: per-candidate scoring ---
@@ -358,8 +406,13 @@ async function scoreShortlist(
   shortlist: FnoScannerRow[],
   marketTrend: MarketTrendRead,
   sectorRankByName: Map<string, SectorRank>,
-  sideFor: (row: FnoScannerRow) => OptionType | null
+  sideFor: (row: FnoScannerRow) => OptionType | null,
+  scoreFloor: number,
+  shownStateKey: string
 ): Promise<ScannedCandidate[]> {
+  const previouslyShown = await readShownSymbols(shownStateKey);
+  const exitFloor = Math.max(0, scoreFloor - HYSTERESIS_MARGIN);
+
   const results: ScannedCandidate[] = [];
   for (const row of shortlist) {
     try {
@@ -374,7 +427,11 @@ async function scoreShortlist(
 
       const { breakdown, reasoning } = scoreCandidate(marketTrend, ownSector, bias, side);
       const score = sumBreakdown(breakdown);
-      if (score < SCORE_SURFACE_FLOOR) continue;
+      // Hysteresis: a symbol already showing gets the lower exit floor, not
+      // the entry floor — a small dip shouldn't flicker it out the moment
+      // it crosses back under the entry bar.
+      const effectiveFloor = previouslyShown.has(row.symbol) ? exitFloor : scoreFloor;
+      if (score < effectiveFloor) continue;
 
       results.push({
         symbol: row.symbol,
@@ -394,6 +451,7 @@ async function scoreShortlist(
     }
   }
   results.sort((a, b) => b.score - a.score);
+  await writeShownSymbols(shownStateKey, new Set(results.map((r) => r.symbol)));
   return results;
 }
 
@@ -415,9 +473,19 @@ export async function runMarketScan(provider: MarketDataProvider, exchange: Exch
   // an actual trend to align to. On a SIDEWAYS day there's no side to hunt.
   let candidates: ScannedCandidate[] = [];
   if (marketTrend.trend !== 'SIDEWAYS') {
-    const shortlist = shortlistStocks(fnoRows, marketTrend.trend);
+    const previouslyShown = await readShownSymbols(SHOWN_CANDIDATES_KEY);
+    const shortlist = shortlistStocks(fnoRows, marketTrend.trend, previouslyShown);
     const side: OptionType = marketTrend.trend === 'BULLISH' ? 'CE' : 'PE';
-    candidates = await scoreShortlist(provider, exchange, shortlist, marketTrend, sectorRankByName, () => side);
+    candidates = await scoreShortlist(
+      provider,
+      exchange,
+      shortlist,
+      marketTrend,
+      sectorRankByName,
+      () => side,
+      SCORE_SURFACE_FLOOR,
+      SHOWN_CANDIDATES_KEY
+    );
   }
 
   // Stock-specific movers — strong own-direction standouts, scored
@@ -429,9 +497,17 @@ export async function runMarketScan(provider: MarketDataProvider, exchange: Exch
   // changePercent is clearly one-sided, which would wrongly drop a real
   // mover here after it already earned its spot on relative strength.
   const excludeSymbols = new Set(candidates.map((c) => c.symbol));
-  const stockSpecificShortlist = shortlistStockSpecificMovers(fnoRows, excludeSymbols);
-  const stockSpecificMovers = await scoreShortlist(provider, exchange, stockSpecificShortlist, marketTrend, sectorRankByName, (row) =>
-    row.changePercent > 0 ? 'CE' : row.changePercent < 0 ? 'PE' : null
+  const previouslyShownStockSpecific = await readShownSymbols(SHOWN_STOCK_SPECIFIC_KEY);
+  const stockSpecificShortlist = shortlistStockSpecificMovers(fnoRows, excludeSymbols, previouslyShownStockSpecific);
+  const stockSpecificMovers = await scoreShortlist(
+    provider,
+    exchange,
+    stockSpecificShortlist,
+    marketTrend,
+    sectorRankByName,
+    (row) => (row.changePercent > 0 ? 'CE' : row.changePercent < 0 ? 'PE' : null),
+    STOCK_SPECIFIC_SCORE_FLOOR,
+    SHOWN_STOCK_SPECIFIC_KEY
   );
 
   return { marketTrend, sector: contextSector ?? null, candidates, stockSpecificMovers, scannedAt: Date.now() };
