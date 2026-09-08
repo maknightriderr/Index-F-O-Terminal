@@ -197,6 +197,23 @@ export const DEFAULT_RISK_CONFIG = {
   maxPositions: 5,
   maxPortfolioDelta: 500,
   maxPortfolioGamma: 100,
+  /**
+   * Cap on the PREMIUM actually paid for a single naked long, as a % of
+   * capital — a second, independent bound alongside maxRiskPerTrade.
+   *
+   * maxRiskPerTrade only bounds the loss if the stop FILLS. A long option's
+   * true maximum loss is 100% of premium: it can gap through the stop
+   * overnight, or collapse faster than an exit gets worked on expiry day.
+   * Sizing on the stop alone means a TIGHTER stop buys MORE lots for the
+   * same nominal risk — so tightening stops to fix reward:risk silently
+   * doubled the capital deployed (and the real tail loss) per trade.
+   * Measured: a 15% stop produced 13 lots / ₹65,000 outlay to risk a
+   * nominal ₹9,750. This is the bound that stops that.
+   *
+   * 5% of capital = 2.5x maxRiskPerTrade, i.e. a total wipeout of one
+   * position costs about two and a half planned stop-outs.
+   */
+  maxPremiumPerTradePct: 5,
 };
 
 // --- Risk-Free Rate (for Black-Scholes) ---

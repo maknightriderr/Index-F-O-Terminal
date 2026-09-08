@@ -348,6 +348,12 @@ export interface PositionSize {
   riskAmount: number;
   /** riskAmount as a % of capital — the real number to check against your intended risk%, since whole-lot rounding means it rarely lands exactly on it. */
   riskPct: number;
+  /** Premium actually paid to open this — quantity * entry. For a naked long this is the TRUE maximum loss (a gap or a fast collapse can take the whole thing), which `riskAmount` above understates because it assumes the stop fills. */
+  premiumOutlay: number;
+  /** premiumOutlay as a % of capital. */
+  premiumPct: number;
+  /** Which bound actually set the lot count: the stop-based risk budget, or the premium cap. */
+  limitedBy: 'RISK' | 'PREMIUM';
   capital: number;
   lotSize: number;
 }

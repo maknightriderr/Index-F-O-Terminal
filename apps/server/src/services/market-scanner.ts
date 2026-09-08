@@ -664,9 +664,7 @@ function computePortfolioRisk(candidates: ScannedCandidate[]): ScanPortfolioRisk
 
   const sized = candidates.filter((c) => c.tradeSetup.positionSize && c.tradeSetup.positionSize.lots > 0);
   const totalRiskAmount = round2(sized.reduce((sum, c) => sum + (c.tradeSetup.positionSize?.riskAmount ?? 0), 0));
-  const totalPremiumOutlay = round2(
-    sized.reduce((sum, c) => sum + (c.tradeSetup.entry ?? 0) * (c.tradeSetup.positionSize?.quantity ?? 0), 0)
-  );
+  const totalPremiumOutlay = round2(sized.reduce((sum, c) => sum + (c.tradeSetup.positionSize?.premiumOutlay ?? 0), 0));
   const sides = new Set(sized.map((c) => c.side));
   const singleSided = sides.size === 1 && sized.length > 1;
 

@@ -159,15 +159,32 @@ function calculatePositionSize(entry: number, stopLoss: number, lotSize: number)
   const riskPct = DEFAULT_RISK_CONFIG.maxRiskPerTrade;
   const maxRiskAmount = capital * (riskPct / 100);
   const riskPerLot = riskPerUnit * lotSize;
-  const lots = Math.max(0, Math.floor(maxRiskAmount / riskPerLot));
+  const riskBasedLots = Math.max(0, Math.floor(maxRiskAmount / riskPerLot));
+
+  // Second, independent bound: what this position actually COSTS. Sizing on
+  // the stop alone is inversely proportional to stop width, so a tighter
+  // stop buys more lots for the same nominal risk — and for a naked long,
+  // whose real maximum loss is the whole premium rather than the stop
+  // distance, that quietly scales up the tail risk instead of holding it
+  // flat. Whichever bound is stricter wins.
+  const maxPremiumAmount = capital * (DEFAULT_RISK_CONFIG.maxPremiumPerTradePct / 100);
+  const premiumPerLot = entry * lotSize;
+  const premiumBasedLots = premiumPerLot > 0 ? Math.max(0, Math.floor(maxPremiumAmount / premiumPerLot)) : riskBasedLots;
+
+  const lots = Math.min(riskBasedLots, premiumBasedLots);
   const quantity = lots * lotSize;
   const riskAmount = round2(quantity * riskPerUnit);
+
+  const premiumOutlay = round2(quantity * entry);
 
   return {
     lots,
     quantity,
     riskAmount,
     riskPct: capital > 0 ? round2((riskAmount / capital) * 100) : 0,
+    premiumOutlay,
+    premiumPct: capital > 0 ? round2((premiumOutlay / capital) * 100) : 0,
+    limitedBy: premiumBasedLots < riskBasedLots ? 'PREMIUM' : 'RISK',
     capital,
     lotSize,
   };
@@ -342,9 +359,24 @@ function buildNakedLong(
   if (!positionSize) {
     sizingNote = ' Position size unavailable — no valid lot size for this contract.';
   } else if (positionSize.lots === 0) {
-    sizingNote = ` Even 1 lot (${lotSize} qty) risks ~${oneLotRiskPct}% of the ₹${(positionSize.capital / 100000).toFixed(1)}L default capital — above the ${DEFAULT_RISK_CONFIG.maxRiskPerTrade}% target, so no lot count keeps this trade within it; size down or skip.`;
+    // Two different bounds can force this, and saying the wrong one is
+    // actively misleading: a high-priced contract can breach the premium
+    // cap while its stop-based risk is comfortably UNDER the risk target,
+    // in which case the old "risks ~X%, above the N% target" wording
+    // reported a number that wasn't above anything.
+    const oneLotPremium = round2(entry * lotSize);
+    const oneLotPremiumPct = positionSize.capital > 0 ? round2((oneLotPremium / positionSize.capital) * 100) : 0;
+    const capitalLabel = `₹${(positionSize.capital / 100000).toFixed(1)}L default capital`;
+    sizingNote =
+      oneLotPremiumPct > DEFAULT_RISK_CONFIG.maxPremiumPerTradePct
+        ? ` Even 1 lot (${lotSize} qty) costs ₹${oneLotPremium.toFixed(0)} in premium — ${oneLotPremiumPct}% of ${capitalLabel}, above the ${DEFAULT_RISK_CONFIG.maxPremiumPerTradePct}% premium-per-trade cap, so no lot count fits; skip this one.`
+        : ` Even 1 lot (${lotSize} qty) risks ~${oneLotRiskPct}% of ${capitalLabel} — above the ${DEFAULT_RISK_CONFIG.maxRiskPerTrade}% target, so no lot count keeps this trade within it; size down or skip.`;
   } else {
-    sizingNote = ` Suggested size: ${positionSize.lots} lot(s) (${positionSize.quantity} qty) risks ₹${positionSize.riskAmount.toFixed(0)} (${positionSize.riskPct}% of ₹${(positionSize.capital / 100000).toFixed(1)}L default capital) if SL hits.`;
+    sizingNote =
+      ` Suggested size: ${positionSize.lots} lot(s) (${positionSize.quantity} qty) risks ₹${positionSize.riskAmount.toFixed(0)} ` +
+      `(${positionSize.riskPct}% of ₹${(positionSize.capital / 100000).toFixed(1)}L default capital) if SL hits` +
+      (positionSize.limitedBy === 'PREMIUM' ? `, capped by the ${DEFAULT_RISK_CONFIG.maxPremiumPerTradePct}% premium-per-trade limit rather than by that stop` : '') +
+      `. Premium outlay ₹${positionSize.premiumOutlay.toFixed(0)} (${positionSize.premiumPct}%) — that, not the stop-based figure, is what a gap through the stop or an expiry-day collapse actually costs.`;
   }
 
   return {

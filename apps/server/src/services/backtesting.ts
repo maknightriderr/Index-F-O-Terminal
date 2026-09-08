@@ -156,27 +156,35 @@ function computeRiskMetrics(records: TradeSetupRecord[]): RiskMetrics {
   let maxLossStreak = 0;
 
   for (const r of resolved) {
-    // Measured in R — multiples of the trade's OWN risk — not raw
-    // returnPercent. Summing returnPercent produced a "maxDrawdownPercent"
-    // of 555%, which is not a drawdown at all: a drawdown can't exceed 100%,
-    // and adding up percentages each struck against a different premium
-    // basis gives a number that isn't proportional to money either. Every
-    // trade risks the same fraction of capital by construction (position
-    // sizing targets maxRiskPerTrade), so R is the unit where the trades
-    // ARE comparable and the equity curve means something.
-    const ret = toRMultiple(r);
-    if (ret == null) continue;
+    // Drawdown and profit factor are measured in R — multiples of the
+    // trade's OWN risk — not raw returnPercent. Summing returnPercent
+    // produced a "maxDrawdownPercent" of 555%, which is not a drawdown at
+    // all: a drawdown can't exceed 100%, and adding up percentages each
+    // struck against a different premium basis gives a number that isn't
+    // proportional to money either. Every trade risks the same fraction of
+    // capital by construction (position sizing targets maxRiskPerTrade), so
+    // R is the unit where trades ARE comparable.
+    const rMultiple = toRMultiple(r);
+    if (rMultiple != null) {
+      cumulative += rMultiple;
+      peak = Math.max(peak, cumulative);
+      maxDrawdown = Math.max(maxDrawdown, peak - cumulative);
 
-    cumulative += ret;
-    peak = Math.max(peak, cumulative);
-    maxDrawdown = Math.max(maxDrawdown, peak - cumulative);
+      if (rMultiple > 0) grossProfit += rMultiple;
+      else if (rMultiple < 0) grossLoss += Math.abs(rMultiple);
+    }
 
+    // Streaks walk EVERY resolved trade, using the sign of returnPercent —
+    // which exists for all of them, including legacy spread rows that have
+    // no stop leg to normalise into R. Counting streaks off the R-subset
+    // instead silently spliced those rows out of the sequence and merged
+    // the losing runs either side of them into one, inflating the reported
+    // "max consecutive losses" from 7 to 11 purely as an artefact.
+    const ret = r.returnPercent!;
     if (ret > 0) {
-      grossProfit += ret;
       winStreak += 1;
       lossStreak = 0;
     } else if (ret < 0) {
-      grossLoss += Math.abs(ret);
       lossStreak += 1;
       winStreak = 0;
     } else {
