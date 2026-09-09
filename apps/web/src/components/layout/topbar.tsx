@@ -37,19 +37,24 @@ export function TopBar() {
   const bankNifty = indices.find((i) => i.symbol === 'BANKNIFTY') ?? indices[1];
 
   return (
-    <header className="flex items-center h-12 px-4 bg-[#0b0b12]/95 light:bg-white/95 backdrop-blur-sm border-b border-gray-800/40 light:border-slate-200 shrink-0 gap-5 shadow-[0_1px_0_rgba(255,255,255,0.02)] light:shadow-[0_1px_0_rgba(0,0,0,0.03)] relative z-10">
+    // This row carries two index chips, a three-part status cluster, the
+    // alert bell, the theme switcher and a clock. That fits a desktop and
+    // overflows a phone, so the diagnostic bits (exchange/WS/live dots) and
+    // the theme toggle drop away below their breakpoints — the live index
+    // prices, alerts and clock are what's actually worth the width there.
+    <header className="flex items-center h-12 px-2 md:px-4 bg-[#0b0b12]/95 light:bg-white/95 backdrop-blur-sm border-b border-gray-800/40 light:border-slate-200 shrink-0 gap-2 md:gap-5 shadow-[0_1px_0_rgba(255,255,255,0.02)] light:shadow-[0_1px_0_rgba(0,0,0,0.03)] relative z-10">
       {/* Quick Index Prices */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-2 md:gap-4 min-w-0">
         <IndexChip symbol="NIFTY" price={nifty.ltp} change={nifty.change} changePercent={nifty.changePercent} />
-        <div className="w-px h-5 bg-gradient-to-b from-transparent via-gray-700 to-transparent light:via-slate-300" />
-        <IndexChip symbol="BANKNIFTY" price={bankNifty.ltp} change={bankNifty.change} changePercent={bankNifty.changePercent} />
+        <div className="hidden sm:block w-px h-5 bg-gradient-to-b from-transparent via-gray-700 to-transparent light:via-slate-300" />
+        <div className="hidden sm:block"><IndexChip symbol="BANKNIFTY" price={bankNifty.ltp} change={bankNifty.change} changePercent={bankNifty.changePercent} /></div>
       </div>
 
       {/* Spacer */}
       <div className="flex-1" />
 
       {/* Status Cluster */}
-      <div className="flex items-center gap-1 bg-gray-900/50 light:bg-slate-100 border border-gray-800/40 light:border-slate-200 rounded-full pl-3 pr-1 py-1 backdrop-blur-sm">
+      <div className="hidden lg:flex items-center gap-1 bg-gray-900/50 light:bg-slate-100 border border-gray-800/40 light:border-slate-200 rounded-full pl-3 pr-1 py-1 backdrop-blur-sm">
         <StatusDot label={`${selectedExchange} ${marketOpen ? 'Open' : 'Closed'}`} on={marketOpen} pulse={marketOpen} />
         <Divider />
         <StatusDot label={health.websocket.connected ? 'WS' : 'WS Off'} on={health.websocket.connected} />
@@ -62,7 +67,7 @@ export function TopBar() {
       <ThemeSwitcher />
 
       {/* Clock — JetBrains Mono with subtle glow */}
-      <div className="text-sm font-mono text-gray-300 light:text-slate-600 tabular-nums min-w-[70px] text-right tracking-wide" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+      <div className="text-xs md:text-sm font-mono text-gray-300 light:text-slate-600 tabular-nums min-w-[62px] md:min-w-[70px] text-right tracking-wide shrink-0" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
         {currentTime.split(':').map((part, i) => (
           <span key={i}>
             {i > 0 && <span className="animate-colon-blink">:</span>}
@@ -159,16 +164,20 @@ function IndexChip({
 
   return (
     <div className={`flex items-center gap-2.5 text-xs rounded-lg px-2 py-1 -mx-1 ${flashClass} transition-colors`}>
-      <Sparkline
-        data={getPriceHistory(symbol)}
-        symbol={symbol}
-        width={32}
-        height={16}
-        color={isPositive ? '#34d399' : '#f87171'}
-        showArea={false}
-        strokeWidth={1.2}
-        points={20}
-      />
+      {/* Decoration before information: on a phone this 32px sparkline
+          competes with the price it decorates, so it's the first thing to go. */}
+      <div className="hidden sm:block">
+        <Sparkline
+          data={getPriceHistory(symbol)}
+          symbol={symbol}
+          width={32}
+          height={16}
+          color={isPositive ? '#34d399' : '#f87171'}
+          showArea={false}
+          strokeWidth={1.2}
+          points={20}
+        />
+      </div>
       <span className="text-gray-400 light:text-slate-600 font-semibold tracking-wide">{symbol}</span>
       <span className={`text-gray-50 light:text-slate-900 font-bold tabular-nums text-sm ${isPositive ? 'text-glow-emerald' : 'text-glow-red'}`}>
         {formatIndianNumber(price, 2)}

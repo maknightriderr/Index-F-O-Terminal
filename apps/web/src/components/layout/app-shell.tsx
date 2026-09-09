@@ -19,7 +19,12 @@ export function AppShell({ children }: AppShellProps) {
   if (!mounted) return null; // Prevent hydration mismatch with persisted state
 
   return (
-    <div className="noise-overlay ambient-bg flex h-screen w-screen overflow-hidden bg-[#0a0a0f] light:bg-slate-50 text-gray-100 light:text-slate-900 font-sans">
+    // h-[100dvh] not h-screen: 100vh on mobile browsers measures the viewport
+    // as if the address bar were hidden, so the bottom of the app sat
+    // permanently under the browser chrome. dvh tracks the visible area as
+    // that bar collapses. w-full not w-screen: 100vw includes the scrollbar
+    // gutter, which is what produces a phantom horizontal scroll.
+    <div className="noise-overlay ambient-bg flex h-[100dvh] w-full overflow-hidden bg-[#0a0a0f] light:bg-slate-50 text-gray-100 light:text-slate-900 font-sans">
       <ThemeEffect />
       {/* Sidebar */}
       <Sidebar />

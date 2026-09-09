@@ -105,8 +105,13 @@ export function Sidebar() {
 
   return (
     <aside
-      className={`flex flex-col h-full bg-[#0b0b12]/95 light:bg-white/95 backdrop-blur-sm border-r border-gray-800/40 light:border-slate-200 transition-all duration-300 ease-out relative z-[2] ${
-        sidebarOpen ? 'w-56' : 'w-14'
+      // Always the narrow icon rail on a phone. An expanded 224px sidebar on
+      // a ~390px screen leaves too little for the content it's navigating
+      // to, and this app's screens are dense tables. The collapsed state
+      // still carries every label in its accessible name via the tooltip
+      // span, so nothing is lost to a screen reader.
+      className={`flex flex-col h-full bg-[#0b0b12]/95 light:bg-white/95 backdrop-blur-sm border-r border-gray-800/40 light:border-slate-200 transition-all duration-300 ease-out relative z-[2] shrink-0 w-14 ${
+        sidebarOpen ? 'md:w-56' : 'md:w-14'
       }`}
     >
       {/* Logo */}
@@ -122,15 +127,23 @@ export function Sidebar() {
           <div className="absolute inset-0 rounded-lg bg-gradient-to-br from-emerald-400/20 to-cyan-500/20 animate-breathe" />
         </div>
         {sidebarOpen && (
-          <span className="ml-2.5 text-sm font-semibold text-gray-100 light:text-slate-900 truncate tracking-tight">
+          <span className="ml-2.5 text-sm font-semibold text-gray-100 light:text-slate-900 truncate tracking-tight hidden md:inline">
             Terminal
           </span>
         )}
       </div>
 
       {/* Add Asset */}
+      {/* Two instances rather than one: the rail is always narrow below md,
+          so the button has to be compact there regardless of sidebarOpen,
+          and that's a CSS breakpoint the component can't see from a prop. */}
       <div className="px-2 py-2 border-b border-gray-800/40 light:border-slate-200">
-        <AddAssetButton compact={!sidebarOpen} />
+        <div className="md:hidden">
+          <AddAssetButton compact />
+        </div>
+        <div className="hidden md:block">
+          <AddAssetButton compact={!sidebarOpen} />
+        </div>
       </div>
 
       {/* Navigation */}
@@ -143,7 +156,7 @@ export function Sidebar() {
             )}
             {/* Section Title */}
             {sidebarOpen && (
-              <div className="px-2.5 pt-2 pb-1.5 text-[10px] font-bold text-gray-400 light:text-slate-600 uppercase tracking-[0.14em]">
+              <div className="px-2.5 pt-2 pb-1.5 text-[10px] font-bold text-gray-400 light:text-slate-600 uppercase tracking-[0.14em] hidden md:block">
                 {section.title}
               </div>
             )}
@@ -168,7 +181,7 @@ export function Sidebar() {
                       <Icon d={ICONS[item.icon] || ICONS.dashboard} className={isActive ? 'text-emerald-400 light:text-emerald-600 drop-shadow-[0_0_4px_rgba(16,185,129,0.4)]' : ''} />
                     </div>
                     {sidebarOpen && (
-                      <span className="ml-1 truncate">{item.label}</span>
+                      <span className="ml-1 truncate hidden md:inline">{item.label}</span>
                     )}
                     {/* Tooltip when collapsed */}
                     {!sidebarOpen && (
