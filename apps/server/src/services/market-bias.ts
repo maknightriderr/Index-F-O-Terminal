@@ -65,6 +65,7 @@ import { cached } from '../lib/cache.js';
 import { redis } from '../lib/redis.js';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
+import { notifyTradeSetup } from './telegram.js';
 import type { OptionChain } from '@fno/shared';
 
 // Angel One rate-limits historical-candle and Greeks requests far more
@@ -1749,6 +1750,14 @@ async function resolveStickyTradeSetup(
   } catch (err: any) {
     logger.warn({ error: err.message, underlying }, 'Sticky trade setup write failed');
   }
+
+  // Push exactly here and nowhere else. This branch is the ONLY one that
+  // mints a genuinely new setup — every other path either returns a setup
+  // already locked in Redis or backfills its database row, and hooking
+  // those would re-notify the same setup on every poll. Fire-and-forget:
+  // the notification is a side effect of the setup, never a precondition,
+  // so a Telegram outage cannot stop a setup being generated.
+  notifyTradeSetup({ underlying, exchange, mode, direction, confidence, setup: toStore });
 
   return toStore;
 }
