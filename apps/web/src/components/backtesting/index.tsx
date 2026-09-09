@@ -23,6 +23,9 @@ const MODE_FILTER_LABELS: Record<ModeFilter, string> = { ALL: 'All', INTRADAY: '
 // ("what happened"), vs. OPEN (r.outcome null/undefined) which is still
 // live and not yet comparable to the others.
 type OutcomeTab = 'ALL' | 'CLOSED' | 'OPEN';
+
+// The recent rows are what actually get read; 180 is an archive.
+const HISTORY_PREVIEW_ROWS = 20;
 const OUTCOME_TAB_LABELS: Record<OutcomeTab, string> = { ALL: 'All', CLOSED: 'Closed', OPEN: 'Open' };
 
 export function BacktestingPage() {
@@ -30,6 +33,7 @@ export function BacktestingPage() {
   const { analytics, history, loading, isLive } = useBacktesting(modeFilter);
   const [periodTab, setPeriodTab] = useState<PeriodTab>('daily');
   const [outcomeTab, setOutcomeTab] = useState<OutcomeTab>('ALL');
+  const [showAllHistory, setShowAllHistory] = useState(false);
   const openTab = useAssetTabsStore((s) => s.openTab);
   const filteredHistory =
     outcomeTab === 'ALL' ? history : outcomeTab === 'OPEN' ? history.filter((r) => !r.outcome) : history.filter((r) => !!r.outcome);
@@ -90,32 +94,44 @@ export function BacktestingPage() {
           <OverallSummary bucket={analytics.overall} />
           <RiskMetricsSummary metrics={analytics.riskMetrics} />
 
-          <div className="pt-1">
-            <h2 className="text-sm font-bold text-gray-200 light:text-slate-800">Win Rate Over Time</h2>
-            <p className="text-[11px] text-gray-400 light:text-slate-600 mt-0.5">Grouped by the day each setup was generated — a setup counts toward the period it opened in, not when it resolved.</p>
-          </div>
+          <Collapsible
+            title="Win Rate Over Time"
+            subtitle="grouped by the day each setup was generated"
+            count={analytics[periodTab].length}
+          >
+            <div className="flex gap-2 mb-3">
+              {(Object.keys(PERIOD_LABELS) as PeriodTab[]).map((p) => (
+                <button
+                  key={p}
+                  onClick={() => setPeriodTab(p)}
+                  className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${
+                    periodTab === p ? 'bg-emerald-500/15 text-emerald-400 light:text-emerald-700' : 'bg-gray-800/50 light:bg-slate-100 text-gray-400 light:text-slate-600'
+                  }`}
+                >
+                  {PERIOD_LABELS[p]}
+                </button>
+              ))}
+            </div>
+            <WinRateTable buckets={analytics[periodTab]} periodLabel={PERIOD_LABELS[periodTab]} />
+          </Collapsible>
 
-          <div className="flex gap-2">
-            {(Object.keys(PERIOD_LABELS) as PeriodTab[]).map((p) => (
-              <button
-                key={p}
-                onClick={() => setPeriodTab(p)}
-                className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${
-                  periodTab === p ? 'bg-emerald-500/15 text-emerald-400 light:text-emerald-700' : 'bg-gray-800/50 light:bg-slate-100 text-gray-400 light:text-slate-600'
-                }`}
-              >
-                {PERIOD_LABELS[p]}
-              </button>
-            ))}
-          </div>
-
-          <WinRateTable buckets={analytics[periodTab]} periodLabel={PERIOD_LABELS[periodTab]} />
-
-          <div className="pt-1">
-            <h2 className="text-sm font-bold text-gray-200 light:text-slate-800">By Symbol</h2>
-            <p className="text-[11px] text-gray-400 light:text-slate-600 mt-0.5">Every symbol the system has generated at least one trade setup for.</p>
-          </div>
-          <SymbolTable symbols={analytics.bySymbol} onOpen={(s) => openTab(s, 'NSE')} />
+          {/*
+            Only symbols that have actually RESOLVED something. Of 57 symbols
+            listed before, most had a single setup and "—" in every outcome
+            column — 40+ rows carrying no information, which is most of why
+            this page was unreadable. The rest are still reachable by opening
+            the symbol itself.
+          */}
+          <Collapsible
+            title="By Symbol"
+            subtitle="symbols with at least one resolved outcome"
+            count={analytics.bySymbol.filter((s) => s.wins + s.losses > 0).length}
+          >
+            <SymbolTable
+              symbols={analytics.bySymbol.filter((s) => s.wins + s.losses > 0)}
+              onOpen={(s) => openTab(s, 'NSE')}
+            />
+          </Collapsible>
         </>
       )}
 
@@ -141,17 +157,76 @@ export function BacktestingPage() {
           ))}
         </div>
       </div>
+      {/* Capped by default. 180 rows is an archive, not a view — the recent
+          ones are what get read, and the rest are one click away. */}
       <TradeSetupHistoryTable
-        history={filteredHistory}
+        history={showAllHistory ? filteredHistory : filteredHistory.slice(0, HISTORY_PREVIEW_ROWS)}
         loading={loading}
         onOpen={(s) => openTab(s, 'NSE')}
         emptyMessage={history.length > 0 ? `No ${OUTCOME_TAB_LABELS[outcomeTab].toLowerCase()} setups right now.` : undefined}
       />
+      {filteredHistory.length > HISTORY_PREVIEW_ROWS && (
+        <button
+          type="button"
+          onClick={() => setShowAllHistory(!showAllHistory)}
+          className="w-full text-xs font-semibold py-2 rounded-lg bg-gray-800/50 light:bg-slate-100 text-gray-300 light:text-slate-700 hover:bg-gray-800 light:hover:bg-slate-200 transition-colors"
+        >
+          {showAllHistory
+            ? `Show fewer — back to the latest ${HISTORY_PREVIEW_ROWS}`
+            : `Show all ${filteredHistory.length} setups`}
+        </button>
+      )}
     </div>
   );
 }
 
 // --- Shared card ---
+
+/**
+ * A section that starts closed.
+ *
+ * This page rendered, in one scroll: 7 metric cards, a 14-row period table,
+ * a 57-row per-symbol table (most rows a single setup with "—" in every
+ * outcome column) and all 180 trade rows. The number that actually answers
+ * "is this working" — expectancy — was somewhere in the middle of about
+ * 260 rows. Everything below the headline metrics is genuinely reference
+ * material, so it's collapsed until asked for.
+ */
+function Collapsible({
+  title,
+  subtitle,
+  count,
+  children,
+  defaultOpen = false,
+}: {
+  title: string;
+  subtitle?: string;
+  count?: number;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="border border-gray-800/50 light:border-slate-200 rounded-xl overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="w-full flex items-center gap-2 px-4 py-3 text-left hover:bg-gray-800/30 light:hover:bg-slate-50 transition-colors"
+      >
+        <span className={`text-gray-400 light:text-slate-600 text-xs transition-transform ${open ? 'rotate-90' : ''}`}>▶</span>
+        <span className="text-sm font-bold text-gray-200 light:text-slate-800">{title}</span>
+        {count != null && (
+          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-gray-800 light:bg-slate-100 text-gray-400 light:text-slate-600 tabular-nums">
+            {count}
+          </span>
+        )}
+        {subtitle && <span className="text-[11px] text-gray-400 light:text-slate-600 truncate ml-1">{subtitle}</span>}
+      </button>
+      {open && <div className="px-4 pb-4">{children}</div>}
+    </div>
+  );
+}
 
 function Card({ children, accent = 'border-t-amber-500/50' }: { children: React.ReactNode; accent?: string }) {
   return (
