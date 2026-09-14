@@ -82,6 +82,11 @@ export function BacktestingPage() {
           ℹ️ Showing Intraday ({analytics.intradayCount}) and Positional ({analytics.positionalCount}) combined — they have different SL sizing and hold times. Use the filter above to separate them.
         </div>
       )}
+      {analytics && analytics.offSessionExcludedCount > 0 && (
+        <div className="bg-gray-500/10 border border-gray-500/20 rounded-xl px-4 py-2 text-gray-400 light:text-slate-600 text-xs">
+          {analytics.offSessionExcludedCount} setup{analytics.offSessionExcludedCount === 1 ? '' : 's'} generated while the market was closed (after hours, weekend, or holiday) {analytics.offSessionExcludedCount === 1 ? 'is' : 'are'} excluded from these stats — priced off frozen quotes nobody could trade. They're still listed below, marked OFF-HRS.
+        </div>
+      )}
 
       {!isLive && !loading && (
         <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2.5 text-amber-400 light:text-amber-700 text-xs font-medium">
@@ -267,7 +272,7 @@ function OverallSummary({ bucket }: { bucket: WinRateBucket }) {
           Profitable Close Rate
         </div>
         <div className={`text-3xl font-bold tabular-nums ${profitableRateColor}`}>{bucket.profitableCloseRatePercent != null ? `${bucket.profitableCloseRatePercent}%` : '—'}</div>
-        <div className="text-[10px] text-gray-400 light:text-slate-600 mt-1">{bucket.profitableCloses}↑ / {bucket.unprofitableCloses}↓ · all closes</div>
+        <div className="text-[10px] text-gray-400 light:text-slate-600 mt-1">{bucket.profitableCloses}↑ / {bucket.unprofitableCloses}↓ · closes with a non-zero return</div>
       </Card>
       <Card accent="border-t-cyan-500/50">
         <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5" title="Target-hit rate only: counts a position as a win solely if it reached its exact fixed target, and EXCLUDES every EXPIRED close regardless of P&L. Because expiries dominate, this covers only a small slice of closed trades — read Profitable Close Rate for the full picture.">
@@ -534,6 +539,14 @@ function TradeSetupHistoryTable({
                 <tr key={r.id} onClick={() => onOpen(r.symbol)} className="border-t border-gray-800/40 light:border-slate-200 hover:bg-gray-800/30 light:hover:bg-slate-100 cursor-pointer transition-colors">
                   <td className="px-2 py-2 text-gray-400 light:text-slate-600 whitespace-nowrap">
                     {new Date(r.generatedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                    {r.generatedOffSession && (
+                      <span
+                        className="ml-1.5 inline-block px-1 py-px rounded text-[9px] font-bold text-amber-400 light:text-amber-700 bg-amber-500/10"
+                        title="Generated outside a live session — excluded from every statistic above"
+                      >
+                        OFF-HRS
+                      </span>
+                    )}
                   </td>
                   <td className="px-2 py-2 font-semibold text-gray-200 light:text-slate-800">{r.symbol}</td>
                   <td className="text-center px-2 py-2">

@@ -23,6 +23,7 @@ import type {
   TradingMode,
   SpreadLeg,
 } from '@fno/shared';
+import { minutesSinceSessionOpen } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 
@@ -38,15 +39,19 @@ const HISTORY_LIMIT = 5000; // generous — trade setups are at most a handful p
 // back to a terminal state and sits as "open" forever, inflating the open
 // count and never contributing to any statistic.
 //
-// Two days is deliberately well past any legitimate resolution window:
-// an INTRADAY setup closes at the day's rollover and a POSITIONAL one is
-// still actively monitored while its Redis key lives, so anything still
-// open after two full days has definitively lost its monitor. Closed as
+// Two days is deliberately well past an INTRADAY setup's resolution window
+// (it closes at the day's rollover). A POSITIONAL setup is a different
+// case: its Redis key lives for 30 days (STICKY_TRADE_SETUP_TTL_SECONDS_
+// POSITIONAL in market-bias.ts), and sweeping it at two days closed every
+// live positional hold as EXPIRED with no return while it was still being
+// monitored — so positional rows only count as abandoned once that key
+// can no longer exist. Closed as
 // EXPIRED with NO exit price and NO return, because the honest answer is
 // "we stopped tracking this" — inventing an exit price to make the row
 // look resolved would put fabricated P&L into the win-rate stats, which
 // is far worse than an unresolved row.
 const ABANDONED_AFTER_DAYS = 2;
+const ABANDONED_AFTER_DAYS_POSITIONAL = 31;
 
 const ABANDONED_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000; // 4x/day — this is housekeeping, not a live signal
 const ABANDONED_SWEEP_INITIAL_DELAY_MS = 60_000; // let boot settle (DB pool, auth) before touching the table
@@ -64,17 +69,43 @@ export function startAbandonedSetupSweep(): void {
   };
   setTimeout(tick, ABANDONED_SWEEP_INITIAL_DELAY_MS);
   setInterval(tick, ABANDONED_SWEEP_INTERVAL_MS);
-  logger.info({ intervalMs: ABANDONED_SWEEP_INTERVAL_MS, afterDays: ABANDONED_AFTER_DAYS }, 'Abandoned trade-setup sweep started');
+  logger.info(
+    { intervalMs: ABANDONED_SWEEP_INTERVAL_MS, afterDays: ABANDONED_AFTER_DAYS, afterDaysPositional: ABANDONED_AFTER_DAYS_POSITIONAL },
+    'Abandoned trade-setup sweep started'
+  );
 }
 
 export async function closeAbandonedTradeSetups(): Promise<number> {
   try {
+    // Repair for the positional rows the old 2-day window closed while they
+    // were still live. Only touches rows this sweep itself closed — marked
+    // abandoned with no exitTime and no return (a real outcome always stamps
+    // an exitTime) — and young enough that their Redis key can still exist,
+    // so their monitor can resolve them properly. Idempotent.
+    const reopened = await sql<{ id: string }[]>`
+      UPDATE signals
+      SET inputs = inputs - 'outcome' - 'exitPrice' - 'exitTime' - 'abandoned'
+      WHERE signal_type = 'TRADE_SETUP'
+        AND inputs->>'mode' = 'POSITIONAL'
+        AND inputs->>'abandoned' = 'true'
+        AND inputs->>'exitTime' IS NULL
+        AND fwd_1d_return IS NULL
+        AND time >= NOW() - ${`${ABANDONED_AFTER_DAYS_POSITIONAL} days`}::interval
+      RETURNING id
+    `;
+    if (reopened.length > 0) {
+      logger.info({ count: reopened.length }, 'Backtesting: reopened positional setups closed early by the old 2-day abandoned window');
+    }
+
     const rows = await sql<{ id: string }[]>`
       UPDATE signals
       SET inputs = inputs || ${sql.json({ outcome: 'EXPIRED', exitPrice: null, exitTime: null, abandoned: true })}
       WHERE signal_type = 'TRADE_SETUP'
         AND inputs->>'outcome' IS NULL
-        AND time < NOW() - ${`${ABANDONED_AFTER_DAYS} days`}::interval
+        AND time < NOW() - CASE
+          WHEN inputs->>'mode' = 'POSITIONAL' THEN ${`${ABANDONED_AFTER_DAYS_POSITIONAL} days`}::interval
+          ELSE ${`${ABANDONED_AFTER_DAYS} days`}::interval
+        END
       RETURNING id
     `;
     if (rows.length > 0) {
@@ -102,15 +133,23 @@ interface SignalRow {
 
 function toTradeSetupRecord(row: SignalRow): TradeSetupRecord {
   const inputs = row.inputs ?? {};
+  const exchange = (inputs.exchange ?? 'NSE') as Exchange;
+  const generatedAt = new Date(row.time).getTime();
+  // Rows minted before market-bias.ts gated generation on a live session
+  // (midnight rollovers off frozen quotes, pre-open and holiday setups) drop
+  // out of the stats without deleting anything. Only "no session at all"
+  // counts — the opening settle window is a policy for NEW setups, and a
+  // 09:18 setup was still a real, tradeable position whose result stands.
   return {
     id: row.id,
     symbol: row.symbol,
-    exchange: (inputs.exchange ?? 'NSE') as Exchange,
+    exchange,
+    generatedOffSession: minutesSinceSessionOpen(exchange, generatedAt) == null,
     // Absent on records from before the mode toggle shipped — those were
     // all generated under what's now called INTRADAY, so that's the
     // correct read for them, not "unknown".
     mode: (inputs.mode as TradingMode) ?? 'INTRADAY',
-    generatedAt: new Date(row.time).getTime(),
+    generatedAt,
     direction: row.direction,
     confidence: Number(row.confidence),
     // Absent on records from before the multi-leg spread builder shipped —
@@ -299,7 +338,11 @@ function bucketBy(records: TradeSetupRecord[], keyFn: (r: TradeSetupRecord) => s
 // omitted (or 'ALL') keeps the original combined view.
 export async function getWinRateAnalytics(modeFilter?: TradingMode | 'ALL'): Promise<WinRateAnalytics> {
   const everything = await getTradeSetupHistory();
-  const all = !modeFilter || modeFilter === 'ALL' ? everything : everything.filter((r) => r.mode === modeFilter);
+  const inMode = !modeFilter || modeFilter === 'ALL' ? everything : everything.filter((r) => r.mode === modeFilter);
+  // A setup priced off frozen quotes was never tradeable — its "outcome" is
+  // an artefact of stale data meeting the next live print, not a result.
+  const live = everything.filter((r) => !r.generatedOffSession);
+  const all = inMode.filter((r) => !r.generatedOffSession);
 
   const bySymbolMap = new Map<string, TradeSetupRecord[]>();
   for (const r of all) {
@@ -318,8 +361,9 @@ export async function getWinRateAnalytics(modeFilter?: TradingMode | 'ALL'): Pro
     monthly: bucketBy(all, (r) => istDateString(r.generatedAt).slice(0, 7)),
     yearly: bucketBy(all, (r) => istDateString(r.generatedAt).slice(0, 4)),
     bySymbol,
-    intradayCount: everything.filter((r) => r.mode === 'INTRADAY').length,
-    positionalCount: everything.filter((r) => r.mode === 'POSITIONAL').length,
+    intradayCount: live.filter((r) => r.mode === 'INTRADAY').length,
+    positionalCount: live.filter((r) => r.mode === 'POSITIONAL').length,
+    offSessionExcludedCount: inMode.length - all.length,
   };
 }
 

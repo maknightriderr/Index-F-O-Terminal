@@ -5,7 +5,7 @@
 // configuration for NSE, BSE, and MCX.
 // ============================================================
 
-import type { Exchange, ExchangeSegment, TradingHours } from '../types/index.js';
+import type { Exchange, ExchangeHoliday, ExchangeSegment, TradingHours } from '../types/index.js';
 
 // --- Trading Hours ---
 
@@ -13,6 +13,75 @@ export const TRADING_HOURS: Record<Exchange, TradingHours> = {
   NSE: { open: '09:15', close: '15:30', timezone: 'Asia/Kolkata' },
   BSE: { open: '09:15', close: '15:30', timezone: 'Asia/Kolkata' },
   MCX: { open: '09:00', close: '23:30', timezone: 'Asia/Kolkata' },
+};
+
+/** MCX splits its day into a morning and an evening session here — partial holidays shut one side of this boundary. */
+export const MCX_EVENING_SESSION_OPEN = '17:00';
+
+/**
+ * A new trade setup isn't minted in the first minutes of a session — the
+ * opening quotes are still catching up from the pre-open auction (a 09:03
+ * BANKNIFTY setup priced off pre-open quotes "won" +77% on the 09:15 gap).
+ * Shared so Backtesting judges historical rows by the same rule.
+ */
+export const SETUP_OPENING_SETTLE_MINUTES = 5;
+
+// --- Exchange Holidays ---
+// Weekday closures only — weekends are already closed by isMarketOpen.
+// Without this, a weekday holiday read as a normal session everywhere, and
+// quote timestamps are fetch times rather than exchange times, so the
+// quotes themselves can't reveal a holiday either.
+//
+// Needs each new year added once the exchanges publish their list (usually
+// December). Not modelled: special weekend sessions — Budget Sunday
+// (1 Feb 2026) and Muhurat trading (8 Nov 2026) stay closed here.
+// BSE's equity/F&O list matches NSE's.
+
+const NSE_HOLIDAYS: ExchangeHoliday[] = [
+  { date: '2026-01-15', name: 'Municipal Corporation Elections', closed: 'FULL' },
+  { date: '2026-01-26', name: 'Republic Day', closed: 'FULL' },
+  { date: '2026-03-03', name: 'Holi', closed: 'FULL' },
+  { date: '2026-03-26', name: 'Shri Ram Navami', closed: 'FULL' },
+  { date: '2026-03-31', name: 'Shri Mahavir Jayanti', closed: 'FULL' },
+  { date: '2026-04-03', name: 'Good Friday', closed: 'FULL' },
+  { date: '2026-04-14', name: 'Dr. Baba Saheb Ambedkar Jayanti', closed: 'FULL' },
+  { date: '2026-05-01', name: 'Maharashtra Day', closed: 'FULL' },
+  { date: '2026-05-28', name: 'Bakri Id', closed: 'FULL' },
+  { date: '2026-06-26', name: 'Muharram', closed: 'FULL' },
+  { date: '2026-09-14', name: 'Ganesh Chaturthi', closed: 'FULL' },
+  { date: '2026-10-02', name: 'Mahatma Gandhi Jayanti', closed: 'FULL' },
+  { date: '2026-10-20', name: 'Dussehra', closed: 'FULL' },
+  { date: '2026-11-10', name: 'Diwali Balipratipada', closed: 'FULL' },
+  { date: '2026-11-24', name: 'Guru Nanak Jayanti', closed: 'FULL' },
+  { date: '2026-12-25', name: 'Christmas', closed: 'FULL' },
+];
+
+const MCX_HOLIDAYS: ExchangeHoliday[] = [
+  { date: '2026-01-01', name: "New Year's Day", closed: 'EVENING' },
+  { date: '2026-01-15', name: 'Municipal Corporation Elections', closed: 'MORNING' },
+  { date: '2026-01-26', name: 'Republic Day', closed: 'FULL' },
+  { date: '2026-03-03', name: 'Holi', closed: 'MORNING' },
+  { date: '2026-03-26', name: 'Shri Ram Navami', closed: 'MORNING' },
+  { date: '2026-03-31', name: 'Shri Mahavir Jayanti', closed: 'MORNING' },
+  { date: '2026-04-03', name: 'Good Friday', closed: 'FULL' },
+  { date: '2026-04-14', name: 'Dr. Baba Saheb Ambedkar Jayanti', closed: 'MORNING' },
+  { date: '2026-05-01', name: 'Maharashtra Day', closed: 'MORNING' },
+  { date: '2026-05-28', name: 'Bakri Id', closed: 'MORNING' },
+  { date: '2026-06-26', name: 'Muharram', closed: 'MORNING' },
+  { date: '2026-09-14', name: 'Ganesh Chaturthi', closed: 'MORNING' },
+  { date: '2026-10-02', name: 'Mahatma Gandhi Jayanti', closed: 'FULL' },
+  { date: '2026-10-20', name: 'Dussehra', closed: 'MORNING' },
+  { date: '2026-11-10', name: 'Diwali Balipratipada', closed: 'MORNING' },
+  { date: '2026-11-24', name: 'Guru Nanak Jayanti', closed: 'MORNING' },
+  { date: '2026-12-25', name: 'Christmas', closed: 'FULL' },
+];
+
+const byDate = (list: ExchangeHoliday[]): Record<string, ExchangeHoliday> => Object.fromEntries(list.map((h) => [h.date, h]));
+
+export const EXCHANGE_HOLIDAYS: Record<Exchange, Record<string, ExchangeHoliday>> = {
+  NSE: byDate(NSE_HOLIDAYS),
+  BSE: byDate(NSE_HOLIDAYS),
+  MCX: byDate(MCX_HOLIDAYS),
 };
 
 // --- Exchange Segment Codes (Angel One WebSocket) ---

@@ -77,6 +77,13 @@ export interface TradingHours {
   timezone: string; // "Asia/Kolkata"
 }
 
+export interface ExchangeHoliday {
+  date: string; // YYYY-MM-DD, exchange timezone
+  name: string;
+  /** Which session is shut. NSE/BSE holidays are always FULL; MCX shuts only its morning (open–17:00) or evening (17:00–close) session on most festival days. */
+  closed: 'FULL' | 'MORNING' | 'EVENING';
+}
+
 // --- Derivative Contracts ---
 
 export interface FuturesContract {
@@ -1322,6 +1329,8 @@ export interface TradeSetupRecord {
   exitPrice: number | null;
   exitTime: number | null;
   returnPercent: number | null;
+  /** Generated while its exchange had no live session (after hours, weekend, holiday) — priced off frozen quotes nobody could have traded, so Backtesting keeps it out of every statistic. */
+  generatedOffSession: boolean;
 }
 
 export interface WinRateBucket {
@@ -1412,6 +1421,8 @@ export interface WinRateAnalytics {
   /** Total setup counts by mode across ALL history (unaffected by whichever mode filter scoped the rest of this response) — lets the UI show "12 Intraday / 3 Positional" regardless of which one is currently selected. */
   intradayCount: number;
   positionalCount: number;
+  /** Setups (within the current mode filter) left out of every statistic above because they were generated outside a live session — see TradeSetupRecord.generatedOffSession. */
+  offSessionExcludedCount: number;
 }
 
 // --- WebSocket Subscription ---

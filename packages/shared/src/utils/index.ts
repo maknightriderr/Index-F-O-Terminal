@@ -2,8 +2,8 @@
 // SHARED UTILITIES
 // ============================================================
 
-import { TRADING_HOURS } from '../constants/index.js';
-import type { Exchange, OptionType } from '../types/index.js';
+import { TRADING_HOURS, EXCHANGE_HOLIDAYS, MCX_EVENING_SESSION_OPEN } from '../constants/index.js';
+import type { Exchange, ExchangeHoliday, OptionType } from '../types/index.js';
 
 /**
  * Format a number as Indian Rupee currency.
@@ -121,25 +121,68 @@ export function classifyStrike(
   }
 }
 
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** Calendar date, weekday (0 = Sunday) and minutes past midnight in the exchange's own timezone at `at`. */
+function exchangeClock(exchange: Exchange, at: Date | number): { date: string; weekday: number; minutes: number } {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: TRADING_HOURS[exchange].timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(at));
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? '';
+  return {
+    date: `${get('year')}-${get('month')}-${get('day')}`,
+    weekday: WEEKDAYS.indexOf(get('weekday')),
+    minutes: Number(get('hour')) * 60 + Number(get('minute')),
+  };
+}
+
+const hhmmToMinutes = (hhmm: string): number => {
+  const [h, m] = hhmm.split(':').map(Number);
+  return h * 60 + m;
+};
+
+/** The exchange's holiday on the calendar date of `at`, if any (including partial MCX closures). */
+export function getExchangeHoliday(exchange: Exchange, at: Date | number = Date.now()): ExchangeHoliday | null {
+  return EXCHANGE_HOLIDAYS[exchange][exchangeClock(exchange, at).date] ?? null;
+}
+
 /**
- * Check if market is currently open for given exchange.
+ * Minutes since the live session opened, or null when there's no live
+ * session at `at` — weekend, full holiday, outside trading hours, or the
+ * half of the day an MCX partial holiday shuts (on a morning closure the
+ * session opens at 17:00, so "minutes since open" counts from there).
  */
-export function isMarketOpen(exchange: Exchange): boolean {
+export function minutesSinceSessionOpen(exchange: Exchange, at: Date | number = Date.now()): number | null {
   const hours = TRADING_HOURS[exchange];
-  const now = new Date();
-  const ist = new Date(now.toLocaleString('en-US', { timeZone: hours.timezone }));
+  const { date, weekday, minutes } = exchangeClock(exchange, at);
+  if (weekday === 0 || weekday === 6) return null;
 
-  const day = ist.getDay();
-  if (day === 0 || day === 6) return false; // Weekends
+  let open = hhmmToMinutes(hours.open);
+  let close = hhmmToMinutes(hours.close);
+  const holiday = EXCHANGE_HOLIDAYS[exchange][date];
+  if (holiday) {
+    if (holiday.closed === 'FULL') return null;
+    if (holiday.closed === 'MORNING') open = hhmmToMinutes(MCX_EVENING_SESSION_OPEN);
+    else close = hhmmToMinutes(MCX_EVENING_SESSION_OPEN);
+  }
 
-  const [openH, openM] = hours.open.split(':').map(Number);
-  const [closeH, closeM] = hours.close.split(':').map(Number);
+  if (minutes < open || minutes > close) return null;
+  return minutes - open;
+}
 
-  const currentMinutes = ist.getHours() * 60 + ist.getMinutes();
-  const openMinutes = openH * 60 + openM;
-  const closeMinutes = closeH * 60 + closeM;
-
-  return currentMinutes >= openMinutes && currentMinutes <= closeMinutes;
+/**
+ * Check if the market is open for the given exchange — now, or at `at`.
+ * Holiday-aware via EXCHANGE_HOLIDAYS.
+ */
+export function isMarketOpen(exchange: Exchange, at: Date | number = Date.now()): boolean {
+  return minutesSinceSessionOpen(exchange, at) != null;
 }
 
 /**

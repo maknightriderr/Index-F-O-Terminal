@@ -56,7 +56,16 @@ import type {
   GammaExposureRegime,
   OIInterpretation,
 } from '@fno/shared';
-import { KNOWN_INDEX_TOKENS, CM_SEGMENT, calculateDTE, INDEX_SYMBOLS, TRADING_HOURS } from '@fno/shared';
+import {
+  KNOWN_INDEX_TOKENS,
+  CM_SEGMENT,
+  calculateDTE,
+  INDEX_SYMBOLS,
+  TRADING_HOURS,
+  SETUP_OPENING_SETTLE_MINUTES,
+  getExchangeHoliday,
+  minutesSinceSessionOpen,
+} from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveSpotToken, resolveNearestFuturesContract, buildOptionChain } from './option-chain.js';
 import { buildFuturesData } from './futures.js';
@@ -1477,6 +1486,97 @@ const STICKY_TRADE_SETUP_TTL_SECONDS_POSITIONAL = 60 * 60 * 24 * 30; // a positi
 // routine noise long before the thesis played out.
 const POSITIONAL_SL_PREMIUM_PCT = 0.4;
 
+// --- Fresh-data and re-entry gates ---
+// Two failure modes found reviewing the Backtesting table against live
+// trading, both of which locked in setups nobody could actually have taken:
+//
+// 1. Off-hours generation. Nothing stopped a new setup being built while
+//    the exchange was shut — the institutional scanner polls every 15
+//    minutes around the clock, so just after midnight it rolled the prior
+//    day's setup over and immediately minted a new one from the frozen
+//    closing quotes (NIFTY CE 23,400 @ 134.32 on three consecutive nights,
+//    two of them a weekend). A 09:03 BANKNIFTY setup priced off pre-open
+//    quotes then "won" +77% on the 09:15 gap. SETUP_OPENING_SETTLE_MINUTES
+//    also skips the first ticks after the bell, while quotes are still
+//    catching up from the pre-open auction.
+//
+// 2. Immediate re-entry after a stop-out. An SL hit falls straight through
+//    to fresh generation, and the bias that produced the losing trade
+//    usually still reads the same way — so the next poll bought the same
+//    side again (three NIFTY PE stop-outs in one morning as the index
+//    climbed). Every LOSS now starts a same-direction cooldown, and
+//    MAX_SAME_DIRECTION_LOSSES_PER_DAY stops that direction for the day.
+//
+// Holidays (including MCX's half-day closures) come from EXCHANGE_HOLIDAYS
+// in @fno/shared, which needs each new year's list added.
+const SL_COOLDOWN_SECONDS = 60 * 60;
+const SL_COOLDOWN_SECONDS_POSITIONAL = 60 * 60 * 24; // a positional thesis that just stopped out isn't re-evaluated within the hour
+const MAX_SAME_DIRECTION_LOSSES_PER_DAY = 2;
+
+function sessionGateReason(exchange: Exchange): string | null {
+  const sinceOpen = minutesSinceSessionOpen(exchange);
+  if (sinceOpen == null) {
+    const holiday = getExchangeHoliday(exchange);
+    const closedFor = holiday ? ` for ${holiday.name}${holiday.closed === 'FULL' ? '' : ` (${holiday.closed.toLowerCase()} session)`}` : '';
+    return `${exchange} is closed${closedFor} — new trade setups are only built from live session quotes, not the frozen last prints.`;
+  }
+  if (sinceOpen < SETUP_OPENING_SETTLE_MINUTES) {
+    return `Waiting out the first ${SETUP_OPENING_SETTLE_MINUTES} minutes after the session opens — quotes are still settling from the pre-open auction.`;
+  }
+  return null;
+}
+
+function slCooldownKey(exchange: Exchange, underlying: string, mode: TradingMode, direction: BiasDirection): string {
+  return `trade_setup_sl_cooldown:${exchange}:${underlying}:${mode}:${direction}`;
+}
+
+function slLossCountKey(exchange: Exchange, underlying: string, mode: TradingMode, direction: BiasDirection, day: string): string {
+  return `trade_setup_sl_losses:${exchange}:${underlying}:${mode}:${direction}:${day}`;
+}
+
+async function registerStopLossHit(exchange: Exchange, underlying: string, mode: TradingMode, direction: BiasDirection): Promise<void> {
+  const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const countKey = slLossCountKey(exchange, underlying, mode, direction, day);
+  try {
+    await redis.set(slCooldownKey(exchange, underlying, mode, direction), '1', 'EX', mode === 'POSITIONAL' ? SL_COOLDOWN_SECONDS_POSITIONAL : SL_COOLDOWN_SECONDS);
+    await redis.incr(countKey);
+    await redis.expire(countKey, 60 * 60 * 24);
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying }, 'Stop-loss cooldown write failed');
+  }
+}
+
+async function stopLossCooldownReason(underlying: string, exchange: Exchange, direction: BiasDirection, mode: TradingMode): Promise<string | null> {
+  if (direction === 'NEUTRAL') return null;
+  const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  try {
+    const [cooldownTtl, losses] = await Promise.all([
+      redis.ttl(slCooldownKey(exchange, underlying, mode, direction)),
+      redis.get(slLossCountKey(exchange, underlying, mode, direction, day)),
+    ]);
+    const lossCount = Number(losses ?? 0);
+    if (lossCount >= MAX_SAME_DIRECTION_LOSSES_PER_DAY) {
+      return `${underlying} has already stopped out ${lossCount} ${direction} setups today — no more ${direction} entries until tomorrow.`;
+    }
+    if (cooldownTtl > 0) {
+      return `${underlying}'s last ${direction} setup hit its stop-loss — no same-direction re-entry for another ${Math.ceil(cooldownTtl / 60)} min.`;
+    }
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying }, 'Stop-loss cooldown read failed — proceeding ungated');
+  }
+  return null;
+}
+
+// A target is a resting limit order — it fills AT the target, not at
+// whatever higher print the next poll happened to see after a gap through
+// it (BANKNIFTY's +77% "win" against a +37% target). A stop is the
+// opposite: a stop-market order fills wherever the market is, so a gap
+// through it is a genuine, worse fill and keeps the observed price.
+function exitValueForPriceHit(stored: StoredTradeSetup, isSpread: boolean, hitTarget: boolean, currentValue: number | null): number | null {
+  if (!hitTarget || isSpread || currentValue == null || stored.target == null) return currentValue;
+  return Math.min(currentValue, stored.target);
+}
+
 async function resolveStickyTradeSetup(
   provider: MarketDataProvider,
   underlying: string,
@@ -1621,8 +1721,9 @@ async function resolveStickyTradeSetup(
 
     if (hitSL || hitTarget) {
       const outcome = classifyPriceHitOutcome(stored!, isSpread, hitTarget);
-      await recordTradeSetupOutcome(stored!, outcome, currentValue);
-      // falls through to fresh generation below
+      await recordTradeSetupOutcome(stored!, outcome, exitValueForPriceHit(stored!, isSpread, hitTarget, currentValue));
+      if (outcome === 'LOSS') await registerStopLossHit(exchange, underlying, mode, stored!.direction);
+      // falls through to fresh generation below (subject to the stop-loss cooldown)
     } else if (stored!.direction === direction) {
       // Bias still agrees with the locked setup — fully sticky. Clear any
       // reversal streak that had started building from an earlier blip,
@@ -1670,7 +1771,13 @@ async function resolveStickyTradeSetup(
     await recordTradeSetupOutcome(stored!, 'EXPIRED', currentExitValue(chain, stored!));
   }
 
-  const unreliableReason = await checkReliabilityFilters(underlying, exchange, direction, mode);
+  // Everything above only resolves an EXISTING setup, which is safe off-hours
+  // (the frozen last print is the session's real close). Minting a NEW one
+  // needs live quotes and no fresh stop-out in the same direction.
+  const unreliableReason =
+    sessionGateReason(exchange) ??
+    (await stopLossCooldownReason(underlying, exchange, direction, mode)) ??
+    (await checkReliabilityFilters(underlying, exchange, direction, mode));
   if (unreliableReason != null) {
     try {
       await redis.del(key);
@@ -2019,7 +2126,8 @@ export async function checkLockedSetupPriceLevels(provider: MarketDataProvider, 
   if (!hitSL && !hitTarget) return;
 
   const outcome = classifyPriceHitOutcome(stored, isSpread, hitTarget);
-  await recordTradeSetupOutcome(stored, outcome, currentValue);
+  await recordTradeSetupOutcome(stored, outcome, exitValueForPriceHit(stored, isSpread, hitTarget, currentValue));
+  if (outcome === 'LOSS') await registerStopLossHit(exchange, underlying, 'INTRADAY', stored.direction);
   // recordTradeSetupOutcome only updates the DB row — resolveStickyTradeSetup's
   // on-demand path normally clears/overwrites this Redis key itself right
   // after (it falls through to generating a fresh setup). This monitor
