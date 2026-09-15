@@ -14,18 +14,14 @@
 //      triggers one scan (~40 quote requests) — no worse than a user
 //      loading any of those pages already does.
 //
-//   2. Trade Setup closed (SL/target reached) — read-only against the
-//      `trade_setup:*` sticky keys market-bias.ts already maintains
-//      whenever a user has an asset tab open. This job never calls
-//      buildMarketBias itself (that pulls historical candles, which
-//      Angel One rate-limits hard) — it only diffs the existing
-//      state, so it adds ZERO new broker calls. The trade-off: a
-//      symbol nobody has viewed recently won't have a sticky key to
-//      diff, so its closes won't be caught until it's viewed again.
+//   2. Trade Setup closed — MOVED to trade-setup-close-notifier.ts,
+//      which fires the moment an outcome is recorded. Diffing the
+//      sticky keys here only caught a close once the next setup for
+//      the same symbol appeared (hours late) and couldn't tell a
+//      stop-loss from a bias reversal.
 //
-// Both checks dedupe via Redis so a real condition only alerts once
-// (OI/IV: once per symbol per IST day; Trade Setup: once per actual
-// state transition) rather than once per scan tick.
+// Alerts dedupe via Redis so a real condition only alerts once (once
+// per symbol per IST day) rather than once per scan tick.
 // ============================================================
 
 import { cached } from '../lib/cache.js';
@@ -38,7 +34,7 @@ import { getLiveIndexQuotes } from './indices.js';
 import { buildOptionChain } from './option-chain.js';
 import { INSTITUTIONAL_SYMBOLS } from './institutional-flow.js';
 import type { MarketDataProvider } from '../providers/interface.js';
-import type { AlertChannel, BiasDirection, OptionType, SignalType } from '@fno/shared';
+import type { AlertChannel, SignalType } from '@fno/shared';
 
 const SCAN_INTERVAL_MS = 120_000; // 2 minutes
 const INITIAL_DELAY_MS = 30_000; // let the provider/cache warm up after boot before the first tick
@@ -59,18 +55,6 @@ const PCR_EXTREME_HIGH = 1.5;
 const PCR_EXTREME_LOW = 0.6;
 const UNUSUAL_ACTIVITY_BUILDUP_SHARE_PCT = 35; // % of the F&O universe on the same side of OI buildup
 
-interface StoredTradeSetupSnapshot {
-  available: boolean;
-  side?: OptionType;
-  strike?: number;
-  entry?: number;
-  stopLoss?: number;
-  target?: number;
-  direction?: BiasDirection;
-  day?: string;
-  generatedAt?: number;
-}
-
 let scannerStarted = false;
 
 export function startAlertScanner(provider: MarketDataProvider): void {
@@ -87,7 +71,7 @@ export function startAlertScanner(provider: MarketDataProvider): void {
 }
 
 async function runAlertScan(provider: MarketDataProvider): Promise<void> {
-  await Promise.all([checkOiAndIvAlerts(provider), checkTradeSetupAlerts(), checkInstitutionalFlowAlerts(provider)]);
+  await Promise.all([checkOiAndIvAlerts(provider), checkInstitutionalFlowAlerts(provider)]);
 }
 
 // --- Institutional Flow (Section 8): VIX spike, PCR extreme, unusual
@@ -250,92 +234,6 @@ async function checkOiAndIvAlerts(provider: MarketDataProvider): Promise<void> {
   }
 }
 
-// --- Trade Setup closed (read-only diff against the sticky key) ---
-
-async function checkTradeSetupAlerts(): Promise<void> {
-  let keys: string[];
-  try {
-    keys = await scanKeys('trade_setup:*');
-  } catch (err: any) {
-    logger.warn({ error: err.message }, 'Alert scan: trade_setup key scan failed');
-    return;
-  }
-
-  for (const key of keys) {
-    try {
-      await checkOneTradeSetup(key);
-    } catch (err: any) {
-      logger.warn({ error: err.message, key }, 'Alert scan: trade setup check failed for one key');
-    }
-  }
-}
-
-async function checkOneTradeSetup(key: string): Promise<void> {
-  // key shape: trade_setup:{exchange}:{underlying}:{mode} — INTRADAY and
-  // POSITIONAL setups for the same symbol are two independent Redis keys
-  // (see market-bias.ts's resolveStickyTradeSetup), so mode must stay in
-  // the seen-baseline key too. Dropping it (as this used to) meant both
-  // modes shared ONE seenKey slot — whichever mode's key the scanner
-  // happened to process first each tick "won" the baseline, and the
-  // other mode's every subsequent poll compared its real setup against
-  // a snapshot belonging to a DIFFERENT mode (different SL%, different
-  // hold horizon), which could spuriously fire or spuriously suppress a
-  // TRADE_SETUP_CLOSED alert.
-  const [, exchange, underlying, mode] = key.split(':');
-  if (!exchange || !underlying || !mode) return;
-
-  const seenKey = `alert_setup_seen:${exchange}:${underlying}:${mode}`;
-  const modeLabel = mode === 'POSITIONAL' ? 'POS' : 'INTRA';
-
-  const [currentRaw, seenRaw] = await Promise.all([redis.get(key), redis.get(seenKey)]);
-  const current: StoredTradeSetupSnapshot | null = currentRaw ? JSON.parse(currentRaw) : null;
-  const seen: StoredTradeSetupSnapshot | null = seenRaw ? JSON.parse(seenRaw) : null;
-
-  // Record the baseline the first time we see this key — don't alert on
-  // a setup that already existed before the scanner started watching it.
-  if (!seen) {
-    if (current) await redis.set(seenKey, JSON.stringify(current), 'EX', 60 * 60 * 24 * 2);
-    return;
-  }
-
-  if (seen.available) {
-    const sameDayAndDirection = current?.available && current.day === seen.day && current.direction === seen.direction;
-    const sameSetup = sameDayAndDirection && current!.generatedAt === seen.generatedAt;
-
-    if (!sameSetup) {
-      if (sameDayAndDirection) {
-        // Same day, same direction, but the setup changed — resolveStickyTradeSetup
-        // only regenerates a same-day/same-direction setup when SL or target was hit.
-        await maybeFireOnce({
-          symbol: underlying,
-          exchange,
-          alertType: 'TRADE_SETUP_CLOSED',
-          severity: 'WARNING',
-          message: `🎯 ${underlying} (${modeLabel}): Trade Setup closed — ${seen.side} ${seen.strike} (Entry ₹${seen.entry} · SL ₹${seen.stopLoss} · Target ₹${seen.target}) hit its stop-loss or target`,
-          condition: { reason: 'SL_OR_TARGET', side: seen.side, strike: seen.strike, entry: seen.entry, stopLoss: seen.stopLoss, target: seen.target },
-        });
-      } else {
-        // Day rolled over, direction reversed, or bias no longer supports a
-        // setup at all — an ended setup, but not necessarily SL/target.
-        await maybeFireOnce({
-          symbol: underlying,
-          exchange,
-          alertType: 'TRADE_SETUP_CLOSED',
-          severity: 'INFO',
-          message: `${underlying} (${modeLabel}): Trade Setup ended — ${seen.side} ${seen.strike} (bias shifted or the session rolled over)`,
-          condition: { reason: 'BIAS_OR_DAY_CHANGE', side: seen.side, strike: seen.strike, entry: seen.entry, stopLoss: seen.stopLoss, target: seen.target },
-        });
-      }
-    }
-  }
-
-  if (current) {
-    await redis.set(seenKey, JSON.stringify(current), 'EX', 60 * 60 * 24 * 2);
-  } else {
-    await redis.del(seenKey);
-  }
-}
-
 // --- Shared alert plumbing ---
 
 async function maybeFireDailyAlert(input: {
@@ -355,17 +253,6 @@ async function maybeFireDailyAlert(input: {
     return;
   }
 
-  await fireAlert(input);
-}
-
-async function maybeFireOnce(input: {
-  symbol: string;
-  exchange: string;
-  alertType: SignalType;
-  severity: 'INFO' | 'WARNING' | 'CRITICAL';
-  message: string;
-  condition: Record<string, unknown>;
-}): Promise<void> {
   await fireAlert(input);
 }
 
@@ -399,15 +286,4 @@ async function fireAlert(input: {
 
 function istDay(): string {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-}
-
-async function scanKeys(pattern: string): Promise<string[]> {
-  const keys: string[] = [];
-  let cursor = '0';
-  do {
-    const [next, batch] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 200);
-    cursor = next;
-    keys.push(...batch);
-  } while (cursor !== '0');
-  return keys;
 }

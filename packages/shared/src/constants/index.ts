@@ -18,6 +18,9 @@ export const TRADING_HOURS: Record<Exchange, TradingHours> = {
 /** MCX splits its day into a morning and an evening session here — partial holidays shut one side of this boundary. */
 export const MCX_EVENING_SESSION_OPEN = '17:00';
 
+/** MCX's evening session closes here instead of TRADING_HOURS.MCX.close while the US is on daylight saving time — see getSessionCloseTime. */
+export const MCX_US_DST_CLOSE = '23:55';
+
 /**
  * A new trade setup isn't minted in the first minutes of a session — the
  * opening quotes are still catching up from the pre-open auction (a 09:03

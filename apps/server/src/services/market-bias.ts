@@ -64,6 +64,7 @@ import {
   TRADING_HOURS,
   SETUP_OPENING_SETTLE_MINUTES,
   getExchangeHoliday,
+  getSessionCloseTime,
   minutesSinceSessionOpen,
 } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
@@ -75,6 +76,8 @@ import { redis } from '../lib/redis.js';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 import { notifyTradeSetup } from './telegram.js';
+import { notifyTradeSetupClosed } from './trade-setup-close-notifier.js';
+import type { TradeCloseReason } from './trade-setup-close-notifier.js';
 import type { OptionChain } from '@fno/shared';
 
 // Angel One rate-limits historical-candle and Greeks requests far more
@@ -1253,7 +1256,7 @@ function remainingSessionFraction(exchange: Exchange): number {
   const hours = TRADING_HOURS[exchange];
   const ist = new Date(new Date().toLocaleString('en-US', { timeZone: hours.timezone }));
   const [openH, openM] = hours.open.split(':').map(Number);
-  const [closeH, closeM] = hours.close.split(':').map(Number);
+  const [closeH, closeM] = getSessionCloseTime(exchange).split(':').map(Number);
   const openMinutes = openH * 60 + openM;
   const closeMinutes = closeH * 60 + closeM;
   const nowMinutes = ist.getHours() * 60 + ist.getMinutes();
@@ -1280,7 +1283,7 @@ function isNoisyIntradayWindow(exchange: Exchange): boolean {
   const hours = TRADING_HOURS[exchange];
   const ist = new Date(new Date().toLocaleString('en-US', { timeZone: hours.timezone }));
   const [openH, openM] = hours.open.split(':').map(Number);
-  const [closeH, closeM] = hours.close.split(':').map(Number);
+  const [closeH, closeM] = getSessionCloseTime(exchange).split(':').map(Number);
   const openMinutes = openH * 60 + openM;
   const closeMinutes = closeH * 60 + closeM;
   const nowMinutes = ist.getHours() * 60 + ist.getMinutes();
@@ -1793,7 +1796,12 @@ async function resolveStickyTradeSetup(
 
     if (hitSL || hitTarget) {
       const outcome = classifyPriceHitOutcome(stored!, isSpread, hitTarget);
-      await recordTradeSetupOutcome(stored!, outcome, exitValueForPriceHit(stored!, isSpread, hitTarget, currentValue));
+      await recordTradeSetupOutcome(stored!, outcome, exitValueForPriceHit(stored!, isSpread, hitTarget, currentValue), {
+        underlying,
+        exchange,
+        mode,
+        reason: closeReasonForPriceHit(stored!, isSpread, hitTarget),
+      });
       if (outcome === 'LOSS') await registerStopLossHit(exchange, underlying, mode, stored!.direction);
       // falls through to fresh generation below (subject to the stop-loss cooldown)
     } else if (stored!.direction === direction) {
@@ -1827,12 +1835,12 @@ async function resolveStickyTradeSetup(
       // Reversal confirmed across enough polls — inconclusive, not a loss.
       // Still worth a mark-to-market exit price where we can get one, so
       // it's not just a blank row in the backtest.
-      await recordTradeSetupOutcome(stored!, 'EXPIRED', currentValue);
+      await recordTradeSetupOutcome(stored!, 'EXPIRED', currentValue, { underlying, exchange, mode, reason: 'BIAS_REVERSED' });
     }
   } else if (storedIsPlausible && stored?.signalId) {
     // Day rolled over — a setup from a prior session is unconditionally
     // stale regardless of direction, no debounce needed.
-    await recordTradeSetupOutcome(stored!, 'EXPIRED', currentExitValue(chain, stored!));
+    await recordTradeSetupOutcome(stored!, 'EXPIRED', currentExitValue(chain, stored!), { underlying, exchange, mode, reason: 'SESSION_ENDED' });
   } else if (!storedIsPlausible && stored?.available && stored?.signalId) {
     // A previously-implausible setup (e.g. a diverging IV solver's target,
     // or a bad-quote spread) is about to be silently replaced below — found
@@ -1840,7 +1848,7 @@ async function resolveStickyTradeSetup(
     // permanently stuck at outcome: null ("OPEN" forever), since neither
     // branch above ever ran for it. Close it out as EXPIRED first so the
     // self-heal doesn't leave a zombie row behind.
-    await recordTradeSetupOutcome(stored!, 'EXPIRED', currentExitValue(chain, stored!));
+    await recordTradeSetupOutcome(stored!, 'EXPIRED', currentExitValue(chain, stored!), { underlying, exchange, mode, reason: 'SETUP_INVALIDATED' });
   }
 
   // Everything above only resolves an EXISTING setup, which is safe off-hours
@@ -2013,34 +2021,73 @@ async function recordTradeSetupGenerated(
   }
 }
 
+interface TradeCloseContext {
+  underlying: string;
+  exchange: Exchange;
+  mode: TradingMode;
+  reason: TradeCloseReason;
+}
+
 async function recordTradeSetupOutcome(
   stored: StoredTradeSetup,
   outcome: 'WIN' | 'LOSS' | 'EXPIRED',
-  exitValue: number | null
+  exitValue: number | null,
+  close: TradeCloseContext
 ): Promise<void> {
-  if (!stored.signalId) return; // pre-dates this feature or failed to record on generation — nothing to update
-  try {
-    // A naked long's return% is the % change in the option's own premium.
-    // A spread has no single "entry price" to measure against that way —
-    // maxLoss (the capital genuinely at risk) is the meaningful reference,
-    // so a spread's return% is P&L as a % of that risk instead.
-    let returnPercent: number | null = null;
-    if (exitValue != null) {
-      if (stored.structureType === 'SPREAD' && stored.maxLoss != null && stored.maxLoss > 0 && stored.netPremium != null) {
-        const pnl = exitValue - stored.netPremium;
-        returnPercent = Math.round((pnl / stored.maxLoss) * 10000) / 100;
-      } else if (stored.entry != null && stored.entry > 0) {
-        returnPercent = Math.round(((exitValue - stored.entry) / stored.entry) * 10000) / 100;
-      }
+  // A naked long's return% is the % change in the option's own premium.
+  // A spread has no single "entry price" to measure against that way —
+  // maxLoss (the capital genuinely at risk) is the meaningful reference,
+  // so a spread's return% is P&L as a % of that risk instead.
+  const isSpread = stored.structureType === 'SPREAD';
+  let returnPercent: number | null = null;
+  if (exitValue != null) {
+    if (isSpread && stored.maxLoss != null && stored.maxLoss > 0 && stored.netPremium != null) {
+      const pnl = exitValue - stored.netPremium;
+      returnPercent = Math.round((pnl / stored.maxLoss) * 10000) / 100;
+    } else if (stored.entry != null && stored.entry > 0) {
+      returnPercent = Math.round(((exitValue - stored.entry) / stored.entry) * 10000) / 100;
     }
-    await sql`
-      UPDATE signals
-      SET inputs = inputs || ${sql.json({ outcome, exitPrice: exitValue, exitTime: Date.now() })}, fwd_1d_return = ${returnPercent}
-      WHERE id = ${stored.signalId}
-    `;
-  } catch (err: any) {
-    logger.warn({ error: err.message, signalId: stored.signalId }, 'Backtesting: failed to record trade setup outcome');
   }
+
+  // No signalId: pre-dates Backtesting or failed to record on generation —
+  // no row to update, but the position still closed, so it's still notified.
+  if (stored.signalId) {
+    try {
+      await sql`
+        UPDATE signals
+        SET inputs = inputs || ${sql.json({ outcome, exitPrice: exitValue, exitTime: Date.now() })}, fwd_1d_return = ${returnPercent}
+        WHERE id = ${stored.signalId}
+      `;
+    } catch (err: any) {
+      logger.warn({ error: err.message, signalId: stored.signalId }, 'Backtesting: failed to record trade setup outcome');
+    }
+  }
+
+  // R against the stop the trade was OPENED with — a trailed stop would
+  // understate the risk actually taken.
+  const initialStop = stored.initialStopLoss ?? stored.stopLoss;
+  const riskPct =
+    !isSpread && stored.entry != null && stored.entry > 0 && initialStop != null ? ((stored.entry - initialStop) / stored.entry) * 100 : null;
+
+  notifyTradeSetupClosed({
+    ...close,
+    outcome,
+    side: stored.side ?? null,
+    strike: stored.strike ?? null,
+    strategy: stored.strategy ?? null,
+    entry: isSpread ? stored.netPremium ?? null : stored.entry ?? null,
+    exitPrice: exitValue,
+    returnPercent,
+    rMultiple: returnPercent != null && riskPct != null && riskPct > 0 ? Math.round((returnPercent / riskPct) * 100) / 100 : null,
+    generatedAt: stored.generatedAt ?? null,
+    dedupeId: stored.signalId ?? `${close.exchange}:${close.underlying}:${close.mode}:${stored.generatedAt ?? 'unknown'}`,
+  });
+}
+
+function closeReasonForPriceHit(stored: StoredTradeSetup, isSpread: boolean, hitTarget: boolean): TradeCloseReason {
+  if (hitTarget) return 'TARGET';
+  if (isSpread) return 'STOP_LOSS';
+  return stored.stopLoss! > stored.entry! ? 'TRAILING_STOP' : stored.stopLoss! === stored.entry! ? 'BREAKEVEN_STOP' : 'STOP_LOSS';
 }
 
 function findLeg(chain: OptionChain, strike: number, side: 'CE' | 'PE') {
@@ -2168,7 +2215,7 @@ export async function checkLockedSetupPriceLevels(provider: MarketDataProvider, 
     // comparison: 32 DB rows had no outcome, but only 9 were still backed
     // by a real Redis key; the other 23 were exactly this. Same close-out
     // resolveStickyTradeSetup itself uses for a same-poll day rollover.
-    await recordTradeSetupOutcome(stored, 'EXPIRED', currentExitValue(chain, stored));
+    await recordTradeSetupOutcome(stored, 'EXPIRED', currentExitValue(chain, stored), { underlying, exchange, mode: 'INTRADAY', reason: 'SESSION_ENDED' });
     try {
       await redis.del(key);
     } catch (err: any) {
@@ -2201,7 +2248,12 @@ export async function checkLockedSetupPriceLevels(provider: MarketDataProvider, 
   if (!hitSL && !hitTarget) return;
 
   const outcome = classifyPriceHitOutcome(stored, isSpread, hitTarget);
-  await recordTradeSetupOutcome(stored, outcome, exitValueForPriceHit(stored, isSpread, hitTarget, currentValue));
+  await recordTradeSetupOutcome(stored, outcome, exitValueForPriceHit(stored, isSpread, hitTarget, currentValue), {
+    underlying,
+    exchange,
+    mode: 'INTRADAY',
+    reason: closeReasonForPriceHit(stored, isSpread, hitTarget),
+  });
   if (outcome === 'LOSS') await registerStopLossHit(exchange, underlying, 'INTRADAY', stored.direction);
   // recordTradeSetupOutcome only updates the DB row — resolveStickyTradeSetup's
   // on-demand path normally clears/overwrites this Redis key itself right

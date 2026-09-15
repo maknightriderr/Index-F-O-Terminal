@@ -2,7 +2,7 @@
 // SHARED UTILITIES
 // ============================================================
 
-import { TRADING_HOURS, EXCHANGE_HOLIDAYS, MCX_EVENING_SESSION_OPEN } from '../constants/index.js';
+import { TRADING_HOURS, EXCHANGE_HOLIDAYS, MCX_EVENING_SESSION_OPEN, MCX_US_DST_CLOSE } from '../constants/index.js';
 import type { Exchange, ExchangeHoliday, OptionType } from '../types/index.js';
 
 /**
@@ -148,6 +148,34 @@ const hhmmToMinutes = (hhmm: string): number => {
   return h * 60 + m;
 };
 
+/**
+ * True on dates when the US is on daylight saving time — from the second
+ * Sunday of March up to (not including) the first Sunday of November.
+ * Date-level on purpose: the US switches at 2am on a Sunday, when MCX is
+ * shut anyway, so the Monday after is the first session affected.
+ */
+function isUsDaylightSavingDate(date: string): boolean {
+  const [year, month, day] = date.split('-').map(Number);
+  const nthSunday = (m: number, n: number): number => {
+    const firstWeekday = new Date(Date.UTC(year, m - 1, 1)).getUTCDay();
+    return 1 + ((7 - firstWeekday) % 7) + (n - 1) * 7;
+  };
+  const key = month * 100 + day;
+  return key >= 300 + nthSunday(3, 2) && key < 1100 + nthSunday(11, 1);
+}
+
+/**
+ * The session's closing time (HH:MM, exchange timezone) on the date of `at`.
+ * MCX's evening session follows US trading hours: it runs to 23:55 while
+ * the US is on daylight saving time, and to 23:30 otherwise — a fixed
+ * 23:30 wrongly treated the last 25 minutes of every summer session as
+ * closed.
+ */
+export function getSessionCloseTime(exchange: Exchange, at: Date | number = Date.now()): string {
+  if (exchange !== 'MCX') return TRADING_HOURS[exchange].close;
+  return isUsDaylightSavingDate(exchangeClock(exchange, at).date) ? MCX_US_DST_CLOSE : TRADING_HOURS.MCX.close;
+}
+
 /** The exchange's holiday on the calendar date of `at`, if any (including partial MCX closures). */
 export function getExchangeHoliday(exchange: Exchange, at: Date | number = Date.now()): ExchangeHoliday | null {
   return EXCHANGE_HOLIDAYS[exchange][exchangeClock(exchange, at).date] ?? null;
@@ -165,7 +193,7 @@ export function minutesSinceSessionOpen(exchange: Exchange, at: Date | number = 
   if (weekday === 0 || weekday === 6) return null;
 
   let open = hhmmToMinutes(hours.open);
-  let close = hhmmToMinutes(hours.close);
+  let close = hhmmToMinutes(getSessionCloseTime(exchange, at));
   const holiday = EXCHANGE_HOLIDAYS[exchange][date];
   if (holiday) {
     if (holiday.closed === 'FULL') return null;
