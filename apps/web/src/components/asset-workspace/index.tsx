@@ -275,7 +275,7 @@ export function AssetWorkspace() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
           <MarketBiasCard bias={bias} symbol={selectedSymbol} />
           <MarketRegimeCard bias={bias} />
-          <IntelligenceScoreCard score={score} symbol={selectedSymbol} />
+          <IntelligenceScoreCard score={score} symbol={selectedSymbol} direction={bias.direction} />
         </div>
         <div className="mt-3">
           <SupportResistanceCard bias={bias} />
@@ -439,13 +439,26 @@ function FuturesCard({ contract }: { contract: FuturesData }) {
       >
         {formatIndianNumber(contract.futuresPrice, 2)}
       </div>
-      <div className="flex items-center gap-2 mb-3">
-        <span className={`text-[11px] font-medium px-1.5 py-0.5 rounded ${
-          contract.premiumDiscountType === 'PREMIUM' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'
-        }`}>
-          {contract.basis >= 0 ? '+' : ''}{contract.basis.toFixed(2)} ({contract.premiumDiscount.toFixed(2)}%)
-        </span>
+      <div className="flex items-center gap-2 mb-1.5">
+        {contract.change != null && contract.changePercent != null && (
+          <span
+            className={`text-[11px] font-medium px-1.5 py-0.5 rounded ${
+              contract.change >= 0 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'
+            }`}
+            title="Today's move for this contract vs its own previous close"
+          >
+            {contract.change >= 0 ? '+' : ''}{contract.change.toFixed(2)} ({contract.changePercent >= 0 ? '+' : ''}{contract.changePercent.toFixed(2)}%)
+          </span>
+        )}
         <OIBadge type={contract.interpretation} />
+      </div>
+      <div
+        className="text-[10px] text-gray-400 light:text-slate-600 mb-3 tabular-nums"
+        title="Basis = this contract's price minus the spot reference. On MCX there is no cash market, so the nearest future is the spot reference."
+      >
+        {contract.isSpotReference
+          ? 'Spot reference contract'
+          : `Basis vs spot ${contract.basis >= 0 ? '+' : ''}${contract.basis.toFixed(2)} (${contract.basis >= 0 ? '+' : '-'}${contract.premiumDiscount.toFixed(2)}%)`}
       </div>
       <div className="grid grid-cols-3 gap-2 text-[11px] pt-2.5 border-t border-gray-800/60 light:border-slate-200">
         <div>

@@ -95,6 +95,13 @@ async function buildFuturesDataUncached(
     const basis = Math.round((futuresPrice - spotPrice) * 100) / 100;
     const premiumDiscountPct = spotPrice > 0 ? Math.round((basis / spotPrice) * 10000) / 100 : 0;
     const changeOi = changeOiByToken.get(inst.token) ?? 0;
+    // This contract's own move today (LTP vs its previous close). The card
+    // used to show only `basis` — the gap to spot — styled like a price
+    // change, and on MCX the current month IS the spot reference, so it
+    // read "+0.00 (0.00%)" on a day the contract was up 1.6%.
+    const prevClose = quote?.close ?? 0;
+    const change = prevClose > 0 ? Math.round((futuresPrice - prevClose) * 100) / 100 : null;
+    const changePercent = prevClose > 0 ? Math.round(((futuresPrice - prevClose) / prevClose) * 10000) / 100 : null;
 
     return {
       token: inst.token,
@@ -108,7 +115,10 @@ async function buildFuturesDataUncached(
       volume: quote?.volume ?? 0,
       oi: quote?.oi ?? 0,
       changeOi,
-      interpretation: classifyFuturesOI({ priceChange: quote?.percentChange ?? 0, oiChange: changeOi }),
+      change,
+      changePercent,
+      isSpotReference: inst.token === spotToken,
+      interpretation: classifyFuturesOI({ priceChange: changePercent ?? quote?.percentChange ?? 0, oiChange: changeOi }),
       expiry: inst.expiry!,
       dte: calculateDTE(inst.expiry!),
       timestamp: now,

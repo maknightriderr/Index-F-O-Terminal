@@ -721,9 +721,8 @@ async function computeMarketBias(
   // double-weighted CHoCH or RSI divergence outweigh an ordinary read, as
   // intended. What's capped is how far ANY single source can push the
   // final verdict, so that "7 price-derived indicators agree" can no
-  // longer simply outvote the option-positioning read on its own. Three
-  // clusters x 3 = 9 possible decisive votes, versus the ~14 before, where
-  // half could come from one feed.
+  // longer simply outvote the option-positioning read on its own. Two
+  // sources x 3 = 6 possible decisive votes: the candles, and positioning.
   const CLUSTER_MAX_WEIGHT = 3;
   const clusterContribution = (votes: Vote[]): Vote[] => {
     const net = votes.reduce((a: number, b) => a + b, 0);
@@ -732,11 +731,41 @@ async function computeMarketBias(
     return Array<Vote>(Math.min(Math.abs(net), CLUSTER_MAX_WEIGHT)).fill(sign);
   };
 
+  // Price indicators and chart structure are ONE information source — both
+  // are read off the same candles — so they're capped together. As two
+  // separate clusters they outvoted positioning two to one on a single
+  // short pullback: found live on CRUDEOIL, where futures short covering,
+  // PCR and chain-wide put writing all read bullish (positioning maxed at
+  // +3), yet a one-hour dip below VWAP showed up in BOTH candle clusters
+  // (-2 price, -3 structure) and minted a PE.
+  const chartVotes: Vote[] = [...priceVotes, ...structureVotes];
+  const chartNet = chartVotes.reduce((a: number, b) => a + b, 0);
+  const positioningNet = positioningVotes.reduce((a: number, b) => a + b, 0);
+
   const directionVotes: Vote[] = [
-    ...clusterContribution(priceVotes),
-    ...clusterContribution(structureVotes),
+    ...clusterContribution(chartVotes),
     ...clusterContribution(positioningVotes),
   ];
+
+  // Every vote behind this read, persisted with each trade setup so a
+  // setup's outcome can later be analysed against what actually drove it.
+  const voteSnapshot: BiasVoteSnapshot = {
+    price: {
+      vwap: vwapVote,
+      rsi: rsiVote,
+      supertrendShort: st15Vote,
+      supertrendLong: st1hVote,
+      macd: macdVote,
+      bollinger: bollingerVote,
+      emaTrend: emaTrendVote,
+      rsiDivergence: rsiDivergenceVote,
+      vcpBreakout: vcpBreakoutConfirmed ? 1 : 0,
+    },
+    structure: [...structureVotes],
+    positioning: { futuresOi: futuresOiVote, pcr: pcrVote, optionOiFlow: optionOiFlowVote },
+    chartNet,
+    positioningNet,
+  };
 
   const voteSum = directionVotes.reduce((a: number, b) => a + b, 0);
   const votesFor = directionVotes.filter((v) => v === 1).length;
@@ -750,9 +779,22 @@ async function computeMarketBias(
   // when every information source is internally balanced — genuinely "no
   // read", and the only case where these ratios would divide by zero.
   const total = directionVotes.length;
-  const bullishProbability = total > 0 ? Math.round((votesFor / total) * 100) : 0;
-  const bearishProbability = total > 0 ? Math.round((votesAgainst / total) * 100) : 0;
-  const neutralProbability = 100 - bullishProbability - bearishProbability;
+  // Rounded so the three always sum to exactly 100 — rounding each side
+  // independently printed 38% / 63% / -1% neutral for a 3-vs-5 split. The
+  // minority side and neutral round normally; the majority takes the rest.
+  let bullishProbability = 0;
+  let bearishProbability = 0;
+  let neutralProbability = 100;
+  if (total > 0) {
+    neutralProbability = Math.round((votesFlat / total) * 100);
+    if (votesFor >= votesAgainst) {
+      bearishProbability = Math.round((votesAgainst / total) * 100);
+      bullishProbability = 100 - neutralProbability - bearishProbability;
+    } else {
+      bullishProbability = Math.round((votesFor / total) * 100);
+      bearishProbability = 100 - neutralProbability - bullishProbability;
+    }
+  }
 
   // Confidence = agreement among the votes that actually HAVE an opinion,
   // scaled down when few of them do.
@@ -772,9 +814,7 @@ async function computeMarketBias(
   // how many indicators did, since seven price-derived indicators agreeing
   // is one source, not seven. Two independent sources agreeing is real
   // evidence; one source alone is capped at half.
-  const clustersWithOpinion = [priceVotes, structureVotes, positioningVotes].filter(
-    (c) => c.reduce((a: number, b) => a + b, 0) !== 0
-  ).length;
+  const clustersWithOpinion = [chartNet, positioningNet].filter((net) => net !== 0).length;
   const MIN_INDEPENDENT_SOURCES = 2;
   const decisiveVotes = votesFor + votesAgainst;
   const agreementCount = direction === 'BULLISH' ? votesFor : direction === 'BEARISH' ? votesAgainst : votesFlat;
@@ -1078,6 +1118,7 @@ async function computeMarketBias(
       // isNoisyIntradayWindow) — surfaced so it's auditable, not a
       // silent adjustment.
       noisyIntradayWindow: !isPositional && isNoisyIntradayWindow(exchange),
+      votes: voteSnapshot,
     },
     timestamp: Date.now(),
   };
@@ -1098,11 +1139,14 @@ async function computeMarketBias(
   // buying-vs-writing / covering-vs-unwinding flow read.
   const optionsOiScore = contribution(optionOiFlowVote, directionSign);
   const pcrScore = clamp(Math.round(50 + (pcr - 1) * 40), 0, 100);
-  // atmIvPct is 0 both when IV is genuinely unresolvable (no chain, no legs
-  // with a broker/calculated IV) and — vanishingly rarely — when it's truly
-  // near-zero; treat it as "unknown" and score neutral rather than a
-  // misleadingly perfect 100.
-  const ivScore = atmIvPct > 0 ? clamp(Math.round(100 - atmIvPct * 2.5), 0, 100) : 50;
+  // Scored against the underlying's OWN realized volatility, not an absolute
+  // IV level. The old 100 - IV×2.5 scale was tuned to index options (~12-20%
+  // IV) and read 0 for anything at 40%+, so CRUDEOIL — which normally trades
+  // at 40-60% IV — scored 0 whether or not its premium was actually rich.
+  // 50 = IV in line with HV; cheaper than realized scores higher (good for
+  // an option buyer), richer scores lower. No resolvable IV or HV means no
+  // relative read, so it scores neutral.
+  const ivScore = atmIvPct > 0 && ivVsHv.spreadPct != null ? clamp(Math.round(50 - ivVsHv.spreadPct), 0, 100) : 50;
 
   const technicalsVote = (rsiVote + macdVote + bollingerVote) / 3;
   const technicalsScore = contribution(technicalsVote, directionSign);
@@ -1183,7 +1227,7 @@ async function computeMarketBias(
   };
 
   const tradeSetup: TradeSetup = chain
-    ? await resolveStickyTradeSetup(provider, underlying, exchange, chain, direction, confidence, regime, overall, mode)
+    ? await resolveStickyTradeSetup(provider, underlying, exchange, chain, direction, confidence, regime, overall, mode, voteSnapshot)
     : { available: false, reason: 'Option chain unavailable for this symbol — cannot size a setup.' };
 
   const result: MarketBiasResult = { bias, score, tradeSetup };
@@ -1461,8 +1505,20 @@ async function checkReliabilityFilters(
 // new trading day (a setup from a prior session is stale regardless of
 // whether its levels were touched).
 
+/** Every vote behind a bias read (-1/0/+1, event votes can be ±2 via repeats in `structure`). */
+interface BiasVoteSnapshot {
+  price: Record<'vwap' | 'rsi' | 'supertrendShort' | 'supertrendLong' | 'macd' | 'bollinger' | 'emaTrend' | 'rsiDivergence' | 'vcpBreakout', number>;
+  structure: number[];
+  positioning: { futuresOi: number; pcr: number; optionOiFlow: number };
+  /** Net of price + structure — the single capped "candles" source. */
+  chartNet: number;
+  /** Net of futures OI + PCR + option OI flow — the positioning source. */
+  positioningNet: number;
+}
+
 interface StoredTradeSetup extends TradeSetup {
   direction: BiasDirection;
+  voteSnapshot?: BiasVoteSnapshot; // the votes that minted this setup — persisted with its Backtesting row
   day: string; // YYYY-MM-DD, IST
   signalId?: string; // links to the persisted `signals` row for backtesting (see backtesting.ts)
   reversalStreak?: number; // consecutive polls the bias has read opposite to `direction` — see REVERSAL_CONFIRM_POLLS
@@ -1522,6 +1578,21 @@ function sessionGateReason(exchange: Exchange): string | null {
   }
   if (sinceOpen < SETUP_OPENING_SETTLE_MINUTES) {
     return `Waiting out the first ${SETUP_OPENING_SETTLE_MINUTES} minutes after the session opens — quotes are still settling from the pre-open auction.`;
+  }
+  return null;
+}
+
+// Positioning veto: never mint a setup when futures OI, PCR AND option OI
+// flow all point the other way. With the candles capped as one source this
+// combination already nets to NEUTRAL (+3 vs -3) and can't produce a
+// direction — it's kept as an explicit guard so a future re-weighting can't
+// quietly reopen the CRUDEOIL case, and so the refusal reads plainly.
+function positioningConflictReason(direction: BiasDirection, votes: BiasVoteSnapshot | undefined): string | null {
+  if (!votes || direction === 'NEUTRAL') return null;
+  const against = direction === 'BULLISH' ? -1 : 1;
+  const { futuresOi, pcr, optionOiFlow } = votes.positioning;
+  if (futuresOi === against && pcr === against && optionOiFlow === against) {
+    return `Futures OI, PCR and option OI flow all read ${direction === 'BULLISH' ? 'bearish' : 'bullish'} — not taking a ${direction} setup against every positioning signal.`;
   }
   return null;
 }
@@ -1586,7 +1657,8 @@ async function resolveStickyTradeSetup(
   confidence: number,
   regime: MarketRegime,
   intelligenceScore: number,
-  mode: TradingMode = 'INTRADAY'
+  mode: TradingMode = 'INTRADAY',
+  voteSnapshot?: BiasVoteSnapshot
 ): Promise<TradeSetup> {
   const isPositional = mode === 'POSITIONAL';
   const setupTtl = isPositional ? STICKY_TRADE_SETUP_TTL_SECONDS_POSITIONAL : STICKY_TRADE_SETUP_TTL_SECONDS;
@@ -1645,7 +1717,7 @@ async function resolveStickyTradeSetup(
   // leave one harmless duplicate row, which is a far better failure mode
   // than the guaranteed-permanent gap this replaces.
   if (storedIsPlausible && stored && !stored.signalId) {
-    const backfilledId = await recordTradeSetupGenerated(underlying, exchange, stored, stored.direction, confidence, regime, intelligenceScore, mode);
+    const backfilledId = await recordTradeSetupGenerated(underlying, exchange, stored, stored.direction, confidence, regime, intelligenceScore, mode, stored.voteSnapshot);
     if (backfilledId) {
       stored = { ...stored, signalId: backfilledId };
       try {
@@ -1776,6 +1848,7 @@ async function resolveStickyTradeSetup(
   // needs live quotes and no fresh stop-out in the same direction.
   const unreliableReason =
     sessionGateReason(exchange) ??
+    positioningConflictReason(direction, voteSnapshot) ??
     (await stopLossCooldownReason(underlying, exchange, direction, mode)) ??
     (await checkReliabilityFilters(underlying, exchange, direction, mode));
   if (unreliableReason != null) {
@@ -1849,9 +1922,9 @@ async function resolveStickyTradeSetup(
     return fresh;
   }
 
-  const signalId = await recordTradeSetupGenerated(underlying, exchange, fresh, direction, confidence, regime, intelligenceScore, mode);
+  const signalId = await recordTradeSetupGenerated(underlying, exchange, fresh, direction, confidence, regime, intelligenceScore, mode, voteSnapshot);
 
-  const toStore: StoredTradeSetup = { ...fresh, direction, day: today, generatedAt: Date.now(), signalId, initialStopLoss: fresh.stopLoss };
+  const toStore: StoredTradeSetup = { ...fresh, direction, day: today, generatedAt: Date.now(), signalId, initialStopLoss: fresh.stopLoss, voteSnapshot };
   try {
     await redis.set(key, JSON.stringify(toStore), 'EX', setupTtl);
   } catch (err: any) {
@@ -1889,7 +1962,8 @@ async function recordTradeSetupGenerated(
   confidence: number,
   regime: MarketRegime,
   intelligenceScore: number,
-  mode: TradingMode
+  mode: TradingMode,
+  votes?: BiasVoteSnapshot
 ): Promise<string | undefined> {
   try {
     // mode is persisted here (found missing in a re-audit) so backtesting
@@ -1925,6 +1999,7 @@ async function recordTradeSetupGenerated(
             breakeven: fresh.breakeven,
             breakevenLower: fresh.breakevenLower,
             breakevenUpper: fresh.breakevenUpper,
+            votes: votes ?? null,
           } as any
         )},
         ${fresh.reason}, ${regime}, ${intelligenceScore}

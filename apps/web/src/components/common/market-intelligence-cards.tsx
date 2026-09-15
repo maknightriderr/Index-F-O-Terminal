@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { formatIndianNumber } from '@fno/shared';
-import type { MarketBias, IntelligenceScore } from '@fno/shared';
+import type { MarketBias, IntelligenceScore, BiasDirection } from '@fno/shared';
 import { BiasBadge, ScoreBadge } from '@/components/common/badges';
 
 export function MarketBiasCard({ bias, symbol }: { bias: MarketBias; symbol: string }) {
@@ -112,19 +112,28 @@ export function MarketRegimeCard({ bias }: { bias: MarketBias }) {
   );
 }
 
-export function IntelligenceScoreCard({ score, symbol }: { score: IntelligenceScore; symbol: string }) {
+export function IntelligenceScoreCard({ score, symbol, direction }: { score: IntelligenceScore; symbol: string; direction?: BiasDirection }) {
+  // Most dimensions are scored on how strongly they AGREE with the bias
+  // direction, not on raw bullishness — a Futures OI of 5 under a BEARISH
+  // bias means "futures positioning strongly contradicts this bearish read",
+  // which was being read as "futures OI is bearish". Marked ⇄ so the two
+  // kinds of bar can't be confused. PCR and IV are absolute readings.
   const scoreBreakdown = [
-    { label: 'Trend', value: score.trend },
-    { label: 'Price Action', value: score.priceAction },
-    { label: 'Futures OI', value: score.futuresOi },
-    { label: 'Options OI', value: score.optionsOi },
-    { label: 'PCR', value: score.pcr },
-    { label: 'IV', value: score.iv },
-    { label: 'Technicals', value: score.technicals },
-    { label: 'OI Shifts', value: score.oiShifts },
-    { label: 'Volume', value: score.volume },
-    { label: 'Rel. Strength', value: score.relativeStrength },
+    { label: 'Trend', value: score.trend, vsBias: true },
+    { label: 'Price Action', value: score.priceAction, vsBias: true },
+    { label: 'Futures OI', value: score.futuresOi, vsBias: true },
+    { label: 'Options OI', value: score.optionsOi, vsBias: true },
+    { label: 'PCR', value: score.pcr, vsBias: false },
+    { label: 'IV', value: score.iv, vsBias: false },
+    { label: 'Technicals', value: score.technicals, vsBias: true },
+    { label: 'OI Shifts', value: score.oiShifts, vsBias: true },
+    { label: 'Volume', value: score.volume, vsBias: true },
+    { label: 'Rel. Strength', value: score.relativeStrength, vsBias: true },
   ];
+  const vsBiasNote =
+    direction === 'NEUTRAL'
+      ? '⇄ scored on how flat each read is (bias is neutral).'
+      : `⇄ scored against the ${direction ?? 'current'} bias: 50 neutral, above 50 supports it, below 50 argues against it.`;
 
   return (
     <div className="bg-gradient-to-b from-[#151522] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 border-t-2 border-t-amber-500/50 rounded-xl shadow-[0_8px_28px_-14px_rgba(0,0,0,0.75)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.15)] hover:border-gray-700/80 light:hover:border-slate-300 transition-all duration-200 p-4">
@@ -132,12 +141,18 @@ export function IntelligenceScoreCard({ score, symbol }: { score: IntelligenceSc
         <h3 className="text-xs font-bold text-gray-300 light:text-slate-700 uppercase tracking-wide">Intelligence Score <span className="text-gray-400 light:text-slate-600 font-medium normal-case">— {symbol}</span></h3>
         <ScoreBadge score={score.score} large />
       </div>
+      <p className="text-[10px] text-gray-400 light:text-slate-600 mb-2.5 leading-snug">
+        {vsBiasNote} PCR: above 50 = bullish. IV: vs realized volatility, above 50 = cheap.
+      </p>
       <div className="space-y-2">
-        {scoreBreakdown.map(({ label, value }) => {
+        {scoreBreakdown.map(({ label, value, vsBias }) => {
           const barColor = value >= 70 ? 'bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.5)]' : value >= 40 ? 'bg-yellow-500 shadow-[0_0_6px_rgba(234,179,8,0.4)]' : 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.4)]';
           return (
             <div key={label} className="flex items-center gap-2">
-              <span className="text-[10px] text-gray-400 light:text-slate-600 w-20 shrink-0">{label}</span>
+              <span className="text-[10px] text-gray-400 light:text-slate-600 w-20 shrink-0" title={vsBias ? 'Scored against the bias direction, not raw bullishness' : undefined}>
+                {label}
+                {vsBias && <span className="ml-0.5 text-cyan-500/70">⇄</span>}
+              </span>
               <div className="flex-1 h-2 bg-gray-900/70 light:bg-slate-200 rounded-full overflow-hidden">
                 <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${value}%` }} />
               </div>

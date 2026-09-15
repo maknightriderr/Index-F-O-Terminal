@@ -63,6 +63,18 @@ export async function buildOptionChain(
   options: BuildOptionChainOptions = {}
 ): Promise<OptionChain> {
   const strikeRange = options.strikeRange ?? DEFAULT_STRIKE_RANGE;
+
+  // A narrower window is a DISPLAY choice, not a different chain. Building
+  // it as its own chain computed PCR, max pain and OI momentum over only
+  // those strikes, so one page showed PCR 0.96 in the ±10 option chain
+  // panel and 1.11 in Market Intelligence (the default ±20, which is also
+  // what the bias votes on). Build the default chain — shared cache with
+  // the bias engine — and trim only the strike rows.
+  if (strikeRange < DEFAULT_STRIKE_RANGE) {
+    const full = await buildOptionChain(provider, underlying, exchange, requestedExpiry, { strikeRange: DEFAULT_STRIKE_RANGE });
+    return { ...full, strikes: sliceStrikesAroundAtm(full.strikes, full.atmStrike, strikeRange) };
+  }
+
   const cacheKey = `chain:${exchange}:${underlying}:${requestedExpiry ?? 'nearest'}:${strikeRange}`;
 
   return cached(cacheKey, CHAIN_CACHE_TTL_SECONDS, () =>
@@ -310,6 +322,15 @@ async function buildOptionChainUncached(
 }
 
 // --- Helpers ---
+
+function sliceStrikesAroundAtm(strikes: OptionChainStrike[], atmStrike: number, range: number): OptionChainStrike[] {
+  if (strikes.length === 0) return strikes;
+  const atmIndex = strikes.reduce(
+    (closest, s, idx) => (Math.abs(s.strike - atmStrike) < Math.abs(strikes[closest].strike - atmStrike) ? idx : closest),
+    0
+  );
+  return strikes.slice(Math.max(0, atmIndex - range), atmIndex + range + 1);
+}
 
 // option-chain.ts and futures.ts each independently resolved + fetched the
 // spot quote for the same underlying, under separate cache keys — found

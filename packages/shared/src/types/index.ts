@@ -619,6 +619,11 @@ export interface FuturesData {
   volume: number;
   oi: number;
   changeOi: number;
+  /** Today's move for this contract (LTP vs its own previous close); null when the feed had no previous close. */
+  change?: number | null;
+  changePercent?: number | null;
+  /** This contract IS the spot reference (MCX has no cash market — the nearest future stands in), so its basis is 0 by definition. */
+  isSpotReference?: boolean;
   interpretation: OIInterpretation;
   expiry: string;
   dte: number;
