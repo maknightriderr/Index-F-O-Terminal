@@ -317,6 +317,11 @@ export interface TradeSetup {
   /** 'SPREAD' when Strategy Recommender's own IV-regime logic calls for a defined-risk multi-leg structure instead of a naked long — absent (or 'NAKED_LONG') for the single-leg case. */
   structureType?: 'NAKED_LONG' | 'SPREAD';
 
+  /** Expiry (YYYY-MM-DD) of the option contract this setup's strike and premiums belong to — the chain it was priced from, and the only chain it's tracked against. Absent on setups locked before this was recorded. */
+  expiry?: string;
+  /** Days to that expiry when the setup was locked in. */
+  dte?: number;
+
   /**
    * NIFTY's direction, when this setup runs AGAINST it. Absent when the
    * setup agrees with the index (the normal case) or the check doesn't
@@ -1320,6 +1325,9 @@ export interface TradeSetupRecord {
   breakeven: number | null;
   breakevenLower: number | null;
   breakevenUpper: number | null;
+  /** Expiry (YYYY-MM-DD) of the contract the setup was priced from; null on rows recorded before this was captured. */
+  expiry?: string | null;
+  dte?: number | null;
   // --- Naked-long-only fields — null for a SPREAD record ---
   side: OptionType | null;
   strike: number | null;

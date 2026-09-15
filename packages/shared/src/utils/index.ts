@@ -57,6 +57,15 @@ export function getChangeColor(value: number): 'positive' | 'negative' | 'neutra
 /**
  * Calculate Days To Expiry from expiry date string.
  */
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** "2026-09-17" -> "17 Sep 2026". Returns the input unchanged if it isn't a YYYY-MM-DD date. */
+export function formatExpiryDate(expiry: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(expiry);
+  if (!match) return expiry;
+  return `${Number(match[3])} ${MONTHS_SHORT[Number(match[2]) - 1]} ${match[1]}`;
+}
+
 export function calculateDTE(expiryDate: string): number {
   const now = new Date();
   const expiry = new Date(expiryDate);

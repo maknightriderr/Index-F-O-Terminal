@@ -1735,6 +1735,10 @@ async function resolveStickyTradeSetup(
   // calendar-day change alone shouldn't invalidate it, only SL/target
   // being hit or a confirmed reversal should. Intraday keeps requiring
   // same-day, matching its "roll over every session" design.
+  // Price the locked setup off its OWN contract, not whichever expiry this
+  // poll's chain happens to be — see chainForStoredSetup.
+  const storedChain = stored?.available ? await chainForStoredSetup(provider, underlying, exchange, chain, stored) : chain;
+
   if (storedIsPlausible && (isPositional || stored!.day === today)) {
     const isSpread = stored!.structureType === 'SPREAD';
     let currentValue: number | null = null;
@@ -1746,7 +1750,7 @@ async function resolveStickyTradeSetup(
       // no trailing-stop this pass (the naked long's premium-based trail
       // doesn't translate directly to a multi-leg position's P&L; a
       // reasonable further refinement, not built here).
-      const legPrices = stored!.legs.map((l) => ({ action: l.action, price: legLtpOrNull(chain, l.strike, l.side) }));
+      const legPrices = stored!.legs.map((l) => ({ action: l.action, price: legLtpOrNull(storedChain, l.strike, l.side) }));
       const progress = evaluateSpreadProgress(legPrices, stored!.netPremium!, stored!.maxProfit!, stored!.maxLoss!);
       currentValue = progress.currentValue;
       hitSL = progress.hitStop;
@@ -1755,7 +1759,7 @@ async function resolveStickyTradeSetup(
       // SL/target are about the option's own price, not the current bias
       // read — check them first and unconditionally, so a real win/loss is
       // never masked by a same-tick direction flicker.
-      const currentLtp = legLtpOrNull(chain, stored!.strike!, stored!.side!);
+      const currentLtp = legLtpOrNull(storedChain, stored!.strike!, stored!.side!);
       currentValue = currentLtp;
 
       // Trailing stop — naked long only. Ratchet stopLoss up as price
@@ -1840,7 +1844,7 @@ async function resolveStickyTradeSetup(
   } else if (storedIsPlausible && stored?.signalId) {
     // Day rolled over — a setup from a prior session is unconditionally
     // stale regardless of direction, no debounce needed.
-    await recordTradeSetupOutcome(stored!, 'EXPIRED', currentExitValue(chain, stored!), { underlying, exchange, mode, reason: 'SESSION_ENDED' });
+    await recordTradeSetupOutcome(stored!, 'EXPIRED', currentExitValue(storedChain, stored!), { underlying, exchange, mode, reason: 'SESSION_ENDED' });
   } else if (!storedIsPlausible && stored?.available && stored?.signalId) {
     // A previously-implausible setup (e.g. a diverging IV solver's target,
     // or a bad-quote spread) is about to be silently replaced below — found
@@ -1848,7 +1852,7 @@ async function resolveStickyTradeSetup(
     // permanently stuck at outcome: null ("OPEN" forever), since neither
     // branch above ever ran for it. Close it out as EXPIRED first so the
     // self-heal doesn't leave a zombie row behind.
-    await recordTradeSetupOutcome(stored!, 'EXPIRED', currentExitValue(chain, stored!), { underlying, exchange, mode, reason: 'SETUP_INVALIDATED' });
+    await recordTradeSetupOutcome(stored!, 'EXPIRED', currentExitValue(storedChain, stored!), { underlying, exchange, mode, reason: 'SETUP_INVALIDATED' });
   }
 
   // Everything above only resolves an EXISTING setup, which is safe off-hours
@@ -1908,7 +1912,11 @@ async function resolveStickyTradeSetup(
         return oneDayMove * Math.sqrt(remainingSessionFraction(exchange));
       })();
 
-  const built = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, targetExpectedMovePoints, slPremiumPct, vix, chain.dte, chain.lotSize);
+  const builtRaw = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, targetExpectedMovePoints, slPremiumPct, vix, chain.dte, chain.lotSize);
+  // Record WHICH contract the strike/entry/SL/target belong to. A strike
+  // alone is ambiguous — the same strike exists in every listed expiry at a
+  // different premium — and this is what later tracking prices against.
+  const built: TradeSetup = builtRaw.available ? { ...builtRaw, expiry: chain.expiry, dte: chain.dte } : builtRaw;
   const fresh: TradeSetup =
     built.available && counterIndex
       ? {
@@ -2007,6 +2015,8 @@ async function recordTradeSetupGenerated(
             breakeven: fresh.breakeven,
             breakevenLower: fresh.breakevenLower,
             breakevenUpper: fresh.breakevenUpper,
+            expiry: fresh.expiry ?? null,
+            dte: fresh.dte ?? null,
             votes: votes ?? null,
           } as any
         )},
@@ -2074,6 +2084,7 @@ async function recordTradeSetupOutcome(
     outcome,
     side: stored.side ?? null,
     strike: stored.strike ?? null,
+    expiry: stored.expiry ?? null,
     strategy: stored.strategy ?? null,
     entry: isSpread ? stored.netPremium ?? null : stored.entry ?? null,
     exitPrice: exitValue,
@@ -2106,13 +2117,43 @@ function findLeg(chain: OptionChain, strike: number, side: 'CE' | 'PE') {
 // happened. Found via a backtesting review: every recorded LOSS was
 // showing precisely -100.00% regardless of the position's actual SL
 // distance — the fingerprint of this bug, not real trading outcomes.
-function legLtpOrNull(chain: OptionChain, strike: number, side: 'CE' | 'PE'): number | null {
+function legLtpOrNull(chain: OptionChain | null, strike: number, side: 'CE' | 'PE'): number | null {
+  if (!chain) return null;
   const ltp = findLeg(chain, strike, side)?.ltp;
   return ltp != null && ltp > 0 ? ltp : null;
 }
 
-/** Mark-to-market value of a stored setup right now — a single leg's LTP for a naked long, or the net cost-to-close for a spread. Null if any required leg's quote is currently unavailable. */
-function currentExitValue(chain: OptionChain, stored: StoredTradeSetup): number | null {
+/**
+ * The chain a locked setup must be priced from: its own expiry's. The chain
+ * a poll builds is the nearest expiry (INTRADAY) or a DTE-window pick that
+ * slides over the days (POSITIONAL), so once that rolls to a different
+ * expiry the same strike is a DIFFERENT contract at a different premium —
+ * reading it would record a stop/target hit or exit price from a contract
+ * the setup never held. Returns null when the setup's own contract can't be
+ * priced (e.g. expired and delisted: buildOptionChain falls back to the
+ * nearest listed expiry instead), which leaves the setup unresolved by price
+ * rather than resolved off the wrong contract. Setups locked before expiry
+ * was recorded keep the old behaviour.
+ */
+async function chainForStoredSetup(
+  provider: MarketDataProvider,
+  underlying: string,
+  exchange: Exchange,
+  chain: OptionChain,
+  stored: StoredTradeSetup
+): Promise<OptionChain | null> {
+  if (!stored.expiry || stored.expiry === chain.expiry) return chain;
+  try {
+    const own = await buildOptionChain(provider, underlying, exchange, stored.expiry);
+    return own.expiry === stored.expiry ? own : null;
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying, expiry: stored.expiry }, 'Locked setup: own-expiry option chain unavailable — not pricing it off another expiry');
+    return null;
+  }
+}
+
+/** Mark-to-market value of a stored setup right now — a single leg's LTP for a naked long, or the net cost-to-close for a spread. Null if any required leg's quote (or the setup's own chain) is currently unavailable. */
+function currentExitValue(chain: OptionChain | null, stored: StoredTradeSetup): number | null {
   if (stored.structureType === 'SPREAD' && stored.legs) {
     const prices = stored.legs.map((l) => legLtpOrNull(chain, l.strike, l.side));
     if (prices.some((p) => p == null)) return null;
@@ -2198,11 +2239,16 @@ export async function checkLockedSetupPriceLevels(provider: MarketDataProvider, 
 
   let chain: OptionChain;
   try {
-    chain = await buildOptionChain(provider, underlying, exchange);
+    // The setup's own expiry, not the nearest — see chainForStoredSetup.
+    chain = await buildOptionChain(provider, underlying, exchange, stored.expiry);
   } catch (err: any) {
     logger.warn({ error: err.message, underlying }, 'Price-level monitor: option chain fetch failed — will retry next tick');
     return;
   }
+
+  // buildOptionChain falls back to the nearest listed expiry when the one
+  // asked for is gone — never price this setup off that other contract.
+  const pricingChain = !stored.expiry || chain.expiry === stored.expiry ? chain : null;
 
   const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
   if (stored.day !== today) {
@@ -2215,7 +2261,7 @@ export async function checkLockedSetupPriceLevels(provider: MarketDataProvider, 
     // comparison: 32 DB rows had no outcome, but only 9 were still backed
     // by a real Redis key; the other 23 were exactly this. Same close-out
     // resolveStickyTradeSetup itself uses for a same-poll day rollover.
-    await recordTradeSetupOutcome(stored, 'EXPIRED', currentExitValue(chain, stored), { underlying, exchange, mode: 'INTRADAY', reason: 'SESSION_ENDED' });
+    await recordTradeSetupOutcome(stored, 'EXPIRED', currentExitValue(pricingChain, stored), { underlying, exchange, mode: 'INTRADAY', reason: 'SESSION_ENDED' });
     try {
       await redis.del(key);
     } catch (err: any) {
@@ -2231,13 +2277,13 @@ export async function checkLockedSetupPriceLevels(provider: MarketDataProvider, 
   let hitTarget: boolean;
 
   if (isSpread && stored.legs && stored.netPremium != null && stored.maxProfit != null && stored.maxLoss != null) {
-    const legPrices = stored.legs.map((l) => ({ action: l.action, price: legLtpOrNull(chain, l.strike, l.side) }));
+    const legPrices = stored.legs.map((l) => ({ action: l.action, price: legLtpOrNull(pricingChain, l.strike, l.side) }));
     const progress = evaluateSpreadProgress(legPrices, stored.netPremium, stored.maxProfit, stored.maxLoss);
     currentValue = progress.currentValue;
     hitSL = progress.hitStop;
     hitTarget = progress.hitTarget;
   } else if (!isSpread && stored.strike != null && stored.side && stored.stopLoss != null && stored.target != null) {
-    const currentLtp = legLtpOrNull(chain, stored.strike, stored.side);
+    const currentLtp = legLtpOrNull(pricingChain, stored.strike, stored.side);
     currentValue = currentLtp;
     hitSL = currentLtp != null && currentLtp <= stored.stopLoss;
     hitTarget = currentLtp != null && currentLtp >= stored.target;

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { DEFAULT_RISK_CONFIG, formatIndianNumber } from '@fno/shared';
+import { DEFAULT_RISK_CONFIG, formatExpiryDate, formatIndianNumber } from '@fno/shared';
 import type { WinRateBucket, TradeSetupRecord, RiskMetrics } from '@fno/shared';
 import { useBacktesting } from '@/lib/use-backtesting';
 import { useAssetTabsStore } from '@/stores';
@@ -558,6 +558,11 @@ function TradeSetupHistoryTable({
                     {isSpread
                       ? <>{r.strategy}<span className="text-gray-400 light:text-slate-600"> ({r.legs?.map((l) => `${l.action[0]}${l.strike}`).join('/')})</span></>
                       : <>{r.side} {formatIndianNumber(r.strike ?? 0, 0)}</>}
+                    {r.expiry && (
+                      <span className="text-gray-400 light:text-slate-600" title="Expiry of the contract this setup was priced from">
+                        {' · '}{formatExpiryDate(r.expiry)}
+                      </span>
+                    )}
                   </td>
                   <td className="text-right px-2 py-2 tabular-nums text-gray-300 light:text-slate-700">
                     {isSpread

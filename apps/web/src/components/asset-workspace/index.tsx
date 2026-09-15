@@ -5,7 +5,7 @@ import { useMarketStore } from '@/stores';
 import { api, ApiError } from '@/lib/api';
 import { useMarketBias } from '@/lib/use-market-bias';
 import { useCorporateActionsForSymbol } from '@/lib/use-corporate-actions';
-import { formatIndianNumber, formatCompact, isMarketOpen, DEFAULT_RISK_CONFIG } from '@fno/shared';
+import { formatIndianNumber, formatCompact, formatExpiryDate, calculateDTE, isMarketOpen, DEFAULT_RISK_CONFIG } from '@fno/shared';
 import type {
   Exchange,
   OptionChain,
@@ -770,6 +770,7 @@ function TradeSetupCard({ setup }: { setup: TradeSetup }) {
         <div className="text-[10px] text-gray-400 light:text-slate-600 mb-2 leading-snug">
           {setup.legs?.map((l) => `${l.action} ${l.side} ${formatIndianNumber(l.strike, 0)} @ ${l.premium.toFixed(2)}`).join(' · ')}
         </div>
+        <ContractExpiryLine setup={setup} />
         <div className="grid grid-cols-3 gap-1.5">
           <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
             <div className="text-gray-400 light:text-slate-600 text-[10px]">Net {isCredit ? 'Credit' : 'Debit'}</div>
@@ -808,6 +809,7 @@ function TradeSetupCard({ setup }: { setup: TradeSetup }) {
         </span>
         <span className="text-[10px] text-gray-400 light:text-slate-600 font-medium">R:R {setup.riskReward!.toFixed(2)}</span>
       </div>
+      <ContractExpiryLine setup={setup} />
       <div className="grid grid-cols-3 gap-1.5">
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
           <div className="text-gray-400 light:text-slate-600 text-[10px]">Entry</div>
@@ -839,6 +841,24 @@ function TradeSetupCard({ setup }: { setup: TradeSetup }) {
         Heuristic from live data — not investment advice.{lockedNote}
       </p>
     </IntelCard>
+  );
+}
+
+// A strike alone doesn't identify a contract — the same strike trades in
+// every listed expiry at a different premium. This names the expiry whose
+// chain the strike, entry, SL and target were taken from, so they can be
+// matched against the right chain (the option chain panel below may be
+// showing a different expiry).
+function ContractExpiryLine({ setup }: { setup: TradeSetup }) {
+  if (!setup.expiry) return null;
+  return (
+    <div
+      className="text-[10px] text-gray-400 light:text-slate-600 mb-2 tabular-nums"
+      title="The option contract this setup's strike, entry, SL and target are priced from"
+    >
+      Expiry <span className="text-gray-200 light:text-slate-800 font-semibold">{formatExpiryDate(setup.expiry)}</span>
+      {' · '}DTE {calculateDTE(setup.expiry)}
+    </div>
   );
 }
 

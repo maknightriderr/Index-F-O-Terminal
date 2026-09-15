@@ -20,6 +20,7 @@
 
 import { config } from '../lib/config.js';
 import { logger } from '../lib/logger.js';
+import { formatExpiryDate } from '@fno/shared';
 import type { Exchange, TradeSetup, TradingMode, BiasDirection } from '@fno/shared';
 
 const TELEGRAM_API = 'https://api.telegram.org';
@@ -125,6 +126,11 @@ async function sendTradeSetup({
   const lines: string[] = [];
   lines.push(`${arrow} *${e(underlying)}* ${e(setup.side ?? '')} ${setup.strike != null ? e(String(setup.strike)) : ''}`.trim());
   lines.push(`_${e(mode)} · ${e(exchange)} · ${e(direction)} ${e(String(confidence))}%_`);
+  // Which contract the strike and premiums belong to — the same strike
+  // trades in every listed expiry at a different price.
+  if (setup.expiry) {
+    lines.push(`Expiry *${e(formatExpiryDate(setup.expiry))}*${setup.dte != null ? e(` · DTE ${setup.dte}`) : ''}`);
+  }
   lines.push('');
   lines.push(`Entry  *${num(setup.entry)}*`);
   lines.push(`SL     *${num(setup.stopLoss)}*`);

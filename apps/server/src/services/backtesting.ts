@@ -166,6 +166,8 @@ function toTradeSetupRecord(row: SignalRow): TradeSetupRecord {
     breakevenUpper: inputs.breakevenUpper ?? null,
     side: (inputs.side as OptionType) ?? null,
     strike: inputs.strike != null ? Number(inputs.strike) : null,
+    expiry: inputs.expiry ?? null,
+    dte: inputs.dte != null ? Number(inputs.dte) : null,
     entry: inputs.entry != null ? Number(inputs.entry) : null,
     stopLoss: inputs.stopLoss != null ? Number(inputs.stopLoss) : null,
     target: inputs.target != null ? Number(inputs.target) : null,

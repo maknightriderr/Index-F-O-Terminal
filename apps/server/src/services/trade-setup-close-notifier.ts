@@ -17,6 +17,7 @@ import { redis } from '../lib/redis.js';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 import { sendTelegramMessage, isTelegramConfigured } from '../lib/telegram.js';
+import { formatExpiryDate } from '@fno/shared';
 import type { AlertChannel, Exchange, OptionType, TradingMode } from '@fno/shared';
 
 export type TradeCloseReason =
@@ -46,6 +47,8 @@ export interface TradeCloseNotice {
   reason: TradeCloseReason;
   side: OptionType | null;
   strike: number | null;
+  /** Expiry (YYYY-MM-DD) of the contract the setup was priced from. */
+  expiry: string | null;
   strategy: string | null;
   entry: number | null;
   exitPrice: number | null;
@@ -84,6 +87,7 @@ async function deliver(n: TradeCloseNotice): Promise<void> {
           reason: n.reason,
           side: n.side,
           strike: n.strike,
+          expiry: n.expiry,
           entry: n.entry,
           exitPrice: n.exitPrice,
           returnPercent: n.returnPercent,
@@ -106,7 +110,8 @@ async function deliver(n: TradeCloseNotice): Promise<void> {
 function buildMessage(n: TradeCloseNotice, esc: (s: string) => string): string {
   const icon = n.outcome === 'WIN' ? '✅' : n.outcome === 'LOSS' ? '🛑' : '⏹️';
   const modeLabel = n.mode === 'POSITIONAL' ? 'POS' : 'INTRA';
-  const instrument = n.side && n.strike != null ? `${n.side} ${n.strike}` : n.strategy ?? 'setup';
+  const contract = n.side && n.strike != null ? `${n.side} ${n.strike}` : n.strategy ?? 'setup';
+  const instrument = n.expiry ? `${contract} · ${formatExpiryDate(n.expiry)} expiry` : contract;
 
   const lines = [`${icon} ${n.outcome} — ${n.underlying} ${instrument} (${modeLabel} · ${n.exchange})`, REASON_TEXT[n.reason]];
   if (n.entry != null) {
