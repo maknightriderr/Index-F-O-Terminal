@@ -23,7 +23,11 @@ const EXCHANGES: Exchange[] = ['NSE', 'BSE', 'MCX'];
 const TICK_MS = 5 * 60 * 1000;
 const INITIAL_DELAY_MS = 90_000;
 const SETTLE_AFTER_CLOSE_MS = 5 * 60 * 1000; // let the final OI print settle
-const RUN_WINDOW_MS = 3 * 60 * 60 * 1000; // a restart after this just leaves the fallback baseline
+// Any time before the next session opens: once it does, getLatestSessionWindow
+// returns the NEW session and the run is skipped, so this bound only guards
+// against acting on a session long past. A late deploy or restart still
+// catches the snapshot.
+const RUN_WINDOW_MS = 12 * 60 * 60 * 1000;
 const MAX_CHAINS_PER_RUN = 40; // most recently read first
 const TRACK_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
 const STAGGER_MS = 2500; // quotes/Greeks endpoints are rate-limited — never burst
