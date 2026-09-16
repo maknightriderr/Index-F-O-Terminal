@@ -222,7 +222,14 @@ async function computeMarketBias(
   // below are the actual source of truth for what each tier means.
   const shortInterval = isPositional ? 'ONE_HOUR' : 'FIFTEEN_MINUTE';
   const longInterval = isPositional ? 'ONE_DAY' : 'ONE_HOUR';
-  const shortIntervalKey = isPositional ? '1h' : '15m';
+  // Cache keys name the history length too where a key could otherwise be
+  // shared by two different requests. POSITIONAL's short tier (1H over 60
+  // days) used to be `…:1h` — the same key as INTRADAY's long tier (1H over
+  // 30 days) — so whichever was fetched first served both, and positional
+  // indicators could run on 30 days of 1H bars. INTRADAY keys are unchanged
+  // on purpose: chart-patterns.ts fetches the same 15m/10d and 1h/30d series
+  // under those keys and shares that cache.
+  const shortIntervalKey = isPositional ? '1h-60d' : '15m';
   const longIntervalKey = isPositional ? '1d' : '1h';
   // Positional needs much deeper history: enough 1H bars to make Supertrend/
   // RSI/ADX meaningful over weeks (not just days), and enough daily bars
