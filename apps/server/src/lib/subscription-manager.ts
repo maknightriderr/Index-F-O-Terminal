@@ -226,6 +226,15 @@ export class SubscriptionManager {
         .catch((err: Error) => logger.error({ error: err.message }, 'Redis quote cache write failed'));
     }
 
-    this.tickListeners.forEach((l) => l(ticks));
+    // handleTicks runs un-awaited off the upstream socket, so a throw here
+    // is an unhandled rejection — which terminates the Node process. One
+    // listener's bug must not take the whole server down with it.
+    for (const listener of this.tickListeners) {
+      try {
+        listener(ticks);
+      } catch (err: any) {
+        logger.error({ error: err.message }, 'Subscription manager: tick listener threw — skipped');
+      }
+    }
   }
 }

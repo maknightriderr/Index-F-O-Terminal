@@ -77,9 +77,13 @@ export function createMarketWebSocketServer(
     }
 
     for (const [clientId, clientTicks] of perClient.entries()) {
+      // Not every subscriber is a browser socket — server-side consumers
+      // (the trade-setup monitor) subscribe tokens too. The old check
+      // `socket?.readyState === socket?.OPEN` was `undefined === undefined`
+      // (true) for those, and send() on no socket crashed the process.
       const socket = clients.get(clientId);
-      if (socket?.readyState === socket?.OPEN) {
-        socket!.send(JSON.stringify({ type: 'tick', data: clientTicks }));
+      if (socket && socket.readyState === socket.OPEN) {
+        socket.send(JSON.stringify({ type: 'tick', data: clientTicks }));
       }
     }
   });
