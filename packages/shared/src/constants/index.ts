@@ -61,12 +61,12 @@ export const TRADING_COST_MODEL = {
  * source, hold bands, index futures volume, previous-close OI, IV pressure
  * off the forward, regime weighting, room-to-target cap — 16 Sep 2026
  * 20:49 IST; then per-trade cost estimates from the live quote replacing
- * the flat 3% gate — 16 Sep 2026 22:20 IST). Backtesting's "Current logic" view counts only
+ * the flat 3% gate — 16 Sep 2026 21:46 IST). Backtesting's "Current logic" view counts only
  * setups generated from here on, so results under the new logic aren't
  * pooled with the old. Move this forward whenever selection logic changes
  * enough that earlier results stop describing it.
  */
-export const TRADE_LOGIC_UPDATED_AT = Date.parse('2026-09-16T22:20:00+05:30');
+export const TRADE_LOGIC_UPDATED_AT = Date.parse('2026-09-16T21:46:00+05:30');
 
 // --- Exchange Holidays ---
 // Weekday closures only — weekends are already closed by isMarketOpen.
