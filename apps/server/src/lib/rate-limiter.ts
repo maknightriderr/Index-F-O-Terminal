@@ -27,6 +27,8 @@ interface QueueItem {
   resolve: () => void;
 }
 
+export type RequestPriority = 'high' | 'normal';
+
 const MINUTE_MS = 60_000;
 
 export class RateLimiter {
@@ -34,6 +36,10 @@ export class RateLimiter {
   private readonly refillIntervalMs: number;
   private readonly perMinute: number | null;
   private tokens: number;
+  // Two lanes: `high` (a person waiting on the terminal) always drains
+  // before `normal` (background jobs). Both share the same pace, cap and
+  // pause, so priority reorders requests without sending more of them.
+  private highQueue: QueueItem[] = [];
   private queue: QueueItem[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
   private grantedAt: number[] = []; // grant times within the last minute (only tracked when perMinute is set)
@@ -82,24 +88,26 @@ export class RateLimiter {
 
   private drain(): void {
     const now = Date.now();
-    while (this.queue.length > 0 && this.canGrant(now)) {
+    while ((this.highQueue.length > 0 || this.queue.length > 0) && this.canGrant(now)) {
       this.grant(now);
-      this.queue.shift()!.resolve();
+      (this.highQueue.length > 0 ? this.highQueue : this.queue).shift()!.resolve();
     }
   }
 
   /** Resolves once a slot is free. Await this immediately before making the actual call it's guarding. */
-  async acquire(): Promise<void> {
+  async acquire(priority: RequestPriority = 'normal'): Promise<void> {
     this.ensureTimer();
     const now = Date.now();
-    // Only skip the queue when nobody is already waiting — otherwise a new
-    // caller could jump ahead of requests queued during a pause.
-    if (this.queue.length === 0 && this.canGrant(now)) {
+    // Only skip the queue when nobody of equal or higher priority is already
+    // waiting — otherwise a new caller could jump ahead of requests queued
+    // during a pause. A high-priority caller may pass waiting normal ones.
+    const ahead = priority === 'high' ? this.highQueue.length : this.highQueue.length + this.queue.length;
+    if (ahead === 0 && this.canGrant(now)) {
       this.grant(now);
       return;
     }
     return new Promise((resolve) => {
-      this.queue.push({ resolve });
+      (priority === 'high' ? this.highQueue : this.queue).push({ resolve });
     });
   }
 }

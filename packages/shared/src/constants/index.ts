@@ -120,6 +120,15 @@ const MCX_HOLIDAYS: ExchangeHoliday[] = [
 
 const byDate = (list: ExchangeHoliday[]): Record<string, ExchangeHoliday> => Object.fromEntries(list.map((h) => [h.date, h]));
 
+/** Calendar years every exchange's holiday list covers. A year missing here means isMarketOpen treats that year's holidays as trading days. */
+export const HOLIDAY_CALENDAR_YEARS: readonly number[] = (() => {
+  const yearsOf = (list: ExchangeHoliday[]) => new Set(list.map((h) => Number(h.date.slice(0, 4))));
+  const mcxYears = yearsOf(MCX_HOLIDAYS);
+  return Array.from(yearsOf(NSE_HOLIDAYS))
+    .filter((y) => mcxYears.has(y))
+    .sort((a, b) => a - b);
+})();
+
 export const EXCHANGE_HOLIDAYS: Record<Exchange, Record<string, ExchangeHoliday>> = {
   NSE: byDate(NSE_HOLIDAYS),
   BSE: byDate(NSE_HOLIDAYS),

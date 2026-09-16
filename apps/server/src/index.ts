@@ -12,6 +12,8 @@ import { logger } from './lib/logger.js';
 import { redis, pingRedis } from './lib/redis.js';
 import { sql, pingDb } from './lib/db.js';
 import { SubscriptionManager } from './lib/subscription-manager.js';
+import { runInteractive } from './lib/request-priority.js';
+import { startHolidayCalendarCheck } from './services/holiday-calendar-check.js';
 import { createMarketWebSocketServer } from './ws/server.js';
 import { AngelOneProvider } from './providers/angel-one/index.js';
 import { createAuthRoutes } from './api/auth.js';
@@ -73,6 +75,10 @@ const limiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Too many requests' } },
 });
 app.use('/api/', limiter);
+
+// Terminal API requests jump the broker request queue ahead of background
+// jobs — see lib/request-priority.ts.
+app.use('/api/', (_req, _res, next) => runInteractive(next));
 
 // Request logging
 app.use((req, _res, next) => {
@@ -208,6 +214,7 @@ startMarketScanner(provider);
 startFiiDiiTracker();
 startAbandonedSetupSweep();
 startOiCloseSnapshot(provider);
+startHolidayCalendarCheck();
 
 setInterval(() => {
   const { apiKey, clientId, password, totpSecret } = config.angelOne;

@@ -10,6 +10,7 @@ import axios, { type AxiosInstance } from 'axios';
 import { authenticator } from 'otplib';
 import { logger } from '../../lib/logger.js';
 import { RateLimiter } from '../../lib/rate-limiter.js';
+import { isInteractiveRequest } from '../../lib/request-priority.js';
 import type {
   Exchange,
   ExchangeSegment,
@@ -189,7 +190,8 @@ export class AngelOneProvider implements MarketDataProvider {
     // collectively exceeding Angel One's own rate limits, regardless of
     // which feature initiated any given call.
     this.api.interceptors.request.use(async (config) => {
-      await limiterFor(config.url).acquire();
+      // Requests made while serving the terminal go ahead of background jobs.
+      await limiterFor(config.url).acquire(isInteractiveRequest() ? 'high' : 'normal');
       return config;
     });
 

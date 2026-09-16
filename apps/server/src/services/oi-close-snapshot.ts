@@ -9,9 +9,15 @@
 // refetches the chains (and futures) of every symbol the bias engine read
 // in the last few days; those post-close reads become the next session's
 // previous-close baselines.
+//
+// It runs a second time shortly before each session opens. A symbol first
+// read after the post-close run (a late view, an evening scanner pass) would
+// otherwise start the next session on the first-seen fallback; before the
+// open the quotes still carry the previous session's settled OI, so a read
+// then is just as valid a baseline.
 // ============================================================
 
-import { getLatestSessionWindow } from '@fno/shared';
+import { getLatestSessionWindow, getSessionWindow } from '@fno/shared';
 import type { Exchange } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { redis } from '../lib/redis.js';
@@ -31,6 +37,7 @@ const RUN_WINDOW_MS = 12 * 60 * 60 * 1000;
 const MAX_CHAINS_PER_RUN = 40; // most recently read first
 const TRACK_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
 const STAGGER_MS = 2500; // quotes/Greeks endpoints are rate-limited — never burst
+const PRE_OPEN_LEAD_MS = 40 * 60 * 1000; // pre-open run window: from 40 min before the open until it
 
 const trackedKey = (exchange: Exchange) => `oi_snapshot_tracked:${exchange}`;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -61,14 +68,15 @@ export function startOiCloseSnapshot(provider: MarketDataProvider): void {
 async function runTick(provider: MarketDataProvider): Promise<void> {
   for (const exchange of EXCHANGES) {
     try {
-      await snapshotExchange(provider, exchange);
+      await snapshotAfterClose(provider, exchange);
+      await snapshotBeforeOpen(provider, exchange);
     } catch (err: any) {
       logger.warn({ error: err.message, exchange }, 'OI close snapshot failed for exchange');
     }
   }
 }
 
-async function snapshotExchange(provider: MarketDataProvider, exchange: Exchange): Promise<void> {
+async function snapshotAfterClose(provider: MarketDataProvider, exchange: Exchange): Promise<void> {
   if (!provider.isAuthenticated()) return;
 
   const now = Date.now();
@@ -79,6 +87,24 @@ async function snapshotExchange(provider: MarketDataProvider, exchange: Exchange
   const claimed = await redis.set(`oi_close_snapshot_done:${exchange}:${session.date}`, '1', 'EX', 2 * 24 * 60 * 60, 'NX');
   if (claimed !== 'OK') return;
 
+  await refetchTracked(provider, exchange, `after the ${session.date} close`);
+}
+
+async function snapshotBeforeOpen(provider: MarketDataProvider, exchange: Exchange): Promise<void> {
+  if (!provider.isAuthenticated()) return;
+
+  const now = Date.now();
+  const today = new Date(now).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const upcoming = getSessionWindow(exchange, today);
+  if (!upcoming || now >= upcoming.open || now < upcoming.open - PRE_OPEN_LEAD_MS) return;
+
+  const claimed = await redis.set(`oi_preopen_snapshot_done:${exchange}:${today}`, '1', 'EX', 2 * 24 * 60 * 60, 'NX');
+  if (claimed !== 'OK') return;
+
+  await refetchTracked(provider, exchange, `before the ${today} open`);
+}
+
+async function refetchTracked(provider: MarketDataProvider, exchange: Exchange, when: string): Promise<void> {
   const members = await redis.zrevrange(trackedKey(exchange), 0, MAX_CHAINS_PER_RUN - 1);
   let chains = 0;
   const underlyings = new Set<string>();
@@ -109,5 +135,5 @@ async function snapshotExchange(provider: MarketDataProvider, exchange: Exchange
     await sleep(STAGGER_MS);
   }
 
-  logger.info({ exchange, session: session.date, chains, futures }, 'OI close snapshot taken — next session measures OI change from these');
+  logger.info({ exchange, when, chains, futures }, 'OI close snapshot taken — next session measures OI change from these');
 }
