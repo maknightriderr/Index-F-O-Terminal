@@ -1346,8 +1346,39 @@ async function computeMarketBias(
     timestamp: Date.now(),
   };
 
+  // --- Trade-quality context: regime alignment and room to target ---
+  // Neither changes the bias read itself; they decide whether that read is
+  // a good OPTION-BUYING trade. The regime was computed and shown but never
+  // used: across 87 live intraday trades, 38% ran against the 1H regime and
+  // won 30% (avg -0.09R) vs 52% (+0.07R) with it, and range-bound regimes
+  // averaged -0.22R. The factors below are a judgment call on that small
+  // sample — every setup now records its context so they can be re-checked.
+  const alignment = regimeAlignment(direction, regime);
+  const setupConfidence = direction === 'NEUTRAL' ? confidence : Math.round(confidence * REGIME_CONFIDENCE_FACTOR[alignment]);
+  const room = roomToTarget(direction, chain?.spotPrice ?? spot, callLevels, putLevels, pivots);
+
+  const entryContext: SetupEntryContext = {
+    regime,
+    regimeAlignment: alignment,
+    biasConfidence: confidence,
+    setupConfidence,
+    ivVsHv: ivVsHv.reading,
+    ivVsHvSpreadPct: ivVsHv.spreadPct,
+    atmIvPct: atmIvPct > 0 ? Math.round(atmIvPct * 100) / 100 : null,
+    hvPct: hvPct != null ? Math.round(hvPct * 100) / 100 : null,
+    vwapDeviationPct: vwapDataAvailable ? Math.round(vwapDeviationPct * 1000) / 1000 : null,
+    todayChangePct: Math.round(todayChangePct * 100) / 100,
+    minutesSinceOpen: minutesSinceSessionOpen(exchange),
+    volumeRatio: Math.round(volumeRatio * 100) / 100,
+    volumeSource,
+    roomToTargetPoints: room ? Math.round(room.points * 100) / 100 : null,
+    roomLevel: room ? Math.round(room.level * 100) / 100 : null,
+    roomLevelSource: room?.source ?? null,
+    optionOiBaselineCoverage: Math.round(optionOiBaselineCoverage * 100) / 100,
+  };
+
   const tradeSetup: TradeSetup = chain
-    ? await resolveStickyTradeSetup(provider, underlying, exchange, chain, direction, confidence, regime, overall, mode, voteSnapshot)
+    ? await resolveStickyTradeSetup(provider, underlying, exchange, chain, direction, setupConfidence, regime, overall, mode, voteSnapshot, entryContext)
     : { available: false, reason: 'Option chain unavailable for this symbol — cannot size a setup.' };
 
   const result: MarketBiasResult = { bias, score, tradeSetup };
@@ -1639,6 +1670,7 @@ interface BiasVoteSnapshot {
 interface StoredTradeSetup extends TradeSetup {
   direction: BiasDirection;
   voteSnapshot?: BiasVoteSnapshot; // the votes that minted this setup — persisted with its Backtesting row
+  entryContext?: SetupEntryContext; // regime/IV/VWAP/room context at entry — persisted with its Backtesting row
   day: string; // YYYY-MM-DD, IST
   signalId?: string; // links to the persisted `signals` row for backtesting (see backtesting.ts)
   reversalStreak?: number; // confident opposite reads since the streak started — see REVERSAL_CONFIRM_POLLS
@@ -1798,7 +1830,8 @@ async function resolveStickyTradeSetup(
   regime: MarketRegime,
   intelligenceScore: number,
   mode: TradingMode = 'INTRADAY',
-  voteSnapshot?: BiasVoteSnapshot
+  voteSnapshot?: BiasVoteSnapshot,
+  entryContext?: SetupEntryContext
 ): Promise<TradeSetup> {
   const isPositional = mode === 'POSITIONAL';
   const setupTtl = isPositional ? STICKY_TRADE_SETUP_TTL_SECONDS_POSITIONAL : STICKY_TRADE_SETUP_TTL_SECONDS;
@@ -1857,7 +1890,18 @@ async function resolveStickyTradeSetup(
   // leave one harmless duplicate row, which is a far better failure mode
   // than the guaranteed-permanent gap this replaces.
   if (storedIsPlausible && stored && !stored.signalId) {
-    const backfilledId = await recordTradeSetupGenerated(underlying, exchange, stored, stored.direction, confidence, regime, intelligenceScore, mode, stored.voteSnapshot);
+    const backfilledId = await recordTradeSetupGenerated(
+      underlying,
+      exchange,
+      stored,
+      stored.direction,
+      confidence,
+      regime,
+      intelligenceScore,
+      mode,
+      stored.voteSnapshot,
+      stored.entryContext
+    );
     if (backfilledId) {
       stored = { ...stored, signalId: backfilledId };
       try {
@@ -2053,11 +2097,32 @@ async function resolveStickyTradeSetup(
         return oneDayMove * Math.sqrt(remainingSessionFraction(exchange));
       })();
 
-  const builtRaw = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, targetExpectedMovePoints, slPremiumPct, vix, chain.dte, chain.lotSize);
+  // Room to target: the move a target may assume is capped at the distance
+  // to the nearest strong OI wall or pivot in the trade's direction. The
+  // target used to be delta × expected move with no regard for what sits in
+  // between, and the further it reached the worse it did: setups projecting
+  // R:R 2.2+ won 0 of 16 (avg -0.37R) vs +0.17R below 1.9. A capped target
+  // that no longer clears the minimum R:R is refused, like any other.
+  const roomPoints = entryContext?.roomToTargetPoints ?? null;
+  const targetCapped = roomPoints != null && roomPoints < targetExpectedMovePoints;
+  const targetMovePoints = targetCapped ? roomPoints : targetExpectedMovePoints;
+  const roomNote = targetCapped
+    ? ` Target move capped at ${roomPoints!.toFixed(0)} pts — the room to the ${formatRoomSource(entryContext!.roomLevelSource)} at ${entryContext!.roomLevel!.toFixed(0)} — instead of the ${targetExpectedMovePoints.toFixed(0)}-pt expected move.`
+    : '';
+  const regimeNote =
+    entryContext && entryContext.setupConfidence < entryContext.biasConfidence
+      ? ` Confidence reduced from ${entryContext.biasConfidence} to ${entryContext.setupConfidence}: ${
+          entryContext.regimeAlignment === 'RANGE' ? `a ${entryContext.regime} regime rarely gives an option buyer the move it needs` : `this runs against the ${entryContext.regime} regime`
+        }.`
+      : '';
+
+  const builtRaw = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, targetMovePoints, slPremiumPct, vix, chain.dte, chain.lotSize);
   // Record WHICH contract the strike/entry/SL/target belong to. A strike
   // alone is ambiguous — the same strike exists in every listed expiry at a
   // different premium — and this is what later tracking prices against.
-  const built: TradeSetup = builtRaw.available ? { ...builtRaw, expiry: chain.expiry, dte: chain.dte } : builtRaw;
+  const built: TradeSetup = builtRaw.available
+    ? { ...builtRaw, expiry: chain.expiry, dte: chain.dte, reason: `${builtRaw.reason}${roomNote}${regimeNote}` }
+    : { ...builtRaw, reason: `${builtRaw.reason}${roomNote}${regimeNote}` };
   const fresh: TradeSetup =
     built.available && counterIndex
       ? {
@@ -2079,9 +2144,18 @@ async function resolveStickyTradeSetup(
     return fresh;
   }
 
-  const signalId = await recordTradeSetupGenerated(underlying, exchange, fresh, direction, confidence, regime, intelligenceScore, mode, voteSnapshot);
+  const signalId = await recordTradeSetupGenerated(underlying, exchange, fresh, direction, confidence, regime, intelligenceScore, mode, voteSnapshot, entryContext);
 
-  const toStore: StoredTradeSetup = { ...fresh, direction, day: today, generatedAt: Date.now(), signalId, initialStopLoss: fresh.stopLoss, voteSnapshot };
+  const toStore: StoredTradeSetup = {
+    ...fresh,
+    direction,
+    day: today,
+    generatedAt: Date.now(),
+    signalId,
+    initialStopLoss: fresh.stopLoss,
+    voteSnapshot,
+    entryContext,
+  };
   try {
     await redis.set(key, JSON.stringify(toStore), 'EX', setupTtl);
   } catch (err: any) {
@@ -2120,7 +2194,8 @@ async function recordTradeSetupGenerated(
   regime: MarketRegime,
   intelligenceScore: number,
   mode: TradingMode,
-  votes?: BiasVoteSnapshot
+  votes?: BiasVoteSnapshot,
+  context?: SetupEntryContext
 ): Promise<string | undefined> {
   try {
     // mode is persisted here (found missing in a re-audit) so backtesting
@@ -2159,6 +2234,10 @@ async function recordTradeSetupGenerated(
             expiry: fresh.expiry ?? null,
             dte: fresh.dte ?? null,
             votes: votes ?? null,
+            // Entry context (regime alignment, IV vs HV, VWAP distance, day
+            // move, time into session, room to target) — so these can be
+            // measured against outcomes instead of guessed at.
+            context: context ?? null,
           } as any
         )},
         ${fresh.reason}, ${regime}, ${intelligenceScore}
@@ -2492,6 +2571,105 @@ async function fetchHistoricalWithRetry(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// --- Trade-quality context ---
+
+type RegimeAlignment = 'WITH_TREND' | 'AGAINST_STRONG_TREND' | 'AGAINST_WEAK_TREND' | 'RANGE' | 'NO_TREND';
+
+// Multiplier on bias confidence for the setup gate (MIN_CONFIDENCE). With
+// the trend, or in a regime with no trend to fight (high volatility,
+// expiry-day gamma — the latter averaged +0.77R live), nothing changes.
+const REGIME_CONFIDENCE_FACTOR: Record<RegimeAlignment, number> = {
+  WITH_TREND: 1,
+  NO_TREND: 1,
+  AGAINST_WEAK_TREND: 0.9,
+  AGAINST_STRONG_TREND: 0.8,
+  RANGE: 0.9,
+};
+
+// An OI wall below this strength (vs the strongest wall on its side) isn't
+// treated as an obstacle to the target.
+const OI_WALL_MIN_STRENGTH_PCT = 70;
+
+interface SetupEntryContext {
+  regime: MarketRegime;
+  regimeAlignment: RegimeAlignment;
+  biasConfidence: number;
+  setupConfidence: number;
+  ivVsHv: string;
+  ivVsHvSpreadPct: number | null;
+  atmIvPct: number | null;
+  hvPct: number | null;
+  vwapDeviationPct: number | null;
+  todayChangePct: number;
+  minutesSinceOpen: number | null;
+  volumeRatio: number;
+  volumeSource: string;
+  roomToTargetPoints: number | null;
+  roomLevel: number | null;
+  roomLevelSource: 'CALL_WALL' | 'PUT_WALL' | 'PIVOT' | null;
+  optionOiBaselineCoverage: number;
+}
+
+function regimeAlignment(direction: BiasDirection, regime: MarketRegime): RegimeAlignment {
+  if (direction === 'NEUTRAL') return 'NO_TREND';
+  switch (regime) {
+    case 'RANGE_BOUND':
+    case 'LOW_VOLATILITY':
+      return 'RANGE';
+    case 'STRONG_BULL_TREND':
+    case 'BREAKOUT':
+    case 'OPERATOR_ACCUMULATION':
+      return direction === 'BULLISH' ? 'WITH_TREND' : 'AGAINST_STRONG_TREND';
+    case 'STRONG_BEAR_TREND':
+    case 'BREAKDOWN':
+    case 'OPERATOR_DISTRIBUTION':
+      return direction === 'BEARISH' ? 'WITH_TREND' : 'AGAINST_STRONG_TREND';
+    case 'WEAK_BULL_TREND':
+      return direction === 'BULLISH' ? 'WITH_TREND' : 'AGAINST_WEAK_TREND';
+    case 'WEAK_BEAR_TREND':
+      return direction === 'BEARISH' ? 'WITH_TREND' : 'AGAINST_WEAK_TREND';
+    default:
+      return 'NO_TREND';
+  }
+}
+
+/**
+ * Distance from spot to the nearest obstacle in the trade's direction: a
+ * strong OI wall (call wall above for a bullish trade, put wall below for a
+ * bearish one) or a prior-session pivot (R1-R3 / S1-S3). Null when nothing
+ * stands in the way. Levels price has already crossed don't count, so a
+ * break through a wall opens room to the next one.
+ */
+function roomToTarget(
+  direction: BiasDirection,
+  spot: number,
+  callLevels: OiLevel[],
+  putLevels: OiLevel[],
+  pivots: { r1: number; r2: number; r3: number; s1: number; s2: number; s3: number } | null
+): { points: number; level: number; source: 'CALL_WALL' | 'PUT_WALL' | 'PIVOT' } | null {
+  if (direction === 'NEUTRAL' || !(spot > 0)) return null;
+  const bullish = direction === 'BULLISH';
+  const candidates: Array<{ level: number; source: 'CALL_WALL' | 'PUT_WALL' | 'PIVOT' }> = [];
+  const walls = bullish ? callLevels : putLevels;
+  for (const wall of walls) {
+    if (wall.strengthPct >= OI_WALL_MIN_STRENGTH_PCT && (bullish ? wall.strike > spot : wall.strike < spot)) {
+      candidates.push({ level: wall.strike, source: bullish ? 'CALL_WALL' : 'PUT_WALL' });
+    }
+  }
+  if (pivots) {
+    for (const level of bullish ? [pivots.r1, pivots.r2, pivots.r3] : [pivots.s1, pivots.s2, pivots.s3]) {
+      if (Number.isFinite(level) && (bullish ? level > spot : level < spot)) candidates.push({ level, source: 'PIVOT' });
+    }
+  }
+  if (candidates.length === 0) return null;
+  const nearest = candidates.reduce((a, b) => (Math.abs(b.level - spot) < Math.abs(a.level - spot) ? b : a));
+  return { points: Math.abs(nearest.level - spot), level: nearest.level, source: nearest.source };
+}
+
+function formatRoomSource(source: SetupEntryContext['roomLevelSource']): string {
+  return source === 'CALL_WALL' ? 'call OI wall' : source === 'PUT_WALL' ? 'put OI wall' : 'pivot';
 }
 
 // --- Vote hold bands (hysteresis) ---

@@ -270,7 +270,12 @@ async function buildOptionChainUncached(
     // Normalize here so both paths agree on the same unit.
     const greeks = sanitized
       ?? (() => {
-          const calculated = calculateGreeksFromPrice(quote?.ltp ?? 0, spotPrice, strike, tte, optionType, RISK_FREE_RATE);
+          // Solved against the parity-implied forward (in spot terms), not
+          // index spot — the same basis error fixed for ivPressure above.
+          // With spot, a call and a put at one strike resolved to different
+          // IVs whenever the basis moved, and delta (which sizes Trade Setup
+          // targets) was off by the basis.
+          const calculated = calculateGreeksFromPrice(quote?.ltp ?? 0, pricingSpotNow, strike, tteAtQuote, optionType, RISK_FREE_RATE);
           return { delta: calculated.delta, gamma: calculated.gamma, theta: calculated.theta, vega: calculated.vega, iv: calculated.iv * 100 };
         })();
 

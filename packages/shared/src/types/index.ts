@@ -1344,6 +1344,10 @@ export interface TradeSetupRecord {
   breakevenUpper: number | null;
   /** Expiry (YYYY-MM-DD) of the contract the setup was priced from; null on rows recorded before this was captured. */
   expiry?: string | null;
+  /** Every bias vote behind the setup; null on rows recorded before votes were persisted. */
+  votes?: Record<string, unknown> | null;
+  /** Entry context — regime alignment, IV vs HV, VWAP distance, day move, time into session, room to target; null on older rows. */
+  entryContext?: Record<string, unknown> | null;
   dte?: number | null;
   // --- Naked-long-only fields — null for a SPREAD record ---
   side: OptionType | null;
