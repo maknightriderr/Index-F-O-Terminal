@@ -104,23 +104,29 @@ const BIAS_RESULT_CACHE_TTL_SECONDS = 5 * 60;
 // poll interval) before actually invalidating a sticky setup filters that
 // noise out while still reacting to a real, sustained reversal.
 //
-// A poll COUNT alone turned out not to measure time at all. Every caller
+// A poll COUNT alone turned out not to measure anything real. Every caller
 // of buildMarketBias advances the streak — each open browser view, the
-// 5-minute market scanner, the 15-minute institutional scanner — so three
-// reads could land within seconds: on 16 Sep a NIFTY CE was closed 4
-// minutes after it was locked, on reads 3 seconds apart, and NIFTY
-// re-entered and re-closed the same call three times in 31 minutes. The
-// reversal now has to HOLD for a wall-clock window as well: one full
-// 15-minute bar for INTRADAY (its short tier is 15m candles), two 1H bars
-// for POSITIONAL. The poll floor stays so a single read can't satisfy it.
+// 5-minute market scanner, the 15-minute institutional scanner — so the
+// confirming reads could land seconds apart on the SAME cached candles: on
+// 16 Sep a NIFTY CE was closed 4 minutes after it was locked, on reads 3
+// seconds apart.
+//
+// The fix is not a long wait. INTRADAY exits as soon as the opposite read
+// repeats on REFRESHED data: a second confident opposite read at least
+// HISTORICAL_CACHE_TTL_SECONDS after the first, i.e. after the candle cache
+// has refetched — typically ~90s. Fresh generation then runs in the same
+// poll, so a valid setup in the new direction is taken immediately. (A
+// fixed 15-minute window was tried and dropped: invalidation should be
+// decided by the data, not by a timer.) POSITIONAL keeps a longer window —
+// its short tier is 1H candles, which a 90s refresh barely changes.
 //
 // Only a confident opposite read counts (>= MIN_CONFIDENCE, the same bar a
 // new setup needs). NEUTRAL or low-confidence reads say "mixed", not
 // "reversed" — they neither advance nor clear a streak; the stop-loss is
 // what protects the position while signals are mixed.
-const REVERSAL_CONFIRM_POLLS = 3;
-const REVERSAL_CONFIRM_MINUTES = 15;
-const REVERSAL_CONFIRM_MINUTES_POSITIONAL = 120;
+const REVERSAL_CONFIRM_POLLS = 2;
+const REVERSAL_CONFIRM_SECONDS = HISTORICAL_CACHE_TTL_SECONDS;
+const REVERSAL_CONFIRM_SECONDS_POSITIONAL = 120 * 60;
 
 export interface MarketBiasResult {
   bias: MarketBias;
@@ -1572,13 +1578,18 @@ const POSITIONAL_SL_PREMIUM_PCT = 0.4;
 //    through to fresh generation, and the bias that produced the losing
 //    trade usually still reads the same way — so the next poll bought the
 //    same side again (three NIFTY PE stop-outs in one morning as the index
-//    climbed). A bias-reversal close at a loss is the same failure and was
-//    NOT covered at first: on 16 Sep NIFTY re-entered CE three times in 31
-//    minutes after each one closed red. Every losing close (a LOSS, or a
-//    BIAS_REVERSED close below entry) now starts a same-direction cooldown,
-//    and MAX_SAME_DIRECTION_LOSSES_PER_DAY stops that direction for the day.
-//    Session-end and data-sanity closes don't count — they aren't the
-//    thesis failing, and a session-end close lands on the NEXT day.
+//    climbed). Every stop-loss LOSS starts a same-direction cooldown, and
+//    MAX_SAME_DIRECTION_LOSSES_PER_DAY stops that direction for the day.
+//    The opposite direction is never blocked.
+//
+//    Deliberately NOT applied to a bias-reversal exit, even one below
+//    entry. That was tried (16 Sep) and checked against history: of 4
+//    same-direction re-entries within an hour of a losing reversal exit, 2
+//    were winners (+1.15R, +2.52R target hit) — blocking them would have
+//    cost +3.26R to save -0.41R. A reversal exit means the read flickered;
+//    a stop-loss means price actually moved against the trade. The two
+//    measurable same-direction re-entries right after a stop-loss lost
+//    -1.01R and -1.46R.
 //
 // Holidays (including MCX's half-day closures) come from EXCHANGE_HOLIDAYS
 // in @fno/shared, which needs each new year's list added.
@@ -1653,10 +1664,10 @@ async function losingCloseCooldownReason(underlying: string, exchange: Exchange,
     ]);
     const lossCount = Number(losses ?? 0);
     if (lossCount >= MAX_SAME_DIRECTION_LOSSES_PER_DAY) {
-      return `${underlying} has already closed ${lossCount} ${direction} setups at a loss today — no more ${direction} entries until tomorrow.`;
+      return `${underlying} has already stopped out ${lossCount} ${direction} setups today — no more ${direction} entries until tomorrow.`;
     }
     if (cooldownTtl > 0) {
-      return `${underlying}'s last ${direction} setup closed at a loss — no same-direction re-entry for another ${Math.ceil(cooldownTtl / 60)} min.`;
+      return `${underlying}'s last ${direction} setup hit its stop-loss — no same-direction re-entry for another ${Math.ceil(cooldownTtl / 60)} min.`;
     }
   } catch (err: any) {
     logger.warn({ error: err.message, underlying }, 'Losing-close cooldown read failed — proceeding ungated');
@@ -1847,13 +1858,13 @@ async function resolveStickyTradeSetup(
       // leave any streak as it is (see REVERSAL_CONFIRM_POLLS).
       return withLiveMark(stored!, currentValue, isSpread);
     } else {
-      // A confident opposite read — don't tear down the setup on it alone.
-      // The reversal has to hold for REVERSAL_CONFIRM_POLLS reads AND a
-      // wall-clock window before it's treated as real.
+      // A confident opposite read — confirm it once on refreshed data
+      // before exiting, rather than acting on a single read that may share
+      // cached candles with the one before it (see REVERSAL_CONFIRM_SECONDS).
       const now = Date.now();
       const since = stored!.reversalSince ?? now;
       const streak = (stored!.reversalStreak ?? 0) + 1;
-      const confirmMs = (isPositional ? REVERSAL_CONFIRM_MINUTES_POSITIONAL : REVERSAL_CONFIRM_MINUTES) * 60_000;
+      const confirmMs = (isPositional ? REVERSAL_CONFIRM_SECONDS_POSITIONAL : REVERSAL_CONFIRM_SECONDS) * 1000;
       if (streak < REVERSAL_CONFIRM_POLLS || now - since < confirmMs) {
         const bumped: StoredTradeSetup = { ...stored!, reversalStreak: streak, reversalSince: since };
         try {
@@ -2101,8 +2112,9 @@ async function recordTradeSetupOutcome(
   }
 
   const dedupeId = stored.signalId ?? `${close.exchange}:${close.underlying}:${close.mode}:${stored.generatedAt ?? 'unknown'}`;
-  const closedAtLoss = outcome === 'LOSS' || (close.reason === 'BIAS_REVERSED' && returnPercent != null && returnPercent < 0);
-  if (closedAtLoss && stored.direction !== 'NEUTRAL') {
+  // Stop-loss hits only — see MAX_SAME_DIRECTION_LOSSES_PER_DAY for why a
+  // losing bias-reversal exit doesn't start a cooldown.
+  if (outcome === 'LOSS' && stored.direction !== 'NEUTRAL') {
     await registerLosingClose(close.exchange, close.underlying, close.mode, stored.direction, dedupeId);
   }
 
