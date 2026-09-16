@@ -20,7 +20,7 @@
 // ============================================================
 
 import type { OptionChainStrike, OptionType, BiasDirection, TradeSetup, PositionSize } from '@fno/shared';
-import { DEFAULT_RISK_CONFIG, ESTIMATED_ROUND_TRIP_COST_PCT } from '@fno/shared';
+import { DEFAULT_RISK_CONFIG, TRADING_COST_MODEL } from '@fno/shared';
 
 // 30% premium stop for an intraday hold — standard retail heuristic for
 // long options. A positional hold (days/weeks) needs a wider stop since
@@ -141,9 +141,35 @@ const MAX_ATM_SPREAD_PCT = 5;
 // rule of thumb surfaced as a note, not a number the UI should present
 // as precise (real costs vary by broker/plan), unlike position sizing
 // below, which now IS a structured field once a real lot size is known.
-// ESTIMATED_ROUND_TRIP_COST_PCT (brokerage-equivalent + STT + residual
-// spread, as a % of entry premium) lives in @fno/shared so Backtesting can
-// report results after the same cost this gate assumes.
+/**
+ * Estimated cost of opening and closing one unit of a long option, from its
+ * own quote: the full bid-ask spread (entry and exit each cross half of it
+ * from the mid-price entry), a slippage allowance for a stop-market exit,
+ * statutory charges, and brokerage for a single lot spread over its
+ * quantity — one lot is the smallest position, so this never understates
+ * the brokerage share.
+ *
+ * Replaces a flat 3% of premium. Measured on live chains, a monthly stock
+ * option's one-session target reaches ~25-29% of its premium, and at a flat
+ * 3% the 1.5 reward:risk gate needs ~30% — so every intraday stock setup
+ * was refused however liquid the contract. A NIFTY ATM option with a 0.05
+ * spread estimates ~1.5% here; a thin stock option with a wide spread can
+ * estimate above the old 3%.
+ */
+export function estimateRoundTripCost(
+  entry: number,
+  bid: number,
+  ask: number,
+  lotSize: number
+): { perUnit: number; pct: number } {
+  if (!(entry > 0)) return { perUnit: 0, pct: 0 };
+  const spread = bid > 0 && ask > bid ? ask - bid : entry * (TRADING_COST_MODEL.fallbackSpreadPct / 100);
+  const brokerage = 2 * TRADING_COST_MODEL.brokeragePerOrder * (1 + TRADING_COST_MODEL.gstPct / 100);
+  const brokeragePerUnit = lotSize > 0 ? brokerage / lotSize : 0;
+  const percentageCharges = entry * ((TRADING_COST_MODEL.statutoryPct + TRADING_COST_MODEL.slippagePct) / 100);
+  const perUnit = spread + percentageCharges + brokeragePerUnit;
+  return { perUnit, pct: (perUnit / entry) * 100 };
+}
 
 // Position sizing: quantity chosen so a stop-out risks a fixed % of
 // trading capital, whatever the SL's own % of premium happens to be —
@@ -309,16 +335,16 @@ function buildNakedLong(
   // Costs are charged against BOTH legs when judging whether the ratio is
   // worth taking: a win pays the round trip out of the reward, a loss pays
   // it on top of the stop. Deliberately used for the GATE only, never
-  // written into the displayed `riskReward` — brokerage is a flat rupee
-  // amount per order so its % impact varies with lot size, and this stays
-  // a broker-independent rule of thumb rather than a number the UI should
-  // present as precise (same reasoning as the note in `reason` below).
-  const roundTripCost = entry * (ESTIMATED_ROUND_TRIP_COST_PCT / 100);
+  // written into the displayed `riskReward` — the displayed prices stay
+  // pre-cost (same reasoning as the note in `reason` below).
+  const cost = estimateRoundTripCost(entry, leg.bid, leg.ask, lotSize);
+  const roundTripCost = cost.perUnit;
+  const costPct = round2(cost.pct);
   const netReward = grossReward - roundTripCost;
   if (netReward <= 0) {
     return {
       available: false,
-      reason: `Projected target (${target.toFixed(2)}) doesn't clear the ~${ESTIMATED_ROUND_TRIP_COST_PCT}% round-trip cost of trading it — no edge left after costs.`,
+      reason: `Projected target (${target.toFixed(2)}) doesn't clear the ~${costPct}% estimated round-trip cost of trading it (spread, slippage, charges, brokerage) — no edge left after costs.`,
     };
   }
 
@@ -335,7 +361,7 @@ function buildNakedLong(
       available: false,
       reason:
         `Reward:risk after costs (${impliedRr.toFixed(2)}) is below the ${MIN_RISK_REWARD} minimum even at the tightest tradeable stop ` +
-        `(${Math.round(MIN_SL_PREMIUM_PCT * 100)}% of premium). The ${deltaMove.toFixed(2)}-point projected move can't pay for the risk — skip, don't size down.`,
+        `(${Math.round(MIN_SL_PREMIUM_PCT * 100)}% of premium, ~${costPct}% est. costs). The ${deltaMove.toFixed(2)}-point projected move can't pay for the risk — skip, don't size down.`,
     };
   }
 
@@ -390,6 +416,7 @@ function buildNakedLong(
     stopLoss,
     target,
     riskReward,
+    estimatedCostPct: costPct,
     positionSize: positionSize ?? undefined,
     reason:
       `${direction} bias at ${confidence}/100 confidence — ATM ${side} ${atmStrike} @ ${entry.toFixed(2)}${hasQuote ? ' (bid-ask mid)' : ''}. ` +
@@ -398,7 +425,7 @@ function buildNakedLong(
       (stopWidth < maxStopWidth ? ` (tighter than the ${Math.round(effectiveSlPct * 100)}% ceiling${vixNote}${expiryNote} this setup would otherwise allow)` : `${vixNote}${expiryNote}`) +
       `. R:R ${riskReward.toFixed(2)} gross, ~${riskRewardNet.toFixed(2)} after costs.` +
       (dte != null ? ` DTE ${dte}.` : '') +
-      ` The entry/SL/target figures themselves are pre-cost — brokerage, STT, and slippage beyond this mid-price entry typically run ~${ESTIMATED_ROUND_TRIP_COST_PCT}% of premium round-trip (~${estimatedCost.toFixed(2)} here), a rough broker-dependent estimate, which is why it gates the setup rather than being subtracted from the displayed prices.` +
+      ` The entry/SL/target figures themselves are pre-cost — the round trip is estimated at ~${costPct}% of premium (~${estimatedCost.toFixed(2)} per unit: this contract's bid-ask spread, a slippage allowance, statutory charges, and brokerage for one lot), a broker-dependent estimate, which is why it gates the setup rather than being subtracted from the displayed prices.` +
       sizingNote,
   };
 }

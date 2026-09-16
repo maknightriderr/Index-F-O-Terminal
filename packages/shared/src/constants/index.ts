@@ -30,22 +30,43 @@ export const MCX_US_DST_CLOSE = '23:55';
 export const SETUP_OPENING_SETTLE_MINUTES = 5;
 
 /**
- * Brokerage + STT + residual spread/slippage for opening and closing a long
- * option, as a % of entry premium — a broker-independent rule of thumb. The
- * setup builder gates on it, and Backtesting reports results after it.
+ * Flat round-trip cost (% of entry premium) assumed for setups recorded
+ * before each setup carried its own cost estimate — Backtesting's fallback.
+ * New setups are gated and reported on estimateRoundTripCost (@fno/analytics)
+ * built from TRADING_COST_MODEL below.
  */
 export const ESTIMATED_ROUND_TRIP_COST_PCT = 3;
 
 /**
+ * Inputs to a long option's estimated round-trip cost. The flat 3% it
+ * replaces ignored the actual quote: a liquid index option with a 0.05
+ * spread and a thinly traded stock option were charged the same, and for
+ * monthly stock options that alone was enough to refuse every setup.
+ */
+export const TRADING_COST_MODEL = {
+  /** ₹ per executed order (typical discount-broker flat fee); two orders per round trip. */
+  brokeragePerOrder: 20,
+  /** GST on brokerage. */
+  gstPct: 18,
+  /** STT on the sell leg (~0.1%) + exchange transaction charges on both legs + stamp duty + GST on them, as % of entry premium. */
+  statutoryPct: 0.2,
+  /** Allowance beyond the quoted spread — a stop-loss exit is a market order in a moving book. */
+  slippagePct: 1,
+  /** Spread assumed when the leg has no two-sided quote, as % of premium. */
+  fallbackSpreadPct: 2,
+} as const;
+
+/**
  * When trade-selection logic last changed materially (confidence per
  * source, hold bands, index futures volume, previous-close OI, IV pressure
- * off the forward, regime weighting, room-to-target cap — deployed
- * 16 Sep 2026 20:49 IST). Backtesting's "Current logic" view counts only
+ * off the forward, regime weighting, room-to-target cap — 16 Sep 2026
+ * 20:49 IST; then per-trade cost estimates from the live quote replacing
+ * the flat 3% gate — 16 Sep 2026 22:20 IST). Backtesting's "Current logic" view counts only
  * setups generated from here on, so results under the new logic aren't
  * pooled with the old. Move this forward whenever selection logic changes
  * enough that earlier results stop describing it.
  */
-export const TRADE_LOGIC_UPDATED_AT = Date.parse('2026-09-16T20:49:00+05:30');
+export const TRADE_LOGIC_UPDATED_AT = Date.parse('2026-09-16T22:20:00+05:30');
 
 // --- Exchange Holidays ---
 // Weekday closures only — weekends are already closed by isMarketOpen.

@@ -2128,9 +2128,19 @@ async function resolveStickyTradeSetup(
   // Record WHICH contract the strike/entry/SL/target belong to. A strike
   // alone is ambiguous — the same strike exists in every listed expiry at a
   // different premium — and this is what later tracking prices against.
+  // Monthly stock options carry weeks of time value, so on a one-session
+  // target they rarely clear the reward:risk gate (measured: the target
+  // reaches ~25-29% of premium with a full session left, ~20% by midday).
+  // That's the gate working, not a missing setup — say so, and where a
+  // stock setup can come from instead.
+  const isNseStock = exchange === 'NSE' && !(INDEX_SYMBOLS as readonly string[]).includes(underlying);
+  const stockNote =
+    !builtRaw.available && isNseStock && !isPositional && builtRaw.reason.startsWith('Reward:risk after costs')
+      ? ` Monthly stock options carry weeks of time value, so a one-session move rarely pays for the stop — switch this stock to Positional for a multi-day setup.`
+      : '';
   const built: TradeSetup = builtRaw.available
     ? { ...builtRaw, expiry: chain.expiry, dte: chain.dte, reason: `${builtRaw.reason}${roomNote}${regimeNote}` }
-    : { ...builtRaw, reason: `${builtRaw.reason}${roomNote}${regimeNote}` };
+    : { ...builtRaw, reason: `${builtRaw.reason}${stockNote}${roomNote}${regimeNote}` };
   const fresh: TradeSetup =
     built.available && counterIndex
       ? {
@@ -2241,6 +2251,7 @@ async function recordTradeSetupGenerated(
             breakevenUpper: fresh.breakevenUpper,
             expiry: fresh.expiry ?? null,
             dte: fresh.dte ?? null,
+            estimatedCostPct: fresh.estimatedCostPct ?? null,
             votes: votes ?? null,
             // Entry context (regime alignment, IV vs HV, VWAP distance, day
             // move, time into session, room to target) — so these can be

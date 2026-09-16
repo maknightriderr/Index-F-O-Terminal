@@ -196,6 +196,7 @@ function toTradeSetupRecord(row: SignalRow): TradeSetupRecord {
     side: (inputs.side as OptionType) ?? null,
     strike: inputs.strike != null ? Number(inputs.strike) : null,
     expiry: inputs.expiry ?? null,
+    estimatedCostPct: inputs.estimatedCostPct != null ? Number(inputs.estimatedCostPct) : null,
     votes: inputs.votes ?? null,
     entryContext: inputs.context ?? null,
     dte: inputs.dte != null ? Number(inputs.dte) : null,
@@ -364,7 +365,9 @@ function toRMultiple(r: TradeSetupRecord): number | null {
  */
 function netReturnPercent(r: TradeSetupRecord): number | null {
   if (r.returnPercent == null) return null;
-  return r.structureType === 'SPREAD' ? r.returnPercent : r.returnPercent - ESTIMATED_ROUND_TRIP_COST_PCT;
+  if (r.structureType === 'SPREAD') return r.returnPercent;
+  // The setup's own estimate when it was recorded; the old flat rate otherwise.
+  return r.returnPercent - (r.estimatedCostPct ?? ESTIMATED_ROUND_TRIP_COST_PCT);
 }
 
 function bucketBy(records: TradeSetupRecord[], keyFn: (r: TradeSetupRecord) => string): WinRateBucket[] {

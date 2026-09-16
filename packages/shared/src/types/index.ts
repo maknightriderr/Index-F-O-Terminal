@@ -336,6 +336,8 @@ export interface TradeSetup {
   expiry?: string;
   /** Days to that expiry when the setup was locked in. */
   dte?: number;
+  /** Estimated round-trip trading cost as % of entry premium (spread + slippage allowance + statutory charges + brokerage for one lot) — what the reward:risk gate charged this setup. */
+  estimatedCostPct?: number;
 
   /**
    * NIFTY's direction, when this setup runs AGAINST it. Absent when the
@@ -1344,6 +1346,8 @@ export interface TradeSetupRecord {
   breakevenUpper: number | null;
   /** Expiry (YYYY-MM-DD) of the contract the setup was priced from; null on rows recorded before this was captured. */
   expiry?: string | null;
+  /** The setup's own estimated round-trip cost (% of premium); null on older rows, which fall back to ESTIMATED_ROUND_TRIP_COST_PCT. */
+  estimatedCostPct?: number | null;
   /** Every bias vote behind the setup; null on rows recorded before votes were persisted. */
   votes?: Record<string, unknown> | null;
   /** Entry context — regime alignment, IV vs HV, VWAP distance, day move, time into session, room to target; null on older rows. */

@@ -304,7 +304,7 @@ function OverallSummary({ bucket }: { bucket: WinRateBucket }) {
           Profitable Close Rate
         </div>
         <div className={`text-3xl font-bold tabular-nums ${profitableRateColor}`}>{bucket.profitableCloseRatePercent != null ? `${bucket.profitableCloseRatePercent}%` : '—'}</div>
-        <div className="text-[10px] text-gray-400 light:text-slate-600 mt-1">{bucket.profitableCloses}↑ / {bucket.unprofitableCloses}↓ · after ~{ESTIMATED_ROUND_TRIP_COST_PCT}% est. costs</div>
+        <div className="text-[10px] text-gray-400 light:text-slate-600 mt-1">{bucket.profitableCloses}↑ / {bucket.unprofitableCloses}↓ · after est. costs</div>
       </Card>
       <Card accent="border-t-cyan-500/50">
         <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5" title="Target-hit rate only: counts a position as a win solely if it reached its exact fixed target, and EXCLUDES every EXPIRED close regardless of P&L. Because expiries dominate, this covers only a small slice of closed trades — read Profitable Close Rate for the full picture.">
@@ -337,7 +337,7 @@ function OverallSummary({ bucket }: { bucket: WinRateBucket }) {
       <Card accent="border-t-emerald-500/50">
         <div
           className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5"
-          title={`Average result per trade in R — multiples of that trade's own risk — after ~${ESTIMATED_ROUND_TRIP_COST_PCT}% estimated round-trip costs (brokerage, STT, spread). Positive means the system makes money per unit of risk; negative means it loses. Drawdown, profit factor and streaks are after the same costs.`}
+          title={`Average result per trade in R — multiples of that trade's own risk — after estimated round-trip costs: each setup's own estimate (spread, slippage, charges, brokerage) where recorded, ~${ESTIMATED_ROUND_TRIP_COST_PCT}% of premium for older setups. Positive means the system makes money per unit of risk; negative means it loses. Drawdown, profit factor and streaks are after the same costs.`}
         >
           Expectancy (R)
         </div>
