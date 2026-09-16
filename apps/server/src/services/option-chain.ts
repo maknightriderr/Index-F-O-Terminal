@@ -209,13 +209,34 @@ async function buildOptionChainUncached(
       : DAY_MS;
   const tteAtPrevClose = tteAtQuote + decayMs / YEAR_MS;
 
+  // Options price off the FORWARD, not spot, and the two don't move
+  // together: on 16 Sep NIFTY spot closed +99 while the options' own forward
+  // (and the future) moved only +60 as the basis compressed. Repricing with
+  // the spot move overstated it, so every call read "written" and every put
+  // "bought" at the same strike. Use the forward implied by put-call parity
+  // at the strikes nearest ATM, at both the previous close and now, and hand
+  // the model F·e^(−rT) so its own forward is exactly F. Falls back to spot
+  // when parity can't be read (too few two-sided strikes).
+  const nearAtmPairs = Array.from(byStrike.entries())
+    .filter(([, e]) => e.call && e.put)
+    .sort(([a], [b]) => Math.abs(a - atmStrike) - Math.abs(b - atmStrike))
+    .slice(0, PARITY_STRIKES)
+    .map(([strike, e]) => ({ strike, call: quoteByToken.get(e.call!.token), put: quoteByToken.get(e.put!.token) }));
+  const forwardNow = impliedForward(nearAtmPairs.map((p) => ({ strike: p.strike, call: p.call?.ltp, put: p.put?.ltp })), tteAtQuote);
+  const forwardPrev = impliedForward(nearAtmPairs.map((p) => ({ strike: p.strike, call: p.call?.close, put: p.put?.close })), tteAtPrevClose);
+  const useForward = forwardNow != null && forwardPrev != null;
+  const pricingSpotNow = useForward ? forwardNow * Math.exp(-RISK_FREE_RATE * tteAtQuote) : spotPrice;
+  const pricingSpotPrev = useForward ? forwardPrev * Math.exp(-RISK_FREE_RATE * tteAtPrevClose) : spotClose;
+
   const buildLeg = (inst: Instrument, strike: number, optionType: OptionType): OptionChainLeg => {
     const quote = quoteByToken.get(inst.token);
     const broker = greeksByKey.get(`${strike}:${optionType}`);
     const oiRead = changeOiByToken.get(inst.token);
     const changeOi = oiRead?.changeOi ?? 0;
     const pressurePct =
-      quote && spotClose > 0 ? ivPressure(quote.close, quote.ltp, spotClose, spotPrice, strike, optionType, tteAtPrevClose, tteAtQuote) : null;
+      quote && pricingSpotPrev > 0
+        ? ivPressure(quote.close, quote.ltp, pricingSpotPrev, pricingSpotNow, strike, optionType, tteAtPrevClose, tteAtQuote)
+        : null;
     // Same self-computed % change as underlyingChangePercent above — this
     // comment previously referred to a field that didn't actually exist,
     // which is how the chain ended up with no day-scale reading of the
@@ -361,12 +382,32 @@ const IV_PRESSURE_MIN_PCT = 2;
 // Below this previous-close premium the IV solve and the % are dominated by
 // tick size.
 const MIN_MODELLABLE_PREMIUM = 0.5;
+// Strikes nearest ATM used to read the implied forward — the median absorbs
+// one stale or off-market last trade.
+const PARITY_STRIKES = 5;
+
+/**
+ * The forward the options are priced off, from put-call parity
+ * (C − P = e^(−rT)·(F − K), so F = K + (C − P)·e^(rT)), median across the
+ * given strikes. Null when fewer than 3 strikes have both legs priced.
+ */
+function impliedForward(pairs: Array<{ strike: number; call?: number; put?: number }>, tte: number): number | null {
+  const growth = Math.exp(RISK_FREE_RATE * Math.max(0, tte));
+  const forwards = pairs
+    .filter((p) => (p.call ?? 0) > 0 && (p.put ?? 0) > 0)
+    .map((p) => p.strike + (p.call! - p.put!) * growth)
+    .sort((a, b) => a - b);
+  if (forwards.length < 3) return null;
+  const mid = Math.floor(forwards.length / 2);
+  return forwards.length % 2 === 1 ? forwards[mid] : (forwards[mid - 1] + forwards[mid]) / 2;
+}
 
 /**
  * How far the option's price sits from what the underlying's move and time
  * decay alone would have made it, as % of the previous close premium.
- * Solves the IV the option closed at yesterday, reprices it at today's spot
- * and remaining time with that SAME IV, and compares to the live premium:
+ * Solves the IV the option closed at yesterday, reprices it at today's
+ * underlying (the parity-implied forward, passed in spot terms) and
+ * remaining time with that SAME IV, and compares to the live premium:
  * the residual is the IV change — buyers bidding options up, or writers
  * pressing them down. Null when it can't be modelled (no/illiquid quote,
  * premium at intrinsic, IV unresolvable).
