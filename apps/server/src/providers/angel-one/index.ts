@@ -102,6 +102,8 @@ const RATE_LIMIT_PAUSE_MS = 2000;
 // "Connection Idle Timeout" — the client must send a text "ping" at least
 // every 30s. Without it the feed dropped and reconnected 240 times on 16 Sep.
 const WS_HEARTBEAT_INTERVAL_MS = 25_000;
+// Fixed packet sizes per subscription mode — see parseBinaryMessage.
+const WS_PACKET_BYTES = { LTP: 51, QUOTE: 123, SNAP_QUOTE: 379 } as const;
 
 const EXCHANGE_MAP: Record<string, Exchange> = {
   NSE: 'NSE',
@@ -1063,73 +1065,56 @@ class AngelOneWebSocket implements WebSocketConnection {
 
   // --- Binary Message Parser ---
 
+  // Angel One SmartAPI WebSocket 2.0 binary layout — little-endian, prices
+  // as int64 paise — matching the offsets in Angel One's own SDK
+  // (smartWebSocketV2):
+  //   0 mode (1)  1 exchange type (1)  2-26 token (25, NUL-padded ASCII)
+  //   27 sequence no. (8)  35 exchange timestamp (8)  43 LTP (8)       — LTP packet ends at 51
+  //   51 last traded qty (8)  59 avg traded price (8)  67 volume (8)
+  //   75 total buy qty (8, double)  83 total sell qty (8, double)
+  //   91 open (8)  99 high (8)  107 low (8)  115 close (8)             — Quote packet ends at 123
+  //   123 last traded timestamp (8)  131 OI (8)  139 OI change % (8, double)
+  //   147 best five buy/sell (200)  347 upper circuit  355 lower circuit
+  //   363 52w high  371 52w low                                         — SnapQuote packet ends at 379
+  //
+  // The parser this replaces was a placeholder built on guessed offsets
+  // ("simplified parser — in production, follow exact binary spec"): it read
+  // LTP as an int32 at byte 27, i.e. the low half of the SEQUENCE NUMBER,
+  // and open/high/low/close/volume/OI from equally wrong positions. Nothing
+  // acted on tick prices until the trade-setup monitor started closing
+  // positions on them (16 Sep 21:16 IST), when every first tick read as a
+  // huge price and closed each open setup as a WIN at its target.
   private parseBinaryMessage(data: Buffer): Tick[] {
     const ticks: Tick[] = [];
-
-    // Angel One WebSocket v2 binary format
-    // Each message may contain multiple packets
     let offset = 0;
 
-    while (offset < data.length) {
-      try {
-        // Check minimum packet size
-        if (data.length - offset < 8) break;
+    while (data.length - offset >= WS_PACKET_BYTES.LTP) {
+      const mode = data.readUInt8(offset);
+      const packetSize = mode === 1 ? WS_PACKET_BYTES.LTP : mode === 2 ? WS_PACKET_BYTES.QUOTE : mode === 3 ? WS_PACKET_BYTES.SNAP_QUOTE : 0;
+      // Unknown mode (e.g. 20-level depth) or a truncated packet: its layout
+      // isn't the one above, so reading it would produce wrong prices.
+      if (packetSize === 0 || offset + packetSize > data.length) break;
 
-        // Read subscription mode (1 byte) and exchange type (1 byte)
-        const mode = data.readUInt8(offset);
-        const exchangeType = data.readUInt8(offset + 1);
-
-        // Read token (25 bytes, null-terminated string starting at offset+2)
-        // In Angel One v2, token info varies by mode
-        // This is a simplified parser — in production, follow exact binary spec
-
-        let packetSize: number;
-        switch (mode) {
-          case 1: packetSize = 50;  break; // LTP mode
-          case 2: packetSize = 130; break; // Quote mode
-          case 3: packetSize = 170; break; // SnapQuote mode
-          default: packetSize = data.length - offset; break;
-        }
-
-        if (offset + packetSize > data.length) break;
-
-        const packet = data.subarray(offset, offset + packetSize);
-        const tick = this.parseTickPacket(packet, mode, exchangeType);
-        if (tick) ticks.push(tick);
-
-        offset += packetSize;
-      } catch (err) {
-        // Skip malformed packet
-        break;
-      }
+      const tick = this.parseTickPacket(data.subarray(offset, offset + packetSize), mode, data.readUInt8(offset + 1));
+      if (tick) ticks.push(tick);
+      offset += packetSize;
     }
 
     return ticks;
   }
 
-  private parseTickPacket(
-    packet: Buffer,
-    mode: number,
-    exchangeType: number
-  ): Tick | null {
+  private parseTickPacket(packet: Buffer, mode: number, exchangeType: number): Tick | null {
     try {
-      // Simplified parsing — actual byte positions depend on Angel One v2 spec
-      // Token is typically at bytes 2-26 (25 char null-terminated)
-      const tokenBytes = packet.subarray(2, 27);
-      const token = tokenBytes.toString('ascii').replace(/\0/g, '').trim();
-
+      const token = packet.subarray(2, 27).toString('ascii').replace(/\0/g, '').trim();
       if (!token) return null;
 
-      const exchange = this.exchangeTypeToExchange(exchangeType);
-
-      // LTP starts at byte 27 (4 bytes, int32, needs /100)
-      const ltp = packet.readInt32LE(27) / 100;
+      const paise = (at: number) => Number(packet.readBigInt64LE(at)) / 100;
 
       const tick: Tick = {
         token,
-        exchange,
+        exchange: this.exchangeTypeToExchange(exchangeType),
         timestamp: Date.now(),
-        ltp,
+        ltp: paise(43),
         open: 0,
         high: 0,
         low: 0,
@@ -1137,18 +1122,16 @@ class AngelOneWebSocket implements WebSocketConnection {
         volume: 0,
       };
 
-      // Quote mode has more fields
-      if (mode >= 2 && packet.length >= 130) {
-        tick.open = packet.readInt32LE(47) / 100;
-        tick.high = packet.readInt32LE(51) / 100;
-        tick.low = packet.readInt32LE(55) / 100;
-        tick.close = packet.readInt32LE(59) / 100;
-        tick.volume = packet.readInt32LE(35);
+      if (mode >= 2 && packet.length >= WS_PACKET_BYTES.QUOTE) {
+        tick.volume = Number(packet.readBigInt64LE(67));
+        tick.open = paise(91);
+        tick.high = paise(99);
+        tick.low = paise(107);
+        tick.close = paise(115);
       }
 
-      // SnapQuote mode adds OI and bid/ask
-      if (mode >= 3 && packet.length >= 170) {
-        tick.oi = packet.readInt32LE(63);
+      if (mode >= 3 && packet.length >= WS_PACKET_BYTES.SNAP_QUOTE) {
+        tick.oi = Number(packet.readBigInt64LE(131));
       }
 
       return tick;

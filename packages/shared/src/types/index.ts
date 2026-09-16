@@ -1365,6 +1365,9 @@ export interface TradeSetupRecord {
   returnPercent: number | null;
   /** Generated while its exchange had no live session (after hours, weekend, holiday) — priced off frozen quotes nobody could have traded, so Backtesting keeps it out of every statistic. */
   generatedOffSession: boolean;
+  /** Outcome known to be invalid (recorded by a data bug) — kept for the record, excluded from every statistic. */
+  voided?: boolean;
+  voidReason?: string | null;
 }
 
 export interface WinRateBucket {
@@ -1457,6 +1460,8 @@ export interface WinRateAnalytics {
   positionalCount: number;
   /** Setups (within the current mode filter) left out of every statistic above because they were generated outside a live session — see TradeSetupRecord.generatedOffSession. */
   offSessionExcludedCount: number;
+  /** Setups whose outcome was voided as invalid (see TradeSetupRecord.voided), also excluded from the statistics above. */
+  voidedCount?: number;
 }
 
 // --- WebSocket Subscription ---

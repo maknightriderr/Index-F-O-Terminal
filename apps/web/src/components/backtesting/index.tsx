@@ -109,6 +109,11 @@ export function BacktestingPage() {
           ℹ️ Showing Intraday ({analytics.intradayCount}) and Positional ({analytics.positionalCount}) combined — they have different SL sizing and hold times. Use the filter above to separate them.
         </div>
       )}
+      {analytics && (analytics.voidedCount ?? 0) > 0 && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2 text-red-400 light:text-red-700 text-xs">
+          {analytics.voidedCount} setup outcome{analytics.voidedCount === 1 ? ' was' : 's were'} recorded by a data bug (a mis-decoded live price on 16 Sep) and {analytics.voidedCount === 1 ? 'is' : 'are'} excluded from these stats. {analytics.voidedCount === 1 ? "It's" : "They're"} still listed below, marked VOID.
+        </div>
+      )}
       {analytics && analytics.offSessionExcludedCount > 0 && (
         <div className="bg-gray-500/10 border border-gray-500/20 rounded-xl px-4 py-2 text-gray-400 light:text-slate-600 text-xs">
           {analytics.offSessionExcludedCount} setup{analytics.offSessionExcludedCount === 1 ? '' : 's'} generated while the market was closed (after hours, weekend, or holiday) {analytics.offSessionExcludedCount === 1 ? 'is' : 'are'} excluded from these stats — priced off frozen quotes nobody could trade. They're still listed below, marked OFF-HRS.
@@ -571,6 +576,14 @@ function TradeSetupHistoryTable({
                 <tr key={r.id} onClick={() => onOpen(r.symbol)} className="border-t border-gray-800/40 light:border-slate-200 hover:bg-gray-800/30 light:hover:bg-slate-100 cursor-pointer transition-colors">
                   <td className="px-2 py-2 text-gray-400 light:text-slate-600 whitespace-nowrap">
                     {new Date(r.generatedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                    {r.voided && (
+                      <span
+                        className="ml-1.5 inline-block px-1 py-px rounded text-[9px] font-bold text-red-400 light:text-red-700 bg-red-500/10"
+                        title={r.voidReason ?? 'Outcome invalidated — excluded from every statistic above'}
+                      >
+                        VOID
+                      </span>
+                    )}
                     {r.generatedOffSession && (
                       <span
                         className="ml-1.5 inline-block px-1 py-px rounded text-[9px] font-bold text-amber-400 light:text-amber-700 bg-amber-500/10"

@@ -2458,6 +2458,11 @@ function classifyPriceHitOutcome(stored: StoredTradeSetup, isSpread: boolean, hi
  * distributed locking for what would be a duplicate backtesting row, not a
  * functional or safety issue.
  */
+// A live tick more than this far from the chain's quote (cached ≤10s) for
+// the same contract is treated as bad data, not a real move.
+const TICK_SANITY_MIN_RATIO = 0.5;
+const TICK_SANITY_MAX_RATIO = 2;
+
 /** What the monitor needs to watch a still-open naked long on the live tick feed. */
 export interface LockedSetupWatch {
   underlying: string;
@@ -2550,7 +2555,17 @@ export async function checkLockedSetupPriceLevels(
     hitSL = progress.hitStop;
     hitTarget = progress.hitTarget;
   } else if (!isSpread && stored.strike != null && stored.side && stored.stopLoss != null && stored.target != null) {
-    const currentLtp = observedLtp != null && observedLtp > 0 ? observedLtp : legLtpOrNull(pricingChain, stored.strike, stored.side);
+    // A tick price is only trusted when it's plausibly the same contract's
+    // price as the chain's own quote. A tick decoder bug once made every
+    // first tick a huge number, closing open setups as WINs at their
+    // targets — a price-level close must never rest on one unchecked tick.
+    const chainLtp = legLtpOrNull(pricingChain, stored.strike, stored.side);
+    const tickUsable =
+      observedLtp != null && observedLtp > 0 && (chainLtp == null || (observedLtp >= chainLtp * TICK_SANITY_MIN_RATIO && observedLtp <= chainLtp * TICK_SANITY_MAX_RATIO));
+    if (observedLtp != null && !tickUsable) {
+      logger.warn({ underlying, exchange, observedLtp, chainLtp }, 'Price-level monitor: tick price implausible vs chain quote — ignored');
+    }
+    const currentLtp = tickUsable ? observedLtp! : chainLtp;
     currentValue = currentLtp;
     hitSL = currentLtp != null && currentLtp <= stored.stopLoss;
     hitTarget = currentLtp != null && currentLtp >= stored.target;

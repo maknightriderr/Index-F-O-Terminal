@@ -75,8 +75,35 @@ export function startAbandonedSetupSweep(): void {
   );
 }
 
+// Outcomes recorded by the broken WebSocket tick decoder (see
+// parseBinaryMessage in providers/angel-one). From deploy 0f3b22d until its
+// fix, every open setup's first live tick read as a huge price, so each was
+// closed as a WIN at exactly its target — and CRUDEOIL looped
+// regenerate -> "WIN" every ~90s. No genuine WIN could be recorded in the
+// window: the bogus first tick always closed a watched setup before a real
+// price check could. Voided rows are kept but excluded from all statistics.
+const TICK_DECODER_BUG_WINDOW = {
+  start: Date.parse('2026-09-16T21:16:00+05:30'),
+  end: Date.parse('2026-09-16T22:30:00+05:30'),
+};
+const TICK_DECODER_BUG_REASON = 'Closed on a mis-decoded live tick price (16 Sep 2026 WebSocket decoder bug) — not a real outcome';
+
 export async function closeAbandonedTradeSetups(): Promise<number> {
   try {
+    const voided = await sql<{ id: string }[]>`
+      UPDATE signals
+      SET inputs = inputs || ${sql.json({ voided: true, voidReason: TICK_DECODER_BUG_REASON })}
+      WHERE signal_type = 'TRADE_SETUP'
+        AND inputs->>'outcome' = 'WIN'
+        AND inputs->>'voided' IS NULL
+        AND (inputs->>'exitTime')::bigint >= ${TICK_DECODER_BUG_WINDOW.start}
+        AND (inputs->>'exitTime')::bigint < ${TICK_DECODER_BUG_WINDOW.end}
+      RETURNING id
+    `;
+    if (voided.length > 0) {
+      logger.info({ count: voided.length }, 'Backtesting: voided WIN outcomes recorded by the tick decoder bug');
+    }
+
     // Repair for the positional rows the old 2-day window closed while they
     // were still live. Only touches rows this sweep itself closed — marked
     // abandoned with no exitTime and no return (a real outcome always stamps
@@ -145,6 +172,8 @@ function toTradeSetupRecord(row: SignalRow): TradeSetupRecord {
     symbol: row.symbol,
     exchange,
     generatedOffSession: minutesSinceSessionOpen(exchange, generatedAt) == null,
+    voided: inputs.voided === true,
+    voidReason: inputs.voidReason ?? null,
     // Absent on records from before the mode toggle shipped — those were
     // all generated under what's now called INTRADAY, so that's the
     // correct read for them, not "unknown".
@@ -364,8 +393,8 @@ export async function getWinRateAnalytics(modeFilter?: TradingMode | 'ALL', sinc
   const inMode = !modeFilter || modeFilter === 'ALL' ? everything : everything.filter((r) => r.mode === modeFilter);
   // A setup priced off frozen quotes was never tradeable — its "outcome" is
   // an artefact of stale data meeting the next live print, not a result.
-  const live = everything.filter((r) => !r.generatedOffSession);
-  const all = inMode.filter((r) => !r.generatedOffSession);
+  const live = everything.filter((r) => !r.generatedOffSession && !r.voided);
+  const all = inMode.filter((r) => !r.generatedOffSession && !r.voided);
 
   const bySymbolMap = new Map<string, TradeSetupRecord[]>();
   for (const r of all) {
@@ -386,7 +415,8 @@ export async function getWinRateAnalytics(modeFilter?: TradingMode | 'ALL', sinc
     bySymbol,
     intradayCount: live.filter((r) => r.mode === 'INTRADAY').length,
     positionalCount: live.filter((r) => r.mode === 'POSITIONAL').length,
-    offSessionExcludedCount: inMode.length - all.length,
+    offSessionExcludedCount: inMode.filter((r) => r.generatedOffSession).length,
+    voidedCount: inMode.filter((r) => r.voided && !r.generatedOffSession).length,
   };
 }
 
