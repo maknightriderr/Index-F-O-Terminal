@@ -43,7 +43,7 @@ const DEFAULT_SL_PREMIUM_PCT = 0.3;
 // counting them made a unanimous-but-quiet read score LOWER than a
 // contested one. 65 is a meaningfully different (and more honest) bar than
 // it was when this number was first chosen.
-const MIN_CONFIDENCE = 65;
+export const MIN_CONFIDENCE = 65;
 // A real single-leg long-option bet essentially never justifies a
 // reward:risk this large — with SL fixed at a 30%-of-entry stop, the risk
 // leg is small by construction, so even a moderately-inflated target

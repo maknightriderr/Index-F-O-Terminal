@@ -310,7 +310,11 @@ function OverallSummary({ bucket }: { bucket: WinRateBucket }) {
           Expectancy (R)
         </div>
         <div className={`text-3xl font-bold tabular-nums ${bucket.avgRMultiple == null ? 'text-gray-400' : bucket.avgRMultiple >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-          {bucket.avgRMultiple != null ? `${bucket.avgRMultiple >= 0 ? '+' : ''}${bucket.avgRMultiple}R` : '—'}
+          {bucket.avgRMultiple != null
+            ? Math.abs(bucket.avgRMultiple) < 0.005
+              ? '0.00R'
+              : `${bucket.avgRMultiple > 0 ? '+' : ''}${bucket.avgRMultiple.toFixed(2)}R`
+            : '—'}
         </div>
         <div className="text-[10px] text-gray-400 light:text-slate-600 mt-1">
           {bucket.avgReturnPercent != null ? `${bucket.avgReturnPercent >= 0 ? '+' : ''}${bucket.avgReturnPercent}% avg premium move` : '—'}

@@ -26,6 +26,7 @@ import {
   buildTradeSetup,
   MAX_RISK_REWARD,
   MIN_RISK_REWARD,
+  MIN_CONFIDENCE,
   evaluateSpreadProgress,
   calculateHistoricalVolatility,
   compareIvToHv,
@@ -103,16 +104,23 @@ const BIAS_RESULT_CACHE_TTL_SECONDS = 5 * 60;
 // poll interval) before actually invalidating a sticky setup filters that
 // noise out while still reacting to a real, sustained reversal.
 //
-// POSITIONAL gets a much higher bar — found during a re-audit that this
-// constant was being applied uniformly regardless of mode, meaning a
-// week-long positional thesis could be invalidated on the same ~3-minute
-// debounce tuned for an intraday scalp. Whatever the exact wall-clock time
-// that maps to (it depends on how often the underlying 1H/Daily candle
-// cache actually refreshes with new data, not just poll count), requiring
-// more consecutive confirmations is unambiguously more conservative and
-// appropriate for a multi-day/week hold.
+// A poll COUNT alone turned out not to measure time at all. Every caller
+// of buildMarketBias advances the streak — each open browser view, the
+// 5-minute market scanner, the 15-minute institutional scanner — so three
+// reads could land within seconds: on 16 Sep a NIFTY CE was closed 4
+// minutes after it was locked, on reads 3 seconds apart, and NIFTY
+// re-entered and re-closed the same call three times in 31 minutes. The
+// reversal now has to HOLD for a wall-clock window as well: one full
+// 15-minute bar for INTRADAY (its short tier is 15m candles), two 1H bars
+// for POSITIONAL. The poll floor stays so a single read can't satisfy it.
+//
+// Only a confident opposite read counts (>= MIN_CONFIDENCE, the same bar a
+// new setup needs). NEUTRAL or low-confidence reads say "mixed", not
+// "reversed" — they neither advance nor clear a streak; the stop-loss is
+// what protects the position while signals are mixed.
 const REVERSAL_CONFIRM_POLLS = 3;
-const REVERSAL_CONFIRM_POLLS_POSITIONAL = 10;
+const REVERSAL_CONFIRM_MINUTES = 15;
+const REVERSAL_CONFIRM_MINUTES_POSITIONAL = 120;
 
 export interface MarketBiasResult {
   bias: MarketBias;
@@ -1524,7 +1532,8 @@ interface StoredTradeSetup extends TradeSetup {
   voteSnapshot?: BiasVoteSnapshot; // the votes that minted this setup — persisted with its Backtesting row
   day: string; // YYYY-MM-DD, IST
   signalId?: string; // links to the persisted `signals` row for backtesting (see backtesting.ts)
-  reversalStreak?: number; // consecutive polls the bias has read opposite to `direction` — see REVERSAL_CONFIRM_POLLS
+  reversalStreak?: number; // confident opposite reads since the streak started — see REVERSAL_CONFIRM_POLLS
+  reversalSince?: number; // when the first of those reads landed (epoch ms) — see REVERSAL_CONFIRM_MINUTES
   initialStopLoss?: number; // the SL at generation time, fixed — `stopLoss` itself trails upward as price moves favorably, this is what "1x/2x initial risk" is measured against
 }
 
@@ -1559,12 +1568,17 @@ const POSITIONAL_SL_PREMIUM_PCT = 0.4;
 //    also skips the first ticks after the bell, while quotes are still
 //    catching up from the pre-open auction.
 //
-// 2. Immediate re-entry after a stop-out. An SL hit falls straight through
-//    to fresh generation, and the bias that produced the losing trade
-//    usually still reads the same way — so the next poll bought the same
-//    side again (three NIFTY PE stop-outs in one morning as the index
-//    climbed). Every LOSS now starts a same-direction cooldown, and
-//    MAX_SAME_DIRECTION_LOSSES_PER_DAY stops that direction for the day.
+// 2. Immediate re-entry after a losing close. An SL hit falls straight
+//    through to fresh generation, and the bias that produced the losing
+//    trade usually still reads the same way — so the next poll bought the
+//    same side again (three NIFTY PE stop-outs in one morning as the index
+//    climbed). A bias-reversal close at a loss is the same failure and was
+//    NOT covered at first: on 16 Sep NIFTY re-entered CE three times in 31
+//    minutes after each one closed red. Every losing close (a LOSS, or a
+//    BIAS_REVERSED close below entry) now starts a same-direction cooldown,
+//    and MAX_SAME_DIRECTION_LOSSES_PER_DAY stops that direction for the day.
+//    Session-end and data-sanity closes don't count — they aren't the
+//    thesis failing, and a session-end close lands on the NEXT day.
 //
 // Holidays (including MCX's half-day closures) come from EXCHANGE_HOLIDAYS
 // in @fno/shared, which needs each new year's list added.
@@ -1608,19 +1622,28 @@ function slLossCountKey(exchange: Exchange, underlying: string, mode: TradingMod
   return `trade_setup_sl_losses:${exchange}:${underlying}:${mode}:${direction}:${day}`;
 }
 
-async function registerStopLossHit(exchange: Exchange, underlying: string, mode: TradingMode, direction: BiasDirection): Promise<void> {
+/**
+ * Starts the same-direction cooldown and counts toward the daily cap. The
+ * count is claimed once per setup (`setupId`) — the price-level monitor and
+ * an on-demand poll can both record the same close, and counting it twice
+ * would end that direction for the day after a single loss.
+ */
+async function registerLosingClose(exchange: Exchange, underlying: string, mode: TradingMode, direction: BiasDirection, setupId: string): Promise<void> {
   const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
   const countKey = slLossCountKey(exchange, underlying, mode, direction, day);
   try {
     await redis.set(slCooldownKey(exchange, underlying, mode, direction), '1', 'EX', mode === 'POSITIONAL' ? SL_COOLDOWN_SECONDS_POSITIONAL : SL_COOLDOWN_SECONDS);
-    await redis.incr(countKey);
-    await redis.expire(countKey, 60 * 60 * 24);
+    const firstCount = await redis.set(`trade_setup_loss_counted:${setupId}`, '1', 'EX', 60 * 60 * 48, 'NX');
+    if (firstCount === 'OK') {
+      await redis.incr(countKey);
+      await redis.expire(countKey, 60 * 60 * 24);
+    }
   } catch (err: any) {
-    logger.warn({ error: err.message, underlying }, 'Stop-loss cooldown write failed');
+    logger.warn({ error: err.message, underlying }, 'Losing-close cooldown write failed');
   }
 }
 
-async function stopLossCooldownReason(underlying: string, exchange: Exchange, direction: BiasDirection, mode: TradingMode): Promise<string | null> {
+async function losingCloseCooldownReason(underlying: string, exchange: Exchange, direction: BiasDirection, mode: TradingMode): Promise<string | null> {
   if (direction === 'NEUTRAL') return null;
   const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
   try {
@@ -1630,13 +1653,13 @@ async function stopLossCooldownReason(underlying: string, exchange: Exchange, di
     ]);
     const lossCount = Number(losses ?? 0);
     if (lossCount >= MAX_SAME_DIRECTION_LOSSES_PER_DAY) {
-      return `${underlying} has already stopped out ${lossCount} ${direction} setups today — no more ${direction} entries until tomorrow.`;
+      return `${underlying} has already closed ${lossCount} ${direction} setups at a loss today — no more ${direction} entries until tomorrow.`;
     }
     if (cooldownTtl > 0) {
-      return `${underlying}'s last ${direction} setup hit its stop-loss — no same-direction re-entry for another ${Math.ceil(cooldownTtl / 60)} min.`;
+      return `${underlying}'s last ${direction} setup closed at a loss — no same-direction re-entry for another ${Math.ceil(cooldownTtl / 60)} min.`;
     }
   } catch (err: any) {
-    logger.warn({ error: err.message, underlying }, 'Stop-loss cooldown read failed — proceeding ungated');
+    logger.warn({ error: err.message, underlying }, 'Losing-close cooldown read failed — proceeding ungated');
   }
   return null;
 }
@@ -1806,29 +1829,33 @@ async function resolveStickyTradeSetup(
         mode,
         reason: closeReasonForPriceHit(stored!, isSpread, hitTarget),
       });
-      if (outcome === 'LOSS') await registerStopLossHit(exchange, underlying, mode, stored!.direction);
-      // falls through to fresh generation below (subject to the stop-loss cooldown)
+      // falls through to fresh generation below (subject to the losing-close cooldown)
     } else if (stored!.direction === direction) {
       // Bias still agrees with the locked setup — fully sticky. Clear any
       // reversal streak that had started building from an earlier blip,
       // since the reversal didn't hold.
       if (!stored!.reversalStreak) return withLiveMark(stored!, currentValue, isSpread);
-      const reset: StoredTradeSetup = { ...stored!, reversalStreak: 0 };
+      const reset: StoredTradeSetup = { ...stored!, reversalStreak: 0, reversalSince: undefined };
       try {
         await redis.set(key, JSON.stringify(reset), 'EX', setupTtl);
       } catch (err: any) {
         logger.warn({ error: err.message, underlying }, 'Sticky trade setup reversal-streak reset failed');
       }
       return withLiveMark(reset, currentValue, isSpread);
+    } else if (direction === 'NEUTRAL' || confidence < MIN_CONFIDENCE) {
+      // Mixed or low-confidence read — not a reversal. Hold the position and
+      // leave any streak as it is (see REVERSAL_CONFIRM_POLLS).
+      return withLiveMark(stored!, currentValue, isSpread);
     } else {
-      // Bias has flipped this poll — don't tear down the setup on a single
-      // noisy reading. Require the reversal to hold for REVERSAL_CONFIRM_POLLS
-      // (mode-scaled — POSITIONAL needs a much higher bar) consecutive polls
-      // before treating it as real.
-      const confirmPolls = isPositional ? REVERSAL_CONFIRM_POLLS_POSITIONAL : REVERSAL_CONFIRM_POLLS;
+      // A confident opposite read — don't tear down the setup on it alone.
+      // The reversal has to hold for REVERSAL_CONFIRM_POLLS reads AND a
+      // wall-clock window before it's treated as real.
+      const now = Date.now();
+      const since = stored!.reversalSince ?? now;
       const streak = (stored!.reversalStreak ?? 0) + 1;
-      if (streak < confirmPolls) {
-        const bumped: StoredTradeSetup = { ...stored!, reversalStreak: streak };
+      const confirmMs = (isPositional ? REVERSAL_CONFIRM_MINUTES_POSITIONAL : REVERSAL_CONFIRM_MINUTES) * 60_000;
+      if (streak < REVERSAL_CONFIRM_POLLS || now - since < confirmMs) {
+        const bumped: StoredTradeSetup = { ...stored!, reversalStreak: streak, reversalSince: since };
         try {
           await redis.set(key, JSON.stringify(bumped), 'EX', setupTtl);
         } catch (err: any) {
@@ -1861,7 +1888,7 @@ async function resolveStickyTradeSetup(
   const unreliableReason =
     sessionGateReason(exchange) ??
     positioningConflictReason(direction, voteSnapshot) ??
-    (await stopLossCooldownReason(underlying, exchange, direction, mode)) ??
+    (await losingCloseCooldownReason(underlying, exchange, direction, mode)) ??
     (await checkReliabilityFilters(underlying, exchange, direction, mode));
   if (unreliableReason != null) {
     try {
@@ -2073,6 +2100,12 @@ async function recordTradeSetupOutcome(
     }
   }
 
+  const dedupeId = stored.signalId ?? `${close.exchange}:${close.underlying}:${close.mode}:${stored.generatedAt ?? 'unknown'}`;
+  const closedAtLoss = outcome === 'LOSS' || (close.reason === 'BIAS_REVERSED' && returnPercent != null && returnPercent < 0);
+  if (closedAtLoss && stored.direction !== 'NEUTRAL') {
+    await registerLosingClose(close.exchange, close.underlying, close.mode, stored.direction, dedupeId);
+  }
+
   // R against the stop the trade was OPENED with — a trailed stop would
   // understate the risk actually taken.
   const initialStop = stored.initialStopLoss ?? stored.stopLoss;
@@ -2091,7 +2124,7 @@ async function recordTradeSetupOutcome(
     returnPercent,
     rMultiple: returnPercent != null && riskPct != null && riskPct > 0 ? Math.round((returnPercent / riskPct) * 100) / 100 : null,
     generatedAt: stored.generatedAt ?? null,
-    dedupeId: stored.signalId ?? `${close.exchange}:${close.underlying}:${close.mode}:${stored.generatedAt ?? 'unknown'}`,
+    dedupeId,
   });
 }
 
@@ -2300,7 +2333,6 @@ export async function checkLockedSetupPriceLevels(provider: MarketDataProvider, 
     mode: 'INTRADAY',
     reason: closeReasonForPriceHit(stored, isSpread, hitTarget),
   });
-  if (outcome === 'LOSS') await registerStopLossHit(exchange, underlying, 'INTRADAY', stored.direction);
   // recordTradeSetupOutcome only updates the DB row — resolveStickyTradeSetup's
   // on-demand path normally clears/overwrites this Redis key itself right
   // after (it falls through to generating a fresh setup). This monitor
