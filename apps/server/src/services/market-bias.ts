@@ -146,6 +146,16 @@ export interface MarketBiasResult {
 
 type Vote = -1 | 0 | 1;
 
+// When each symbol/mode's bias was last computed successfully by anyone (a
+// browser poll, a scanner, the trade-setup monitor) — so the monitor's own
+// bias recheck can skip symbols that were just read. In-process only; a
+// restart simply means the first recheck isn't skipped.
+const biasComputedAt = new Map<string, number>();
+
+export function lastBiasComputedAt(exchange: Exchange, underlying: string, mode: TradingMode): number | undefined {
+  return biasComputedAt.get(`${exchange}:${underlying}:${mode}`);
+}
+
 export async function buildMarketBias(
   provider: MarketDataProvider,
   underlying: string,
@@ -1390,6 +1400,7 @@ async function computeMarketBias(
     : { available: false, reason: 'Option chain unavailable for this symbol — cannot size a setup.' };
 
   const result: MarketBiasResult = { bias, score, tradeSetup };
+  biasComputedAt.set(`${exchange}:${underlying}:${mode}`, Date.now());
 
   // Persist the successful result as a fallback for future failures
   try {

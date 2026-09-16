@@ -24,13 +24,20 @@
 //    or target triggers the check immediately with that tick's price. A
 //    90s poll alone let exits land well past the stop (NIFTY PE -1.46R,
 //    CRUDEOIL CE -1.52R against a -1R stop).
+// 3. The BIAS behind each open setup is re-read on a schedule, during its
+//    exchange's session. A bias-reversal exit only ever happened when
+//    something else computed that symbol's bias — a browser tab or a
+//    scanner — so a CRUDEOIL or SENSEX setup whose tab was closed never
+//    exited on a reversal at all, only on SL/target or the session end.
+//    The recheck runs the same buildMarketBias path, so exits, fresh
+//    setups and notifications behave exactly as an on-screen poll would.
 // ============================================================
 
-import { FO_SEGMENT } from '@fno/shared';
+import { FO_SEGMENT, minutesSinceSessionOpen } from '@fno/shared';
 import type { Exchange, Tick, TradingMode } from '@fno/shared';
 import { redis } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
-import { checkLockedSetupPriceLevels } from './market-bias.js';
+import { buildMarketBias, checkLockedSetupPriceLevels, lastBiasComputedAt } from './market-bias.js';
 import type { LockedSetupWatch } from './market-bias.js';
 import type { MarketDataProvider } from '../providers/interface.js';
 import type { SubscriptionManager, SubscriptionTarget } from '../lib/subscription-manager.js';
@@ -42,7 +49,17 @@ const MONITOR_INTERVAL_MS = 90_000;
 const INITIAL_DELAY_MS = 45_000;
 const TICK_CLIENT_ID = 'trade-setup-monitor';
 
+// Bias recheck cadence for open setups. A reversal exit needs a second
+// confident opposite read at least ~90s after the first, so once one has
+// started (reversalStreak > 0) the symbol is re-read sooner. Positional
+// reversals need hours to confirm, so their recheck is relaxed. Skipped
+// whenever anyone else computed the bias more recently than this.
+const BIAS_RECHECK_MS = 5 * 60_000;
+const BIAS_RECHECK_PENDING_REVERSAL_MS = 2 * 60_000;
+const BIAS_RECHECK_POSITIONAL_MS = 15 * 60_000;
+
 let monitorStarted = false;
+let sweepRunning = false;
 // token -> what to watch; replaced wholesale on each sweep
 let watchesByToken = new Map<string, LockedSetupWatch>();
 // setup keys with a check already running, so a burst of ticks through a
@@ -71,7 +88,18 @@ export function startTradeSetupPriceMonitor(provider: MarketDataProvider, subscr
 
 async function runMonitor(provider: MarketDataProvider, subscriptions?: SubscriptionManager): Promise<void> {
   if (!provider.isAuthenticated()) return;
+  // A sweep with several bias rechecks can outlast the 90s interval — never
+  // let two overlap.
+  if (sweepRunning) return;
+  sweepRunning = true;
+  try {
+    await sweep(provider, subscriptions);
+  } finally {
+    sweepRunning = false;
+  }
+}
 
+async function sweep(provider: MarketDataProvider, subscriptions?: SubscriptionManager): Promise<void> {
   const next = new Map<string, LockedSetupWatch>();
   const keys = await scanKeys('trade_setup:*');
   for (const key of keys) {
@@ -99,6 +127,58 @@ async function runMonitor(provider: MarketDataProvider, subscriptions?: Subscrip
   }
 
   await syncSubscriptions(subscriptions, next);
+  await recheckBias(provider, keys);
+}
+
+async function recheckBias(provider: MarketDataProvider, keys: string[]): Promise<void> {
+  for (const key of keys) {
+    const parts = key.split(':');
+    if (parts.length !== 4) continue;
+    const [, exchangeRaw, underlying, modeRaw] = parts;
+    if (modeRaw !== 'INTRADAY' && modeRaw !== 'POSITIONAL') continue;
+    const exchange = exchangeRaw as Exchange;
+    const mode = modeRaw as TradingMode;
+
+    // Only while the exchange is trading — a bias off frozen quotes isn't a
+    // reversal, and intraday session-end closes are handled above.
+    if (minutesSinceSessionOpen(exchange) == null) continue;
+
+    let stored: { available?: boolean; reversalStreak?: number; generatedAt?: number } | null = null;
+    try {
+      const raw = await redis.get(key); // re-read: the price check above may have just closed it
+      stored = raw ? JSON.parse(raw) : null;
+    } catch {
+      continue;
+    }
+    if (!stored?.available) continue;
+
+    const interval =
+      mode === 'POSITIONAL' ? BIAS_RECHECK_POSITIONAL_MS : (stored.reversalStreak ?? 0) > 0 ? BIAS_RECHECK_PENDING_REVERSAL_MS : BIAS_RECHECK_MS;
+    const last = lastBiasComputedAt(exchange, underlying, mode);
+    if (last != null && Date.now() - last < interval) continue;
+
+    const id = `${exchange}:${underlying}:${mode}`;
+    if (inFlight.has(id)) continue;
+    inFlight.add(id);
+    try {
+      const { bias, tradeSetup } = await buildMarketBias(provider, underlying, exchange, mode);
+      const unchanged = tradeSetup.available && tradeSetup.generatedAt === stored.generatedAt;
+      logger.info(
+        {
+          underlying,
+          exchange,
+          mode,
+          bias: `${bias.direction} ${bias.confidence}`,
+          setup: unchanged ? 'held' : tradeSetup.available ? `closed, replaced by ${tradeSetup.side} ${tradeSetup.strike}` : 'closed',
+        },
+        'Trade setup monitor: bias rechecked for an open setup'
+      );
+    } catch (err: any) {
+      logger.warn({ error: err.message, underlying, exchange, mode }, 'Trade setup monitor: bias recheck failed — will retry next sweep');
+    } finally {
+      inFlight.delete(id);
+    }
+  }
 }
 
 async function syncSubscriptions(subscriptions: SubscriptionManager | undefined, next: Map<string, LockedSetupWatch>): Promise<void> {
