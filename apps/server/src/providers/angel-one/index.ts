@@ -464,7 +464,9 @@ export class AngelOneProvider implements MarketDataProvider {
       const response = await this.api.post(
         '/rest/secure/angelbroking/historical/v1/getCandleData',
         {
-          exchange: params.exchange,
+          // A derivatives token must be requested on its F&O segment — an
+          // index future sent as "NSE" returns nothing. MCX is one segment.
+          exchange: params.segment === 'FO' ? ({ NSE: 'NFO', BSE: 'BFO', MCX: 'MCX' } as const)[params.exchange] : params.exchange,
           symboltoken: params.token,
           interval: params.interval,
           fromdate: params.fromDate,

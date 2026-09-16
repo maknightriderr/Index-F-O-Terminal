@@ -19,6 +19,7 @@ import {
   calculateDTE,
   yearsToExpiry,
   isExpiryActive,
+  getLatestSessionWindow,
 } from '@fno/shared';
 import type { Exchange, Instrument, OptionChain, OptionChainStrike, OptionChainLeg, OptionType } from '@fno/shared';
 import {
@@ -26,6 +27,8 @@ import {
   calculateMaxPain,
   calculateExpectedMove,
   classifyOptionOI,
+  calculateIV,
+  blackScholesPrice,
   calculateGreeksFromPrice,
   analyzePositionMomentum,
   analyzeOiTrap,
@@ -33,7 +36,8 @@ import {
   calculateGammaExposure,
 } from '@fno/analytics';
 import type { MarketDataProvider } from '../providers/interface.js';
-import { computeChangeOi } from '../lib/oi-baseline.js';
+import { computeChangeOiDetailed } from '../lib/oi-baseline.js';
+import type { ChangeOiResult } from '../lib/oi-baseline.js';
 import { cached } from '../lib/cache.js';
 import { logger } from '../lib/logger.js';
 
@@ -178,11 +182,11 @@ async function buildOptionChainUncached(
   const greeksByKey = new Map(greeksData.map((g) => [`${g.strikePrice}:${g.optionType}`, g]));
 
   // Batch-resolve daily OI baselines for every leg with OI up front (avoids N sequential round-trips).
-  const changeOiByToken = new Map<string, number>();
+  const changeOiByToken = new Map<string, ChangeOiResult>();
   await Promise.all(
     allTokens.map(async (token) => {
       const oi = quoteByToken.get(token)?.oi;
-      if (oi !== undefined) changeOiByToken.set(token, await computeChangeOi(token, oi));
+      if (oi !== undefined) changeOiByToken.set(token, await computeChangeOiDetailed(token, oi, exchange));
     })
   );
 
@@ -190,10 +194,28 @@ async function buildOptionChainUncached(
   const tte = yearsToExpiry(expiry);
   const now = Date.now();
 
+  // Time context for ivPressure (see below): when the current quote was
+  // struck (the session's close, if it's over), and how much option time
+  // separates it from the previous close. The overnight/weekend gap counts
+  // as at most one day of decay — calendar-time theta over a weekend would
+  // make every Monday premium look "bid up".
+  const latestSession = getLatestSessionWindow(exchange, now);
+  const priorSession = latestSession ? getLatestSessionWindow(exchange, latestSession.open - 1) : null;
+  const quoteTime = latestSession ? Math.min(now, latestSession.close) : now;
+  const tteAtQuote = tte + Math.max(0, now - quoteTime) / YEAR_MS;
+  const decayMs =
+    latestSession && priorSession
+      ? Math.max(0, quoteTime - latestSession.open) + Math.min(Math.max(0, latestSession.open - priorSession.close), DAY_MS)
+      : DAY_MS;
+  const tteAtPrevClose = tteAtQuote + decayMs / YEAR_MS;
+
   const buildLeg = (inst: Instrument, strike: number, optionType: OptionType): OptionChainLeg => {
     const quote = quoteByToken.get(inst.token);
     const broker = greeksByKey.get(`${strike}:${optionType}`);
-    const changeOi = changeOiByToken.get(inst.token) ?? 0;
+    const oiRead = changeOiByToken.get(inst.token);
+    const changeOi = oiRead?.changeOi ?? 0;
+    const pressurePct =
+      quote && spotClose > 0 ? ivPressure(quote.close, quote.ltp, spotClose, spotPrice, strike, optionType, tteAtPrevClose, tteAtQuote) : null;
     // Same self-computed % change as underlyingChangePercent above — this
     // comment previously referred to a field that didn't actually exist,
     // which is how the chain ended up with no day-scale reading of the
@@ -239,13 +261,21 @@ async function buildOptionChainUncached(
       volume: quote?.volume ?? 0,
       oi: quote?.oi ?? 0,
       changeOi,
+      changeOiBaseline: oiRead?.baseline ?? null,
+      ivPressurePct: pressurePct != null ? Math.round(pressurePct * 100) / 100 : null,
       changePercent: legChangePercent,
       iv: greeks.iv,
       delta: greeks.delta,
       gamma: greeks.gamma,
       theta: greeks.theta,
       vega: greeks.vega,
-      oiInterpretation: classifyOptionOI({ priceChange: legChangePercent, oiChange: changeOi }, optionType),
+      // Buying vs writing is read from IV pressure, not the raw premium
+      // change. Near expiry every premium falls on time decay alone, so "OI
+      // up + premium down" labelled almost every leg WRITING regardless of
+      // who traded; and a premium that rose only because the underlying did
+      // read as BUYING. What's left after repricing for the underlying's
+      // move and decay is whether the option was bid up or pressed down.
+      oiInterpretation: classifyOptionOI({ priceChange: pressurePct ?? 0, oiChange: changeOi }, optionType, IV_PRESSURE_MIN_PCT),
       // Calls and puts at the same strike are moneyness-opposite (a strike
       // below spot is ITM for a call but OTM for the put at that same
       // strike) — must be classified per-leg with its own optionType, not
@@ -322,6 +352,42 @@ async function buildOptionChainUncached(
 }
 
 // --- Helpers ---
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const YEAR_MS = 365.25 * DAY_MS; // yearsToExpiry's own year length
+// Pressure inside this band (% of previous close premium) is noise — model
+// error and bid-ask bounce — and reads as NEUTRAL rather than a side.
+const IV_PRESSURE_MIN_PCT = 2;
+// Below this previous-close premium the IV solve and the % are dominated by
+// tick size.
+const MIN_MODELLABLE_PREMIUM = 0.5;
+
+/**
+ * How far the option's price sits from what the underlying's move and time
+ * decay alone would have made it, as % of the previous close premium.
+ * Solves the IV the option closed at yesterday, reprices it at today's spot
+ * and remaining time with that SAME IV, and compares to the live premium:
+ * the residual is the IV change — buyers bidding options up, or writers
+ * pressing them down. Null when it can't be modelled (no/illiquid quote,
+ * premium at intrinsic, IV unresolvable).
+ */
+function ivPressure(
+  prevPremium: number,
+  ltp: number,
+  spotPrev: number,
+  spotNow: number,
+  strike: number,
+  optionType: OptionType,
+  tteAtPrevClose: number,
+  tteNow: number
+): number | null {
+  if (!(prevPremium >= MIN_MODELLABLE_PREMIUM) || !(ltp > 0) || !(spotPrev > 0) || !(tteNow > 0)) return null;
+  const prevIv = calculateIV(prevPremium, spotPrev, strike, tteAtPrevClose, RISK_FREE_RATE, optionType);
+  if (!(prevIv > 0)) return null;
+  const fairNow = blackScholesPrice({ spotPrice: spotNow, strikePrice: strike, timeToExpiry: tteNow, riskFreeRate: RISK_FREE_RATE, iv: prevIv, optionType });
+  if (!(fairNow > 0)) return null;
+  return ((ltp - fairNow) / prevPremium) * 100;
+}
 
 function sliceStrikesAroundAtm(strikes: OptionChainStrike[], atmStrike: number, range: number): OptionChainStrike[] {
   if (strikes.length === 0) return strikes;
@@ -405,7 +471,10 @@ export async function resolveNearestFuturesContract(
     .filter(
       (i) =>
         i.exchange === exchange &&
-        i.instrumentType === 'FUTCOM' &&
+        // FUTIDX/FUTSTK too: market-bias borrows an index future's volume
+        // (NSE/BSE index candles carry none). MCX lists only FUTCOM, so its
+        // callers are unaffected.
+        (i.instrumentType === 'FUTCOM' || i.instrumentType === 'FUTIDX' || i.instrumentType === 'FUTSTK') &&
         i.underlying?.toUpperCase() === underlying.toUpperCase() &&
         isExpiryActive(i.expiry)
     )

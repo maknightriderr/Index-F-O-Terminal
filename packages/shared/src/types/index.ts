@@ -185,6 +185,21 @@ export interface OptionChainLeg {
   volume: number;
   oi: number;
   changeOi: number;
+  /**
+   * What `changeOi` is measured from. PREV_CLOSE: the settled OI captured
+   * after the previous session closed. SESSION_FIRST_SEEN: no such snapshot
+   * existed for this contract, so it's the first reading seen this session —
+   * which understates the day's change and isn't comparable across strikes.
+   */
+  changeOiBaseline?: 'PREV_CLOSE' | 'SESSION_FIRST_SEEN' | null;
+  /**
+   * Premium change NOT explained by the underlying's move and time decay, as
+   * a % of the previous close premium (option model repriced at the previous
+   * close's IV). Positive = bid up beyond fair value (buying pressure),
+   * negative = pressed down (writing). This, not the raw premium change, is
+   * what `oiInterpretation` reads. Null when it couldn't be modelled.
+   */
+  ivPressurePct?: number | null;
   /** This leg's own premium % change vs its previous close — 0 doubles as "no live close data this tick" and "genuinely flat," same sentinel convention every other 0-defaulted field here already uses. */
   changePercent: number;
   iv: number;
@@ -1160,6 +1175,8 @@ export type CandleInterval =
 
 export interface HistoricalParams {
   exchange: Exchange;
+  /** 'FO' for a derivatives token (an NSE/BSE index future lives on NFO/BFO, not the cash segment). Defaults to the exchange's own segment. */
+  segment?: 'CM' | 'FO';
   token: string;
   interval: CandleInterval;
   fromDate: string;

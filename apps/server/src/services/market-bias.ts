@@ -56,6 +56,7 @@ import type {
   TradingMode,
   GammaExposureRegime,
   OIInterpretation,
+  OptionChainLeg,
 } from '@fno/shared';
 import {
   KNOWN_INDEX_TOKENS,
@@ -77,6 +78,7 @@ import { redis } from '../lib/redis.js';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 import { notifyTradeSetup } from './telegram.js';
+import { trackSymbolForOiSnapshot } from './oi-close-snapshot.js';
 import { notifyTradeSetupClosed } from './trade-setup-close-notifier.js';
 import type { TradeCloseReason } from './trade-setup-close-notifier.js';
 import type { OptionChain } from '@fno/shared';
@@ -219,19 +221,58 @@ async function computeMarketBias(
   // round-trip latency on a cache miss, not on every poll.
   const nonEmpty = (candles: OHLCV[]) => candles.length > 0;
 
-  const candles15m = await cached(
+  let candles15m = await cached(
     `hist:${exchange}:${historicalToken}:${shortIntervalKey}`,
     HISTORICAL_CACHE_TTL_SECONDS,
     () => fetchHistoricalWithRetry(provider, { exchange, token: historicalToken, interval: shortInterval, fromDate: from15m, toDate }),
     nonEmpty
   );
   await sleep(1200);
-  const candles1h = await cached(
+  let candles1h = await cached(
     `hist:${exchange}:${historicalToken}:${longIntervalKey}`,
     HISTORICAL_CACHE_TTL_SECONDS,
     () => fetchHistoricalWithRetry(provider, { exchange, token: historicalToken, interval: longInterval, fromDate: from1h, toDate }),
     nonEmpty
   );
+
+  // --- Volume for NSE/BSE indices ---
+  // Index candles carry no volume at all, so every volume-gated read was
+  // silently off for NIFTY/SENSEX/BANKNIFTY: session VWAP (it collapsed to
+  // spot), volume-confirmed Supertrend flips and Bollinger breakouts, the
+  // BREAKOUT/BREAKDOWN regime and the 1H flip confirmation — while
+  // vwapDataAvailable still reported true. The index's nearest future
+  // trades the same flow with real volume, so borrow it bar for bar (its
+  // short-tier bars map directly, and are summed into the long tier's
+  // bars). Price indicators stay on the index itself. Caveat: in the last
+  // days before a futures rollover the nearest contract's volume thins as
+  // flow moves to the next month.
+  let volumeSource: 'UNDERLYING' | 'NEAREST_FUTURE' | 'NONE' = 'UNDERLYING';
+  if (exchange !== 'MCX' && !hasRecentVolume(candles15m)) {
+    volumeSource = 'NONE';
+    const volumeFuture = await resolveNearestFuturesContract(provider, underlying, exchange).catch(() => undefined);
+    if (volumeFuture) {
+      await sleep(1200);
+      const futureCandles = await cached(
+        `hist:${exchange}:FO:${volumeFuture.token}:${shortIntervalKey}`,
+        HISTORICAL_CACHE_TTL_SECONDS,
+        () =>
+          fetchHistoricalWithRetry(provider, {
+            exchange,
+            segment: 'FO',
+            token: volumeFuture.token,
+            interval: shortInterval,
+            fromDate: from15m,
+            toDate,
+          }),
+        nonEmpty
+      );
+      if (hasRecentVolume(futureCandles)) {
+        candles15m = withBorrowedVolume(candles15m, futureCandles);
+        candles1h = withBorrowedVolume(candles1h, futureCandles);
+        volumeSource = 'NEAREST_FUTURE';
+      }
+    }
+  }
 
   const targetExpiry = await resolveTargetExpiry(provider, underlying, exchange, mode);
 
@@ -245,6 +286,9 @@ async function computeMarketBias(
       return null;
     }),
   ]);
+
+  // Post-close OI snapshots are taken for chains the bias engine reads — see oi-close-snapshot.ts.
+  if (chain) trackSymbolForOiSnapshot(exchange, underlying, chain.expiry);
 
   if (candles15m.length < 5 || candles1h.length < 5) {
     throw new Error(`Not enough historical candles for ${underlying} to compute market bias (15m: ${candles15m.length}, 1h: ${candles1h.length})`);
@@ -318,7 +362,10 @@ async function computeMarketBias(
   // 23,663.20)", presenting a missing input as though it were a finding,
   // and left vwapVote permanently neutral with nothing flagging why.
   const sessionVwapRaw = sessionVwapSeries[sessionVwapSeries.length - 1];
-  const vwapDataAvailable = sessionVwapRaw != null && Number.isFinite(sessionVwapRaw) && sessionVwapRaw > 0;
+  // A VWAP from candles with no volume isn't a VWAP — this used to report
+  // true for indices while the value was simply spot.
+  const vwapDataAvailable =
+    sessionVwapRaw != null && Number.isFinite(sessionVwapRaw) && sessionVwapRaw > 0 && todaysCandles.some((c) => c.volume > 0);
   const sessionVwap = vwapDataAvailable ? sessionVwapRaw : spot;
 
   const rsi15Series = rsi(c15.closes, 14);
@@ -477,17 +524,25 @@ async function computeMarketBias(
   let optionOiFlowBullishWeight = 0;
   let optionOiFlowBearishWeight = 0;
   const optionOiFlowWeightByType = new Map<OIInterpretation, number>();
-  if (chain) {
-    for (const s of chain.strikes) {
-      for (const leg of [s.call, s.put]) {
-        if (!leg || leg.changeOi === 0) continue;
-        const weight = Math.abs(leg.changeOi);
-        const { implication } = getOIDescription(leg.oiInterpretation);
-        if (implication === 'BULLISH') optionOiFlowBullishWeight += weight;
-        else if (implication === 'BEARISH') optionOiFlowBearishWeight += weight;
-        optionOiFlowWeightByType.set(leg.oiInterpretation, (optionOiFlowWeightByType.get(leg.oiInterpretation) ?? 0) + weight);
-      }
-    }
+  //
+  // Weights are only comparable when every leg's change is measured from the
+  // same point. Legs measured from the previous session's settled OI are;
+  // legs with no such snapshot fall back to their first reading this
+  // session and understate the day. When most legs have a previous-close
+  // baseline, the fallback legs are left out rather than mixed in.
+  const chainLegs: OptionChainLeg[] = chain
+    ? chain.strikes.flatMap((s) => [s.call, s.put]).filter((l): l is OptionChainLeg => l != null && l.changeOiBaseline != null)
+    : [];
+  const prevCloseLegs = chainLegs.filter((l) => l.changeOiBaseline === 'PREV_CLOSE');
+  const optionOiBaselineCoverage = chainLegs.length > 0 ? prevCloseLegs.length / chainLegs.length : 0;
+  const flowLegs = optionOiBaselineCoverage >= OPTION_OI_MIN_PREV_CLOSE_COVERAGE ? prevCloseLegs : chainLegs;
+  for (const leg of flowLegs) {
+    if (leg.changeOi === 0) continue;
+    const weight = Math.abs(leg.changeOi);
+    const { implication } = getOIDescription(leg.oiInterpretation);
+    if (implication === 'BULLISH') optionOiFlowBullishWeight += weight;
+    else if (implication === 'BEARISH') optionOiFlowBearishWeight += weight;
+    optionOiFlowWeightByType.set(leg.oiInterpretation, (optionOiFlowWeightByType.get(leg.oiInterpretation) ?? 0) + weight);
   }
   const optionOiFlowTotalWeight = optionOiFlowBullishWeight + optionOiFlowBearishWeight;
   const optionOiFlowNetSkew =
@@ -542,17 +597,40 @@ async function computeMarketBias(
   const rsiBullThreshold = isPositional ? 60 : 55;
   const rsiBearThreshold = isPositional ? 40 : 45;
 
-  const vwapVote: Vote = spot > sessionVwap * 1.0005 ? 1 : spot < sessionVwap * 0.9995 ? -1 : 0;
-  const rsiVote: Vote = rsi15 > rsiBullThreshold ? 1 : rsi15 < rsiBearThreshold ? -1 : 0;
+  // Hold bands (hysteresis) on every threshold vote — see bandVote. The
+  // entry thresholds are unchanged; a vote that's already on now stays on
+  // until its reading falls back through a slightly looser hold level,
+  // instead of flipping off and on as the reading ticks across one line.
+  // Previous states live in Redis because the bias is recomputed per poll.
+  const voteStateKey = `bias_vote_state:${exchange}:${underlying}:${mode}`;
+  const prevVotes = await readVoteState(voteStateKey);
+
+  const vwapDeviationPct = vwapDataAvailable && sessionVwap > 0 ? (spot / sessionVwap - 1) * 100 : 0;
+  const vwapVote: Vote = vwapDataAvailable ? bandVote(vwapDeviationPct, prevVotes?.vwap, 0.05, 0, -0.05, 0) : 0;
+  const rsiVote: Vote = bandVote(
+    rsi15,
+    prevVotes?.rsi,
+    rsiBullThreshold,
+    rsiBullThreshold - RSI_HOLD_BAND,
+    rsiBearThreshold,
+    rsiBearThreshold + RSI_HOLD_BAND
+  );
   const st15Vote: Vote = st15JustFlipped && !volumeConfirms ? 0 : st15Direction === 'UP' ? 1 : -1;
   const st1hVote: Vote = st1hDirectionConfirmed === 'UP' ? 1 : -1;
+  // Long buildup and short covering both vote bullish (short buildup and
+  // long unwinding bearish), so this vote is "which way is the futures
+  // contract moving today, with OI actually changing". Its classifier flips
+  // at a 0.01% day move — pure noise — so the vote is banded on that move.
+  const futuresDayChangePct = currentFuture?.changePercent ?? null;
   const futuresOiVote: Vote =
-    futuresInterpretation === 'LONG_BUILDUP' || futuresInterpretation === 'SHORT_COVERING'
+    futuresInterpretation === 'NEUTRAL'
+      ? 0
+      : futuresDayChangePct != null
+      ? bandVote(futuresDayChangePct, prevVotes?.futuresOi, FUTURES_MOVE_ENTER_PCT, FUTURES_MOVE_HOLD_PCT, -FUTURES_MOVE_ENTER_PCT, -FUTURES_MOVE_HOLD_PCT)
+      : futuresInterpretation === 'LONG_BUILDUP' || futuresInterpretation === 'SHORT_COVERING'
       ? 1
-      : futuresInterpretation === 'SHORT_BUILDUP' || futuresInterpretation === 'LONG_UNWINDING'
-      ? -1
-      : 0;
-  const pcrVote: Vote = pcr > 1.1 ? 1 : pcr < 0.85 ? -1 : 0;
+      : -1;
+  const pcrVote: Vote = bandVote(pcr, prevVotes?.pcr, 1.1, 1.05, 0.85, 0.9);
   // Only counts when the EMAs are both stacked AND sloping in that
   // direction — a flat/tangled EMA20 sitting on price (aligned but not
   // sloping) is exactly the chop signature this vote should stay silent on.
@@ -561,8 +639,15 @@ async function computeMarketBias(
   // Require a real net skew (not a near-50/50 split) before this counts as
   // a vote — same noise-floor philosophy as the PCR bands above.
   const OPTION_OI_FLOW_MIN_SKEW = 0.15;
-  const optionOiFlowVote: Vote =
-    optionOiFlowNetSkew > OPTION_OI_FLOW_MIN_SKEW ? 1 : optionOiFlowNetSkew < -OPTION_OI_FLOW_MIN_SKEW ? -1 : 0;
+  const OPTION_OI_FLOW_HOLD_SKEW = 0.08;
+  const optionOiFlowVote: Vote = bandVote(
+    optionOiFlowNetSkew,
+    prevVotes?.optionOiFlow,
+    OPTION_OI_FLOW_MIN_SKEW,
+    OPTION_OI_FLOW_HOLD_SKEW,
+    -OPTION_OI_FLOW_MIN_SKEW,
+    -OPTION_OI_FLOW_HOLD_SKEW
+  );
 
   // Operator/retail activity regime: real positioning data (futures OI
   // buildup, an OI wall actually under price pressure, PCR skew) instead
@@ -583,9 +668,18 @@ async function computeMarketBias(
   const operatorActivityBullish = operatorActivityConfirmed && futuresOiVote === 1;
   const operatorActivityBearish = operatorActivityConfirmed && futuresOiVote === -1;
 
-  const macdVote: Vote = macdHistNow > 0 ? 1 : macdHistNow < 0 ? -1 : 0;
+  // MACD histogram as % of price, so one band works for NIFTY and NATURALGAS
+  // alike; it used to flip on any sign change, however tiny.
+  const macdHistPct = spot > 0 ? (macdHistNow / spot) * 100 : 0;
+  const macdVote: Vote = bandVote(macdHistPct, prevVotes?.macd, MACD_ENTER_PCT, 0, -MACD_ENTER_PCT, 0);
   const bbBreakout = bbPercentB > 1 || bbPercentB < 0;
-  const bollingerVote: Vote = bbBreakout && !volumeConfirms ? 0 : bbPercentB > 0.6 ? 1 : bbPercentB < 0.4 ? -1 : 0;
+  const bollingerVote: Vote = bbBreakout && !volumeConfirms ? 0 : bandVote(bbPercentB, prevVotes?.bollinger, 0.6, 0.55, 0.4, 0.45);
+
+  await writeVoteState(
+    voteStateKey,
+    { vwap: vwapVote, rsi: rsiVote, futuresOi: futuresOiVote, pcr: pcrVote, optionOiFlow: optionOiFlowVote, macd: macdVote, bollinger: bollingerVote },
+    isPositional
+  );
 
   // Leading breakout/breakdown regime: a volume-confirmed break outside the
   // Bollinger Bands on THIS specific bar, not just "currently outside them"
@@ -796,22 +890,22 @@ async function computeMarketBias(
   // when every information source is internally balanced — genuinely "no
   // read", and the only case where these ratios would divide by zero.
   const total = directionVotes.length;
-  // Rounded so the three always sum to exactly 100 — rounding each side
-  // independently printed 38% / 63% / -1% neutral for a 3-vs-5 split. The
-  // minority side and neutral round normally; the majority takes the rest.
-  let bullishProbability = 0;
-  let bearishProbability = 0;
-  let neutralProbability = 100;
-  if (total > 0) {
-    neutralProbability = Math.round((votesFlat / total) * 100);
-    if (votesFor >= votesAgainst) {
-      bearishProbability = Math.round((votesAgainst / total) * 100);
-      bullishProbability = 100 - neutralProbability - bearishProbability;
-    } else {
-      bullishProbability = Math.round((votesFor / total) * 100);
-      bearishProbability = 100 - neutralProbability - bullishProbability;
-    }
-  }
+  // Each side's share of the evidence, measured WITHIN each information
+  // source and then averaged across sources — see the confidence note below.
+  const sourceShares = (votes: Vote[]): { bull: number; bear: number } | null => {
+    const bull = votes.filter((v) => v === 1).length;
+    const bear = votes.filter((v) => v === -1).length;
+    return bull + bear > 0 ? { bull: bull / (bull + bear), bear: bear / (bull + bear) } : null;
+  };
+  const opinionatedSources = [sourceShares(chartVotes), sourceShares(positioningVotes)].filter(
+    (s): s is { bull: number; bear: number } => s != null
+  );
+  const bullShare = opinionatedSources.length > 0 ? opinionatedSources.reduce((sum, s) => sum + s.bull, 0) / opinionatedSources.length : 0;
+  const bearShare = opinionatedSources.length > 0 ? 1 - bullShare : 0;
+  // Always sums to exactly 100; all-neutral only when no source has a decisive vote.
+  const bullishProbability = opinionatedSources.length > 0 ? Math.round(bullShare * 100) : 0;
+  const bearishProbability = opinionatedSources.length > 0 ? 100 - bullishProbability : 0;
+  const neutralProbability = opinionatedSources.length > 0 ? 0 : 100;
 
   // Confidence = agreement among the votes that actually HAVE an opinion,
   // scaled down when few of them do.
@@ -831,12 +925,19 @@ async function computeMarketBias(
   // how many indicators did, since seven price-derived indicators agreeing
   // is one source, not seven. Two independent sources agreeing is real
   // evidence; one source alone is capped at half.
-  const clustersWithOpinion = [chartNet, positioningNet].filter((net) => net !== 0).length;
+  //
+  // Measured per source, not on the capped cluster outputs. Capping keeps
+  // either source from outvoting the other on indicator count — right for
+  // DIRECTION — but comparing only the capped nets erased each source's
+  // internal disagreement: SENSEX read BULLISH 95 with its chart votes split
+  // 4-3 (net +1) plus positioning +2, i.e. "3 of 3 decisive votes agree".
+  // Now each source contributes the share of ITS OWN decisive votes that
+  // agree with the direction (a 4-3 chart counts 0.57, not 1.0), sources
+  // weighted equally so neither dominates by indicator count. That SENSEX
+  // read is 79, and a chart leaning against the call pulls confidence down.
   const MIN_INDEPENDENT_SOURCES = 2;
-  const decisiveVotes = votesFor + votesAgainst;
-  const agreementCount = direction === 'BULLISH' ? votesFor : direction === 'BEARISH' ? votesAgainst : votesFlat;
-  const rawAgreement = decisiveVotes > 0 ? agreementCount / decisiveVotes : 0;
-  const evidenceFactor = Math.min(1, clustersWithOpinion / MIN_INDEPENDENT_SOURCES);
+  const evidenceFactor = Math.min(1, opinionatedSources.length / MIN_INDEPENDENT_SOURCES);
+  const agreementShare = direction === 'BULLISH' ? bullShare : direction === 'BEARISH' ? bearShare : 0;
   const confidence =
     direction === 'NEUTRAL'
       ? // Two different "neutral"s: every source silent (no read at all), or
@@ -844,7 +945,7 @@ async function computeMarketBias(
         // Neither deserves a confident number; the contested case deserves
         // the floor.
         clamp(total === 0 ? 50 : 15, 15, 95)
-      : clamp(Math.round(rawAgreement * evidenceFactor * 100), 15, 95);
+      : clamp(Math.round(agreementShare * evidenceFactor * 100), 15, 95);
 
   // --- Regime: leading breakout/breakdown (fresh, volume-confirmed Bollinger break) takes priority over the lagging ADX-based trend read, overridden by expiry-day gamma when DTE<=1 ---
   const regime = classifyRegime(adxValue, st1hDirectionConfirmed, atrPctZ, chain?.dte ?? null, chain?.gammaExposure?.regime ?? null, freshBreakoutUp, freshBreakoutDown, operatorActivityBullish, operatorActivityBearish);
@@ -1077,6 +1178,8 @@ async function computeMarketBias(
       // measurement.
       volumeDataAvailable,
       vwapDataAvailable,
+      volumeSource,
+      optionOiBaselineCoverage: Math.round(optionOiBaselineCoverage * 100) / 100,
       maxPain: chain?.maxPain ?? null,
       expectedMove: chain?.expectedMove.points ?? null,
       expectedRangeLow: chain?.expectedMove.lowerBound ?? null,
@@ -1539,7 +1642,7 @@ interface StoredTradeSetup extends TradeSetup {
   day: string; // YYYY-MM-DD, IST
   signalId?: string; // links to the persisted `signals` row for backtesting (see backtesting.ts)
   reversalStreak?: number; // confident opposite reads since the streak started — see REVERSAL_CONFIRM_POLLS
-  reversalSince?: number; // when the first of those reads landed (epoch ms) — see REVERSAL_CONFIRM_MINUTES
+  reversalSince?: number; // when the first of those reads landed (epoch ms) — see REVERSAL_CONFIRM_SECONDS
   initialStopLoss?: number; // the SL at generation time, fixed — `stopLoss` itself trails upward as price moves favorably, this is what "1x/2x initial risk" is measured against
 }
 
@@ -2389,6 +2492,86 @@ async function fetchHistoricalWithRetry(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// --- Vote hold bands (hysteresis) ---
+const RSI_HOLD_BAND = 3; // RSI points inside the entry threshold a vote holds through
+const FUTURES_MOVE_ENTER_PCT = 0.1; // futures day move to start counting as a side
+const FUTURES_MOVE_HOLD_PCT = 0.02;
+const MACD_ENTER_PCT = 0.005; // histogram as % of price
+const VOTE_STATE_TTL_SECONDS = 20 * 60; // an older state is stale — votes start fresh
+const VOTE_STATE_TTL_SECONDS_POSITIONAL = 4 * 60 * 60;
+// Minimum share of chain legs measured from the previous close before the
+// option OI flow uses only those legs.
+const OPTION_OI_MIN_PREV_CLOSE_COVERAGE = 0.5;
+
+type ThresholdVoteState = Partial<Record<'vwap' | 'rsi' | 'futuresOi' | 'pcr' | 'optionOiFlow' | 'macd' | 'bollinger', Vote>>;
+
+/**
+ * A threshold vote with hysteresis. Entering +1 needs `value > enterUp`;
+ * once +1 (per `prev`), it holds while `value > holdUp` (holdUp sits inside
+ * enterUp). Mirror for -1. Without the hold band a reading hovering at a
+ * threshold flipped the vote every poll — and with only a handful of votes
+ * per source, one flip was enough to flip the whole direction.
+ */
+function bandVote(value: number, prev: Vote | undefined, enterUp: number, holdUp: number, enterDown: number, holdDown: number): Vote {
+  if (!Number.isFinite(value)) return 0;
+  if (prev === 1 && value > holdUp) return 1;
+  if (prev === -1 && value < holdDown) return -1;
+  if (value > enterUp) return 1;
+  if (value < enterDown) return -1;
+  return 0;
+}
+
+async function readVoteState(key: string): Promise<ThresholdVoteState | null> {
+  try {
+    const raw = await redis.get(key);
+    return raw ? (JSON.parse(raw) as ThresholdVoteState) : null;
+  } catch {
+    return null; // no hold bands this poll — entry thresholds still apply
+  }
+}
+
+async function writeVoteState(key: string, state: ThresholdVoteState, isPositional: boolean): Promise<void> {
+  try {
+    await redis.set(key, JSON.stringify(state), 'EX', isPositional ? VOTE_STATE_TTL_SECONDS_POSITIONAL : VOTE_STATE_TTL_SECONDS);
+  } catch (err: any) {
+    logger.warn({ error: err.message, key }, 'Bias vote state write failed — next poll votes without hold bands');
+  }
+}
+
+function hasRecentVolume(candles: OHLCV[]): boolean {
+  return candles.slice(-20).some((c) => c.volume > 0);
+}
+
+/**
+ * `target` with each bar's volume replaced by the summed volume of `source`
+ * bars that started within it ([this bar's start, next bar's start)).
+ * Same-interval bars map one to one; finer source bars roll up into coarser
+ * target bars (15m into 1H, 1H into Daily). Target bars before the source's
+ * history get 0, the same as before borrowing. Both are ascending by time.
+ */
+function withBorrowedVolume(target: OHLCV[], source: OHLCV[]): OHLCV[] {
+  const src = source
+    .map((c) => ({ t: Date.parse(c.timestamp), v: c.volume }))
+    .filter((c) => Number.isFinite(c.t))
+    .sort((a, b) => a.t - b.t);
+  const starts = target.map((c) => Date.parse(c.timestamp));
+  let j = 0;
+  return target.map((bar, i) => {
+    const start = starts[i];
+    const end = i + 1 < starts.length ? starts[i + 1] : Infinity;
+    if (!Number.isFinite(start)) return { ...bar, volume: 0 };
+    while (j < src.length && src[j].t < start) j++;
+    let volume = 0;
+    let k = j;
+    while (k < src.length && src[k].t < end) {
+      volume += src[k].v;
+      k++;
+    }
+    j = k;
+    return { ...bar, volume };
+  });
 }
 
 function extractOHLC(candles: OHLCV[]) {

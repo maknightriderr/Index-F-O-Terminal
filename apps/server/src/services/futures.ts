@@ -77,7 +77,7 @@ async function buildFuturesDataUncached(
   await Promise.all(
     futInstruments.map(async (inst) => {
       const oi = quoteByToken.get(inst.token)?.oi;
-      if (oi !== undefined) changeOiByToken.set(inst.token, await computeChangeOi(inst.token, oi));
+      if (oi !== undefined) changeOiByToken.set(inst.token, await computeChangeOi(inst.token, oi, exchange));
     })
   );
 

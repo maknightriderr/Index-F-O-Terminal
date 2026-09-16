@@ -34,6 +34,7 @@ import { createMarketScannerRoutes } from './api/market-scanner.js';
 import { startMarketScanner } from './services/market-scanner.js';
 import { createFiiDiiRoutes } from './api/fii-dii.js';
 import { startFiiDiiTracker } from './services/fii-dii.js';
+import { startOiCloseSnapshot } from './services/oi-close-snapshot.js';
 
 // --- Initialize Provider + Subscription Manager ---
 
@@ -206,6 +207,7 @@ startTradeSetupPriceMonitor(provider);
 startMarketScanner(provider);
 startFiiDiiTracker();
 startAbandonedSetupSweep();
+startOiCloseSnapshot(provider);
 
 setInterval(() => {
   const { apiKey, clientId, password, totpSecret } = config.angelOne;

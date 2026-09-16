@@ -77,13 +77,19 @@ export function classifyFuturesOI(input: OIClassificationInput): OIInterpretatio
  */
 export function classifyOptionOI(
   input: OIClassificationInput,
-  optionType: OptionType
+  optionType: OptionType,
+  /** Band (in the same % units as priceChange) inside which the price read is treated as no evidence either way. */
+  priceThreshold = 0.01
 ): OIInterpretation {
   const { priceChange, oiChange } = input;
 
-  const priceThreshold = 0.01; // 0.01% minimum move — same noise floor as classifyFuturesOI
   const priceUp = priceChange > priceThreshold;
   const priceDown = priceChange < -priceThreshold;
+  // OI moved but price gave no read on who was aggressive. This used to
+  // default to WRITING/UNWINDING, so every quiet leg voted: call OI up ->
+  // "Call Writing" (bearish), put OI up -> "Put Writing" (bullish), purely on
+  // which side's OI happened to grow more. No price evidence is NEUTRAL.
+  if (!priceUp && !priceDown) return 'NEUTRAL';
   const oiUp = oiChange > 0;
   const oiDown = oiChange < 0;
 

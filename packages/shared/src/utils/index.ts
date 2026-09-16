@@ -185,6 +185,54 @@ export function getSessionCloseTime(exchange: Exchange, at: Date | number = Date
   return isUsDaylightSavingDate(exchangeClock(exchange, at).date) ? MCX_US_DST_CLOSE : TRADING_HOURS.MCX.close;
 }
 
+// Every exchange here trades on Asia/Kolkata (TRADING_HOURS[*].timezone),
+// which has no DST, so a fixed offset turns an IST wall-clock into epoch ms.
+const IST_OFFSET = '+05:30';
+const istWallClockMs = (date: string, hhmm: string): number => Date.parse(`${date}T${hhmm}:00${IST_OFFSET}`);
+
+function shiftIstDate(date: string, days: number): string {
+  const d = new Date(`${date}T12:00:00${IST_OFFSET}`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+export interface SessionWindow {
+  /** IST calendar date (YYYY-MM-DD). */
+  date: string;
+  /** Session open / close, epoch ms. */
+  open: number;
+  close: number;
+}
+
+/** The trading session on an IST calendar date, or null when the exchange doesn't trade that day. Honours partial MCX holidays and MCX's US-DST close. */
+export function getSessionWindow(exchange: Exchange, date: string): SessionWindow | null {
+  const noon = istWallClockMs(date, '12:00');
+  const { weekday } = exchangeClock(exchange, noon);
+  if (weekday === 0 || weekday === 6) return null;
+
+  let open = TRADING_HOURS[exchange].open;
+  let close = getSessionCloseTime(exchange, noon);
+  const holiday = EXCHANGE_HOLIDAYS[exchange][date];
+  if (holiday) {
+    if (holiday.closed === 'FULL') return null;
+    if (holiday.closed === 'MORNING') open = MCX_EVENING_SESSION_OPEN;
+    else close = MCX_EVENING_SESSION_OPEN;
+  }
+  return { date, open: istWallClockMs(date, open), close: istWallClockMs(date, close) };
+}
+
+/** The most recent session that has opened by `at` — still running, or the last one to have closed. Null only if none in the past two weeks. */
+export function getLatestSessionWindow(exchange: Exchange, at: Date | number = Date.now()): SessionWindow | null {
+  const atMs = new Date(at).getTime();
+  let date = exchangeClock(exchange, atMs).date;
+  for (let i = 0; i < 14; i++) {
+    const window = getSessionWindow(exchange, date);
+    if (window && window.open <= atMs) return window;
+    date = shiftIstDate(date, -1);
+  }
+  return null;
+}
+
 /** The exchange's holiday on the calendar date of `at`, if any (including partial MCX closures). */
 export function getExchangeHoliday(exchange: Exchange, at: Date | number = Date.now()): ExchangeHoliday | null {
   return EXCHANGE_HOLIDAYS[exchange][exchangeClock(exchange, at).date] ?? null;

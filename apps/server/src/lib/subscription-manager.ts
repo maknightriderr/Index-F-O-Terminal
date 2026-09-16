@@ -202,7 +202,7 @@ export class SubscriptionManager {
       ticks
         .filter((t) => t.oi !== undefined)
         .map((t) =>
-          computeChangeOi(t.token, t.oi!)
+          computeChangeOi(t.token, t.oi!, t.exchange)
             .then((changeOi) => {
               t.changeOi = changeOi;
             })
