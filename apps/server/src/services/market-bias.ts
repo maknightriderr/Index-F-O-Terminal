@@ -88,6 +88,14 @@ import type { OptionChain } from '@fno/shared';
 // longer than the bias poll interval (60s) so repeat polls for the same
 // symbol reuse the last fetch instead of re-hitting the broker.
 const HISTORICAL_CACHE_TTL_SECONDS = 90;
+// Candle downloads were the rate-limit bottleneck (1,756 of 1,963 rejected
+// requests on 16 Sep). The 15m tier needs to stay fresh, but 1H and Daily
+// bars barely change in 90s, and a borrowed futures volume series only
+// feeds ratios over completed bars.
+const INTRADAY_LONG_TIER_CACHE_TTL_SECONDS = 5 * 60; // 1H
+const POSITIONAL_SHORT_TIER_CACHE_TTL_SECONDS = 5 * 60; // 1H
+const POSITIONAL_LONG_TIER_CACHE_TTL_SECONDS = 30 * 60; // Daily
+const FUTURES_VOLUME_CACHE_TTL_SECONDS = 5 * 60;
 
 // How long a fully-computed bias result stays valid in Redis as a fallback
 // when fresh computation fails (rate-limit, broker downtime, etc.). Long
@@ -223,14 +231,14 @@ async function computeMarketBias(
 
   let candles15m = await cached(
     `hist:${exchange}:${historicalToken}:${shortIntervalKey}`,
-    HISTORICAL_CACHE_TTL_SECONDS,
+    isPositional ? POSITIONAL_SHORT_TIER_CACHE_TTL_SECONDS : HISTORICAL_CACHE_TTL_SECONDS,
     () => fetchHistoricalWithRetry(provider, { exchange, token: historicalToken, interval: shortInterval, fromDate: from15m, toDate }),
     nonEmpty
   );
   await sleep(1200);
   let candles1h = await cached(
     `hist:${exchange}:${historicalToken}:${longIntervalKey}`,
-    HISTORICAL_CACHE_TTL_SECONDS,
+    isPositional ? POSITIONAL_LONG_TIER_CACHE_TTL_SECONDS : INTRADAY_LONG_TIER_CACHE_TTL_SECONDS,
     () => fetchHistoricalWithRetry(provider, { exchange, token: historicalToken, interval: longInterval, fromDate: from1h, toDate }),
     nonEmpty
   );
@@ -254,7 +262,7 @@ async function computeMarketBias(
       await sleep(1200);
       const futureCandles = await cached(
         `hist:${exchange}:FO:${volumeFuture.token}:${shortIntervalKey}`,
-        HISTORICAL_CACHE_TTL_SECONDS,
+        FUTURES_VOLUME_CACHE_TTL_SECONDS,
         () =>
           fetchHistoricalWithRetry(provider, {
             exchange,
@@ -2450,8 +2458,38 @@ function classifyPriceHitOutcome(stored: StoredTradeSetup, isSpread: boolean, hi
  * distributed locking for what would be a duplicate backtesting row, not a
  * functional or safety issue.
  */
-export async function checkLockedSetupPriceLevels(provider: MarketDataProvider, exchange: Exchange, underlying: string): Promise<void> {
-  const key = `trade_setup:${exchange}:${underlying}:INTRADAY`;
+/** What the monitor needs to watch a still-open naked long on the live tick feed. */
+export interface LockedSetupWatch {
+  underlying: string;
+  exchange: Exchange;
+  mode: TradingMode;
+  /** The option contract's instrument token — the exact strike, side and expiry the setup holds. */
+  token: string;
+  stopLoss: number;
+  target: number;
+}
+
+/**
+ * Checks one locked setup's SL/target against its own contract and closes
+ * it if either was hit. Returns what to watch on the tick feed while it
+ * stays open (naked longs only), or null once it's closed or can't be
+ * priced. `observedLtp` is a live tick price that triggered this check — it
+ * is used instead of the chain's LTP, which can be up to 10s stale.
+ *
+ * POSITIONAL setups are covered too now that every setup records its
+ * expiry — they used to be excluded because this always fetched the
+ * nearest expiry. A positional setup from before expiry was recorded is
+ * still skipped (can't be priced safely). Positional setups don't roll
+ * over at the day's end.
+ */
+export async function checkLockedSetupPriceLevels(
+  provider: MarketDataProvider,
+  exchange: Exchange,
+  underlying: string,
+  mode: TradingMode = 'INTRADAY',
+  observedLtp?: number
+): Promise<LockedSetupWatch | null> {
+  const key = `trade_setup:${exchange}:${underlying}:${mode}`;
 
   let stored: StoredTradeSetup | null = null;
   try {
@@ -2459,10 +2497,11 @@ export async function checkLockedSetupPriceLevels(provider: MarketDataProvider, 
     if (raw) stored = JSON.parse(raw) as StoredTradeSetup;
   } catch (err: any) {
     logger.warn({ error: err.message, underlying }, 'Price-level monitor: sticky setup read failed');
-    return;
+    return null;
   }
 
-  if (!stored?.available) return;
+  if (!stored?.available) return null;
+  if (mode === 'POSITIONAL' && !stored.expiry) return null;
 
   let chain: OptionChain;
   try {
@@ -2470,7 +2509,7 @@ export async function checkLockedSetupPriceLevels(provider: MarketDataProvider, 
     chain = await buildOptionChain(provider, underlying, exchange, stored.expiry);
   } catch (err: any) {
     logger.warn({ error: err.message, underlying }, 'Price-level monitor: option chain fetch failed — will retry next tick');
-    return;
+    return null;
   }
 
   // buildOptionChain falls back to the nearest listed expiry when the one
@@ -2478,7 +2517,7 @@ export async function checkLockedSetupPriceLevels(provider: MarketDataProvider, 
   const pricingChain = !stored.expiry || chain.expiry === stored.expiry ? chain : null;
 
   const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-  if (stored.day !== today) {
+  if (mode === 'INTRADAY' && stored.day !== today) {
     // A prior-day INTRADAY setup used to just get silently skipped here —
     // day-rollover EXPIRY only ever happened in resolveStickyTradeSetup's
     // ON-DEMAND path, which never runs for a symbol nobody revisits the
@@ -2495,13 +2534,14 @@ export async function checkLockedSetupPriceLevels(provider: MarketDataProvider, 
       logger.warn({ error: err.message, underlying }, 'Price-level monitor: stale-day sticky setup clear failed');
     }
     logger.info({ underlying, exchange }, 'Price-level monitor: closed a prior-day setup nobody had revisited');
-    return;
+    return null;
   }
 
   const isSpread = stored.structureType === 'SPREAD';
   let currentValue: number | null;
   let hitSL: boolean;
   let hitTarget: boolean;
+  let watch: LockedSetupWatch | null = null;
 
   if (isSpread && stored.legs && stored.netPremium != null && stored.maxProfit != null && stored.maxLoss != null) {
     const legPrices = stored.legs.map((l) => ({ action: l.action, price: legLtpOrNull(pricingChain, l.strike, l.side) }));
@@ -2510,21 +2550,23 @@ export async function checkLockedSetupPriceLevels(provider: MarketDataProvider, 
     hitSL = progress.hitStop;
     hitTarget = progress.hitTarget;
   } else if (!isSpread && stored.strike != null && stored.side && stored.stopLoss != null && stored.target != null) {
-    const currentLtp = legLtpOrNull(pricingChain, stored.strike, stored.side);
+    const currentLtp = observedLtp != null && observedLtp > 0 ? observedLtp : legLtpOrNull(pricingChain, stored.strike, stored.side);
     currentValue = currentLtp;
     hitSL = currentLtp != null && currentLtp <= stored.stopLoss;
     hitTarget = currentLtp != null && currentLtp >= stored.target;
+    const token = pricingChain ? findLeg(pricingChain, stored.strike, stored.side)?.token : undefined;
+    if (token) watch = { underlying, exchange, mode, token, stopLoss: stored.stopLoss, target: stored.target };
   } else {
-    return;
+    return null;
   }
 
-  if (!hitSL && !hitTarget) return;
+  if (!hitSL && !hitTarget) return watch;
 
   const outcome = classifyPriceHitOutcome(stored, isSpread, hitTarget);
   await recordTradeSetupOutcome(stored, outcome, exitValueForPriceHit(stored, isSpread, hitTarget, currentValue), {
     underlying,
     exchange,
-    mode: 'INTRADAY',
+    mode,
     reason: closeReasonForPriceHit(stored, isSpread, hitTarget),
   });
   // recordTradeSetupOutcome only updates the DB row — resolveStickyTradeSetup's
@@ -2539,7 +2581,11 @@ export async function checkLockedSetupPriceLevels(provider: MarketDataProvider, 
   } catch (err: any) {
     logger.warn({ error: err.message, underlying }, 'Price-level monitor: sticky setup clear failed after recording outcome');
   }
-  logger.info({ underlying, exchange, outcome }, 'Price-level monitor: closed a locked setup that hit SL/target between on-demand checks');
+  logger.info(
+    { underlying, exchange, mode, outcome, viaTick: observedLtp != null },
+    'Price-level monitor: closed a locked setup that hit SL/target between on-demand checks'
+  );
+  return null;
 }
 
 // --- Helpers ---
@@ -2553,8 +2599,11 @@ export async function checkLockedSetupPriceLevels(provider: MarketDataProvider, 
 async function fetchHistoricalWithRetry(
   provider: MarketDataProvider,
   params: HistoricalParams,
-  attempts = 3,
-  initialDelayMs = 1500
+  // Was 3 attempts from 1.5s. The provider already retries a rate-limited
+  // request 3 times, so this stacked into as many as 12 broker calls for one
+  // candle series — in the middle of a rate-limit storm.
+  attempts = 2,
+  initialDelayMs = 3000
 ): Promise<OHLCV[]> {
   for (let i = 0; i < attempts; i++) {
     const candles = await provider.getHistoricalData(params);

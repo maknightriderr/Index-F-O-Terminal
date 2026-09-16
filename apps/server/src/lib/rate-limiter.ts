@@ -14,23 +14,41 @@
 // historical candles, and Greeks simultaneously) — this queue is the
 // single choke point every outgoing request passes through now,
 // regardless of which feature initiated it.
+//
+// A per-second pace alone still let historical candles draw 1,756
+// rate-limit rejections in one session (16 Sep): 2/s sustained is 120
+// requests a minute, and the broker's window is evidently tighter than
+// that over a minute. So a limiter can also cap requests per rolling
+// minute, and callers pause it after a rejection so queued requests back
+// off together instead of each retry immediately tripping the limit again.
 // ============================================================
 
 interface QueueItem {
   resolve: () => void;
 }
 
+const MINUTE_MS = 60_000;
+
 export class RateLimiter {
   private readonly maxTokens: number;
   private readonly refillIntervalMs: number;
+  private readonly perMinute: number | null;
   private tokens: number;
   private queue: QueueItem[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
+  private grantedAt: number[] = []; // grant times within the last minute (only tracked when perMinute is set)
+  private pausedUntil = 0;
 
-  constructor(ratePerSecond: number) {
+  constructor(ratePerSecond: number, perMinute?: number) {
     this.maxTokens = ratePerSecond;
     this.tokens = ratePerSecond;
     this.refillIntervalMs = 1000 / ratePerSecond;
+    this.perMinute = perMinute ?? null;
+  }
+
+  /** Hold every request in this category for at least `ms` — call after the broker rejects one for rate. */
+  pause(ms: number): void {
+    this.pausedUntil = Math.max(this.pausedUntil, Date.now() + ms);
   }
 
   private ensureTimer(): void {
@@ -48,9 +66,24 @@ export class RateLimiter {
     // anyway, so this timer being ref'd costs nothing in practice.
   }
 
+  private canGrant(now: number): boolean {
+    if (now < this.pausedUntil || this.tokens <= 0) return false;
+    if (this.perMinute != null) {
+      while (this.grantedAt.length > 0 && now - this.grantedAt[0] >= MINUTE_MS) this.grantedAt.shift();
+      if (this.grantedAt.length >= this.perMinute) return false;
+    }
+    return true;
+  }
+
+  private grant(now: number): void {
+    this.tokens--;
+    if (this.perMinute != null) this.grantedAt.push(now);
+  }
+
   private drain(): void {
-    while (this.tokens > 0 && this.queue.length > 0) {
-      this.tokens--;
+    const now = Date.now();
+    while (this.queue.length > 0 && this.canGrant(now)) {
+      this.grant(now);
       this.queue.shift()!.resolve();
     }
   }
@@ -58,8 +91,11 @@ export class RateLimiter {
   /** Resolves once a slot is free. Await this immediately before making the actual call it's guarding. */
   async acquire(): Promise<void> {
     this.ensureTimer();
-    if (this.tokens > 0) {
-      this.tokens--;
+    const now = Date.now();
+    // Only skip the queue when nobody is already waiting — otherwise a new
+    // caller could jump ahead of requests queued during a pause.
+    if (this.queue.length === 0 && this.canGrant(now)) {
+      this.grant(now);
       return;
     }
     return new Promise((resolve) => {

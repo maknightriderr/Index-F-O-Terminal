@@ -20,7 +20,7 @@
 // ============================================================
 
 import type { OptionChainStrike, OptionType, BiasDirection, TradeSetup, PositionSize } from '@fno/shared';
-import { DEFAULT_RISK_CONFIG } from '@fno/shared';
+import { DEFAULT_RISK_CONFIG, ESTIMATED_ROUND_TRIP_COST_PCT } from '@fno/shared';
 
 // 30% premium stop for an intraday hold — standard retail heuristic for
 // long options. A positional hold (days/weeks) needs a wider stop since
@@ -141,7 +141,9 @@ const MAX_ATM_SPREAD_PCT = 5;
 // rule of thumb surfaced as a note, not a number the UI should present
 // as precise (real costs vary by broker/plan), unlike position sizing
 // below, which now IS a structured field once a real lot size is known.
-const ESTIMATED_ROUND_TRIP_COST_PCT = 3; // brokerage-equivalent + STT + residual spread, as a % of entry premium
+// ESTIMATED_ROUND_TRIP_COST_PCT (brokerage-equivalent + STT + residual
+// spread, as a % of entry premium) lives in @fno/shared so Backtesting can
+// report results after the same cost this gate assumes.
 
 // Position sizing: quantity chosen so a stop-out risks a fixed % of
 // trading capital, whatever the SL's own % of premium happens to be —

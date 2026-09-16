@@ -185,8 +185,8 @@ class ApiClient {
     return this.get<PredictionAccuracyStats>(`/api/institutional-flow/accuracy?symbol=${symbol}`);
   }
 
-  async getWinRateAnalytics(mode: 'ALL' | 'INTRADAY' | 'POSITIONAL' = 'ALL') {
-    return this.get<WinRateAnalytics>(`/api/backtesting/win-rate?mode=${mode}`);
+  async getWinRateAnalytics(mode: 'ALL' | 'INTRADAY' | 'POSITIONAL' = 'ALL', since?: number) {
+    return this.get<WinRateAnalytics>(`/api/backtesting/win-rate?mode=${mode}${since != null ? `&since=${since}` : ''}`);
   }
 
   async getTradeSetupHistory(limit = 100) {

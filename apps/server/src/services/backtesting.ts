@@ -23,7 +23,7 @@ import type {
   TradingMode,
   SpreadLeg,
 } from '@fno/shared';
-import { minutesSinceSessionOpen } from '@fno/shared';
+import { minutesSinceSessionOpen, ESTIMATED_ROUND_TRIP_COST_PCT } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 
@@ -215,9 +215,10 @@ function bucketStats(records: TradeSetupRecord[]): Omit<WinRateBucket, 'period'>
   // still has a real P&L at the moment it closed — see the WinRateBucket
   // doc comment. Blend those into a second "did this actually make money"
   // view rather than letting a profitable early exit vanish from both the
-  // win and loss buckets.
-  const profitableCloses = wins + records.filter((r) => r.outcome === 'EXPIRED' && r.returnPercent != null && r.returnPercent > 0).length;
-  const unprofitableCloses = losses + records.filter((r) => r.outcome === 'EXPIRED' && r.returnPercent != null && r.returnPercent < 0).length;
+  // win and loss buckets. Judged AFTER estimated costs: an early exit up
+  // +1.5% on premium still lost money once brokerage and spread were paid.
+  const profitableCloses = wins + records.filter((r) => r.outcome === 'EXPIRED' && (netReturnPercent(r) ?? 0) > 0).length;
+  const unprofitableCloses = losses + records.filter((r) => r.outcome === 'EXPIRED' && netReturnPercent(r) != null && netReturnPercent(r)! < 0).length;
   const profitableDecisive = profitableCloses + unprofitableCloses;
 
   return {
@@ -286,7 +287,7 @@ function computeRiskMetrics(records: TradeSetupRecord[]): RiskMetrics {
     // instead silently spliced those rows out of the sequence and merged
     // the losing runs either side of them into one, inflating the reported
     // "max consecutive losses" from 7 to 11 purely as an artefact.
-    const ret = r.returnPercent!;
+    const ret = netReturnPercent(r)!;
     if (ret > 0) {
       winStreak += 1;
       lossStreak = 0;
@@ -317,10 +318,24 @@ function computeRiskMetrics(records: TradeSetupRecord[]): RiskMetrics {
  * spread rows), which the caller skips rather than mixing units.
  */
 function toRMultiple(r: TradeSetupRecord): number | null {
-  if (r.returnPercent == null || r.entry == null || r.stopLoss == null || r.entry <= 0) return null;
+  const net = netReturnPercent(r);
+  if (net == null || r.entry == null || r.stopLoss == null || r.entry <= 0) return null;
   const riskPct = ((r.entry - r.stopLoss) / r.entry) * 100;
   if (!(riskPct > 0)) return null;
-  return r.returnPercent / riskPct;
+  return net / riskPct;
+}
+
+/**
+ * Return after the same round-trip cost the setup builder gates on. Every
+ * R-based figure (expectancy, drawdown, profit factor, streaks, profitable
+ * closes) uses this; the raw "avg premium move" stays gross. Stats reported
+ * gross looked ~0.1R per trade better than what reached a trading account.
+ * Legacy spread rows measure return against max loss, not premium, so the
+ * premium-based cost doesn't apply to them.
+ */
+function netReturnPercent(r: TradeSetupRecord): number | null {
+  if (r.returnPercent == null) return null;
+  return r.structureType === 'SPREAD' ? r.returnPercent : r.returnPercent - ESTIMATED_ROUND_TRIP_COST_PCT;
 }
 
 function bucketBy(records: TradeSetupRecord[], keyFn: (r: TradeSetupRecord) => string): WinRateBucket[] {
@@ -340,8 +355,12 @@ function bucketBy(records: TradeSetupRecord[], keyFn: (r: TradeSetupRecord) => s
 // them into one set of win-rate stats muddies both once Positional trades
 // accumulate. `modeFilter` scopes the whole computation to one mode;
 // omitted (or 'ALL') keeps the original combined view.
-export async function getWinRateAnalytics(modeFilter?: TradingMode | 'ALL'): Promise<WinRateAnalytics> {
-  const everything = await getTradeSetupHistory();
+export async function getWinRateAnalytics(modeFilter?: TradingMode | 'ALL', since?: number): Promise<WinRateAnalytics> {
+  const history = await getTradeSetupHistory();
+  // `since` scopes everything to setups generated under the current logic
+  // (see TRADE_LOGIC_UPDATED_AT) — results under old selection rules would
+  // otherwise dilute whether a change is working.
+  const everything = since != null ? history.filter((r) => r.generatedAt >= since) : history;
   const inMode = !modeFilter || modeFilter === 'ALL' ? everything : everything.filter((r) => r.mode === modeFilter);
   // A setup priced off frozen quotes was never tradeable — its "outcome" is
   // an artefact of stale data meeting the next live print, not a result.

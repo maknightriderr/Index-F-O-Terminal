@@ -63,8 +63,12 @@ const WS_URL = 'wss://smartapisocket.angelone.in/smart-stream';
 // are Angel One's most rate-limit-sensitive endpoints in practice
 // (confirmed live), so they get the tightest pacing; quotes and
 // everything else (auth, order-adjacent calls) tolerate more.
-const historicalLimiter = new RateLimiter(2);
-const greeksLimiter = new RateLimiter(2);
+// Per-minute caps on the two endpoints that were rejecting under load on
+// 16 Sep (1,756 historical and 206 Greeks rate-limit retries in a session).
+// Conservative — a request that waits a few seconds in this queue is far
+// cheaper than one that's rejected and retried.
+const historicalLimiter = new RateLimiter(2, 80);
+const greeksLimiter = new RateLimiter(2, 60);
 const quoteLimiter = new RateLimiter(5);
 const defaultLimiter = new RateLimiter(5);
 
@@ -91,6 +95,13 @@ function delay(ms: number): Promise<void> {
 
 const MAX_RATE_LIMIT_RETRIES = 3;
 const RATE_LIMIT_RETRY_BASE_DELAY_MS = 500;
+// After a rejection the whole category waits this long (×attempt), so the
+// retry and everything queued behind it back off together.
+const RATE_LIMIT_PAUSE_MS = 2000;
+// Angel One's WebSocket v2 closes a connection it hasn't heard from with
+// "Connection Idle Timeout" — the client must send a text "ping" at least
+// every 30s. Without it the feed dropped and reconnected 240 times on 16 Sep.
+const WS_HEARTBEAT_INTERVAL_MS = 25_000;
 
 const EXCHANGE_MAP: Record<string, Exchange> = {
   NSE: 'NSE',
@@ -197,6 +208,7 @@ export class AngelOneProvider implements MarketDataProvider {
           { url: config.url, attempt: config.__rateLimitRetries },
           'Angel One rate limit hit — retrying with backoff'
         );
+        limiterFor(config.url).pause(RATE_LIMIT_PAUSE_MS * config.__rateLimitRetries);
         await delay(RATE_LIMIT_RETRY_BASE_DELAY_MS * config.__rateLimitRetries);
         return this.api.request(config); // re-enters the request interceptor, so it re-queues through the same throttle
       }
@@ -863,7 +875,26 @@ class AngelOneWebSocket implements WebSocketConnection {
   private connected = false;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 10;
+  private heartbeat: ReturnType<typeof setInterval> | null = null;
   private subscriptions: Map<string, { token: string; exchangeSegment: ExchangeSegment; mode: SubscriptionMode }> = new Map();
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.heartbeat = setInterval(() => {
+      try {
+        if (this.connected) this.ws?.send('ping');
+      } catch (err: any) {
+        logger.warn({ error: err.message }, 'WebSocket heartbeat send failed');
+      }
+    }, WS_HEARTBEAT_INTERVAL_MS);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeat) {
+      clearInterval(this.heartbeat);
+      this.heartbeat = null;
+    }
+  }
 
   constructor(config: WebSocketConfig) {
     this.config = config;
@@ -887,11 +918,14 @@ class AngelOneWebSocket implements WebSocketConnection {
         this.ws.on('open', () => {
           this.connected = true;
           this.reconnectAttempts = 0;
+          this.startHeartbeat();
           logger.info('Angel One WebSocket connected');
           resolve();
         });
 
         this.ws.on('message', (data: Buffer) => {
+          // The server answers each heartbeat with a text "pong" — not a tick.
+          if (data.length <= 4 && data.toString() === 'pong') return;
           try {
             const ticks = this.parseBinaryMessage(data);
             if (ticks.length > 0) {
@@ -910,6 +944,7 @@ class AngelOneWebSocket implements WebSocketConnection {
 
         this.ws.on('close', (code: number, reason: Buffer) => {
           this.connected = false;
+          this.stopHeartbeat();
           const reasonStr = reason.toString();
           logger.warn({ code, reason: reasonStr }, 'WebSocket disconnected');
           this.disconnectCallbacks.forEach(cb => cb(code, reasonStr));
@@ -927,6 +962,7 @@ class AngelOneWebSocket implements WebSocketConnection {
 
   disconnect(): void {
     this.maxReconnectAttempts = 0; // Prevent reconnection
+    this.stopHeartbeat();
     if (this.ws) {
       this.ws.close();
       this.ws = null;

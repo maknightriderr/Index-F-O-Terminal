@@ -6,7 +6,11 @@ import type { WinRateAnalytics, TradeSetupRecord } from '@fno/shared';
 
 const POLL_INTERVAL_MS = 120000; // win-rate stats only change as setups resolve — no need for fast polling
 
-export function useBacktesting(mode: 'ALL' | 'INTRADAY' | 'POSITIONAL' = 'ALL'): {
+export function useBacktesting(
+  mode: 'ALL' | 'INTRADAY' | 'POSITIONAL' = 'ALL',
+  /** Only setups generated at or after this time (epoch ms) — the "Current logic" view. */
+  since?: number
+): {
   analytics: WinRateAnalytics | null;
   history: TradeSetupRecord[];
   loading: boolean;
@@ -20,14 +24,14 @@ export function useBacktesting(mode: 'ALL' | 'INTRADAY' | 'POSITIONAL' = 'ALL'):
   useEffect(() => {
     let cancelled = false;
     const poll = () => {
-      Promise.all([api.getWinRateAnalytics(mode), api.getTradeSetupHistory(200)])
+      Promise.all([api.getWinRateAnalytics(mode, since), api.getTradeSetupHistory(200)])
         .then(([winRate, setups]) => {
           if (cancelled) return;
           setAnalytics(winRate);
           // History is always the full, unfiltered list from the API — filter
           // client-side so the "Recent Trade Setups" table stays in sync with
-          // the selected mode without a second round-trip per toggle.
-          setHistory(mode === 'ALL' ? setups : setups.filter((s) => s.mode === mode));
+          // the selected mode and scope without a second round-trip per toggle.
+          setHistory(setups.filter((s) => (mode === 'ALL' || s.mode === mode) && (since == null || s.generatedAt >= since)));
           setIsLive(true);
           setLoading(false);
         })
@@ -43,7 +47,7 @@ export function useBacktesting(mode: 'ALL' | 'INTRADAY' | 'POSITIONAL' = 'ALL'):
       cancelled = true;
       clearInterval(interval);
     };
-  }, [mode]);
+  }, [mode, since]);
 
   return { analytics, history, loading, isLive };
 }

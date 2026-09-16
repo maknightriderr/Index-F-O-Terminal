@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { DEFAULT_RISK_CONFIG, formatExpiryDate, formatIndianNumber } from '@fno/shared';
+import { DEFAULT_RISK_CONFIG, ESTIMATED_ROUND_TRIP_COST_PCT, TRADE_LOGIC_UPDATED_AT, formatExpiryDate, formatIndianNumber } from '@fno/shared';
 import type { WinRateBucket, TradeSetupRecord, RiskMetrics } from '@fno/shared';
 import { useBacktesting } from '@/lib/use-backtesting';
 import { useAssetTabsStore } from '@/stores';
@@ -28,9 +28,14 @@ type OutcomeTab = 'ALL' | 'CLOSED' | 'OPEN';
 const HISTORY_PREVIEW_ROWS = 20;
 const OUTCOME_TAB_LABELS: Record<OutcomeTab, string> = { ALL: 'All', CLOSED: 'Closed', OPEN: 'Open' };
 
+type ScopeFilter = 'ALL_TIME' | 'CURRENT_LOGIC';
+const LOGIC_UPDATED_LABEL = new Date(TRADE_LOGIC_UPDATED_AT).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short' });
+const SCOPE_FILTER_LABELS: Record<ScopeFilter, string> = { ALL_TIME: 'All time', CURRENT_LOGIC: `Current logic (since ${LOGIC_UPDATED_LABEL})` };
+
 export function BacktestingPage() {
   const [modeFilter, setModeFilter] = useState<ModeFilter>('ALL');
-  const { analytics, history, loading, isLive } = useBacktesting(modeFilter);
+  const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('ALL_TIME');
+  const { analytics, history, loading, isLive } = useBacktesting(modeFilter, scopeFilter === 'CURRENT_LOGIC' ? TRADE_LOGIC_UPDATED_AT : undefined);
   const [periodTab, setPeriodTab] = useState<PeriodTab>('daily');
   const [outcomeTab, setOutcomeTab] = useState<OutcomeTab>('ALL');
   const [showAllHistory, setShowAllHistory] = useState(false);
@@ -47,7 +52,29 @@ export function BacktestingPage() {
             Win-rate analysis of every trade setup the system has actually generated — captured live, not simulated. Coverage grows with what gets viewed/scanned; there's no way to backfill history.
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-0.5 bg-gray-800/60 light:bg-slate-200/60 rounded-lg p-0.5" role="group" aria-label="Filter by selection logic">
+            {(Object.keys(SCOPE_FILTER_LABELS) as ScopeFilter[]).map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setScopeFilter(s)}
+                aria-pressed={scopeFilter === s}
+                title={
+                  s === 'CURRENT_LOGIC'
+                    ? 'Only setups generated since trade-selection logic last changed — shows whether the current rules work, without older results mixed in'
+                    : 'Every setup ever generated, under whatever logic was live at the time'
+                }
+                className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wide transition-colors ${
+                  scopeFilter === s
+                    ? 'bg-emerald-500/90 text-white'
+                    : 'text-gray-400 light:text-slate-600 hover:text-gray-200 light:hover:text-slate-700'
+                }`}
+              >
+                {SCOPE_FILTER_LABELS[s]}
+              </button>
+            ))}
+          </div>
           <div className="flex items-center gap-0.5 bg-gray-800/60 light:bg-slate-200/60 rounded-lg p-0.5" role="group" aria-label="Filter by trading mode">
             {(Object.keys(MODE_FILTER_LABELS) as ModeFilter[]).map((m) => (
               <button
@@ -272,7 +299,7 @@ function OverallSummary({ bucket }: { bucket: WinRateBucket }) {
           Profitable Close Rate
         </div>
         <div className={`text-3xl font-bold tabular-nums ${profitableRateColor}`}>{bucket.profitableCloseRatePercent != null ? `${bucket.profitableCloseRatePercent}%` : '—'}</div>
-        <div className="text-[10px] text-gray-400 light:text-slate-600 mt-1">{bucket.profitableCloses}↑ / {bucket.unprofitableCloses}↓ · closes with a non-zero return</div>
+        <div className="text-[10px] text-gray-400 light:text-slate-600 mt-1">{bucket.profitableCloses}↑ / {bucket.unprofitableCloses}↓ · after ~{ESTIMATED_ROUND_TRIP_COST_PCT}% est. costs</div>
       </Card>
       <Card accent="border-t-cyan-500/50">
         <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5" title="Target-hit rate only: counts a position as a win solely if it reached its exact fixed target, and EXCLUDES every EXPIRED close regardless of P&L. Because expiries dominate, this covers only a small slice of closed trades — read Profitable Close Rate for the full picture.">
@@ -305,7 +332,7 @@ function OverallSummary({ bucket }: { bucket: WinRateBucket }) {
       <Card accent="border-t-emerald-500/50">
         <div
           className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5"
-          title="Average result per trade in R — multiples of that trade's own risk. Positive means the system makes money per unit of risk; negative means it loses. This is the expectancy figure."
+          title={`Average result per trade in R — multiples of that trade's own risk — after ~${ESTIMATED_ROUND_TRIP_COST_PCT}% estimated round-trip costs (brokerage, STT, spread). Positive means the system makes money per unit of risk; negative means it loses. Drawdown, profit factor and streaks are after the same costs.`}
         >
           Expectancy (R)
         </div>
@@ -317,7 +344,8 @@ function OverallSummary({ bucket }: { bucket: WinRateBucket }) {
             : '—'}
         </div>
         <div className="text-[10px] text-gray-400 light:text-slate-600 mt-1">
-          {bucket.avgReturnPercent != null ? `${bucket.avgReturnPercent >= 0 ? '+' : ''}${bucket.avgReturnPercent}% avg premium move` : '—'}
+          {bucket.avgRMultiple != null ? `after costs · ` : ''}
+          {bucket.avgReturnPercent != null ? `${bucket.avgReturnPercent >= 0 ? '+' : ''}${bucket.avgReturnPercent}% avg premium move (gross)` : '—'}
         </div>
       </Card>
       <Card>

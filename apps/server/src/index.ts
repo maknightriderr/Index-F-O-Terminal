@@ -203,7 +203,7 @@ authenticateOnBoot();
 startAlertScanner(provider);
 startPatternScanner(provider);
 startInstitutionalFlowScanner(provider);
-startTradeSetupPriceMonitor(provider);
+startTradeSetupPriceMonitor(provider, subscriptionManager);
 startMarketScanner(provider);
 startFiiDiiTracker();
 startAbandonedSetupSweep();

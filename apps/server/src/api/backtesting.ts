@@ -19,7 +19,9 @@ export function createBacktestingRoutes(): Router {
     try {
       const modeParam = (req.query.mode as string || '').toUpperCase();
       const mode: TradingMode | 'ALL' = modeParam === 'INTRADAY' || modeParam === 'POSITIONAL' ? modeParam : 'ALL';
-      const data = await getWinRateAnalytics(mode);
+      const sinceParam = Number(req.query.since);
+      const since = Number.isFinite(sinceParam) && sinceParam > 0 ? sinceParam : undefined;
+      const data = await getWinRateAnalytics(mode, since);
       res.json({ success: true, data, meta: { timestamp: Date.now(), source: 'LIVE' } });
     } catch (error: any) {
       logger.error({ error: error.message }, 'Win-rate analytics fetch failed');

@@ -4,6 +4,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { logger } from '../lib/logger.js';
+import { cached } from '../lib/cache.js';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { CM_SEGMENT, FO_SEGMENT } from '@fno/shared';
 import type { CandleInterval, Exchange, TradingMode } from '@fno/shared';
@@ -140,13 +141,15 @@ export function createMarketDataRoutes(provider: MarketDataProvider): Router {
         return;
       }
 
-      const data = await provider.getHistoricalData({
-        exchange: exchange as any,
-        token,
-        interval,
-        fromDate,
-        toDate,
-      });
+      // Every open chart polled this straight through to the broker's most
+      // rate-limited endpoint. A short cache collapses repeat requests for
+      // the same range; empty results aren't cached so a failure can retry.
+      const data = await cached(
+        `hist-api:${exchange}:${token}:${interval}:${fromDate}:${toDate}`,
+        60,
+        () => provider.getHistoricalData({ exchange: exchange as any, token, interval, fromDate, toDate }),
+        (candles) => candles.length > 0
+      );
 
       res.json({
         success: true,

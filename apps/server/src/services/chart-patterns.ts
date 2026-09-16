@@ -170,7 +170,7 @@ async function fetchHistoricalWithRetry(
   provider: MarketDataProvider,
   params: HistoricalParams,
   attempts = 2,
-  delayMs = 1500
+  delayMs = 3000 // the provider already retries rate-limited requests; don't stack a fast second wave on top
 ): Promise<OHLCV[]> {
   for (let i = 0; i < attempts; i++) {
     const candles = await provider.getHistoricalData(params);
