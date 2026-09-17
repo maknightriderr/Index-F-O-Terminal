@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { api } from './api';
-import { MOCK_FII_DII_HISTORY } from './mock-data';
 import type { FiiDiiActivity } from '@fno/shared';
 
 // Persisted once daily server-side — no need to poll faster than the
@@ -12,8 +11,8 @@ const POLL_INTERVAL_MS = 10 * 60 * 1000;
 /**
  * Persisted daily FII/DII history, oldest first. An empty array on a
  * successful response is a real, honest state (the tracker just hasn't
- * accumulated enough days yet) — NOT the same as the backend being
- * unreachable, so only an actual request failure falls back to mock data.
+ * accumulated enough days yet). A failed request keeps the last live
+ * history (or none) and flips isLive — it never substitutes sample days.
  */
 export function useFiiDiiHistory(limit = 30): { data: FiiDiiActivity[]; loading: boolean; isLive: boolean } {
   const [data, setData] = useState<FiiDiiActivity[]>([]);
@@ -34,7 +33,6 @@ export function useFiiDiiHistory(limit = 30): { data: FiiDiiActivity[]; loading:
         })
         .catch(() => {
           if (cancelled) return;
-          setData(MOCK_FII_DII_HISTORY);
           setIsLive(false);
           setLoading(false);
         });

@@ -57,8 +57,25 @@ async function ensureCookies(forceRefresh = false): Promise<string> {
   return cookieJar;
 }
 
+/** IST date `days` from today as NSE's DD-MM-YYYY. */
+function nseDate(days: number): string {
+  const d = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+  const [y, m, day] = d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }).split('-');
+  return `${day}-${m}-${y}`;
+}
+
+// Without from_date/to_date NSE returns only its latest 20 rows: on 17 Sep
+// the "upcoming" list held only that day's ex-dates (84 were announced
+// through 22 Sep) and RELIANCE's history stopped at 20 of 28 entries.
+const UPCOMING_WINDOW_DAYS = 90;
+const HISTORY_FROM = '01-01-2000';
+const HISTORY_AHEAD_DAYS = 365;
+
 async function fetchRaw(symbol?: string): Promise<any[]> {
-  const url = `${NSE_BASE}/api/corporates-corporateActions?index=equities${symbol ? `&symbol=${encodeURIComponent(symbol)}` : ''}`;
+  const range = symbol
+    ? `&from_date=${HISTORY_FROM}&to_date=${nseDate(HISTORY_AHEAD_DAYS)}`
+    : `&from_date=${nseDate(0)}&to_date=${nseDate(UPCOMING_WINDOW_DAYS)}`;
+  const url = `${NSE_BASE}/api/corporates-corporateActions?index=equities${symbol ? `&symbol=${encodeURIComponent(symbol)}` : ''}${range}`;
   const requestHeaders = (cookie: string) => ({
     'User-Agent': USER_AGENT,
     Accept: 'application/json',
@@ -131,7 +148,7 @@ function todayIso(): string {
  */
 export async function getUpcomingCorporateActions(): Promise<CorporateAction[]> {
   return cached(
-    'corporate-actions:market',
+    'corporate-actions:v2:market',
     CACHE_TTL_SECONDS,
     async () => {
       const raw = await fetchRaw();
@@ -148,7 +165,7 @@ export async function getUpcomingCorporateActions(): Promise<CorporateAction[]> 
 /** Full corporate-action history (past + future) for one symbol, most recent first. */
 export async function getCorporateActionsForSymbol(symbol: string): Promise<CorporateAction[]> {
   return cached(
-    `corporate-actions:symbol:${symbol}`,
+    `corporate-actions:v2:symbol:${symbol}`,
     CACHE_TTL_SECONDS,
     async () => {
       const raw = await fetchRaw(symbol);

@@ -54,7 +54,7 @@ export function InstitutionalFlowPage() {
       )}
 
       {/* Section 5: Next-Day Market Bias Engine */}
-      <SectionHeader title="Next-Day Market Bias Engine" subtitle="Gap / trend / range / volatility read from the current bias, regime, and India VIX — not a statistical model." />
+      <SectionHeader title="Next-Day Market Bias Engine" subtitle="Gap / trend / range / volatility read from the current bias, regime, and India VIX — a fixed rule, not a fitted model. Each card shows how often its direction call has actually been right." />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {biases.map((b) => (
           <NextDayBiasCard key={b.symbol} bias={b} />
@@ -188,14 +188,24 @@ function ProbabilityBar({ label, value, color }: { label: string; value: number;
   );
 }
 
+// A direction call needs this many resolved days, and this hit rate, before
+// the card presents it (and its probabilities) as a read rather than an
+// experiment. Checked on 17 Sep: NIFTY's call was right 9 of 25 days (36%),
+// worse than always saying "bearish" (44%) — while the IV range held 80%.
+const NEXT_DAY_MIN_RESOLVED = 10;
+const NEXT_DAY_MIN_DIRECTION_ACCURACY_PCT = 55;
+
 function NextDayBiasCard({ bias }: { bias: NextDayBias }) {
-  const dirColor = bias.predictedDirection === 'BULLISH' ? 'text-emerald-400' : bias.predictedDirection === 'BEARISH' ? 'text-red-400' : 'text-gray-400';
-  return (
-    <Card accent="border-t-purple-500/50">
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-sm font-bold text-gray-200 light:text-slate-800">{bias.symbol}</span>
-        <span className={`text-xs font-bold ${dirColor}`}>{bias.predictedDirection} · {bias.confidence}/100</span>
-      </div>
+  const { accuracy } = usePredictionAccuracy(bias.symbol);
+  const record = accuracy?.last30 ?? null;
+  const rated = record != null && record.resolvedCount >= NEXT_DAY_MIN_RESOLVED && record.directionAccuracyPercent != null;
+  const directionTrusted = rated && record!.directionAccuracyPercent! >= NEXT_DAY_MIN_DIRECTION_ACCURACY_PCT;
+  const dirColor = !directionTrusted
+    ? 'text-gray-400 light:text-slate-600'
+    : bias.predictedDirection === 'BULLISH' ? 'text-emerald-400' : bias.predictedDirection === 'BEARISH' ? 'text-red-400' : 'text-gray-400';
+
+  const probabilityBars = (
+    <>
       <div className="grid grid-cols-2 gap-x-4 gap-y-2.5 mb-3">
         <ProbabilityBar label="Gap Up" value={bias.gapUpProbability} color="bg-emerald-500" />
         <ProbabilityBar label="Gap Down" value={bias.gapDownProbability} color="bg-red-500" />
@@ -203,12 +213,48 @@ function NextDayBiasCard({ bias }: { bias: NextDayBias }) {
         <ProbabilityBar label="Range-Bound" value={bias.rangeBoundProbability} color="bg-amber-500" />
       </div>
       <ProbabilityBar label="Volatile Session" value={bias.volatileSessionProbability} color="bg-fuchsia-500" />
-      <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-800/60 light:border-slate-200">
-        <span className="text-[11px] text-gray-400 light:text-slate-600">Expected Range</span>
+    </>
+  );
+
+  return (
+    <Card accent="border-t-purple-500/50">
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-sm font-bold text-gray-200 light:text-slate-800">{bias.symbol}</span>
+        <span className={`text-xs font-bold ${dirColor}`}>
+          {bias.predictedDirection} · {bias.confidence}/100{!directionTrusted && ' · experimental'}
+        </span>
+      </div>
+
+      <div className="flex items-center justify-between pb-3 mb-3 border-b border-gray-800/60 light:border-slate-200">
+        <span className="text-[11px] text-gray-400 light:text-slate-600">
+          Expected Range
+          {rated && record!.rangeAccuracyPercent != null && (
+            <span className="ml-1 tabular-nums">· held {record!.rangeAccuracyPercent}% of the last {record!.resolvedCount} days</span>
+          )}
+        </span>
         <span className="text-xs font-bold text-gray-200 light:text-slate-800 tabular-nums">
           {formatIndianNumber(bias.expectedRangeLow, 0)} – {formatIndianNumber(bias.expectedRangeHigh, 0)}
         </span>
       </div>
+
+      <p className="text-[11px] leading-snug text-gray-400 light:text-slate-600 mb-3">
+        {!rated
+          ? `Direction track record: ${record ? `${record.resolvedCount} resolved day${record.resolvedCount === 1 ? '' : 's'}` : 'loading'} — not enough to rate yet.`
+          : `Direction right ${record!.directionAccuracyPercent}% of the last ${record!.resolvedCount} resolved days${
+              directionTrusted ? '.' : ` — below the ${NEXT_DAY_MIN_DIRECTION_ACCURACY_PCT}% needed to rely on it, so treat the call and the rule-based probabilities as experimental.`
+            }`}
+      </p>
+
+      {directionTrusted ? (
+        probabilityBars
+      ) : (
+        <details className="group">
+          <summary className="cursor-pointer text-[11px] font-semibold text-gray-400 light:text-slate-600 hover:text-gray-200 light:hover:text-slate-800 select-none">
+            Show rule-based probabilities (not calibrated)
+          </summary>
+          <div className="mt-3">{probabilityBars}</div>
+        </details>
+      )}
     </Card>
   );
 }

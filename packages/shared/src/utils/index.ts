@@ -66,20 +66,40 @@ export function formatExpiryDate(expiry: string): string {
   return `${Number(match[3])} ${MONTHS_SHORT[Number(match[2]) - 1]} ${match[1]}`;
 }
 
-export function calculateDTE(expiryDate: string): number {
-  const now = new Date();
-  const expiry = new Date(expiryDate);
-  const diffMs = expiry.getTime() - now.getTime();
-  return Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
+/**
+ * Calendar days from today (IST) to the expiry date: 0 on expiry day, 1 the
+ * day before. Never negative.
+ */
+export function calculateDTE(expiryDate: string, at: Date | number = Date.now()): number {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(expiryDate)) {
+    const diffMs = new Date(expiryDate).getTime() - new Date(at).getTime();
+    return Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
+  }
+  const today = new Date(at).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const days = Math.round((Date.parse(`${expiryDate}T12:00:00Z`) - Date.parse(`${today}T12:00:00Z`)) / (24 * 60 * 60 * 1000));
+  return Math.max(0, days);
 }
 
 /**
- * Calculate fractional years to expiry (for Black-Scholes).
+ * The moment a contract expiring on `expiryDate` stops trading: its
+ * exchange's close that day (15:30 IST for NSE/BSE, 23:30/23:55 for MCX).
+ * `new Date("2026-09-17")` is UTC midnight — 05:30 IST on expiry morning —
+ * which zeroed time-to-expiry for the whole expiry session (every Greek and
+ * IV read 0) and cut 10-18h off it on every other day, overstating IV.
  */
-export function yearsToExpiry(expiryDate: string): number {
-  const now = new Date();
-  const expiry = new Date(expiryDate);
-  const diffMs = expiry.getTime() - now.getTime();
+export function expiryTimestamp(expiryDate: string, exchange: Exchange = 'NSE'): number {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(expiryDate)) return new Date(expiryDate).getTime();
+  const session = getSessionWindow(exchange, expiryDate);
+  if (session) return session.close;
+  return istWallClockMs(expiryDate, getSessionCloseTime(exchange, istWallClockMs(expiryDate, '12:00')));
+}
+
+/**
+ * Calculate fractional years to expiry (for Black-Scholes), measured to the
+ * exchange's close on the expiry date.
+ */
+export function yearsToExpiry(expiryDate: string, exchange: Exchange = 'NSE', at: Date | number = Date.now()): number {
+  const diffMs = expiryTimestamp(expiryDate, exchange) - new Date(at).getTime();
   return Math.max(0, diffMs / (1000 * 60 * 60 * 24 * 365.25));
 }
 

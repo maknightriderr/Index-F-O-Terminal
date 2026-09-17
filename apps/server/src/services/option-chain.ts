@@ -191,7 +191,7 @@ async function buildOptionChainUncached(
   );
 
   const dte = calculateDTE(expiry);
-  const tte = yearsToExpiry(expiry);
+  const tte = yearsToExpiry(expiry, exchange);
   const now = Date.now();
 
   // Time context for ivPressure (see below): when the current quote was
@@ -332,7 +332,9 @@ async function buildOptionChainUncached(
   const atmIvSamples = [atmEntry?.call?.iv, atmEntry?.put?.iv].filter((v): v is number => !!v && v > 0);
   const atmIv = atmIvSamples.length > 0 ? atmIvSamples.reduce((a, b) => a + b, 0) / atmIvSamples.length / 100 : 0.15;
 
-  const expectedMoveDetail = calculateExpectedMove(spotPrice, atmIv, dte, underlying);
+  // Fractional days of option life left, not the whole-day DTE: on expiry
+  // day DTE is 0 but the session still has hours to run.
+  const expectedMoveDetail = calculateExpectedMove(spotPrice, atmIv, tteAtQuote * 365, underlying);
 
   const positionMomentum = analyzePositionMomentum(strikes);
   const oiTrap = analyzeOiTrap(strikes, spotPrice);

@@ -482,6 +482,8 @@ export interface FnoScannerRow {
   exchange: Exchange;
   price: number;
   changePercent: number;
+  /** The nearest future's own % change — what oiInterpretation is classified from (it can differ in sign from the equity's changePercent on a small move). */
+  futuresChangePercent?: number;
   volume: number;
   futuresOi: number;
   futuresChangeOi: number;

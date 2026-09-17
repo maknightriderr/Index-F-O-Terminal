@@ -103,13 +103,28 @@ const OI_CONFIG: Record<OIInterpretation, { label: string; color: string; dot: s
   },
 };
 
-export function OIBadge({ type }: { type: OIInterpretation | string }) {
+/**
+ * futuresChangePercent: the future's own move, which the label is classified
+ * from. Shown beside it because the row's price column is the equity's move,
+ * and on small days the two can differ in sign (SBIN -0.20% cash with the
+ * future up reads "Long Buildup").
+ */
+export function OIBadge({ type, futuresChangePercent }: { type: OIInterpretation | string; futuresChangePercent?: number }) {
   const info = OI_CONFIG[type as OIInterpretation] || OI_CONFIG.NEUTRAL;
+  const hasFut = futuresChangePercent != null && Number.isFinite(futuresChangePercent);
 
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold badge-glass ${info.color}`}>
+    <span
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold badge-glass ${info.color}`}
+      title={hasFut ? `Classified from the nearest future: price ${futuresChangePercent! >= 0 ? '+' : ''}${futuresChangePercent!.toFixed(2)}% with OI change` : undefined}
+    >
       <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${info.dot}`} />
       <span>{info.label}</span>
+      {hasFut && (
+        <span className="font-normal opacity-75 tabular-nums">
+          · Fut {futuresChangePercent! >= 0 ? '+' : ''}{futuresChangePercent!.toFixed(2)}%
+        </span>
+      )}
     </span>
   );
 }

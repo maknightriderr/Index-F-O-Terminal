@@ -267,19 +267,22 @@ export function AssetWorkspace() {
             ))}
           </div>
         </div>
-        {!biasLive && (
-          <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2 mb-2 text-amber-400 text-xs font-medium">
-            ⚠️ Live signal engine unreachable — bias/regime/score below are sample data.
+        {!biasLive ? (
+          <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3 mb-2 text-amber-400 light:text-amber-700 text-xs font-medium">
+            Waiting for the live signal engine — bias, regime, score and levels appear once {selectedSymbol || 'this symbol'} has a live read.
           </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+              <MarketBiasCard bias={bias} symbol={selectedSymbol} />
+              <MarketRegimeCard bias={bias} />
+              <IntelligenceScoreCard score={score} symbol={selectedSymbol} direction={bias.direction} />
+            </div>
+            <div className="mt-3">
+              <SupportResistanceCard bias={bias} />
+            </div>
+          </>
         )}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-          <MarketBiasCard bias={bias} symbol={selectedSymbol} />
-          <MarketRegimeCard bias={bias} />
-          <IntelligenceScoreCard score={score} symbol={selectedSymbol} direction={bias.direction} />
-        </div>
-        <div className="mt-3">
-          <SupportResistanceCard bias={bias} />
-        </div>
       </div>
 
       {/* Main content (left) + News sidebar (right) — News used to be a
@@ -520,16 +523,20 @@ function LegCells({
     </td>
   );
   const volCell = <td className={`text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600 ${bg}`}>{formatCompact(leg.volume)}</td>;
+  // IV 0 means the solver had nothing to work with — typically a deep
+  // in-the-money premium at or below intrinsic value — so there are no
+  // Greeks either. Show a dash, not a 0% IV and a fake 0/±1 delta.
+  const noGreeks = !(leg.iv > 0);
   const ivCell = (
     <td
-      className={`text-right px-2 py-1.5 tabular-nums ${bg} ${ivCalculated ? 'text-amber-400' : 'text-gray-300 light:text-slate-700'}`}
-      title={ivCalculated ? 'Calculated internally — broker Greeks unavailable for this leg' : 'Broker-provided'}
+      className={`text-right px-2 py-1.5 tabular-nums ${bg} ${noGreeks ? 'text-gray-500 light:text-slate-400' : ivCalculated ? 'text-amber-400' : 'text-gray-300 light:text-slate-700'}`}
+      title={noGreeks ? 'IV not solvable — premium is at or below intrinsic value, or the leg has no usable quote' : ivCalculated ? 'Calculated internally — broker Greeks unavailable for this leg' : 'Broker-provided'}
     >
-      {leg.iv.toFixed(1)}%{ivCalculated && <sup>~</sup>}
+      {noGreeks ? '—' : <>{leg.iv.toFixed(1)}%{ivCalculated && <sup>~</sup>}</>}
     </td>
   );
-  const deltaCell = <td className={`text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600 ${bg}`}>{leg.delta.toFixed(2)}</td>;
-  const thetaCell = <td className={`text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600 ${bg}`}>{leg.theta.toFixed(2)}</td>;
+  const deltaCell = <td className={`text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600 ${bg}`}>{noGreeks ? '—' : leg.delta.toFixed(2)}</td>;
+  const thetaCell = <td className={`text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600 ${bg}`}>{noGreeks ? '—' : leg.theta.toFixed(2)}</td>;
   const ltpCell = <td className={`text-right px-2 py-1.5 tabular-nums font-medium text-gray-200 light:text-slate-800 ${bg}`}>{leg.ltp.toFixed(2)}</td>;
   const activityCell = (
     <td className={`px-2 py-1.5 ${bg} ${side === 'call' ? 'text-right border-r border-gray-800/50 light:border-slate-200' : 'text-left border-l border-gray-800/50 light:border-slate-200'}`}>

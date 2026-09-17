@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { api } from './api';
-import { MOCK_NIFTY_BIAS, MOCK_NIFTY_SCORE } from './mock-data';
 import type { MarketBias, IntelligenceScore, TradeSetup, TradingMode } from '@fno/shared';
 
 const POLL_INTERVAL_MS = 60000;
@@ -15,6 +14,48 @@ const POLL_INTERVAL_MS = 60000;
 const RETRY_DELAY_MS = 5000;
 
 const NO_SETUP: TradeSetup = { available: false, reason: 'Live signal engine unreachable.' };
+
+/**
+ * What the hook returns before any live read exists for a symbol: a neutral,
+ * zero-confidence read with no inputs, carrying the REQUESTED symbol. It used
+ * to be the NIFTY sample bias (78% bullish, strong bull trend) — shown under
+ * whatever instrument was selected, with nothing on the Dashboard saying so.
+ * Consumers should check isLive before presenting direction/regime/score.
+ */
+export function placeholderBias(symbol: string): MarketBias {
+  return {
+    symbol,
+    direction: 'NEUTRAL',
+    bullishProbability: 0,
+    bearishProbability: 0,
+    neutralProbability: 100,
+    confidence: 0,
+    regime: 'RANGE_BOUND',
+    reasoning: ['Waiting for the live signal engine.'],
+    inputs: {},
+    timestamp: 0,
+  };
+}
+
+export function placeholderScore(symbol: string): IntelligenceScore {
+  return {
+    symbol,
+    score: 0,
+    trend: 0,
+    priceAction: 0,
+    futuresOi: 0,
+    optionsOi: 0,
+    pcr: 0,
+    iv: 0,
+    oiShifts: 0,
+    volume: 0,
+    relativeStrength: 0,
+    technicals: 0,
+    regime: 0,
+    reasoning: [],
+    timestamp: 0,
+  };
+}
 
 // Module-level so a revisited symbol/exchange/mode combination shows its
 // last-known bias instantly on switch instead of either (a) blanking to the
@@ -29,9 +70,8 @@ function biasCacheKey(symbol: string, exchange: string, mode: TradingMode): stri
 
 /**
  * Live Market Bias / Regime / Intelligence Score / Trade Setup for a symbol
- * — falls back to the NIFTY mock (clearly flagged via `isLive`) if the
- * backend can't compute it (no historical data access, symbol has no
- * derivatives, etc.).
+ * — a neutral zero-confidence placeholder (isLive: false) until the backend
+ * returns a real read; never sample data.
  *
  * Once live data has been received at least once, subsequent failures
  * preserve the last successful values instead of resetting to mocks —
@@ -43,8 +83,8 @@ export function useMarketBias(
   exchange: string,
   mode: TradingMode = 'INTRADAY'
 ): { bias: MarketBias; score: IntelligenceScore; tradeSetup: TradeSetup; isLive: boolean } {
-  const [bias, setBias] = useState<MarketBias>(MOCK_NIFTY_BIAS);
-  const [score, setScore] = useState<IntelligenceScore>(MOCK_NIFTY_SCORE);
+  const [bias, setBias] = useState<MarketBias>(() => placeholderBias(symbol));
+  const [score, setScore] = useState<IntelligenceScore>(() => placeholderScore(symbol));
   const [tradeSetup, setTradeSetup] = useState<TradeSetup>(NO_SETUP);
   const [isLive, setIsLive] = useState(false);
   // Track whether we've ever gotten live data for this symbol — if so,
@@ -56,12 +96,12 @@ export function useMarketBias(
     const key = biasCacheKey(symbol, exchange, mode);
     const cached = biasCache.get(key);
 
-    // Sync to this key's cache (or the mock, if never fetched before) the
+    // Sync to this key's cache (or the placeholder, if never fetched) the
     // moment symbol/exchange/mode changes — without this, whatever was on
     // screen for the PREVIOUS key stays visible, mislabeled as the new
     // symbol/mode, until the first fetch below resolves.
-    setBias(cached?.bias ?? MOCK_NIFTY_BIAS);
-    setScore(cached?.score ?? MOCK_NIFTY_SCORE);
+    setBias(cached?.bias ?? placeholderBias(symbol));
+    setScore(cached?.score ?? placeholderScore(symbol));
     setTradeSetup(cached?.tradeSetup ?? NO_SETUP);
     setIsLive(!!cached);
     hasReceivedLive.current = !!cached;

@@ -33,8 +33,8 @@ export function TopBar() {
   }, [selectedExchange]);
 
   const { indices, isLive } = useLiveIndices();
-  const nifty = indices.find((i) => i.symbol === 'NIFTY') ?? indices[0];
-  const bankNifty = indices.find((i) => i.symbol === 'BANKNIFTY') ?? indices[1];
+  const nifty = indices.find((i) => i.symbol === 'NIFTY') ?? null;
+  const bankNifty = indices.find((i) => i.symbol === 'BANKNIFTY') ?? null;
 
   return (
     // This row carries two index chips, a three-part status cluster, the
@@ -45,9 +45,19 @@ export function TopBar() {
     <header className="flex items-center h-12 px-2 md:px-4 bg-[#0b0b12]/95 light:bg-white/95 backdrop-blur-sm border-b border-gray-800/40 light:border-slate-200 shrink-0 gap-2 md:gap-5 shadow-[0_1px_0_rgba(255,255,255,0.02)] light:shadow-[0_1px_0_rgba(0,0,0,0.03)] relative z-10">
       {/* Quick Index Prices */}
       <div className="flex items-center gap-2 md:gap-4 min-w-0">
-        <IndexChip symbol="NIFTY" price={nifty.ltp} change={nifty.change} changePercent={nifty.changePercent} />
+        {nifty ? (
+          <IndexChip symbol="NIFTY" price={nifty.ltp} change={nifty.change} changePercent={nifty.changePercent} />
+        ) : (
+          <span className="text-xs text-gray-400 light:text-slate-600 font-semibold tracking-wide">NIFTY —</span>
+        )}
         <div className="hidden sm:block w-px h-5 bg-gradient-to-b from-transparent via-gray-700 to-transparent light:via-slate-300" />
-        <div className="hidden sm:block"><IndexChip symbol="BANKNIFTY" price={bankNifty.ltp} change={bankNifty.change} changePercent={bankNifty.changePercent} /></div>
+        <div className="hidden sm:block">
+          {bankNifty ? (
+            <IndexChip symbol="BANKNIFTY" price={bankNifty.ltp} change={bankNifty.change} changePercent={bankNifty.changePercent} />
+          ) : (
+            <span className="text-xs text-gray-400 light:text-slate-600 font-semibold tracking-wide">BANKNIFTY —</span>
+          )}
+        </div>
       </div>
 
       {/* Spacer */}
@@ -59,7 +69,7 @@ export function TopBar() {
         <Divider />
         <StatusDot label={health.websocket.connected ? 'WS' : 'WS Off'} on={health.websocket.connected} />
         <Divider />
-        <StatusDot label={isLive ? 'Live' : 'Mock'} on={isLive} pulse={isLive} />
+        <StatusDot label={isLive ? 'Live' : 'Offline'} on={isLive} pulse={isLive} />
       </div>
 
       <AlertBell />

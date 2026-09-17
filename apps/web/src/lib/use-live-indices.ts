@@ -2,15 +2,14 @@
 
 import { useEffect, useState } from 'react';
 import { api } from './api';
-import { MOCK_INDICES } from './mock-data';
 import { recordPrice } from './price-history-store';
 import type { MarketQuote } from '@fno/shared';
 
 const POLL_INTERVAL_MS = 20000;
 
-/** Live NIFTY/BANKNIFTY/SENSEX/etc quotes, falling back to mock data if the backend is unreachable. */
+/** Live NIFTY/BANKNIFTY/SENSEX/etc quotes. Starts empty — never shows sample prices; isLive says whether the last poll succeeded. */
 export function useLiveIndices(): { indices: MarketQuote[]; isLive: boolean } {
-  const [indices, setIndices] = useState<MarketQuote[]>(MOCK_INDICES);
+  const [indices, setIndices] = useState<MarketQuote[]>([]);
   const [isLive, setIsLive] = useState(false);
 
   useEffect(() => {
@@ -20,7 +19,11 @@ export function useLiveIndices(): { indices: MarketQuote[]; isLive: boolean } {
       api
         .getIndexQuotes()
         .then((data) => {
-          if (cancelled || data.length === 0) return;
+          if (cancelled) return;
+          if (data.length === 0) {
+            setIsLive(false);
+            return;
+          }
           setIndices(data);
           setIsLive(true);
           for (const q of data) recordPrice(q.symbol, q.ltp);

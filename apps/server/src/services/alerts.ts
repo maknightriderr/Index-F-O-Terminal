@@ -34,7 +34,8 @@ import { getLiveIndexQuotes } from './indices.js';
 import { buildOptionChain } from './option-chain.js';
 import { INSTITUTIONAL_SYMBOLS } from './institutional-flow.js';
 import type { MarketDataProvider } from '../providers/interface.js';
-import type { AlertChannel, SignalType } from '@fno/shared';
+import { minutesSinceSessionOpen, SETUP_OPENING_SETTLE_MINUTES } from '@fno/shared';
+import type { AlertChannel, Exchange, SignalType } from '@fno/shared';
 
 const SCAN_INTERVAL_MS = 120_000; // 2 minutes
 const INITIAL_DELAY_MS = 30_000; // let the provider/cache warm up after boot before the first tick
@@ -70,6 +71,19 @@ export function startAlertScanner(provider: MarketDataProvider): void {
   logger.info({ intervalMs: SCAN_INTERVAL_MS }, 'Alert scanner started');
 }
 
+/**
+ * True once the exchange has been trading for a few minutes this session.
+ * Every check below reads live quotes, so outside a session it only sees the
+ * last close frozen in place — and because de-duplication is per IST day,
+ * the first tick after midnight used to re-send the previous session's
+ * digests (IV-rank alerts at 00:00 on a Sunday and on a holiday). The
+ * opening minutes are skipped for the same reason the setup engine skips them.
+ */
+function sessionLive(exchange: Exchange): boolean {
+  const minutes = minutesSinceSessionOpen(exchange);
+  return minutes != null && minutes >= SETUP_OPENING_SETTLE_MINUTES;
+}
+
 async function runAlertScan(provider: MarketDataProvider): Promise<void> {
   await Promise.all([checkOiAndIvAlerts(provider), checkInstitutionalFlowAlerts(provider)]);
 }
@@ -84,7 +98,8 @@ async function checkInstitutionalFlowAlerts(provider: MarketDataProvider): Promi
 
   const today = istDay();
 
-  const vixQuotes = await getLiveIndexQuotes(provider, [{ symbol: 'INDIAVIX', exchange: 'NSE' }]).catch(() => []);
+  const nseLive = sessionLive('NSE');
+  const vixQuotes = nseLive ? await getLiveIndexQuotes(provider, [{ symbol: 'INDIAVIX', exchange: 'NSE' }]).catch(() => []) : [];
   const vix = vixQuotes[0];
   if (vix && (vix.ltp >= VIX_SPIKE_LEVEL || Math.abs(vix.changePercent) >= VIX_SPIKE_DAY_CHANGE_PCT)) {
     await maybeFireDailyAlert({
@@ -99,8 +114,13 @@ async function checkInstitutionalFlowAlerts(provider: MarketDataProvider): Promi
   }
 
   for (const { symbol, exchange } of INSTITUTIONAL_SYMBOLS) {
+    if (!sessionLive(exchange)) continue;
     try {
       const chain = await buildOptionChain(provider, symbol, exchange);
+      // An empty or one-sided chain reads PCR 0 — a data gap, not "extreme
+      // call buildup". It fired exactly that for BANKNIFTY on 8 and 9 Sep.
+      const { callOi, putOi } = chain.positionMomentum;
+      if (!(callOi > 0 && putOi > 0 && chain.pcr > 0)) continue;
       if (chain.pcr >= PCR_EXTREME_HIGH || chain.pcr <= PCR_EXTREME_LOW) {
         await maybeFireDailyAlert({
           dedupeKey: `alert_sent:PCR_EXTREME:${symbol}:${today}`,
@@ -116,6 +136,8 @@ async function checkInstitutionalFlowAlerts(provider: MarketDataProvider): Promi
       logger.warn({ error: err.message, symbol }, 'Alert scan: PCR extreme check unavailable this tick');
     }
   }
+
+  if (!nseLive) return;
 
   let rows;
   try {
@@ -169,7 +191,7 @@ function summarizeDigest(items: string[]): string {
 }
 
 async function checkOiAndIvAlerts(provider: MarketDataProvider): Promise<void> {
-  if (!provider.isAuthenticated()) return;
+  if (!provider.isAuthenticated() || !sessionLive('NSE')) return;
 
   let rows;
   try {

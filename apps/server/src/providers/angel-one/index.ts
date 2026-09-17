@@ -813,7 +813,12 @@ export class AngelOneProvider implements MarketDataProvider {
     // index) regex-extracts to "SENSEX" too, since the parse just stops at
     // the first digit, which merged SENSEX50's futures into SENSEX's
     // futures chain. Only fall back to the regex if `name` is ever absent.
-    if (name) return name.toUpperCase().replace(/-EQ$/, '');
+    // Some newly listed series carry the full contract symbol in `name`
+    // ("360ONE26NOV1000CE"), which leaked 135 contracts into the F&O stock
+    // list as if they were underlyings — those fall through to parsing.
+    if (name && !/\d(CE|PE|FUT)$/i.test(name)) return name.toUpperCase().replace(/-EQ$/, '');
+    const derivative = symbol.match(/^(.+?)\d{2}[A-Z]{3}\d{2}(?:\d+(?:\.\d+)?)?(?:CE|PE|FUT)$/);
+    if (derivative) return derivative[1];
     const match = symbol.match(/^([A-Z]+?)(\d|$)/);
     return match ? match[1] : symbol;
   }

@@ -531,8 +531,17 @@ async function computeMarketBias(
   const atmIvPct = chain ? computeAtmIv(chain) : 0;
   const putLevels = chain ? findTopOiLevels(chain, 'put') : [];
   const callLevels = chain ? findTopOiLevels(chain, 'call') : [];
-  const putWall = putLevels[0] ?? null;
-  const callWall = callLevels[0] ?? null;
+  // Displayed support/resistance must sit on the right side of spot: the
+  // heaviest put strike overall used to be labelled "support" even above
+  // spot (BANKNIFTY 57,500 with spot 56,194 — equal to resistance). These
+  // side-aware ladders are for display and reasoning only; room-to-target
+  // keeps the unfiltered ladders above and applies its own side filter, so
+  // trade logic and its strength thresholds are unchanged.
+  const levelSpot = chain?.spotPrice ?? spot;
+  const supportLevels = chain ? findTopOiLevels(chain, 'put', OI_LEVEL_COUNT, { atOrBelow: levelSpot }) : [];
+  const resistanceLevels = chain ? findTopOiLevels(chain, 'call', OI_LEVEL_COUNT, { atOrAbove: levelSpot }) : [];
+  const putWall = supportLevels[0] ?? null;
+  const callWall = resistanceLevels[0] ?? null;
 
   // --- Option OI flow: buying-vs-writing / covering-vs-unwinding, aggregated ---
   // Rising OI alone is ambiguous on both sides: CALL_WRITING (bearish,
@@ -1219,8 +1228,8 @@ async function computeMarketBias(
       // intraday trading wants the full ladder, not just the top one.
       support: putWall?.strike ?? null,
       resistance: callWall?.strike ?? null,
-      supportLevels: putLevels,
-      resistanceLevels: callLevels,
+      supportLevels,
+      resistanceLevels,
       pivotSupport: pivots?.s1 ?? null,
       pivotResistance: pivots?.r1 ?? null,
       pivotPP: pivots?.pp ?? null,
@@ -2999,12 +3008,15 @@ const OI_LEVEL_COUNT = 3;
 function findTopOiLevels(
   chain: NonNullable<Awaited<ReturnType<typeof buildOptionChain>>>,
   side: 'call' | 'put',
-  count: number = OI_LEVEL_COUNT
+  count: number = OI_LEVEL_COUNT,
+  bounds: { atOrBelow?: number; atOrAbove?: number } = {}
 ): OiLevel[] {
   const levels: Array<{ strike: number; oi: number }> = [];
   for (const s of chain.strikes) {
     const leg = side === 'call' ? s.call : s.put;
     if (!leg || leg.oi <= 0) continue;
+    if (bounds.atOrBelow != null && s.strike > bounds.atOrBelow) continue;
+    if (bounds.atOrAbove != null && s.strike < bounds.atOrAbove) continue;
     levels.push({ strike: s.strike, oi: leg.oi });
   }
   levels.sort((a, b) => b.oi - a.oi);

@@ -179,7 +179,7 @@ export function FnoStocksPage() {
                       {stock.futuresChangeOi >= 0 ? '+' : ''}{formatCompact(stock.futuresChangeOi)}
                     </td>
                     <td className="px-3 py-2.5">
-                      <OIBadge type={stock.oiInterpretation} />
+                      <OIBadge type={stock.oiInterpretation} futuresChangePercent={stock.futuresChangePercent} />
                     </td>
                     <td className={`text-right px-3 py-2.5 tabular-nums ${stock.pcr > 1 ? 'text-emerald-400' : stock.pcr < 0.7 ? 'text-red-400' : 'text-gray-400 light:text-slate-600'}`}>
                       {stock.pcr > 0 ? stock.pcr.toFixed(2) : '—'}

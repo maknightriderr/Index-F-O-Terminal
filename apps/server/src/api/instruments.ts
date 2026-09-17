@@ -65,6 +65,8 @@ export function createInstrumentRoutes(provider: MarketDataProvider): Router {
           i.segment === 'FO' &&
           (i.instrumentType === 'FUTSTK' || i.instrumentType === 'OPTSTK')
         )
+        // Exchange test scrips ("011NSETEST") aren't tradeable underlyings.
+        .filter(i => !/TEST$/i.test(i.underlying || i.symbol))
         .forEach(i => {
           const key = i.underlying || i.symbol;
           if (!fnoStocks.has(key)) {

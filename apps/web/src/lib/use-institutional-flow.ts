@@ -2,12 +2,15 @@
 
 import { useEffect, useState } from 'react';
 import { api } from './api';
-import { MOCK_INSTITUTIONAL_SNAPSHOT } from './mock-data';
 import type { InstitutionalFlowSnapshot, NextDayBias, InstitutionalCommentary, InstitutionalFlowPrediction, PredictionAccuracyStats } from '@fno/shared';
 
 const POLL_INTERVAL_MS = 60000; // matches the backend's own 60s snapshot/bias cache TTL
 
-/** snapshot falls back to realistic mock data (isLive: false) when the backend is unreachable — same pattern as useLiveIndices. */
+/**
+ * Snapshot, next-day bias and commentary are fetched independently — one
+ * slow or failing call (commentary needs the AI key) no longer blanks the
+ * other two. isLive tracks the snapshot. Nothing starts from sample data.
+ */
 export function useInstitutionalFlow(): {
   snapshot: InstitutionalFlowSnapshot | null;
   biases: NextDayBias[];
@@ -15,7 +18,7 @@ export function useInstitutionalFlow(): {
   loading: boolean;
   isLive: boolean;
 } {
-  const [snapshot, setSnapshot] = useState<InstitutionalFlowSnapshot | null>(MOCK_INSTITUTIONAL_SNAPSHOT);
+  const [snapshot, setSnapshot] = useState<InstitutionalFlowSnapshot | null>(null);
   const [biases, setBiases] = useState<NextDayBias[]>([]);
   const [commentary, setCommentary] = useState<InstitutionalCommentary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -24,20 +27,16 @@ export function useInstitutionalFlow(): {
   useEffect(() => {
     let cancelled = false;
     const poll = () => {
-      Promise.all([api.getInstitutionalSnapshot(), api.getNextDayBias(), api.getInstitutionalCommentary()])
-        .then(([snap, bias, comm]) => {
+      Promise.allSettled([api.getInstitutionalSnapshot(), api.getNextDayBias(), api.getInstitutionalCommentary()]).then(
+        ([snap, bias, comm]) => {
           if (cancelled) return;
-          setSnapshot(snap);
-          setBiases(bias);
-          setCommentary(comm);
-          setIsLive(true);
+          if (snap.status === 'fulfilled') setSnapshot(snap.value);
+          if (bias.status === 'fulfilled') setBiases(bias.value);
+          if (comm.status === 'fulfilled') setCommentary(comm.value);
+          setIsLive(snap.status === 'fulfilled');
           setLoading(false);
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setIsLive(false);
-          setLoading(false);
-        });
+        }
+      );
     };
     poll();
     const interval = setInterval(poll, POLL_INTERVAL_MS);

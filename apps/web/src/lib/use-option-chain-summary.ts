@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { api } from './api';
-import { MOCK_OPTION_CHAIN_SUMMARY } from './mock-data';
 import type { OptionChain } from '@fno/shared';
 
 const POLL_INTERVAL_MS = 15000; // backend self-caches the full chain at 10s, this just avoids re-fetching faster than that
@@ -58,15 +57,16 @@ function summarize(chain: OptionChain): OptionChainSummary {
 /**
  * Option-chain summary (Call/Put OI, PCR, Max Pain, ATM IV, highest-OI
  * strikes) for any symbol/expiry — reduces the existing full chain
- * client-side rather than adding a new backend endpoint. Falls back to
- * realistic mock data (isLive: false) when the backend is unreachable.
+ * client-side rather than adding a new backend endpoint. Resets to null
+ * whenever symbol/exchange/expiry changes, so one instrument's figures are
+ * never shown under another's name; never shows sample figures.
  */
 export function useOptionChainSummary(
   symbol = 'NIFTY',
   exchange = 'NSE',
   expiry?: string
 ): { data: OptionChainSummary | null; availableExpiries: string[]; currentExpiry: string | null; isLive: boolean; loading: boolean } {
-  const [data, setData] = useState<OptionChainSummary | null>(MOCK_OPTION_CHAIN_SUMMARY);
+  const [data, setData] = useState<OptionChainSummary | null>(null);
   const [availableExpiries, setAvailableExpiries] = useState<string[]>([]);
   const [currentExpiry, setCurrentExpiry] = useState<string | null>(null);
   const [isLive, setIsLive] = useState(false);
@@ -74,6 +74,9 @@ export function useOptionChainSummary(
 
   useEffect(() => {
     let cancelled = false;
+    setData(null);
+    setIsLive(false);
+    setLoading(true);
 
     const poll = () => {
       api

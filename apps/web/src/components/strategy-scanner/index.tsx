@@ -3,7 +3,7 @@
 import React, { useMemo, useState } from 'react';
 import { useFnoScanner } from '@/lib/use-fno-scanner';
 import { useAssetTabsStore } from '@/stores';
-import { recommendStrategy, type StrategyCategory } from '@/lib/strategy-recommender';
+import { recommendStrategy, STRATEGY_MIN_CONFIDENCE, type StrategyCategory } from '@/lib/strategy-recommender';
 import { formatIndianNumber, formatPercent } from '@fno/shared';
 import type { FnoScannerRow, BiasDirection } from '@fno/shared';
 import { BiasBadge, ScoreBadge } from '@/components/common/badges';
@@ -14,25 +14,16 @@ interface Row {
   row: FnoScannerRow;
   strategy: string;
   category: StrategyCategory;
-  riskProfile: 'DEFINED_RISK' | 'UNDEFINED_RISK';
+  riskProfile: 'DEFINED_RISK';
   rationale: string;
 }
 
-type SortKey = 'symbol' | 'price' | 'changePercent' | 'score' | 'ivRank';
+type SortKey = 'symbol' | 'price' | 'changePercent' | 'score' | 'confidence' | 'ivRank';
 type BiasFilter = 'ALL' | BiasDirection;
-type CategoryFilter = 'ALL' | StrategyCategory;
-
 const BIAS_OPTIONS: Array<{ value: BiasFilter; label: string }> = [
   { value: 'ALL', label: 'All' },
   { value: 'BULLISH', label: 'Bullish' },
   { value: 'BEARISH', label: 'Bearish' },
-  { value: 'NEUTRAL', label: 'Neutral' },
-];
-
-const CATEGORY_OPTIONS: Array<{ value: CategoryFilter; label: string }> = [
-  { value: 'ALL', label: 'All' },
-  { value: 'DIRECTIONAL', label: 'Directional' },
-  { value: 'NEUTRAL', label: 'Premium Selling' },
 ];
 
 export function StrategyScannerPage() {
@@ -40,7 +31,6 @@ export function StrategyScannerPage() {
   const openTab = useAssetTabsStore((s) => s.openTab);
   const [query, setQuery] = useState('');
   const [biasFilter, setBiasFilter] = useState<BiasFilter>('ALL');
-  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('ALL');
   const [sortKey, setSortKey] = useState<SortKey>('score');
   const [sortDesc, setSortDesc] = useState(true);
 
@@ -58,10 +48,11 @@ export function StrategyScannerPage() {
     const q = query.trim().toUpperCase();
     let base = q ? withStrategy.filter((r) => r.row.symbol.includes(q)) : withStrategy;
     if (biasFilter !== 'ALL') base = base.filter((r) => r.row.direction === biasFilter);
-    if (categoryFilter !== 'ALL') base = base.filter((r) => r.category === categoryFilter);
     const sorted = [...base].sort((a, b) => {
-      const av = sortKey === 'symbol' ? a.row.symbol : sortKey === 'price' ? a.row.price : sortKey === 'changePercent' ? a.row.changePercent : sortKey === 'ivRank' ? a.row.ivRank : a.row.score;
-      const bv = sortKey === 'symbol' ? b.row.symbol : sortKey === 'price' ? b.row.price : sortKey === 'changePercent' ? b.row.changePercent : sortKey === 'ivRank' ? b.row.ivRank : b.row.score;
+      const pick = (r: Row) =>
+        sortKey === 'symbol' ? r.row.symbol : sortKey === 'price' ? r.row.price : sortKey === 'changePercent' ? r.row.changePercent : sortKey === 'ivRank' ? r.row.ivRank : sortKey === 'confidence' ? r.row.confidence : r.row.score;
+      const av = pick(a);
+      const bv = pick(b);
       if (av == null && bv == null) return 0;
       if (av == null) return 1;
       if (bv == null) return -1;
@@ -70,7 +61,7 @@ export function StrategyScannerPage() {
     });
     if (sortDesc) sorted.reverse();
     return sorted;
-  }, [withStrategy, query, biasFilter, categoryFilter, sortKey, sortDesc]);
+  }, [withStrategy, query, biasFilter, sortKey, sortDesc]);
 
   const toggleSort = (key: SortKey) => {
     if (key === sortKey) setSortDesc((d) => !d);
@@ -86,8 +77,9 @@ export function StrategyScannerPage() {
         <div>
           <h1 className="text-lg font-bold text-gray-100 light:text-slate-900">Strategy Scanner</h1>
           <p className="text-xs text-gray-400 light:text-slate-600 mt-0.5">
-            A strategy shape for every NSE F&O stock with a clear bias — matched from direction, score, IV Rank, and ATM
-            theta. Stocks with no directional edge and cheap IV are left out — there's no attractive setup either way.
+            An option-buying structure for NSE F&O stocks with a clear lean (confidence {STRATEGY_MIN_CONFIDENCE}+) — matched
+            from direction, IV Rank and ATM theta. Neutral or mixed stocks are left out. An unvalidated heuristic: outcomes
+            aren't tracked, unlike Trade Setups.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -106,7 +98,6 @@ export function StrategyScannerPage() {
 
       <div className="flex items-center flex-wrap gap-4">
         <FilterPills label="Bias" options={BIAS_OPTIONS} value={biasFilter} onChange={setBiasFilter} />
-        <FilterPills label="Type" options={CATEGORY_OPTIONS} value={categoryFilter} onChange={setCategoryFilter} />
       </div>
 
       {!isLive && !loading && (
@@ -120,7 +111,7 @@ export function StrategyScannerPage() {
           <table className="w-full text-xs">
             <tbody>
               {Array.from({ length: 8 }, (_, i) => (
-                <SkeletonTableRow key={i} cols={8} />
+                <SkeletonTableRow key={i} cols={9} />
               ))}
             </tbody>
           </table>
@@ -141,6 +132,7 @@ export function StrategyScannerPage() {
                   <SortTh label="Price" active={sortKey === 'price'} desc={sortDesc} onClick={() => toggleSort('price')} />
                   <SortTh label="Chg%" active={sortKey === 'changePercent'} desc={sortDesc} onClick={() => toggleSort('changePercent')} />
                   <th className="text-center px-3 py-2 font-medium">Bias</th>
+                  <SortTh label="Conf" active={sortKey === 'confidence'} desc={sortDesc} onClick={() => toggleSort('confidence')} />
                   <SortTh label="Score" active={sortKey === 'score'} desc={sortDesc} onClick={() => toggleSort('score')} align="center" />
                   <SortTh label="IV Rank" active={sortKey === 'ivRank'} desc={sortDesc} onClick={() => toggleSort('ivRank')} />
                   <th className="text-left px-3 py-2 pl-6 font-medium">Strategy</th>
@@ -148,7 +140,7 @@ export function StrategyScannerPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(({ row, strategy, category, riskProfile, rationale }) => (
+                {filtered.map(({ row, strategy, rationale }) => (
                   <tr
                     key={row.symbol}
                     onClick={() => openTab(row.symbol, row.exchange)}
@@ -162,6 +154,7 @@ export function StrategyScannerPage() {
                     <td className="text-center px-3 py-2.5">
                       <BiasBadge bias={row.direction} />
                     </td>
+                    <td className="text-right px-3 py-2.5 tabular-nums text-gray-300 light:text-slate-700 whitespace-nowrap">{row.confidence}</td>
                     <td className="text-center px-3 py-2.5">
                       <ScoreBadge score={row.score} />
                     </td>
@@ -170,8 +163,8 @@ export function StrategyScannerPage() {
                     </td>
                     <td className="px-3 py-2.5 pl-6 whitespace-nowrap">
                       <div className="font-semibold text-gray-200 light:text-slate-800">{strategy}</div>
-                      <div className={`text-[10px] mt-0.5 ${riskProfile === 'DEFINED_RISK' ? 'text-cyan-400 light:text-cyan-700' : 'text-amber-400 light:text-amber-700'}`}>
-                        {riskProfile === 'DEFINED_RISK' ? 'Defined risk' : 'Undefined risk'} · {category === 'DIRECTIONAL' ? 'Directional' : 'Premium selling'}
+                      <div className="text-[10px] mt-0.5 text-cyan-400 light:text-cyan-700">
+                        Defined risk · Option buying
                       </div>
                     </td>
                     <td className="px-3 py-2.5 text-gray-400 light:text-slate-600 leading-snug max-w-md">{rationale}</td>

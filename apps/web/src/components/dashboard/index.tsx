@@ -70,10 +70,17 @@ export function Dashboard() {
   const { indices, isLive: indicesLive } = useLiveIndices();
   const { indices: allIndices } = useAllIndices();
   const { rows: fnoRows, isLive: fnoLive, loading: fnoLoading } = useFnoScanner('NSE');
+  // Give the first polls a moment before calling a feed offline, so the
+  // notice doesn't flash on every page load.
+  const [feedGraceOver, setFeedGraceOver] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setFeedGraceOver(true), 12000);
+    return () => clearTimeout(t);
+  }, []);
   const { patterns, loading: patternsLoading } = useChartPatterns();
-  const { data: fiiDii } = useFiiDii();
+  const { data: fiiDii, isLive: fiiDiiLive } = useFiiDii();
   const { data: fiiDiiHistory } = useFiiDiiHistory(20);
-  const { snapshot: sentiment } = useInstitutionalFlow();
+  const { snapshot: sentiment, isLive: sentimentLive } = useInstitutionalFlow();
   const vixQuote = allIndices.find((i) => i.symbol === 'INDIAVIX') ?? null;
   const niftyQuote = indices.find((i) => i.symbol === 'NIFTY') ?? indices[0] ?? null;
   const bankNiftyQuote = indices.find((i) => i.symbol === 'BANKNIFTY') ?? indices[1] ?? null;
@@ -89,7 +96,7 @@ export function Dashboard() {
     setSelectedExpiry(undefined); // reset to nearest expiry whenever the instrument changes
   }, [instrument.symbol]);
 
-  const { data: optionSummary, availableExpiries, currentExpiry } = useOptionChainSummary(instrument.symbol, instrument.exchange, selectedExpiry);
+  const { data: optionSummary, availableExpiries, currentExpiry, isLive: optionLive } = useOptionChainSummary(instrument.symbol, instrument.exchange, selectedExpiry);
 
   // Screener controls
   const [screenerFilter, setScreenerFilter] = useState<ScreenerFilter>('ALL');
@@ -98,7 +105,7 @@ export function Dashboard() {
   const [moversTab, setMoversTab] = useState<MoversTab>('GAINERS');
 
   // Selected instrument's bias — drives both the chart's header stats and the intelligence panel
-  const { bias, score } = useMarketBias(instrument.symbol, instrument.exchange);
+  const { bias, score, isLive: biasLive } = useMarketBias(instrument.symbol, instrument.exchange);
   const instrumentQuote = allIndices.find((i) => i.symbol === instrument.symbol) ?? null;
   const instrumentPrice = instrumentQuote?.ltp ?? (bias.inputs.spotPrice as number | undefined) ?? null;
   const supportLevels = (bias.inputs.supportLevels as Array<{ strike: number; strengthPct: number }> | undefined) ?? [];
@@ -113,13 +120,14 @@ export function Dashboard() {
     const advPercent = Math.round((advances / total) * 100);
     const decPercent = Math.round((declines / total) * 100);
     const unchPercent = Math.max(0, 100 - advPercent - decPercent);
-    const avgPcr = fnoRows.length ? fnoRows.reduce((acc, r) => acc + (r.pcr || 1), 0) / fnoRows.length : 1.12;
+    const pcrRows = fnoRows.filter((r) => r.pcr > 0);
+    const avgPcr = pcrRows.length ? pcrRows.reduce((acc, r) => acc + r.pcr, 0) / pcrRows.length : null;
     const avgSpread = fnoRows.length
       ? fnoRows.filter((r) => r.atmSpreadPct != null).reduce((acc, r) => acc + (r.atmSpreadPct ?? 0), 0) /
         Math.max(1, fnoRows.filter((r) => r.atmSpreadPct != null).length)
       : null;
 
-    return { advances, declines, unchanged, total, advPercent, decPercent, unchPercent, avgPcr: avgPcr.toFixed(2), avgSpread, isBullishBias: advances >= declines };
+    return { advances, declines, unchanged, total, advPercent, decPercent, unchPercent, avgPcr: avgPcr != null ? avgPcr.toFixed(2) : null, avgSpread, isBullishBias: advances >= declines };
   }, [fnoRows]);
 
   // Filtered Screener Rows
@@ -167,11 +175,21 @@ export function Dashboard() {
   // actual outage during market hours. Distinguish the two.
   const marketOpen = isMarketOpen('NSE');
   const marketClosed = !marketOpen;
+  // Every panel shows "—" rather than sample figures when its feed is down,
+  // so the notice names exactly which ones are waiting.
+  const offlineFeeds = [
+    !indicesLive && 'index quotes',
+    !fnoLive && 'F&O scanner',
+    !biasLive && `${instrument.label} bias`,
+    !optionLive && `${instrument.label} option chain`,
+    !fiiDiiLive && 'FII/DII',
+    !sentimentLive && 'sentiment',
+  ].filter((x): x is string => !!x);
 
   return (
     <div className="p-4 space-y-4 min-h-full">
       {/* Offline / Mock Notice */}
-      {!indicesLive && !fnoLive && (
+      {feedGraceOver && offlineFeeds.length > 0 && (
         <div className={`rounded-xl px-4 py-2.5 text-xs font-medium animate-slide-in backdrop-blur-sm flex items-center justify-between border ${
           marketClosed
             ? 'bg-gray-800/40 light:bg-slate-100 border-gray-700/40 light:border-slate-200 text-gray-400 light:text-slate-600'
@@ -181,12 +199,12 @@ export function Dashboard() {
             <span className="text-sm">{marketClosed ? '🌙' : '⚠️'}</span>
             <span>
               {marketClosed
-                ? 'Markets are closed — live feeds resume next session. Showing simulated placeholder data.'
-                : 'Live broker connection offline — displaying simulated real-time intelligence feeds.'}
+                ? `Markets are closed — waiting on: ${offlineFeeds.join(', ')}. Those panels show "—"; nothing here is sample data.`
+                : `Live data unavailable for: ${offlineFeeds.join(', ')}. Those panels show "—" until it returns; nothing here is sample data.`}
             </span>
           </div>
           <span className={`text-[11px] font-mono ${marketClosed ? 'text-gray-400 light:text-slate-600' : 'text-amber-400/70'}`}>
-            {marketClosed ? 'Market Closed' : 'Simulated Market Feeds Active'}
+            {marketClosed ? 'Market Closed' : `${offlineFeeds.length} feed${offlineFeeds.length === 1 ? '' : 's'} offline`}
           </span>
         </div>
       )}
@@ -269,7 +287,9 @@ export function Dashboard() {
                 <span className="tabular-nums">VWAP {bias.inputs.vwap != null ? formatIndianNumber(bias.inputs.vwap as number, 0) : '—'}</span>
                 <span className="text-emerald-400 tabular-nums">Support {bias.inputs.support != null ? formatIndianNumber(bias.inputs.support as number, 0) : '—'}</span>
                 <span className="text-red-400 tabular-nums">Resistance {bias.inputs.resistance != null ? formatIndianNumber(bias.inputs.resistance as number, 0) : '—'}</span>
-                <span className="px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-500 light:text-indigo-700 font-semibold">{bias.regime.replace(/_/g, ' ')}</span>
+                {biasLive && (
+                  <span className="px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-500 light:text-indigo-700 font-semibold">{bias.regime.replace(/_/g, ' ')}</span>
+                )}
               </div>
             </div>
 
@@ -297,7 +317,7 @@ export function Dashboard() {
           />
         </div>
 
-        <MarketIntelligencePanel bias={bias} score={score} sentiment={sentiment} fiiDii={fiiDii} breadth={breadth} />
+        <MarketIntelligencePanel bias={bias} score={score} biasLive={biasLive} sentiment={sentiment} fiiDii={fiiDii} breadth={breadth} />
       </div>
 
       {/* ============================================================
@@ -393,7 +413,7 @@ export function Dashboard() {
           ============================================================ */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <WatchlistPanel allIndices={allIndices} fnoRows={fnoRows} />
-        <RiskSentimentCard vix={vixQuote} breadth={breadth} bias={bias} sentiment={sentiment} />
+        <RiskSentimentCard vix={vixQuote} breadth={breadth} bias={bias} biasLive={biasLive} sentiment={sentiment} />
       </div>
 
       {/* ============================================================
@@ -522,7 +542,7 @@ export function Dashboard() {
                       <td className={`text-right px-3 py-2.5 tabular-nums font-bold ${stock.futuresChangeOi >= 0 ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700'}`}>
                         {stock.futuresChangeOi >= 0 ? '+' : ''}{formatCompact(stock.futuresChangeOi)}
                       </td>
-                      <td className="px-3 py-2.5"><OIBadge type={stock.oiInterpretation} /></td>
+                      <td className="px-3 py-2.5"><OIBadge type={stock.oiInterpretation} futuresChangePercent={stock.futuresChangePercent} /></td>
                       <td className={`text-right px-3 py-2.5 tabular-nums font-semibold ${stock.pcr > 1.1 ? 'text-emerald-400 light:text-emerald-700' : stock.pcr < 0.8 ? 'text-red-400 light:text-red-700' : 'text-gray-400 light:text-slate-600'}`}>
                         {stock.pcr > 0 ? stock.pcr.toFixed(2) : '—'}
                       </td>
@@ -596,14 +616,19 @@ function SentimentCard({ score, label }: { score: number | null; label: string |
 // MARKET INTELLIGENCE PANEL
 // ============================================================
 
-function MarketIntelligencePanel({ bias, score, sentiment, fiiDii, breadth }: any) {
+function MarketIntelligencePanel({ bias, score, biasLive, sentiment, fiiDii, breadth }: any) {
   return (
     <div className="card-premium p-4">
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-sm font-bold text-gray-100 light:text-slate-900">Market Intelligence</h3>
-        <ScoreBadge score={score.score} />
+        {biasLive && <ScoreBadge score={score.score} />}
       </div>
 
+      {!biasLive ? (
+        <div className="text-center py-6 mb-3 border-b border-gray-800/40 light:border-slate-200 text-xs text-gray-400 light:text-slate-600">
+          Waiting for the live bias read…
+        </div>
+      ) : (
       <div className="text-center py-3 mb-3 border-b border-gray-800/40 light:border-slate-200">
         <BiasBadge bias={bias.direction} large />
         <div className="mt-2">
@@ -616,6 +641,7 @@ function MarketIntelligencePanel({ bias, score, sentiment, fiiDii, breadth }: an
           <div className="text-[11px] text-gray-400 light:text-slate-600 mt-1 tabular-nums">{bias.confidence}% Confidence</div>
         </div>
       </div>
+      )}
 
       <div className="grid grid-cols-2 gap-2 text-xs">
         <StatTile label="FII Flow" value={fiiDii ? `${fiiDii.fii.netValue >= 0 ? '+' : ''}₹${fiiDii.fii.netValue.toFixed(0)} Cr` : '—'} positive={fiiDii ? fiiDii.fii.netValue >= 0 : undefined} />
@@ -759,22 +785,25 @@ function OptionsIntelligence({
 // RISK & SENTIMENT
 // ============================================================
 
-function RiskSentimentCard({ vix, breadth, bias, sentiment }: any) {
-  const volatilityScore = vix ? Math.max(0, Math.min(100, 100 - (vix.ltp - 10) * 4)) : 50;
-  const liquidityScore = breadth.avgSpread != null ? Math.max(0, Math.min(100, 100 - breadth.avgSpread * 15)) : 50;
-  const breadthScore = breadth.advPercent;
-  const momentumScore = bias.confidence;
-  const institutionalScore = sentiment?.institutionalConvictionScore ?? 50;
+function RiskSentimentCard({ vix, breadth, bias, biasLive, sentiment }: any) {
+  // A missing input is left out of the average and drawn empty — it used to
+  // count as a neutral 50, which made a dead feed look like a calm market.
+  const volatilityScore: number | null = vix ? Math.max(0, Math.min(100, 100 - (vix.ltp - 10) * 4)) : null;
+  const liquidityScore: number | null = breadth.avgSpread != null ? Math.max(0, Math.min(100, 100 - breadth.avgSpread * 15)) : null;
+  const breadthScore: number | null = breadth.advances + breadth.declines > 0 ? breadth.advPercent : null;
+  const momentumScore: number | null = biasLive ? bias.confidence : null;
+  const institutionalScore: number | null = sentiment?.institutionalConvictionScore ?? null;
 
-  const overall = (volatilityScore + liquidityScore + breadthScore + momentumScore + institutionalScore) / 5;
-  const riskLevel = overall >= 65 ? 'Low' : overall >= 40 ? 'Medium' : 'High';
+  const known = [volatilityScore, liquidityScore, breadthScore, momentumScore, institutionalScore].filter((v): v is number => v != null);
+  const overall = known.length >= 3 ? known.reduce((a, b) => a + b, 0) / known.length : null;
+  const riskLevel = overall == null ? '—' : overall >= 65 ? 'Low' : overall >= 40 ? 'Medium' : 'High';
   const riskColor = riskLevel === 'Low' ? 'text-emerald-400 light:text-emerald-700' : riskLevel === 'Medium' ? 'text-amber-400 light:text-amber-700' : 'text-red-400 light:text-red-700';
 
-  const rows: Array<{ label: string; value: number; note: string }> = [
+  const rows: Array<{ label: string; value: number | null; note: string }> = [
     { label: 'Volatility', value: volatilityScore, note: vix ? `VIX ${vix.ltp.toFixed(1)}` : '—' },
     { label: 'Liquidity', value: liquidityScore, note: breadth.avgSpread != null ? `${breadth.avgSpread.toFixed(1)}% avg spread` : '—' },
-    { label: 'Breadth', value: breadthScore, note: `${breadth.advances} adv / ${breadth.declines} dec` },
-    { label: 'Momentum', value: momentumScore, note: `${bias.direction} ${bias.confidence}%` },
+    { label: 'Breadth', value: breadthScore, note: breadthScore != null ? `${breadth.advances} adv / ${breadth.declines} dec` : '—' },
+    { label: 'Momentum', value: momentumScore, note: biasLive ? `${bias.direction} ${bias.confidence}%` : 'Awaiting data' },
     { label: 'Institutional Flow', value: institutionalScore, note: sentiment ? 'FII/DII conviction' : 'Awaiting data' },
   ];
 
@@ -793,8 +822,8 @@ function RiskSentimentCard({ vix, breadth, bias, sentiment }: any) {
             <span className="text-[11px] font-semibold text-gray-400 light:text-slate-600 w-32 shrink-0">{r.label}</span>
             <div className="flex-1 h-2 bg-gray-900/80 light:bg-slate-200 rounded-full overflow-hidden">
               <div
-                className={`h-full rounded-full bar-animated ${r.value >= 65 ? 'bg-emerald-400' : r.value >= 40 ? 'bg-amber-400' : 'bg-red-400'}`}
-                style={{ width: `${Math.round(r.value)}%` }}
+                className={`h-full rounded-full bar-animated ${r.value == null ? '' : r.value >= 65 ? 'bg-emerald-400' : r.value >= 40 ? 'bg-amber-400' : 'bg-red-400'}`}
+                style={{ width: `${r.value == null ? 0 : Math.round(r.value)}%` }}
               />
             </div>
             <span className="text-[10px] text-gray-400 light:text-slate-600 w-28 text-right shrink-0 tabular-nums">{r.note}</span>

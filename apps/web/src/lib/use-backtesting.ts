@@ -24,7 +24,7 @@ export function useBacktesting(
   useEffect(() => {
     let cancelled = false;
     const poll = () => {
-      Promise.all([api.getWinRateAnalytics(mode, since), api.getTradeSetupHistory(200)])
+      Promise.all([api.getWinRateAnalytics(mode, since), api.getTradeSetupHistory(2000)])
         .then(([winRate, setups]) => {
           if (cancelled) return;
           setAnalytics(winRate);

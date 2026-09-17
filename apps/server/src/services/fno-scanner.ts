@@ -16,7 +16,7 @@
 // to ~40 quote requests instead of thousands.
 // ============================================================
 
-import { CM_SEGMENT, FO_SEGMENT, RISK_FREE_RATE, KNOWN_INDEX_TOKENS, getATMStrike, calculateDTE, yearsToExpiry, isExpiryActive } from '@fno/shared';
+import { CM_SEGMENT, FO_SEGMENT, RISK_FREE_RATE, KNOWN_INDEX_TOKENS, getATMStrike, yearsToExpiry, isExpiryActive } from '@fno/shared';
 import type { Exchange, Instrument, OIInterpretation, BiasDirection, FnoScannerRow, Greeks } from '@fno/shared';
 import { classifyFuturesOI, calculateGreeksFromPrice } from '@fno/analytics';
 import type { MarketDataProvider } from '../providers/interface.js';
@@ -153,11 +153,12 @@ export async function scanFnoUniverse(provider: MarketDataProvider, exchange: Ex
       pcr = callOi > 0 ? putOi / callOi : 0;
 
       const atmEntry = pick.strikes.find((s) => s.strike === pick.atmStrike);
-      const dte = calculateDTE(pick.expiry);
-      const tte = yearsToExpiry(pick.expiry);
+      // Measured to the expiry session's close, so expiry day still has a
+      // solvable IV (it read 0 all session when this was cut off at midnight).
+      const tte = yearsToExpiry(pick.expiry, exchange);
       let callGreeks: Greeks | null = null;
       let putGreeks: Greeks | null = null;
-      if (dte > 0) {
+      if (tte > 0) {
         for (const [token, type] of [[atmEntry?.call, 'CE'], [atmEntry?.put, 'PE']] as const) {
           if (!token) continue;
           const q = optByToken.get(token);
@@ -207,7 +208,7 @@ export async function scanFnoUniverse(provider: MarketDataProvider, exchange: Ex
     }
 
     const ivSkew = ceIv > 0 && peIv > 0 ? ceIv - peIv : 0;
-    const { direction, confidence, score } = lightweightBias(changePercent, oiInterpretation, pcr);
+    const { direction, confidence, score } = lightweightBias(changePercent, oiInterpretation, futuresChangeOiPercent, pcr);
 
     if (atmIv > 0) ivInputs.push({ symbol: stock.symbol, atmIv, ceIv, peIv, ivSkew });
 
@@ -216,6 +217,7 @@ export async function scanFnoUniverse(provider: MarketDataProvider, exchange: Ex
       exchange,
       price: eqQuote.ltp,
       changePercent,
+      futuresChangePercent: futChangePercent,
       volume: eqQuote.volume,
       futuresOi,
       futuresChangeOi,
@@ -298,32 +300,57 @@ function nearestExpiryInstrument(instruments: Instrument[]): Instrument | undefi
 // OI buildup, PCR) — no RSI/VWAP/Supertrend, which would need historical
 // candles per stock. See the file header for why.
 
+const LIGHT_PRICE_DEADBAND_PCT = 0.3;
+const LIGHT_PRICE_FULL_PCT = 2;
+const LIGHT_OI_FULL_PCT = 3;
+const LIGHT_PCR_BULL = 1.0;
+const LIGHT_PCR_BEAR = 0.6;
+const LIGHT_DIRECTION_MIN = 0.12;
+
 function lightweightBias(
   changePercent: number,
   oiInterpretation: OIInterpretation,
+  futuresChangeOiPercent: number,
   pcr: number
 ): { direction: BiasDirection; confidence: number; score: number } {
-  const priceVote = changePercent > 0.3 ? 1 : changePercent < -0.3 ? -1 : 0;
-  const oiVote =
+  // Three graded reads instead of three ±1 votes: a +0.31% day and a +4% day
+  // used to count the same, so confidence could only be 33, 67 or 100 and a
+  // third of the universe read "100%". Each read is scaled to [-1, 1] by how
+  // decisive it is, then weighted.
+  const clamp = (v: number) => Math.max(-1, Math.min(1, v));
+  const priceRead = Math.abs(changePercent) < LIGHT_PRICE_DEADBAND_PCT ? 0 : clamp(changePercent / LIGHT_PRICE_FULL_PCT);
+  const oiSign =
     oiInterpretation === 'LONG_BUILDUP' || oiInterpretation === 'SHORT_COVERING'
       ? 1
       : oiInterpretation === 'SHORT_BUILDUP' || oiInterpretation === 'LONG_UNWINDING'
       ? -1
       : 0;
-  const pcrVote = pcr > 1.1 ? 1 : pcr < 0.85 ? -1 : 0;
+  const oiRead = oiSign * Math.min(1, Math.abs(futuresChangeOiPercent) / LIGHT_OI_FULL_PCT);
+  // Near-ATM stock PCR: heavy put OI (writers defending) leans bullish, heavy
+  // call OI leans bearish. Stock chains sit lower than index chains, so the
+  // bands are wider than the index 1.1/0.85 that almost never fired here.
+  const pcrRead = pcr <= 0 ? 0 : pcr >= LIGHT_PCR_BULL ? Math.min(1, (pcr - LIGHT_PCR_BULL) / 0.5 + 0.5) : pcr <= LIGHT_PCR_BEAR ? -Math.min(1, (LIGHT_PCR_BEAR - pcr) / 0.3 + 0.5) : 0;
 
-  const votes = [priceVote, oiVote, pcrVote];
-  const sum = votes.reduce((a, b) => a + b, 0);
-  const direction: BiasDirection = sum > 0 ? 'BULLISH' : sum < 0 ? 'BEARISH' : 'NEUTRAL';
+  const reads = [
+    { weight: 0.4, value: priceRead },
+    { weight: 0.4, value: oiRead },
+    { weight: 0.2, value: pcrRead },
+  ];
+  const net = reads.reduce((a, r) => a + r.weight * r.value, 0);
+  const direction: BiasDirection = net >= LIGHT_DIRECTION_MIN ? 'BULLISH' : net <= -LIGHT_DIRECTION_MIN ? 'BEARISH' : 'NEUTRAL';
 
-  const agreement =
-    direction === 'BULLISH'
-      ? votes.filter((v) => v === 1).length
-      : direction === 'BEARISH'
-      ? votes.filter((v) => v === -1).length
-      : votes.filter((v) => v === 0).length;
-  const confidence = Math.round((agreement / votes.length) * 100);
-  const score = Math.max(5, Math.min(95, Math.round(50 + sum * 15)));
+  const evidence = reads.reduce((a, r) => a + r.weight * Math.abs(r.value), 0); // 0..1
+  let confidence: number;
+  if (direction === 'NEUTRAL') {
+    confidence = Math.round(100 * (1 - evidence));
+  } else {
+    const sign = direction === 'BULLISH' ? 1 : -1;
+    const agree = reads.reduce((a, r) => a + (Math.sign(r.value) === sign ? r.weight * Math.abs(r.value) : 0), 0);
+    const share = evidence > 0 ? agree / evidence : 0;
+    confidence = Math.round(100 * share * (0.5 + 0.5 * evidence));
+  }
+  confidence = Math.max(5, Math.min(95, confidence));
+  const score = Math.max(5, Math.min(95, Math.round(50 + net * 45)));
 
   return { direction, confidence, score };
 }

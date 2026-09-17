@@ -3,28 +3,29 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
 import { recordPrice } from './price-history-store';
-import { MOCK_FNO_SCANNER_ROWS } from './mock-data';
 import type { FnoScannerRow } from '@fno/shared';
 
 const POLL_INTERVAL_MS = 60000;
 
-/** Live F&O stock universe scanner — server caches a full scan for a few minutes, with rich fallback if backend is offline. */
+/** Live F&O stock universe scanner — server caches a full scan for a few minutes. Starts empty; no sample rows (they used to seed fake points into every sparkline). */
 export function useFnoScanner(exchange = 'NSE'): { rows: FnoScannerRow[]; isLive: boolean; loading: boolean } {
-  const [rows, setRows] = useState<FnoScannerRow[]>(MOCK_FNO_SCANNER_ROWS);
+  const [rows, setRows] = useState<FnoScannerRow[]>([]);
   const [isLive, setIsLive] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
-
-    // Seed mock prices into price history store for sparklines
-    for (const r of MOCK_FNO_SCANNER_ROWS) recordPrice(r.symbol, r.price);
 
     const poll = () => {
       api
         .getFnoScanner(exchange)
         .then((data) => {
-          if (cancelled || !data || data.length === 0) return;
+          if (cancelled) return;
+          if (!data || data.length === 0) {
+            setIsLive(false);
+            setLoading(false);
+            return;
+          }
           setRows(data);
           setIsLive(true);
           setLoading(false);
