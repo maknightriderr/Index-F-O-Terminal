@@ -432,6 +432,7 @@ async function computeIvRanks(inputs: IvInput[]): Promise<Map<string, IvRankResu
 
   try {
     await repairIvHistoryClockOnce();
+    await dedupeIvHistoryOnce();
 
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
     const symbols = inputs.map((r) => r.symbol);
@@ -500,6 +501,7 @@ async function computeIvRanks(inputs: IvInput[]): Promise<Map<string, IvRankResu
 // moved back to the previous trading day when that's a holiday.
 const IV_CLOCK_FIX_AT = Date.parse('2026-09-17T14:20:00+05:30');
 const IV_HISTORY_REPAIR_KEY = 'iv_history:clock_repaired:v1';
+const IV_HISTORY_DEDUPE_KEY = 'iv_history:deduped:v1';
 let ivRepair: Promise<void> | null = null;
 
 function repairIvHistoryClockOnce(): Promise<void> {
@@ -510,6 +512,52 @@ function repairIvHistoryClockOnce(): Promise<void> {
     });
   }
   return ivRepair;
+}
+
+let ivDedupe: Promise<void> | null = null;
+
+function dedupeIvHistoryOnce(): Promise<void> {
+  if (!ivDedupe) {
+    ivDedupe = dedupeIvHistory().catch((err: any) => {
+      logger.warn({ error: err.message }, "IV history dedupe failed — will retry on the next scan");
+      ivDedupe = null;
+    });
+  }
+  return ivDedupe;
+}
+
+/**
+ * IV Rank wants ONE sample per stock per trading day. The "already sampled
+ * today" guard compared the database's UTC date against an IST date string,
+ * so between midnight and 05:30 IST every scan re-inserted the whole universe
+ * — about 23,000 rows a day, 264,202 in total by 17 Sep. That filled the
+ * Postgres volume (which took the database down) and, worse, made IV Rank a
+ * percentile over intraday noise instead of daily samples.
+ *
+ * The insert path is fixed (IST dates, and only 30+ minutes into a session).
+ * This clears the backlog once: keep the last sample of each IST day per
+ * symbol — closest to the close, the most settled read — and drop the rest.
+ */
+async function dedupeIvHistory(): Promise<void> {
+  if (await redis.get(IV_HISTORY_DEDUPE_KEY)) return;
+
+  const before = await sql<{ n: string }[]>`SELECT COUNT(*) AS n FROM iv_history`;
+  const deleted = await sql`
+    DELETE FROM iv_history a
+    USING iv_history b
+    WHERE a.symbol = b.symbol
+      AND (a.time AT TIME ZONE 'Asia/Kolkata')::date = (b.time AT TIME ZONE 'Asia/Kolkata')::date
+      AND a.time < b.time
+  `;
+  const after = await sql<{ n: string }[]>`SELECT COUNT(*) AS n FROM iv_history`;
+  // Plain VACUUM (no FULL): returns the space for reuse without locking the table.
+  await sql`VACUUM (ANALYZE) iv_history`.catch((err: any) => logger.warn({ error: err.message }, "IV history vacuum skipped"));
+
+  await redis.set(IV_HISTORY_DEDUPE_KEY, String(Date.now()));
+  logger.info(
+    { before: Number(before[0]?.n ?? 0), deleted: deleted.count, after: Number(after[0]?.n ?? 0) },
+    "IV history deduped to one sample per stock per trading day"
+  );
 }
 
 async function repairIvHistoryClock(): Promise<void> {
