@@ -40,6 +40,7 @@ import { createFiiDiiRoutes } from './api/fii-dii.js';
 import { startFiiDiiTracker } from './services/fii-dii.js';
 import { startOiCloseSnapshot } from './services/oi-close-snapshot.js';
 import { startCacheWarmer } from './services/cache-warmer.js';
+import { startPositionalStockScan } from './services/positional-stock-scan.js';
 
 // --- Initialize Provider + Subscription Manager ---
 
@@ -239,6 +240,7 @@ startAbandonedSetupSweep();
 startOiCloseSnapshot(provider);
 startCacheWarmer(provider);
 startStrategyTracker(provider);
+startPositionalStockScan(provider);
 startHolidayCalendarCheck();
 
 setInterval(() => {
