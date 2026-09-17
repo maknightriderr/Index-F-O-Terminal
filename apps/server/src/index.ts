@@ -108,8 +108,27 @@ app.use('/api/fii-dii', createFiiDiiRoutes());
 
 // --- Health Check ---
 
+// A probe that can't answer IS the answer. When the Postgres volume filled up
+// on 17 Sep the database stopped accepting connections, pingDb() sat on a
+// connect timeout, and /api/health hung for 30s+ instead of reporting the
+// outage — so the System Health page showed nothing at the one moment it
+// mattered.
+const HEALTH_PROBE_TIMEOUT_MS = 3000;
+
+function withProbeTimeout<T extends { healthy: boolean; error?: string }>(probe: Promise<T>, label: string): Promise<T | { healthy: false; error: string }> {
+  return Promise.race([
+    probe.catch((err: any) => ({ healthy: false as const, error: err?.message ?? String(err) })),
+    new Promise<{ healthy: false; error: string }>((resolve) =>
+      setTimeout(() => resolve({ healthy: false, error: `${label} did not respond within ${HEALTH_PROBE_TIMEOUT_MS}ms` }), HEALTH_PROBE_TIMEOUT_MS).unref()
+    ),
+  ]);
+}
+
 app.get('/api/health', async (_req, res) => {
-  const [redisHealth, dbHealth] = await Promise.all([pingRedis(), pingDb()]);
+  const [redisHealth, dbHealth] = await Promise.all([
+    withProbeTimeout(pingRedis(), 'Redis'),
+    withProbeTimeout(pingDb(), 'Database'),
+  ]);
   const wsStatus = subscriptionManager.getStatus();
 
   const services = {

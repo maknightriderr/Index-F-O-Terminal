@@ -225,8 +225,12 @@ export async function getTradeSetupHistory(limit = HISTORY_LIMIT): Promise<Trade
     `;
     return rows.map(toTradeSetupRecord);
   } catch (err: any) {
+    // Rethrow: an empty list here is indistinguishable from "you have no
+    // trade setups". With the database down on 17 Sep the Backtesting page
+    // reported a clean 0 trades, 0 wins — the page already shows
+    // "Unreachable" when the request fails, so let it.
     logger.error({ error: err.message }, 'Backtesting: trade setup history fetch failed');
-    return [];
+    throw err;
   }
 }
 
