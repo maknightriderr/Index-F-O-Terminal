@@ -228,15 +228,20 @@ async function buildOptionChainUncached(
   const pricingSpotNow = useForward ? forwardNow * Math.exp(-RISK_FREE_RATE * tteAtQuote) : spotPrice;
   const pricingSpotPrev = useForward ? forwardPrev * Math.exp(-RISK_FREE_RATE * tteAtPrevClose) : spotClose;
 
+  // Per-leg inputs the expiry-session adjustment below needs again.
+  const pressureInputs = new Map<string, { prevPremium: number; prevIv: number; ltp: number }>();
+
   const buildLeg = (inst: Instrument, strike: number, optionType: OptionType): OptionChainLeg => {
     const quote = quoteByToken.get(inst.token);
     const broker = greeksByKey.get(`${strike}:${optionType}`);
     const oiRead = changeOiByToken.get(inst.token);
     const changeOi = oiRead?.changeOi ?? 0;
-    const pressurePct =
+    const pressure =
       quote && pricingSpotPrev > 0
         ? ivPressure(quote.close, quote.ltp, pricingSpotPrev, pricingSpotNow, strike, optionType, tteAtPrevClose, tteAtQuote)
         : null;
+    const pressurePct = pressure?.pct ?? null;
+    if (pressure && quote) pressureInputs.set(inst.token, { prevPremium: quote.close, prevIv: pressure.prevIv, ltp: quote.ltp });
     // Same self-computed % change as underlyingChangePercent above — this
     // comment previously referred to a field that didn't actually exist,
     // which is how the chain ended up with no day-scale reading of the
@@ -324,6 +329,53 @@ async function buildOptionChainUncached(
       put,
     };
   });
+
+  // Expiry session: yesterday's IV can't price the last hours — implied vol
+  // per unit of remaining time rises into the close — so every leg sits above
+  // its "fair" repricing and calls and puts ALL read as bought (17 Sep:
+  // SENSEX 19 call-buying and 22 put-buying legs at once). Take out that
+  // chain-wide IV shift: the median change in IV points across the near-ATM
+  // legs on both sides, added back to each leg's previous-close IV before
+  // repricing. Measured in vol points and repriced per strike, so it carries
+  // across moneyness (a flat % shift over-corrected wings into "writing").
+  // Other days keep the absolute read: a chain-wide IV drop there is real
+  // premium selling, not a model artefact.
+  if (dte === 0 && tteAtQuote > 0) {
+    const legsWithInputs = (s: OptionChainStrike) =>
+      [
+        [s.call, 'CE'],
+        [s.put, 'PE'],
+      ] as const;
+    const shifts = strikes
+      .slice()
+      .sort((a, b) => Math.abs(a.strike - atmStrike) - Math.abs(b.strike - atmStrike))
+      .slice(0, PARITY_STRIKES)
+      .flatMap((st) =>
+        legsWithInputs(st).map(([leg]) => {
+          const inputs = leg ? pressureInputs.get(leg.token) : undefined;
+          return leg && inputs && leg.iv > 0 ? leg.iv / 100 - inputs.prevIv : null;
+        })
+      )
+      .filter((v): v is number => v != null)
+      .sort((a, b) => a - b);
+    if (shifts.length >= 4) {
+      const mid = Math.floor(shifts.length / 2);
+      const commonShift = shifts.length % 2 === 1 ? shifts[mid] : (shifts[mid - 1] + shifts[mid]) / 2;
+      for (const st of strikes) {
+        for (const [leg, optionType] of legsWithInputs(st)) {
+          const inputs = leg ? pressureInputs.get(leg.token) : undefined;
+          if (!leg || !inputs) continue;
+          const iv = inputs.prevIv + commonShift;
+          if (!(iv > 0)) continue;
+          const fair = blackScholesPrice({ spotPrice: pricingSpotNow, strikePrice: st.strike, timeToExpiry: tteAtQuote, riskFreeRate: RISK_FREE_RATE, iv, optionType });
+          if (!(fair > 0)) continue;
+          const adjusted = ((inputs.ltp - fair) / inputs.prevPremium) * 100;
+          leg.ivPressurePct = Math.round(adjusted * 100) / 100;
+          leg.oiInterpretation = classifyOptionOI({ priceChange: adjusted, oiChange: leg.changeOi }, optionType, IV_PRESSURE_MIN_PCT);
+        }
+      }
+    }
+  }
 
   const pcrDetail = calculatePCR(strikes, spotPrice);
   const maxPainDetail = calculateMaxPain(strikes, spotPrice, underlying, expiry);
@@ -428,13 +480,13 @@ function ivPressure(
   optionType: OptionType,
   tteAtPrevClose: number,
   tteNow: number
-): number | null {
+): { pct: number; prevIv: number } | null {
   if (!(prevPremium >= MIN_MODELLABLE_PREMIUM) || !(ltp > 0) || !(spotPrev > 0) || !(tteNow > 0)) return null;
   const prevIv = calculateIV(prevPremium, spotPrev, strike, tteAtPrevClose, RISK_FREE_RATE, optionType);
   if (!(prevIv > 0)) return null;
   const fairNow = blackScholesPrice({ spotPrice: spotNow, strikePrice: strike, timeToExpiry: tteNow, riskFreeRate: RISK_FREE_RATE, iv: prevIv, optionType });
   if (!(fairNow > 0)) return null;
-  return ((ltp - fairNow) / prevPremium) * 100;
+  return { pct: ((ltp - fairNow) / prevPremium) * 100, prevIv };
 }
 
 function sliceStrikesAroundAtm(strikes: OptionChainStrike[], atmStrike: number, range: number): OptionChainStrike[] {
