@@ -131,6 +131,10 @@ export function createMarketDataRoutes(provider: MarketDataProvider): Router {
       const { token } = req.params;
       const exchange = (req.query.exchange as string) || 'NSE';
       const interval = (req.query.interval as CandleInterval) || 'ONE_DAY';
+      // Derivative contracts live on NFO/BFO/MCX, not the cash segment — without
+      // this an option or futures token silently resolves against the equity
+      // segment and comes back empty.
+      const segment = req.query.segment === 'FO' ? ('FO' as const) : undefined;
       const fromDate = req.query.from as string;
       const toDate = req.query.to as string;
 
@@ -146,9 +150,9 @@ export function createMarketDataRoutes(provider: MarketDataProvider): Router {
       // rate-limited endpoint. A short cache collapses repeat requests for
       // the same range; empty results aren't cached so a failure can retry.
       const data = await cached(
-        `hist-api:${exchange}:${token}:${interval}:${fromDate}:${toDate}`,
+        `hist-api:${exchange}:${segment ?? 'CM'}:${token}:${interval}:${fromDate}:${toDate}`,
         60,
-        () => provider.getHistoricalData({ exchange: exchange as any, token, interval, fromDate, toDate }),
+        () => provider.getHistoricalData({ exchange: exchange as any, segment, token, interval, fromDate, toDate }),
         (candles) => candles.length > 0
       );
 
