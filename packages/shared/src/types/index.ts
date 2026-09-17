@@ -338,6 +338,9 @@ export interface TradeSetup {
   dte?: number;
   /** Estimated round-trip trading cost as % of entry premium (spread + slippage allowance + statutory charges + brokerage for one lot) — what the reward:risk gate charged this setup. */
   estimatedCostPct?: number;
+  /** How far the stop sits from entry in the underlying's ATR, and how far the target is. Null when no ATR was available. */
+  stopInAtr?: number | null;
+  targetInAtr?: number | null;
 
   /**
    * NIFTY's direction, when this setup runs AGAINST it. Absent when the

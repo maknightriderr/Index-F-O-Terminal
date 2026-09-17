@@ -96,6 +96,19 @@ export const MAX_RISK_REWARD = 6;
 // landing this fix immediately flushes the previously-generated sub-1.0 R:R
 // setups instead of leaving them live until the day rolls over.
 export const MIN_RISK_REWARD = 1.5;
+// A stop is only a stop if it sits outside the underlying's ordinary noise.
+// Premium-percentage stops don't know that: across the recorded trades the
+// same 15-45% band landed anywhere between 1.4 and 10.8 ATR of the underlying.
+// The ones that were stopped out sat at a median 2.6 ATR against 5.0 for
+// winners, and three of eleven fired without the underlying ever reaching the
+// equivalent level at all — decay and IV did it. So the premium stop is now
+// also checked in the underlying's own volatility.
+export const MIN_STOP_ATR = 2;
+// And a target has to be a distance the underlying actually travels. Median
+// favourable excursion across the recorded trades was 2.4 ATR against a median
+// target of 4.7 ATR; trades needing more than 6 ATR hit target 13% of the time
+// and lost 0.14R on average, while 57% of all trades simply expired.
+export const MAX_TARGET_ATR = 6;
 // A stop tighter than this is inside the friction: ~3% round-trip costs
 // plus a bid-ask spread that's allowed up to 5% of mid on the ATM leg
 // means anything under ~15% of premium gets taken out by the cost of
@@ -235,7 +248,9 @@ export function buildTradeSetup(
   slPremiumPct: number = DEFAULT_SL_PREMIUM_PCT,
   vix: number | null = null,
   dte: number | null = null,
-  lotSize: number = 1
+  lotSize: number = 1,
+  /** ATR of the underlying on the read's own timeframe, in index/price points. Null disables the volatility gates. */
+  atrPoints: number | null = null
 ): TradeSetup {
   if (confidence < MIN_CONFIDENCE) {
     return {
@@ -249,7 +264,7 @@ export function buildTradeSetup(
   }
 
   const side: OptionType = direction === 'BULLISH' ? 'CE' : 'PE';
-  return buildNakedLong(strikes, atmStrike, direction, side, confidence, expectedMovePoints, slPremiumPct, vix, dte, lotSize);
+  return buildNakedLong(strikes, atmStrike, direction, side, confidence, expectedMovePoints, slPremiumPct, vix, dte, lotSize, atrPoints);
 }
 
 // ============================================================
@@ -266,7 +281,8 @@ function buildNakedLong(
   slPremiumPct: number,
   vix: number | null,
   dte: number | null = null,
-  lotSize: number = 1
+  lotSize: number = 1,
+  atrPoints: number | null = null
 ): TradeSetup {
   const atmEntry = strikes.find((s) => s.strike === atmStrike);
   const leg = side === 'CE' ? atmEntry?.call : atmEntry?.put;
@@ -286,6 +302,14 @@ function buildNakedLong(
   if (deltaMove <= 0) {
     return { available: false, reason: `No usable delta/expected-move data at the ATM strike (${atmStrike}) to project a target.` };
   }
+
+  // Measured, not gated. On 5-minute ATR the recorded trades said targets
+  // beyond ~6x ATR fail; on the 15-minute ATR this engine actually runs on,
+  // and once the opening-hour and low-confidence trades are excluded, the
+  // effect mostly vanishes — the two timeframes disagree and the samples are
+  // small (n=41). Recording it on every setup builds the evidence needed to
+  // decide properly, rather than shipping a threshold fitted to noise.
+  const targetInAtr = atrPoints && atrPoints > 0 ? Math.max(expectedMovePoints, 0) / atrPoints : null;
 
   // Liquidity gate: refuse to size a setup off a quote nobody could actually
   // trade at. Only gates when the broker is actually publishing a two-sided
@@ -365,6 +389,16 @@ function buildNakedLong(
     };
   }
 
+  // The premium stop expressed as the underlying move it implies — the number
+  // that says whether a stop sits inside ordinary noise. Stopped-out trades
+  // carried visibly tighter stops than winners on both timeframes measured
+  // (1.6 vs 3.0 ATR on 15-minute bars), but a floor built on that made no
+  // difference to the recorded outcomes, so this is recorded and watched
+  // rather than enforced. MIN_STOP_ATR/MAX_TARGET_ATR document the levels
+  // being evaluated.
+  const delta = Math.abs(leg.delta);
+  const stopInAtr = atrPoints && atrPoints > 0 && delta > 0 ? stopWidth / delta / atrPoints : null;
+
   const stopLoss = round2(entry - stopWidth);
   const risk = entry - stopLoss;
   const reward = grossReward;
@@ -417,6 +451,8 @@ function buildNakedLong(
     target,
     riskReward,
     estimatedCostPct: costPct,
+    stopInAtr: stopInAtr != null ? round2(stopInAtr) : null,
+    targetInAtr: targetInAtr != null ? round2(targetInAtr) : null,
     positionSize: positionSize ?? undefined,
     reason:
       `${direction} bias at ${confidence}/100 confidence — ATM ${side} ${atmStrike} @ ${entry.toFixed(2)}${hasQuote ? ' (bid-ask mid)' : ''}. ` +

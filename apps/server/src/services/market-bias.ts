@@ -503,6 +503,12 @@ async function computeMarketBias(
   const adx1h = adx(c1h.highs, c1h.lows, c1h.closes, 14);
   const adxValue = adx1h.adx[adx1h.adx.length - 1] ?? 15;
 
+  // ATR on the SHORT tier (15m intraday, 1H positional) — the scale a stop or
+  // target has to survive, and the one the stop/target forensics were measured
+  // on. atr1h below stays the long-tier read the regime classifier uses.
+  const atrShort = atr(c15.highs, c15.lows, c15.closes, 14);
+  const atrShortNow = atrShort[atrShort.length - 1] ?? 0;
+
   const atr1h = atr(c1h.highs, c1h.lows, c1h.closes, 14);
   const atrPct = atr1h.map((v, i) => (v / c1h.closes[c1h.closes.length - atr1h.length + i]) * 100);
   const atrPctNow = atrPct[atrPct.length - 1] ?? 0;
@@ -1437,6 +1443,7 @@ async function computeMarketBias(
     volumeRatio: Math.round(volumeRatio * 100) / 100,
     volumeSource,
     roomToTargetPoints: room ? Math.round(room.points * 100) / 100 : null,
+    atrPoints: atrShortNow > 0 ? Math.round(atrShortNow * 100) / 100 : null,
     roomLevel: room ? Math.round(room.level * 100) / 100 : null,
     roomLevelSource: room?.source ?? null,
     optionOiBaselineCoverage: Math.round(optionOiBaselineCoverage * 100) / 100,
@@ -1794,11 +1801,35 @@ const POSITIONAL_SL_PREMIUM_PCT = 0.4;
 //
 // Holidays (including MCX's half-day closures) come from EXCHANGE_HOLIDAYS
 // in @fno/shared, which needs each new year's list added.
+// Evidence from the 93 closed setups recorded to 17 Sep (R is net of costs):
+//
+//   Intraday entries in the session's first 60 minutes: 20 trades, -7.5R.
+//   Skipping them alone moves the book from -4.9R to +2.6R. The first trade
+//   of a day averaged -0.62R and the second -0.64R, against +0.25R for the
+//   fourth onward — the deficit is entirely in the day's opening attempts,
+//   whenever they fire.
+//
+//   Confidence below 75: 34 trades, -6.6R, and 85% of the 60-74 band expired
+//   without reaching either level. Above 75 the score stops discriminating
+//   (75-89 +0.06R, 90-100 -0.01R), so 75 is a floor, not a ranking.
+//
+//   Together: 54 trades, +7.7R, profit factor 1.40, max drawdown 6.8R against
+//   14.4R. Fewer trades, and the losing streak drops from 9 to 5.
+const SETUP_OPENING_GUARD_MINUTES = 60;
+const MIN_SETUP_CONFIDENCE = 75;
+
+// After a stop-loss (see the cooldown block below for the measured numbers):
+//   any new setup waits POST_LOSS_SETTLE_MINUTES, whatever the symbol;
+//   the same symbol+direction waits SL_COOLDOWN_SECONDS;
+//   and anything else that day needs POST_LOSS_MIN_CONFIDENCE.
+const POST_LOSS_SETTLE_MINUTES = 15;
+const POST_LOSS_MIN_CONFIDENCE = 80;
+
 const SL_COOLDOWN_SECONDS = 60 * 60;
 const SL_COOLDOWN_SECONDS_POSITIONAL = 60 * 60 * 24; // a positional thesis that just stopped out isn't re-evaluated within the hour
 const MAX_SAME_DIRECTION_LOSSES_PER_DAY = 2;
 
-function sessionGateReason(exchange: Exchange): string | null {
+function sessionGateReason(exchange: Exchange, mode: TradingMode): string | null {
   const sinceOpen = minutesSinceSessionOpen(exchange);
   if (sinceOpen == null) {
     const holiday = getExchangeHoliday(exchange);
@@ -1807,6 +1838,15 @@ function sessionGateReason(exchange: Exchange): string | null {
   }
   if (sinceOpen < SETUP_OPENING_SETTLE_MINUTES) {
     return `Waiting out the first ${SETUP_OPENING_SETTLE_MINUTES} minutes after the session opens — quotes are still settling from the pre-open auction.`;
+  }
+  // The opening hour is where the losses are. Positional entries are day-scale
+  // reads and aren't judged on where the first hour's noise put the price, so
+  // the guard is intraday only.
+  if (mode === 'INTRADAY' && sinceOpen < SETUP_OPENING_GUARD_MINUTES) {
+    return (
+      `Market structure is still forming — ${Math.round(sinceOpen)} minutes into the session, and intraday setups wait for ${SETUP_OPENING_GUARD_MINUTES}. ` +
+      `Across the recorded history the first hour's entries lost 7.5R over 20 trades while everything after it made money.`
+    );
   }
   return null;
 }
@@ -1824,6 +1864,16 @@ function positioningConflictReason(direction: BiasDirection, votes: BiasVoteSnap
     return `Futures OI, PCR and option OI flow all read ${direction === 'BULLISH' ? 'bearish' : 'bullish'} — not taking a ${direction} setup against every positioning signal.`;
   }
   return null;
+}
+
+/** Any stop-loss on this exchange+mode blocks every new setup for a few minutes. */
+function postLossSettleKey(exchange: Exchange, mode: TradingMode): string {
+  return `trade_setup_post_loss_settle:${exchange}:${mode}`;
+}
+
+/** Set for the rest of the IST day once something stopped out — raises the bar for what follows. */
+function postLossDayKey(exchange: Exchange, mode: TradingMode, day: string): string {
+  return `trade_setup_post_loss_day:${exchange}:${mode}:${day}`;
 }
 
 function slCooldownKey(exchange: Exchange, underlying: string, mode: TradingMode, direction: BiasDirection): string {
@@ -1845,6 +1895,11 @@ async function registerLosingClose(exchange: Exchange, underlying: string, mode:
   const countKey = slLossCountKey(exchange, underlying, mode, direction, day);
   try {
     await redis.set(slCooldownKey(exchange, underlying, mode, direction), '1', 'EX', mode === 'POSITIONAL' ? SL_COOLDOWN_SECONDS_POSITIONAL : SL_COOLDOWN_SECONDS);
+    // Short settle across every symbol on this exchange+mode, then a raised
+    // bar for the rest of the day.
+    await redis.set(postLossSettleKey(exchange, mode), '1', 'EX', POST_LOSS_SETTLE_MINUTES * 60);
+    const istDay = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    await redis.set(postLossDayKey(exchange, mode, istDay), '1', 'EX', 24 * 60 * 60);
     const firstCount = await redis.set(`trade_setup_loss_counted:${setupId}`, '1', 'EX', 60 * 60 * 48, 'NX');
     if (firstCount === 'OK') {
       await redis.incr(countKey);
@@ -1855,10 +1910,43 @@ async function registerLosingClose(exchange: Exchange, underlying: string, mode:
   }
 }
 
-async function losingCloseCooldownReason(underlying: string, exchange: Exchange, direction: BiasDirection, mode: TradingMode): Promise<string | null> {
+/**
+ * What follows a stop-loss, measured rather than assumed. Of the 39 setups
+ * that followed a same-day loss:
+ *
+ *   within 15 minutes        12 trades, -0.28R, profit factor 0.45
+ *   15-60 minutes later       7 trades, +0.82R, profit factor 8.03
+ *   60+ minutes later        20 trades, +0.41R
+ *   same symbol AND side
+ *     within the hour         5 trades, -0.48R
+ *   a different symbol/side
+ *     within the hour        14 trades, +0.34R, profit factor 2.40
+ *
+ * So a flat hour of silence was wrong in both directions: it blocked the
+ * best-performing group in the whole dataset (a different setup, 15-60
+ * minutes after a loss) while leaving the genuinely bad one (any re-entry
+ * inside 15 minutes) open. The gate is now conditional: a short settle for
+ * everything, the full hour only for the setup that just failed, and a
+ * higher confidence bar for the rest of the day.
+ */
+async function losingCloseCooldownReason(underlying: string, exchange: Exchange, direction: BiasDirection, mode: TradingMode, confidence: number): Promise<string | null> {
   if (direction === 'NEUTRAL') return null;
   const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
   try {
+    const settleTtl = await redis.ttl(postLossSettleKey(exchange, mode));
+    if (settleTtl > 0) {
+      return (
+        `A setup stopped out ${POST_LOSS_SETTLE_MINUTES - Math.ceil(settleTtl / 60)} minutes ago — new entries wait ${POST_LOSS_SETTLE_MINUTES} minutes for the move that caused it to finish. ` +
+        `Re-entries inside that window lost 0.28R a trade across 12 recorded trades; the same setups taken 15-60 minutes later made 0.82R.`
+      );
+    }
+    const lostToday = await redis.get(postLossDayKey(exchange, mode, day));
+    if (lostToday && confidence < POST_LOSS_MIN_CONFIDENCE) {
+      return (
+        `Something already stopped out on ${exchange} today, so the bar for the next setup is confidence ${POST_LOSS_MIN_CONFIDENCE} — this reads ${confidence}. ` +
+        `A fresh, clearly stronger setup is allowed immediately; a marginal one is not.`
+      );
+    }
     const [cooldownTtl, losses] = await Promise.all([
       redis.ttl(slCooldownKey(exchange, underlying, mode, direction)),
       redis.get(slLossCountKey(exchange, underlying, mode, direction, day)),
@@ -1868,7 +1956,7 @@ async function losingCloseCooldownReason(underlying: string, exchange: Exchange,
       return `${underlying} has already stopped out ${lossCount} ${direction} setups today — no more ${direction} entries until tomorrow.`;
     }
     if (cooldownTtl > 0) {
-      return `${underlying}'s last ${direction} setup hit its stop-loss — no same-direction re-entry for another ${Math.ceil(cooldownTtl / 60)} min.`;
+      return `${underlying}'s last ${direction} setup hit its stop-loss — no same-direction re-entry for another ${Math.ceil(cooldownTtl / 60)} min (that repeat lost 0.48R a trade in the recorded history).`;
     }
   } catch (err: any) {
     logger.warn({ error: err.message, underlying }, 'Losing-close cooldown read failed — proceeding ungated');
@@ -2110,9 +2198,12 @@ async function resolveStickyTradeSetup(
   // (the frozen last print is the session's real close). Minting a NEW one
   // needs live quotes and no fresh stop-out in the same direction.
   const unreliableReason =
-    sessionGateReason(exchange) ??
+    sessionGateReason(exchange, mode) ??
+    (confidence < MIN_SETUP_CONFIDENCE
+      ? `Confidence ${confidence}/100 is below the ${MIN_SETUP_CONFIDENCE} a setup needs. Below that bar the recorded trades lost 6.6R across 34 of them, and 85% of the weakest band expired without touching either level.`
+      : null) ??
     positioningConflictReason(direction, voteSnapshot) ??
-    (await losingCloseCooldownReason(underlying, exchange, direction, mode)) ??
+    (await losingCloseCooldownReason(underlying, exchange, direction, mode, confidence)) ??
     (await checkReliabilityFilters(underlying, exchange, direction, mode));
   if (unreliableReason != null) {
     try {
@@ -2182,7 +2273,7 @@ async function resolveStickyTradeSetup(
         }.`
       : '';
 
-  const builtRaw = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, targetMovePoints, slPremiumPct, vix, chain.dte, chain.lotSize);
+  const builtRaw = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, targetMovePoints, slPremiumPct, vix, chain.dte, chain.lotSize, entryContext?.atrPoints ?? null);
   // Record WHICH contract the strike/entry/SL/target belong to. A strike
   // alone is ambiguous — the same strike exists in every listed expiry at a
   // different premium — and this is what later tracking prices against.
@@ -2740,6 +2831,8 @@ interface SetupEntryContext {
   volumeRatio: number;
   volumeSource: string;
   roomToTargetPoints: number | null;
+  /** ATR of the underlying on this read's short tier, in points — the scale a stop or target should be judged against. */
+  atrPoints: number | null;
   roomLevel: number | null;
   roomLevelSource: 'CALL_WALL' | 'PUT_WALL' | 'PIVOT' | null;
   optionOiBaselineCoverage: number;
