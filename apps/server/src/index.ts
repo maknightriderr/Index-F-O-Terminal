@@ -33,10 +33,13 @@ import { createCorporateActionsRoutes } from './api/corporate-actions.js';
 import { startInstitutionalFlowScanner } from './services/institutional-flow-scanner.js';
 import { startTradeSetupPriceMonitor } from './services/trade-setup-monitor.js';
 import { createMarketScannerRoutes } from './api/market-scanner.js';
+import { createStrategyScannerRoutes } from './api/strategy-scanner.js';
+import { startStrategyTracker } from './services/strategy-tracker.js';
 import { startMarketScanner } from './services/market-scanner.js';
 import { createFiiDiiRoutes } from './api/fii-dii.js';
 import { startFiiDiiTracker } from './services/fii-dii.js';
 import { startOiCloseSnapshot } from './services/oi-close-snapshot.js';
+import { startCacheWarmer } from './services/cache-warmer.js';
 
 // --- Initialize Provider + Subscription Manager ---
 
@@ -100,6 +103,7 @@ app.use('/api/backtesting', createBacktestingRoutes());
 app.use('/api/news', createNewsRoutes());
 app.use('/api/corporate-actions', createCorporateActionsRoutes());
 app.use('/api/market-scanner', createMarketScannerRoutes(provider));
+app.use('/api/strategy-scanner', createStrategyScannerRoutes());
 app.use('/api/fii-dii', createFiiDiiRoutes());
 
 // --- Health Check ---
@@ -214,6 +218,8 @@ startMarketScanner(provider);
 startFiiDiiTracker();
 startAbandonedSetupSweep();
 startOiCloseSnapshot(provider);
+startCacheWarmer(provider);
+startStrategyTracker(provider);
 startHolidayCalendarCheck();
 
 setInterval(() => {

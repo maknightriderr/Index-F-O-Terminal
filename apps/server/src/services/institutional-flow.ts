@@ -20,24 +20,34 @@ import type {
   NextDayBias,
   InstitutionalCommentary,
   SentimentLabel,
-  MarketRegime,
-  BiasDirection,
   OIInterpretation,
-  MarketBias,
 } from '@fno/shared';
+import { KNOWN_INDEX_TOKENS, getSessionWindow } from '@fno/shared';
+import {
+  NEXT_DAY_MODEL_VERSION,
+  GAP_THRESHOLD_PCT,
+  VOLATILE_RANGE_MULTIPLE,
+  TREND_BODY_SHARE,
+  toDailyBars,
+  estimateNextDay,
+  nextSessionDate,
+  calendarDaysToNextClose,
+  describeLocation,
+  describeRange,
+} from './next-day-model.js';
+import type { DailyBar } from './next-day-model.js';
 import { getOIDescription } from '@fno/analytics';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { getLiveIndexQuotes } from './indices.js';
 import { buildOptionChain } from './option-chain.js';
 import { buildFuturesData } from './futures.js';
-import { scanFnoUniverse } from './fno-scanner.js';
+import { getFnoScan } from './fno-scanner.js';
 import { buildMarketBias } from './market-bias.js';
 import { getFiiDiiActivity } from './fii-dii.js';
 import { cached } from '../lib/cache.js';
 import { logger } from '../lib/logger.js';
 import { askClaude, isAnthropicConfigured } from '../lib/anthropic.js';
 
-const SCANNER_CACHE_TTL_SECONDS = 180; // shares fno-scanner.ts's own cache key/TTL with the rest of the app
 export const INSTITUTIONAL_SYMBOLS: Array<{ symbol: string; exchange: Exchange }> = [
   { symbol: 'NIFTY', exchange: 'NSE' },
   { symbol: 'BANKNIFTY', exchange: 'NSE' },
@@ -78,7 +88,7 @@ export async function buildSentimentSnapshot(provider: MarketDataProvider): Prom
         })
       )
     ),
-    cached('fno-scanner:NSE', SCANNER_CACHE_TTL_SECONDS, () => scanFnoUniverse(provider, 'NSE')).catch((err) => {
+    getFnoScan(provider, 'NSE').catch((err) => {
       logger.warn({ error: err.message }, 'Institutional flow: F&O universe scan unavailable');
       return [];
     }),
@@ -249,86 +259,113 @@ function classifySentiment(score: number): SentimentLabel {
 }
 
 // --- Section 5: Next-Day Market Bias Engine ---
-// Every probability here is a transparent, documented derivation from
-// the existing market-bias engine's direction/confidence/regime plus
-// India VIX — not a statistical model trained on historical outcomes
-// (that would need the years of resolved predictions this app is only
-// just starting to collect; see institutional-flow-scanner.ts).
+// Empirical, not rule-based: every figure is a rate measured over the
+// trailing ~250 NSE sessions of this index's own daily candles, and nothing
+// is stated where history showed no edge. See next-day-model.ts for the
+// out-of-sample research behind each choice (in short: no direction call,
+// gap odds by close location, volatile-session odds by today's range,
+// trend-day base rate, ±1σ ATM-IV close range).
 
-const TREND_BASE_BY_REGIME: Record<MarketRegime, number> = {
-  STRONG_BULL_TREND: 72,
-  STRONG_BEAR_TREND: 72,
-  WEAK_BULL_TREND: 55,
-  WEAK_BEAR_TREND: 55,
-  HIGH_VOLATILITY: 50,
-  LOW_VOLATILITY: 32,
-  RANGE_BOUND: 28,
-  BREAKOUT: 75,
-  BREAKDOWN: 75,
-  EXPIRY_GAMMA: 40,
-  OPERATOR_ACCUMULATION: 78,
-  OPERATOR_DISTRIBUTION: 78,
-};
+const DAILY_HISTORY_CALENDAR_DAYS = 420;
+const DAILY_HISTORY_CACHE_SECONDS = 5 * 60;
 
-export async function buildNextDayBias(provider: MarketDataProvider, symbol: string): Promise<NextDayBias> {
-  const [{ bias }, vixQuotes] = await Promise.all([
-    buildMarketBias(provider, symbol, 'NSE'),
-    getLiveIndexQuotes(provider, [{ symbol: 'INDIAVIX', exchange: 'NSE' }]).catch(() => []),
-  ]);
-  return deriveNextDayBias(symbol, bias, vixQuotes[0]?.ltp ?? null);
+function istDateOffset(days: number): string {
+  return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+/** Daily bars for an index, oldest first. `fresh` skips the cache — the tracking scanner stores a final prediction from it. */
+export async function getDailyBars(provider: MarketDataProvider, symbol: string, fresh = false): Promise<DailyBar[]> {
+  const token = KNOWN_INDEX_TOKENS[symbol as keyof typeof KNOWN_INDEX_TOKENS];
+  if (!token) throw new Error(`No index token for ${symbol}`);
+  const load = async () =>
+    toDailyBars(
+      await provider.getHistoricalData({
+        exchange: 'NSE',
+        token,
+        interval: 'ONE_DAY',
+        fromDate: `${istDateOffset(-DAILY_HISTORY_CALENDAR_DAYS)} 09:15`,
+        toDate: `${istDateOffset(0)} 15:30`,
+      })
+    );
+  if (fresh) return load();
+  return cached(`next-day:daily:${symbol}`, DAILY_HISTORY_CACHE_SECONDS, load, (bars) => bars.length > 0);
 }
 
 /**
- * Pure derivation from an already-fetched MarketBias + VIX reading — split
- * out from buildNextDayBias so the prediction-tracking scanner (which
- * needs the raw MarketBias anyway, for bullish/bearish/neutral probability
- * columns) can reuse the exact same formula instead of a second, possibly
- * drifting copy of it.
+ * ATM IV (%) for the next-day range. Skips an expiring chain: on its expiry
+ * day the nearest contract's IV describes the last hours, not tomorrow.
  */
-export function deriveNextDayBias(symbol: string, bias: MarketBias, vix: number | null): NextDayBias {
-  const inputs = bias.inputs as Record<string, number | string | null>;
-  const expectedRangeLow = Number(inputs.expectedRangeLow ?? 0);
-  const expectedRangeHigh = Number(inputs.expectedRangeHigh ?? 0);
+async function nextDayAtmIv(provider: MarketDataProvider, symbol: string): Promise<number | null> {
+  let chain = await buildOptionChain(provider, symbol, 'NSE');
+  if (chain.dte === 0 && chain.availableExpiries.length > 1) {
+    chain = await buildOptionChain(provider, symbol, 'NSE', chain.availableExpiries[1]);
+  }
+  const atm = chain.strikes.find((st) => st.strike === chain.atmStrike);
+  const samples = [atm?.call?.iv, atm?.put?.iv].filter((v): v is number => v != null && v > 0);
+  return samples.length > 0 ? samples.reduce((a, b) => a + b, 0) / samples.length : null;
+}
 
-  const trendBase = TREND_BASE_BY_REGIME[bias.regime] ?? 45;
-  const trendDayProbability = clamp(Math.round(trendBase * (0.6 + (bias.confidence / 100) * 0.4)), 5, 95);
-  const rangeBoundProbability = clamp(100 - trendDayProbability, 5, 95);
+export async function buildNextDayBias(provider: MarketDataProvider, symbol: string, opts: { freshHistory?: boolean } = {}): Promise<NextDayBias> {
+  const [bars, atmIvPct] = await Promise.all([
+    getDailyBars(provider, symbol, opts.freshHistory),
+    nextDayAtmIv(provider, symbol).catch((err: any) => {
+      logger.warn({ error: err.message, symbol }, 'Next-day bias: ATM IV unavailable, range omitted');
+      return null;
+    }),
+  ]);
+  const estimate = estimateNextDay(bars);
+  if (!estimate) throw new Error(`Not enough daily history for ${symbol} (${bars.length} bars)`);
 
-  const vixBase = vix == null ? 40 : vix < 12 ? 15 : vix < 18 ? 30 : vix < 25 ? 55 : vix < 32 ? 75 : 90;
-  const volatileSessionProbability = clamp(bias.regime === 'HIGH_VOLATILITY' ? Math.min(95, vixBase + 15) : vixBase, 5, 95);
+  const basis = bars[bars.length - 1];
+  const today = istDateOffset(0);
+  const todaySession = getSessionWindow('NSE', today);
+  const basisFinal = basis.date < today || !todaySession || Date.now() >= todaySession.close;
+  const horizonDays = calendarDaysToNextClose(basis.date);
+  const expectedMovePoints =
+    atmIvPct != null ? Math.round(basis.close * (atmIvPct / 100) * Math.sqrt(horizonDays / 365) * 100) / 100 : null;
+  const nextSession = nextSessionDate(basis.date);
 
-  const { gapUp, gapDown } = computeGapProbabilities(bias.direction, bias.confidence);
-
-  const reasoning: string[] = [
-    `${bias.direction} bias at ${bias.confidence}/100 confidence, regime ${bias.regime.replace(/_/g, ' ').toLowerCase()}`,
-    expectedRangeLow > 0 && expectedRangeHigh > 0
-      ? `Expected range from ATM IV: ${expectedRangeLow.toFixed(0)}–${expectedRangeHigh.toFixed(0)}`
-      : 'Expected range unavailable — option chain data incomplete this tick',
-    vix != null ? `India VIX at ${vix.toFixed(2)}` : 'India VIX unavailable this tick',
-    'Probabilities are a transparent rule-based read of current regime/confidence/VIX — not a statistical model trained on historical outcomes.',
+  const reasoning = [
+    'No direction call: across 2023–2026 daily history, none of 12 tested price rules (trend, momentum, reversal, RSI, close location) predicted the next close’s direction out of sample.',
+    `Opening gap for ${nextSession}: over the last ${estimate.gapSample} sessions the next open was ≥${GAP_THRESHOLD_PCT}% above the prior close ${estimate.gapUpPct}% of the time, below it ${estimate.gapDownPct}%, and flat ${estimate.flatOpenPct}%. Where the day closed in its range (${describeLocation(estimate.closeLocation)} on ${basis.date}${basisFinal ? '' : ', so far'}) tilts this slightly, but using it didn’t improve accuracy out of sample, so these are plain base rates.`,
+    `Volatile session: ${basis.date}’s range is ${describeRange(estimate.rangeBucket)} vs its 20-day average${basisFinal ? '' : ' so far'}. After ${estimate.volatileConditioned ? `such days (${estimate.volatileSample} sessions)` : `all ${estimate.volatileSample} sessions`}, the next range exceeded ${VOLATILE_RANGE_MULTIPLE}× that average about ${estimate.volatilePct}% of the time. Volatility clusters, and this read held out of sample.`,
+    `Trend day (close–open ≥ ${Math.round(TREND_BODY_SHARE * 100)}% of the range): ${estimate.trendDayPct}% of the last ${estimate.trendSample} sessions; no tested condition changed that rate.`,
+    expectedMovePoints != null && atmIvPct != null
+      ? `Expected close range: ±${expectedMovePoints.toFixed(0)} pts (1σ from ATM IV ${atmIvPct.toFixed(1)}% over ${horizonDays.toFixed(1)} calendar day${horizonDays >= 1.5 ? 's' : ''}) — the close should land inside about 68% of the time if IV is fair.`
+      : 'Expected close range unavailable — no usable ATM IV this read.',
   ];
+  if (!basisFinal) reasoning.push('Preview: the basis session is still trading, so these figures move until its close; the tracked prediction is recorded after it.');
 
   return {
     symbol,
-    gapUpProbability: gapUp,
-    gapDownProbability: gapDown,
-    trendDayProbability,
-    rangeBoundProbability,
-    volatileSessionProbability,
-    expectedRangeLow,
-    expectedRangeHigh,
-    predictedDirection: bias.direction,
-    confidence: bias.confidence,
+    gapUpProbability: estimate.gapUpPct,
+    gapDownProbability: estimate.gapDownPct,
+    flatOpenProbability: estimate.flatOpenPct,
+    trendDayProbability: estimate.trendDayPct,
+    rangeBoundProbability: 100 - estimate.trendDayPct,
+    volatileSessionProbability: estimate.volatilePct,
+    expectedRangeLow: expectedMovePoints != null ? Math.round((basis.close - expectedMovePoints) * 100) / 100 : 0,
+    expectedRangeHigh: expectedMovePoints != null ? Math.round((basis.close + expectedMovePoints) * 100) / 100 : 0,
+    predictedDirection: 'NEUTRAL',
+    confidence: 0,
     reasoning,
     timestamp: Date.now(),
+    model: NEXT_DAY_MODEL_VERSION,
+    evidence: {
+      basisDate: basis.date,
+      basisFinal,
+      basisClose: basis.close,
+      closeLocation: estimate.closeLocation,
+      rangeBucket: estimate.rangeBucket,
+      gapSample: estimate.gapSample,
+      trendSample: estimate.trendSample,
+      volatileSample: estimate.volatileSample,
+      volatileConditioned: estimate.volatileConditioned,
+      atmIvPct: atmIvPct != null ? Math.round(atmIvPct * 100) / 100 : null,
+      expectedMovePoints,
+      horizonDays: Math.round(horizonDays * 100) / 100,
+    },
   };
-}
-
-function computeGapProbabilities(direction: BiasDirection, confidence: number): { gapUp: number; gapDown: number } {
-  if (direction === 'NEUTRAL') return { gapUp: 50, gapDown: 50 };
-  const lean = clamp(8 + (confidence / 100) * 32, 8, 40);
-  const gapUp = Math.round(direction === 'BULLISH' ? 50 + lean : 50 - lean);
-  return { gapUp, gapDown: 100 - gapUp };
 }
 
 // --- Section 6: AI Market Commentary ---
@@ -337,7 +374,7 @@ function computeGapProbabilities(direction: BiasDirection, confidence: number): 
 // not to reference FII/DII flows or global markets since none of that
 // is in the grounding context.
 
-const COMMENTARY_SYSTEM_PROMPT = `You are an institutional flow analyst inside a personal F&O trading terminal for Indian markets (NSE/BSE/MCX). You will be given a live data snapshot — India VIX, NIFTY/BANKNIFTY PCR, index/stock futures OI activity, option OI skew, and a rule-based next-day bias read for NIFTY and BANKNIFTY. Some inputs (FII/DII cash flows, participant-wise OI, global markets) are explicitly listed as NOT connected — never reference them, invent figures for them, or imply they were considered. Use ONLY the numbers given. This is data summarization, not investment advice — never phrase output as a recommendation to buy or sell.
+const COMMENTARY_SYSTEM_PROMPT = `You are an institutional flow analyst inside a personal F&O trading terminal for Indian markets (NSE/BSE/MCX). You will be given a live data snapshot — India VIX, NIFTY/BANKNIFTY PCR, index/stock futures OI activity, option OI skew, and empirical next-session odds for NIFTY and BANKNIFTY (gap, volatility and trend-day rates from daily history, deliberately with no direction call). Some inputs (FII/DII cash flows, participant-wise OI, global markets) are explicitly listed as NOT connected — never reference them, invent figures for them, or imply they were considered. Use ONLY the numbers given. This is data summarization, not investment advice — never phrase output as a recommendation to buy or sell.
 
 Respond with ONLY a JSON object, no markdown fences, no other text, in exactly this shape:
 {"oneLineSummary": "...", "detailedAnalysis": "...", "bullCase": "...", "bearCase": "...", "riskFactors": ["...", "..."]}
@@ -373,7 +410,7 @@ export async function generateCommentary(snapshot: InstitutionalFlowSnapshot, bi
   if (snapshot.optionOiLean) lines.push(`Option OI skew: ${snapshot.optionOiLean.putHeavyPct}% of ${snapshot.optionOiLean.sampledSymbols} stocks put-heavy, ${snapshot.optionOiLean.callHeavyPct}% call-heavy.`);
   for (const b of biases) {
     lines.push(
-      `${b.symbol} next-day bias: ${b.predictedDirection} (confidence ${b.confidence}), gap-up ${b.gapUpProbability}% / gap-down ${b.gapDownProbability}%, trend-day ${b.trendDayProbability}%, expected range ${b.expectedRangeLow.toFixed(0)}-${b.expectedRangeHigh.toFixed(0)}.`
+      `${b.symbol} next session (no direction call, history shows no edge): gap-up ${b.gapUpProbability}% / gap-down ${b.gapDownProbability}% / flat ${b.flatOpenProbability ?? '-'}%, volatile session ${b.volatileSessionProbability}%, trend day ${b.trendDayProbability}%${b.expectedRangeLow > 0 ? `, expected close range ${b.expectedRangeLow.toFixed(0)}-${b.expectedRangeHigh.toFixed(0)}` : ''}.`
     );
   }
   lines.push(`NOT connected (never reference): ${snapshot.unavailableInputs.join(', ')}.`);

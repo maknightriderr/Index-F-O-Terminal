@@ -331,41 +331,52 @@ async function buildOptionChainUncached(
   });
 
   // Expiry session: yesterday's IV can't price the last hours — implied vol
-  // per unit of remaining time rises into the close — so every leg sits above
-  // its "fair" repricing and calls and puts ALL read as bought (17 Sep:
-  // SENSEX 19 call-buying and 22 put-buying legs at once). Take out that
-  // chain-wide IV shift: the median change in IV points across the near-ATM
-  // legs on both sides, added back to each leg's previous-close IV before
-  // repricing. Measured in vol points and repriced per strike, so it carries
-  // across moneyness (a flat % shift over-corrected wings into "writing").
-  // Other days keep the absolute read: a chain-wide IV drop there is real
-  // premium selling, not a model artefact.
+  // per unit of remaining time rises into the close, and the smile steepens
+  // — so legs sit above their "fair" repricing and calls and puts ALL read
+  // as bought (17 Sep: SENSEX 19 call-buying and 22 put-buying legs at once).
+  // Take out that shift before repricing each leg: the median change in IV
+  // points across the legs (both sides) at the EXPIRY_SHIFT_NEIGHBOURS
+  // strikes nearest that leg's own strike. A single chain-wide median fixed
+  // the near-ATM legs but left the wings, where the smile moved further,
+  // leaning "bought" on both sides (SENSEX calls 17 up / 6 down, puts
+  // 16 / 2). A local median follows the smile, and one strike's own flow
+  // still stands out against its ~13 neighbours. Measured in vol points and
+  // repriced per strike, so it carries across moneyness. Other days keep the
+  // absolute read: a chain-wide IV drop there is real premium selling.
   if (dte === 0 && tteAtQuote > 0) {
     const legsWithInputs = (s: OptionChainStrike) =>
       [
         [s.call, 'CE'],
         [s.put, 'PE'],
       ] as const;
-    const shifts = strikes
-      .slice()
-      .sort((a, b) => Math.abs(a.strike - atmStrike) - Math.abs(b.strike - atmStrike))
-      .slice(0, PARITY_STRIKES)
-      .flatMap((st) =>
-        legsWithInputs(st).map(([leg]) => {
+    const shiftByStrike = new Map<number, number[]>();
+    for (const st of strikes) {
+      const values = legsWithInputs(st)
+        .map(([leg]) => {
           const inputs = leg ? pressureInputs.get(leg.token) : undefined;
           return leg && inputs && leg.iv > 0 ? leg.iv / 100 - inputs.prevIv : null;
         })
-      )
-      .filter((v): v is number => v != null)
-      .sort((a, b) => a - b);
-    if (shifts.length >= 4) {
-      const mid = Math.floor(shifts.length / 2);
-      const commonShift = shifts.length % 2 === 1 ? shifts[mid] : (shifts[mid - 1] + shifts[mid]) / 2;
-      for (const st of strikes) {
+        .filter((v): v is number => v != null);
+      shiftByStrike.set(st.strike, values);
+    }
+    const median = (values: number[]) => {
+      const sorted = values.slice().sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    };
+    for (const st of strikes) {
+      const neighbourShifts = strikes
+        .slice()
+        .sort((a, b) => Math.abs(a.strike - st.strike) - Math.abs(b.strike - st.strike))
+        .slice(0, EXPIRY_SHIFT_NEIGHBOURS)
+        .flatMap((n) => shiftByStrike.get(n.strike) ?? []);
+      if (neighbourShifts.length < 4) continue;
+      const localShift = median(neighbourShifts);
+      {
         for (const [leg, optionType] of legsWithInputs(st)) {
           const inputs = leg ? pressureInputs.get(leg.token) : undefined;
           if (!leg || !inputs) continue;
-          const iv = inputs.prevIv + commonShift;
+          const iv = inputs.prevIv + localShift;
           if (!(iv > 0)) continue;
           const fair = blackScholesPrice({ spotPrice: pricingSpotNow, strikePrice: st.strike, timeToExpiry: tteAtQuote, riskFreeRate: RISK_FREE_RATE, iv, optionType });
           if (!(fair > 0)) continue;
@@ -444,6 +455,10 @@ const MIN_MODELLABLE_PREMIUM = 0.5;
 // Strikes nearest ATM used to read the implied forward — the median absorbs
 // one stale or off-market last trade.
 const PARITY_STRIKES = 5;
+// Strikes (both legs each) whose IV change sets an expiry-day leg's local
+// baseline — wide enough that one strike's own flow is outvoted, narrow
+// enough to follow the smile.
+const EXPIRY_SHIFT_NEIGHBOURS = 7;
 
 /**
  * The forward the options are priced off, from put-call parity

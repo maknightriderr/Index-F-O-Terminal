@@ -1,50 +1,55 @@
 // ============================================================
 // INSTITUTIONAL FLOW — PREDICTION TRACKING SCANNER
 // ============================================================
-// Section 5's next-day bias is worth nothing without a real track
-// record, so this generates and stores a NIFTY/BANKNIFTY prediction
-// once per trading day and resolves the PRIOR day's prediction once
-// the next session has real price action to check it against. Reuses
-// the `signals` table (already in the schema, unused until now —
-// see database/init/002_schema.sql) rather than a new migration:
-// signal_type='NEXT_DAY_BIAS', the probability breakdown + actual
-// outcome live in `inputs` JSONB, `fwd_1d_return` doubles as the
-// "resolved" flag (NULL = still pending).
+// Section 5's next-day read is worth nothing without a real track record,
+// so this records one prediction per NSE trading day for NIFTY and
+// BANKNIFTY and grades it against the next session. Reuses the `signals`
+// table: signal_type='NEXT_DAY_BIAS', the estimate + actual outcome live in
+// `inputs` JSONB, `fwd_1d_return` doubles as the "resolved" flag.
 //
-// This starts from zero real history today — accuracy stats will
-// honestly read "not enough data yet" until real trading days
-// accumulate. There is no way to backfill a genuine track record.
+// How it's recorded and graded (rebuilt 17 Sep 2026 — the first version
+// produced a track record that couldn't be trusted):
+//   - A prediction is written only on a trading day, after that session's
+//     close, from its completed daily candle. The old scanner upserted
+//     around the clock, so Saturdays, Sundays and holidays got their own
+//     "predictions" from frozen data.
+//   - It's graded from daily candles: the prediction day's close against
+//     the NEXT trading session's open/high/low/close, and only once that
+//     session is over. The old resolver used whatever live quote it saw
+//     after 15:35 — on a weekend or holiday that was the prediction day's
+//     own quote, so those rows were graded against themselves (the
+//     close-to-close 0.00% rows).
+//   - Direction is graded close-to-close (a next-day read is made at the
+//     close), with a ±0.15% flat band.
+//   - History recorded under the old scanner is repaired once: rows dated
+//     on non-trading days are deleted, and the rest are re-graded from
+//     daily candles. Their direction calls are kept (labelled legacy); their
+//     ranges were to-expiry bands, not one-day ranges, so they aren't
+//     graded as ranges.
 // ============================================================
 
-import type {
-  BiasDirection,
-  InstitutionalFlowPrediction,
-  PredictionAccuracyStats,
-  PredictionAccuracyWindow,
-} from '@fno/shared';
-import { TRADING_HOURS } from '@fno/shared';
+import type { BiasDirection, InstitutionalFlowPrediction, PredictionAccuracyStats, PredictionAccuracyWindow } from '@fno/shared';
+import { getSessionWindow } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
-import { buildMarketBias } from './market-bias.js';
-import { getLiveIndexQuotes, INDEX_LIST } from './indices.js';
-import { deriveNextDayBias, INSTITUTIONAL_SYMBOLS } from './institutional-flow.js';
+import { buildNextDayBias, getDailyBars, INSTITUTIONAL_SYMBOLS } from './institutional-flow.js';
+import {
+  NEXT_DAY_MODEL_VERSION,
+  GAP_THRESHOLD_PCT,
+  DIRECTION_FLAT_BAND_PCT,
+  gapPct,
+  isVolatileNext,
+} from './next-day-model.js';
+import type { DailyBar } from './next-day-model.js';
 import { sql } from '../lib/db.js';
+import { redis } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
 
-const SCAN_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes — a same-day prediction/resolution doesn't need to be sub-minute fresh
+const SCAN_INTERVAL_MS = 15 * 60 * 1000;
 const INITIAL_DELAY_MS = 60_000;
-// Was a hardcoded "hour >= 15" — fired as early as 3:00pm, up to 30
-// minutes before NSE's actual 15:30 close, locking in a mid-session LTP
-// as the permanent "actualClose" for that prediction (the resolution
-// query only picks up each pending row once, via fwd_1d_return IS NULL,
-// so whichever snapshot wins the first post-gate tick is what sticks
-// forever). Now derived from TRADING_HOURS.NSE.close (the same source
-// of truth remainingSessionFraction() and isMarketOpen() use) plus a
-// small buffer — by RESOLUTION_BUFFER_MINUTES after the bell, trading
-// has actually stopped and LTP is genuinely frozen at the day's last
-// print, not just "whatever it happened to be a half hour early."
-const RESOLUTION_BUFFER_MINUTES = 5;
-const [NSE_CLOSE_H, NSE_CLOSE_M] = TRADING_HOURS.NSE.close.split(':').map(Number);
-const RESOLUTION_GATE_MINUTES = NSE_CLOSE_H * 60 + NSE_CLOSE_M + RESOLUTION_BUFFER_MINUTES;
+// Daily candles settle a few minutes after the bell.
+const AFTER_CLOSE_BUFFER_MS = 10 * 60 * 1000;
+const LEGACY_MODEL = 'legacy-intraday-bias';
+const HISTORY_REPAIR_KEY = 'next_day_bias:history_repaired:v2';
 
 let scannerStarted = false;
 
@@ -61,128 +66,170 @@ export function startInstitutionalFlowScanner(provider: MarketDataProvider): voi
   logger.info({ intervalMs: SCAN_INTERVAL_MS }, 'Institutional flow prediction scanner started');
 }
 
+function istDate(at: number = Date.now()): string {
+  return new Date(at).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+/** True once `date`'s NSE session has closed and its daily candle has settled. */
+function sessionSettled(date: string, now = Date.now()): boolean {
+  const session = getSessionWindow('NSE', date);
+  return !!session && now >= session.close + AFTER_CLOSE_BUFFER_MS;
+}
+
 async function runScan(provider: MarketDataProvider): Promise<void> {
   if (!provider.isAuthenticated()) return;
 
-  const vixQuotes = await getLiveIndexQuotes(provider, [{ symbol: 'INDIAVIX', exchange: 'NSE' }]).catch(() => []);
-  const vix = vixQuotes[0]?.ltp ?? null;
+  await repairHistoryOnce().catch((err: any) => logger.warn({ error: err.message }, 'Next-day history repair failed — will retry'));
+
+  const today = istDate();
+  const recordToday = sessionSettled(today);
 
   for (const { symbol } of INSTITUTIONAL_SYMBOLS) {
     try {
-      await upsertTodayPrediction(provider, symbol, vix);
+      if (recordToday) await recordPrediction(provider, symbol, today);
+      await resolvePending(provider, symbol);
     } catch (err: any) {
-      logger.warn({ error: err.message, symbol }, 'Institutional flow: prediction upsert failed');
-    }
-  }
-
-  if (istMinutesNow() >= RESOLUTION_GATE_MINUTES) {
-    for (const { symbol } of INSTITUTIONAL_SYMBOLS) {
-      try {
-        await resolvePendingPredictions(provider, symbol);
-      } catch (err: any) {
-        logger.warn({ error: err.message, symbol }, 'Institutional flow: prediction resolution failed');
-      }
+      logger.warn({ error: err.message, symbol }, 'Institutional flow: prediction record/resolve failed');
     }
   }
 }
 
-async function upsertTodayPrediction(provider: MarketDataProvider, symbol: string, vix: number | null): Promise<void> {
-  const entry = INDEX_LIST.find((i) => i.symbol === symbol) ?? { symbol, exchange: 'NSE' as const };
-  const [{ bias, score }, quotes] = await Promise.all([
-    buildMarketBias(provider, symbol, 'NSE'),
-    getLiveIndexQuotes(provider, [entry]),
-  ]);
-
-  const currentClose = quotes[0]?.ltp;
-  if (!currentClose || currentClose <= 0) return;
-
-  const nextDay = deriveNextDayBias(symbol, bias, vix);
-  const todayIST = istDateString();
+async function recordPrediction(provider: MarketDataProvider, symbol: string, today: string): Promise<void> {
+  const nextDay = await buildNextDayBias(provider, symbol, { freshHistory: true });
+  const evidence = nextDay.evidence;
+  // Today's candle not in the history yet — try again next tick rather than
+  // recording yesterday's basis under today's date.
+  if (!evidence || evidence.basisDate !== today || !evidence.basisFinal) return;
 
   const inputs = {
+    model: NEXT_DAY_MODEL_VERSION,
     gapUpProbability: nextDay.gapUpProbability,
     gapDownProbability: nextDay.gapDownProbability,
+    flatOpenProbability: nextDay.flatOpenProbability ?? null,
     trendDayProbability: nextDay.trendDayProbability,
     rangeBoundProbability: nextDay.rangeBoundProbability,
     volatileSessionProbability: nextDay.volatileSessionProbability,
     predictedRangeLow: nextDay.expectedRangeLow,
     predictedRangeHigh: nextDay.expectedRangeHigh,
-    predictionDayClose: currentClose,
-  };
+    predictionDayClose: evidence.basisClose,
+    evidence: { ...evidence },
+  } as Record<string, any>;
 
-  const existing = await sql<{ id: string }[]>`
-    SELECT id FROM signals
+  const existing = await sql<{ id: string; fwd_1d_return: string | null }[]>`
+    SELECT id, fwd_1d_return FROM signals
     WHERE symbol = ${symbol} AND signal_type = 'NEXT_DAY_BIAS'
-      AND (time AT TIME ZONE 'Asia/Kolkata')::date = ${todayIST}::date
+      AND (time AT TIME ZONE 'Asia/Kolkata')::date = ${today}::date
     LIMIT 1
   `;
-
   if (existing.length > 0) {
+    if (existing[0].fwd_1d_return != null) return; // already graded — never rewrite a resolved prediction
     await sql`
       UPDATE signals SET
-        direction = ${bias.direction},
-        confidence = ${bias.confidence},
-        bullish_prob = ${bias.bullishProbability},
-        bearish_prob = ${bias.bearishProbability},
-        neutral_prob = ${bias.neutralProbability},
+        direction = ${nextDay.predictedDirection},
+        confidence = ${nextDay.confidence},
+        bullish_prob = ${null},
+        bearish_prob = ${null},
+        neutral_prob = ${null},
         inputs = ${sql.json(inputs)},
         reasoning = ${nextDay.reasoning.join(' ')},
-        market_regime = ${bias.regime},
-        intelligence_score = ${score.score}
+        market_regime = ${null},
+        intelligence_score = ${null}
       WHERE id = ${existing[0].id}
     `;
   } else {
     await sql`
-      INSERT INTO signals (time, symbol, signal_type, direction, confidence, bullish_prob, bearish_prob, neutral_prob, inputs, reasoning, market_regime, intelligence_score)
-      VALUES (NOW(), ${symbol}, 'NEXT_DAY_BIAS', ${bias.direction}, ${bias.confidence}, ${bias.bullishProbability}, ${bias.bearishProbability}, ${bias.neutralProbability}, ${sql.json(inputs)}, ${nextDay.reasoning.join(' ')}, ${bias.regime}, ${score.score})
+      INSERT INTO signals (time, symbol, signal_type, direction, confidence, inputs, reasoning)
+      VALUES (NOW(), ${symbol}, 'NEXT_DAY_BIAS', ${nextDay.predictedDirection}, ${nextDay.confidence}, ${sql.json(inputs)}, ${nextDay.reasoning.join(' ')})
     `;
   }
 }
 
-async function resolvePendingPredictions(provider: MarketDataProvider, symbol: string): Promise<void> {
-  const todayIST = istDateString();
+const ACTUAL_FIELDS = ['actualOpen', 'actualHigh', 'actualLow', 'actualClose', 'actualGapType', 'actualDirection', 'rangeAccurate', 'gapLeanCorrect', 'volatileActual', 'resolvedSessionDate'];
 
-  const pending = await sql<{ id: string; inputs: any }[]>`
-    SELECT id, inputs FROM signals
-    WHERE symbol = ${symbol} AND signal_type = 'NEXT_DAY_BIAS'
-      AND fwd_1d_return IS NULL
-      AND (time AT TIME ZONE 'Asia/Kolkata')::date < ${todayIST}::date
+/**
+ * One-time repair of predictions recorded by the first scanner: delete rows
+ * dated on non-trading days, and clear every other row's grade so
+ * resolvePending re-grades it from daily candles.
+ */
+async function repairHistoryOnce(): Promise<void> {
+  if (await redis.get(HISTORY_REPAIR_KEY)) return;
+
+  const rows = await sql<{ id: string; day: string; inputs: any }[]>`
+    SELECT id, to_char((time AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD') AS day, inputs
+    FROM signals WHERE signal_type = 'NEXT_DAY_BIAS'
+  `;
+  let deleted = 0;
+  let reset = 0;
+  for (const row of rows) {
+    if (!getSessionWindow('NSE', row.day)) {
+      await sql`DELETE FROM signals WHERE id = ${row.id}`;
+      deleted++;
+      continue;
+    }
+    const inputs = { ...(row.inputs ?? {}) };
+    if (!inputs.model) inputs.model = LEGACY_MODEL;
+    for (const k of ACTUAL_FIELDS) delete inputs[k];
+    await sql`UPDATE signals SET inputs = ${sql.json(inputs)}, fwd_1d_return = NULL WHERE id = ${row.id}`;
+    reset++;
+  }
+  await redis.set(HISTORY_REPAIR_KEY, String(Date.now()));
+  logger.info({ deleted, reset }, 'Next-day prediction history repaired — non-trading-day rows removed, the rest queued for re-grading from daily candles');
+}
+
+async function resolvePending(provider: MarketDataProvider, symbol: string): Promise<void> {
+  const pending = await sql<{ id: string; day: string; direction: BiasDirection | null; inputs: any }[]>`
+    SELECT id, to_char((time AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD') AS day, direction, inputs
+    FROM signals
+    WHERE symbol = ${symbol} AND signal_type = 'NEXT_DAY_BIAS' AND fwd_1d_return IS NULL
+    ORDER BY time ASC
   `;
   if (pending.length === 0) return;
 
-  const entry = INDEX_LIST.find((i) => i.symbol === symbol) ?? { symbol, exchange: 'NSE' as const };
-  const quotes = await getLiveIndexQuotes(provider, [entry]);
-  const q = quotes[0];
-  if (!q || q.ltp <= 0) return;
+  const bars: DailyBar[] = await getDailyBars(provider, symbol, true);
+  const indexByDate = new Map(bars.map((b, i) => [b.date, i]));
 
   for (const row of pending) {
-    const predictionDayClose = Number(row.inputs?.predictionDayClose ?? 0);
-    if (predictionDayClose <= 0) continue;
+    const i = indexByDate.get(row.day);
+    if (i == null) {
+      // A non-trading day that slipped in (e.g. a holiday added to the
+      // calendar later) can never be graded.
+      if (!getSessionWindow('NSE', row.day)) await sql`DELETE FROM signals WHERE id = ${row.id}`;
+      continue;
+    }
+    const basis = bars[i];
+    const next = bars[i + 1];
+    if (!next || !sessionSettled(next.date)) continue;
+    // A prediction is only valid for the session right after it.
+    if (next.date === row.day) continue;
 
-    const actualOpen = q.open;
-    const actualHigh = q.high;
-    const actualLow = q.low;
-    const actualClose = q.ltp;
+    const inputs = row.inputs ?? {};
+    const isEmpirical = inputs.model === NEXT_DAY_MODEL_VERSION;
+    const gap = gapPct(basis, next);
+    const actualGapType: 'GAP_UP' | 'GAP_DOWN' | 'FLAT' = gap > GAP_THRESHOLD_PCT ? 'GAP_UP' : gap < -GAP_THRESHOLD_PCT ? 'GAP_DOWN' : 'FLAT';
+    const forwardReturnPercent = ((next.close - basis.close) / basis.close) * 100;
+    const actualDirection: BiasDirection =
+      forwardReturnPercent > DIRECTION_FLAT_BAND_PCT ? 'BULLISH' : forwardReturnPercent < -DIRECTION_FLAT_BAND_PCT ? 'BEARISH' : 'NEUTRAL';
 
-    const gapPct = ((actualOpen - predictionDayClose) / predictionDayClose) * 100;
-    const actualGapType: 'GAP_UP' | 'GAP_DOWN' | 'FLAT' = gapPct > 0.15 ? 'GAP_UP' : gapPct < -0.15 ? 'GAP_DOWN' : 'FLAT';
+    const low = Number(inputs.predictedRangeLow ?? 0);
+    const high = Number(inputs.predictedRangeHigh ?? 0);
+    const rangeAccurate = isEmpirical && low > 0 && high > 0 ? next.close >= low && next.close <= high : null;
 
-    const dayChangePct = actualOpen > 0 ? ((actualClose - actualOpen) / actualOpen) * 100 : 0;
-    const actualDirection: BiasDirection = dayChangePct > 0.1 ? 'BULLISH' : dayChangePct < -0.1 ? 'BEARISH' : 'NEUTRAL';
 
-    const predictedRangeLow = Number(row.inputs?.predictedRangeLow ?? 0);
-    const predictedRangeHigh = Number(row.inputs?.predictedRangeHigh ?? 0);
-    const rangeAccurate =
-      predictedRangeLow > 0 && predictedRangeHigh > 0 ? actualLow >= predictedRangeLow && actualHigh <= predictedRangeHigh : null;
+    const merged = {
+      ...inputs,
+      predictionDayClose: basis.close,
+      resolvedSessionDate: next.date,
+      actualOpen: next.open,
+      actualHigh: next.high,
+      actualLow: next.low,
+      actualClose: next.close,
+      actualGapType,
+      actualDirection,
+      rangeAccurate,
+      volatileActual: isEmpirical ? isVolatileNext(bars, i) : null,
+    };
 
-    const forwardReturnPercent = ((actualClose - predictionDayClose) / predictionDayClose) * 100;
-
-    const mergedInputs = { ...row.inputs, actualOpen, actualHigh, actualLow, actualClose, actualGapType, actualDirection, rangeAccurate };
-
-    await sql`
-      UPDATE signals SET inputs = ${sql.json(mergedInputs)}, fwd_1d_return = ${forwardReturnPercent}
-      WHERE id = ${row.id}
-    `;
+    await sql`UPDATE signals SET inputs = ${sql.json(merged)}, fwd_1d_return = ${forwardReturnPercent} WHERE id = ${row.id}`;
   }
 }
 
@@ -201,8 +248,11 @@ interface SignalRow {
 function toPrediction(row: SignalRow): InstitutionalFlowPrediction {
   const inputs = row.inputs ?? {};
   const resolved = row.fwd_1d_return != null;
-  const predictedDirection = row.direction;
+  const predictedDirection = (row.direction ?? 'NEUTRAL') as BiasDirection;
   const actualDirection: BiasDirection | null = inputs.actualDirection ?? null;
+  const model: string = inputs.model ?? LEGACY_MODEL;
+  // The empirical model makes no direction call, so there's nothing to grade.
+  const directionCall = model !== NEXT_DAY_MODEL_VERSION && predictedDirection !== 'NEUTRAL';
 
   return {
     id: row.id,
@@ -225,9 +275,12 @@ function toPrediction(row: SignalRow): InstitutionalFlowPrediction {
     actualClose: inputs.actualClose ?? null,
     actualGapType: inputs.actualGapType ?? null,
     actualDirection,
-    directionCorrect: resolved && actualDirection != null ? actualDirection === predictedDirection : null,
+    directionCorrect: resolved && directionCall && actualDirection != null ? actualDirection === predictedDirection : null,
     rangeAccurate: inputs.rangeAccurate ?? null,
     forwardReturnPercent: row.fwd_1d_return != null ? Number(row.fwd_1d_return) : null,
+    model,
+    flatOpenProbability: inputs.flatOpenProbability ?? null,
+    volatileActual: inputs.volatileActual ?? null,
   };
 }
 
@@ -241,17 +294,29 @@ export async function getPredictionHistory(symbol: string, limit = 30): Promise<
   return rows.map(toPrediction);
 }
 
+const share = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 100) : null);
+
 function accuracyWindow(predictions: InstitutionalFlowPrediction[]): PredictionAccuracyWindow {
   const resolved = predictions.filter((p) => p.resolved);
-  const withDirection = resolved.filter((p) => p.directionCorrect != null);
-  const withRange = resolved.filter((p) => p.rangeAccurate != null);
+  const directionCalls = resolved.filter((p) => p.directionCorrect != null);
+  const ranges = resolved.filter((p) => p.rangeAccurate != null);
+  const gaps = resolved.filter((p) => p.model === NEXT_DAY_MODEL_VERSION && p.actualGapType != null);
+  const volatile = resolved.filter((p) => p.volatileActual != null);
   const withReturn = resolved.filter((p) => p.forwardReturnPercent != null);
 
   return {
     count: predictions.length,
     resolvedCount: resolved.length,
-    directionAccuracyPercent: withDirection.length > 0 ? Math.round((withDirection.filter((p) => p.directionCorrect).length / withDirection.length) * 100) : null,
-    rangeAccuracyPercent: withRange.length > 0 ? Math.round((withRange.filter((p) => p.rangeAccurate).length / withRange.length) * 100) : null,
+    directionAccuracyPercent: share(directionCalls.filter((p) => p.directionCorrect).length, directionCalls.length),
+    directionCallCount: directionCalls.length,
+    rangeAccuracyPercent: share(ranges.filter((p) => p.rangeAccurate).length, ranges.length),
+    rangeCount: ranges.length,
+    gapUpPredictedPercent: gaps.length > 0 ? Math.round(gaps.reduce((a, p) => a + p.gapUpProbability, 0) / gaps.length) : null,
+    gapUpActualPercent: share(gaps.filter((p) => p.actualGapType === 'GAP_UP').length, gaps.length),
+    gapDownPredictedPercent: gaps.length > 0 ? Math.round(gaps.reduce((a, p) => a + p.gapDownProbability, 0) / gaps.length) : null,
+    gapDownActualPercent: share(gaps.filter((p) => p.actualGapType === 'GAP_DOWN').length, gaps.length),
+    volatilePredictedPercent: volatile.length > 0 ? Math.round(volatile.reduce((a, p) => a + p.volatileSessionProbability, 0) / volatile.length) : null,
+    volatileActualPercent: share(volatile.filter((p) => p.volatileActual).length, volatile.length),
     avgForwardReturnPercent: withReturn.length > 0 ? Math.round((withReturn.reduce((a, p) => a + (p.forwardReturnPercent ?? 0), 0) / withReturn.length) * 100) / 100 : null,
   };
 }
@@ -265,18 +330,4 @@ export async function getAccuracyStats(symbol: string): Promise<PredictionAccura
     last100: accuracyWindow(all),
     allTime: accuracyWindow(all),
   };
-}
-
-function istDateString(): string {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-}
-
-// Minutes since midnight IST — comparable directly against
-// TRADING_HOURS.NSE.close's own "HH:MM" so the resolution gate tracks
-// the real exchange close instead of a hardcoded hour that drifted out
-// of sync with it. Same Date-round-trip pattern market-bias.ts's own
-// remainingSessionFraction() uses for the identical IST-minutes need.
-function istMinutesNow(): number {
-  const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-  return ist.getHours() * 60 + ist.getMinutes();
 }

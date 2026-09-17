@@ -10,6 +10,7 @@ import { CM_SEGMENT, FO_SEGMENT } from '@fno/shared';
 import type { CandleInterval, Exchange, TradingMode } from '@fno/shared';
 import { getLiveIndexQuotes, getMcxCommodityQuotes, ALL_INDEX_LIST } from '../services/indices.js';
 import { buildMarketBias } from '../services/market-bias.js';
+import { noteBiasRequest } from '../services/cache-warmer.js';
 import { getCachedPatterns } from '../services/chart-patterns.js';
 
 export function createMarketDataRoutes(provider: MarketDataProvider): Router {
@@ -176,6 +177,7 @@ export function createMarketDataRoutes(provider: MarketDataProvider): Router {
       const modeParam = (req.query.mode as string || '').toUpperCase();
       const mode: TradingMode = modeParam === 'POSITIONAL' ? 'POSITIONAL' : 'INTRADAY';
 
+      noteBiasRequest(symbol, exchange, mode);
       const result = await buildMarketBias(provider, symbol, exchange, mode);
 
       res.json({

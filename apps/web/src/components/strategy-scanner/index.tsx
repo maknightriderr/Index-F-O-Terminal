@@ -2,10 +2,11 @@
 
 import React, { useMemo, useState } from 'react';
 import { useFnoScanner } from '@/lib/use-fno-scanner';
+import { useStrategyTrackRecord } from '@/lib/use-strategy-track-record';
 import { useAssetTabsStore } from '@/stores';
 import { recommendStrategy, STRATEGY_MIN_CONFIDENCE, type StrategyCategory } from '@/lib/strategy-recommender';
 import { formatIndianNumber, formatPercent } from '@fno/shared';
-import type { FnoScannerRow, BiasDirection } from '@fno/shared';
+import type { FnoScannerRow, BiasDirection, StrategyTrackRecord } from '@fno/shared';
 import { BiasBadge, ScoreBadge } from '@/components/common/badges';
 import { FilterPills } from '@/components/common/filter-pills';
 import { SkeletonTableRow } from '@/components/common/skeleton';
@@ -28,6 +29,7 @@ const BIAS_OPTIONS: Array<{ value: BiasFilter; label: string }> = [
 
 export function StrategyScannerPage() {
   const { rows, isLive, loading } = useFnoScanner('NSE');
+  const { record: trackRecord, loading: trackLoading } = useStrategyTrackRecord();
   const openTab = useAssetTabsStore((s) => s.openTab);
   const [query, setQuery] = useState('');
   const [biasFilter, setBiasFilter] = useState<BiasFilter>('ALL');
@@ -78,8 +80,8 @@ export function StrategyScannerPage() {
           <h1 className="text-lg font-bold text-gray-100 light:text-slate-900">Strategy Scanner</h1>
           <p className="text-xs text-gray-400 light:text-slate-600 mt-0.5">
             An option-buying structure for NSE F&O stocks with a clear lean (confidence {STRATEGY_MIN_CONFIDENCE}+) — matched
-            from direction, IV Rank and ATM theta. Neutral or mixed stocks are left out. An unvalidated heuristic: outcomes
-            aren't tracked, unlike Trade Setups.
+            from direction, IV Rank and ATM theta. Neutral or mixed stocks are left out. A heuristic — the track record
+            below grades every day's calls against the next session.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -95,6 +97,8 @@ export function StrategyScannerPage() {
           />
         </div>
       </div>
+
+      <TrackRecordStrip record={trackRecord} loading={trackLoading} />
 
       <div className="flex items-center flex-wrap gap-4">
         <FilterPills label="Bias" options={BIAS_OPTIONS} value={biasFilter} onChange={setBiasFilter} />
@@ -184,6 +188,50 @@ export function StrategyScannerPage() {
           strike selection or a real risk/reward number — open a stock's option chain to size an actual trade.
         </p>
       )}
+    </div>
+  );
+}
+
+// Grades the direction call only: the underlying's move from one session's
+// 14:45 snapshot to the next. Option P&L also depends on strike, IV and
+// decay, so a positive average move is necessary, not sufficient.
+const TRACK_MIN_GRADED = 20;
+
+function TrackRecordStrip({ record, loading }: { record: StrategyTrackRecord | null; loading: boolean }) {
+  const shell = 'rounded-xl border border-gray-800/60 light:border-slate-200 bg-gray-900/40 light:bg-slate-50 px-4 py-3 text-xs';
+  if (!record) {
+    return <div className={`${shell} text-gray-400 light:text-slate-600`}>{loading ? 'Loading track record…' : 'Track record unavailable right now.'}</div>;
+  }
+  if (record.graded < TRACK_MIN_GRADED) {
+    return (
+      <div className={`${shell} text-gray-400 light:text-slate-600`}>
+        <span className="font-semibold text-gray-200 light:text-slate-800">Track record: building.</span>{' '}
+        Recommendations are snapshotted at {record.snapshotTime} each session and graded at the next one — {record.graded} graded,{' '}
+        {record.pending} pending{record.since ? ` since ${record.since}` : ''}. Treat the calls below as unproven until at least {TRACK_MIN_GRADED} are graded.
+      </div>
+    );
+  }
+  const good = (record.avgSignedMovePercent ?? 0) > 0 && (record.directionHitPercent ?? 0) > 50;
+  return (
+    <div className={shell}>
+      <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
+        <span className="font-semibold text-gray-200 light:text-slate-800">Track record</span>
+        <span className="tabular-nums text-gray-300 light:text-slate-700">
+          Direction right <b className={good ? 'text-emerald-400 light:text-emerald-700' : 'text-amber-400 light:text-amber-700'}>{record.directionHitPercent}%</b> of {record.graded}
+        </span>
+        <span className="tabular-nums text-gray-300 light:text-slate-700">
+          Avg move the called way <b>{(record.avgSignedMovePercent ?? 0) >= 0 ? '+' : ''}{record.avgSignedMovePercent?.toFixed(2)}%</b> by the next session
+        </span>
+        <span className="text-gray-400 light:text-slate-600">{record.snapshots} sessions since {record.since}</span>
+      </div>
+      <div className="mt-1.5 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-gray-400 light:text-slate-600 tabular-nums">
+        {record.byConfidence.filter((b) => b.graded > 0).map((b) => (
+          <span key={b.label}>Conf {b.label}: {b.directionHitPercent}% · {(b.avgSignedMovePercent ?? 0) >= 0 ? '+' : ''}{b.avgSignedMovePercent?.toFixed(2)}% (n{b.graded})</span>
+        ))}
+        {record.byStrategy.filter((b) => b.graded > 0).map((b) => (
+          <span key={b.label}>{b.label}: {b.directionHitPercent}% (n{b.graded})</span>
+        ))}
+      </div>
     </div>
   );
 }

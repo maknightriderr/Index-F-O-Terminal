@@ -1264,6 +1264,29 @@ export interface NextDayBias {
   confidence: number;
   reasoning: string[];
   timestamp: number;
+  /** Next open within ±0.15% of today's close. gapUp + gapDown + flatOpen = 100 on the empirical model. */
+  flatOpenProbability?: number;
+  /** 'empirical-v2' — trailing-window rates from daily history, no direction call. Absent on the old rule-based read. */
+  model?: string;
+  evidence?: NextDayEvidence;
+}
+
+export interface NextDayEvidence {
+  /** The session whose close the estimate is based on (today's, before its close a live preview). */
+  basisDate: string;
+  /** False while that session is still trading — the numbers move until the close. */
+  basisFinal: boolean;
+  /** That session's close (its live price while it is still trading). */
+  basisClose: number;
+  closeLocation: 'NEAR_HIGH' | 'MID' | 'NEAR_LOW';
+  rangeBucket: 'NARROW' | 'NORMAL' | 'WIDE';
+  gapSample: number;
+  trendSample: number;
+  volatileSample: number;
+  volatileConditioned: boolean;
+  atmIvPct: number | null;
+  expectedMovePoints: number | null;
+  horizonDays: number;
 }
 
 export interface InstitutionalCommentary {
@@ -1299,13 +1322,28 @@ export interface InstitutionalFlowPrediction {
   directionCorrect: boolean | null;
   rangeAccurate: boolean | null;
   forwardReturnPercent: number | null;
+  model?: string;
+  flatOpenProbability?: number | null;
+  volatileActual?: boolean | null;
 }
 
 export interface PredictionAccuracyWindow {
   count: number;
   resolvedCount: number;
+  /** Only predictions that made a direction call (the legacy intraday-bias read); the empirical model makes none. */
   directionAccuracyPercent: number | null;
+  directionCallCount?: number;
+  /** Empirical-model predictions only: next close inside the ±1σ ATM-IV range (≈68% if the IV is fair). */
   rangeAccuracyPercent: number | null;
+  rangeCount?: number;
+  /** Empirical-model predictions: mean predicted gap odds vs how often the open actually gapped, for calibration. */
+  gapUpPredictedPercent?: number | null;
+  gapUpActualPercent?: number | null;
+  gapDownPredictedPercent?: number | null;
+  gapDownActualPercent?: number | null;
+  /** Mean predicted volatile-session probability vs the realised rate, for calibration. */
+  volatilePredictedPercent?: number | null;
+  volatileActualPercent?: number | null;
   avgForwardReturnPercent: number | null;
 }
 
@@ -1480,4 +1518,30 @@ export interface Subscription {
   exchangeSegment: ExchangeSegment;
   mode: SubscriptionMode;
   source: string;         // e.g. "watchlist", "option-chain", "scanner"
+}
+
+// --- Strategy Scanner track record ---
+
+export interface StrategyTrackBucket {
+  label: string;
+  graded: number;
+  /** Share of graded recommendations where the underlying moved the called way by the next session's snapshot. */
+  directionHitPercent: number | null;
+  /** Mean underlying move in the called direction (negative = it went against the call), %. */
+  avgSignedMovePercent: number | null;
+}
+
+export interface StrategyTrackRecord {
+  /** First snapshot session, YYYY-MM-DD. */
+  since: string | null;
+  lastSnapshotDate: string | null;
+  snapshots: number;
+  graded: number;
+  pending: number;
+  directionHitPercent: number | null;
+  avgSignedMovePercent: number | null;
+  byStrategy: StrategyTrackBucket[];
+  byConfidence: StrategyTrackBucket[];
+  /** When during the session recommendations are snapshotted and graded, e.g. "14:45 IST". */
+  snapshotTime: string;
 }

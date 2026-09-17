@@ -14,14 +14,13 @@
 
 import { cached } from '../lib/cache.js';
 import { getLiveIndexQuotes } from './indices.js';
-import { scanFnoUniverse } from './fno-scanner.js';
+import { getFnoScan } from './fno-scanner.js';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 import { askClaude, type ChatTurn } from '../lib/anthropic.js';
 import type { MarketDataProvider } from '../providers/interface.js';
 
 const INDEX_CONTEXT_CACHE_TTL_SECONDS = 60;
-const SCANNER_CACHE_TTL_SECONDS = 180; // matches instruments.ts's fno-scanner cache TTL — same key, shared cache
 
 const SYSTEM_PROMPT_HEADER = `You are the AI Assistant embedded in a personal F&O trading terminal for Indian markets (NSE/BSE/MCX, via Angel One). Answer using ONLY the live data snapshot below plus general market/options knowledge — never invent numbers that aren't in the snapshot. Be concise and plain-spoken; a few sentences unless asked for more. If the snapshot doesn't have what's needed to answer precisely, say so and point to which terminal tab would (F&O Stocks, IV & Greeks, OI Intelligence, Strategy Scanner, Alerts, or opening the specific stock's tab for a full technical/option-chain read). This is data summarization and explanation, not investment advice — never phrase a reply as a recommendation to buy or sell.`;
 
@@ -36,7 +35,7 @@ interface AlertRow {
 async function buildMarketContext(provider: MarketDataProvider): Promise<string> {
   const [indices, rows, recentAlerts] = await Promise.all([
     cached('ai-context:indices', INDEX_CONTEXT_CACHE_TTL_SECONDS, () => getLiveIndexQuotes(provider)),
-    cached('fno-scanner:NSE', SCANNER_CACHE_TTL_SECONDS, () => scanFnoUniverse(provider, 'NSE')),
+    getFnoScan(provider, 'NSE'),
     sql<AlertRow[]>`
       SELECT symbol, alert_type, message, severity, created_at FROM alerts ORDER BY created_at DESC LIMIT 10
     `.catch((err) => {

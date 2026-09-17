@@ -25,6 +25,7 @@ import type {
   NewsArticle,
   CorporateAction,
   MarketScanResult,
+  StrategyTrackRecord,
   FiiDiiActivity,
 } from '@fno/shared';
 
@@ -135,6 +136,10 @@ class ApiClient {
 
   async getMarketScan() {
     return this.get<MarketScanResult>('/api/market-scanner');
+  }
+
+  async getStrategyTrackRecord() {
+    return this.get<StrategyTrackRecord>('/api/strategy-scanner/track-record');
   }
 
   async getFiiDii() {

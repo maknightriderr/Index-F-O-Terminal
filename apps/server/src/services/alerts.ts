@@ -9,7 +9,7 @@
 //
 //   1. OI / IV extremes — reads the SAME Redis-cached F&O universe
 //      scan the F&O Stocks / IV & Greeks / OI Intelligence pages
-//      already poll (`fno-scanner:${exchange}`, see instruments.ts).
+//      already poll (getFnoScan in fno-scanner.ts).
 //      If that cache is warm this is a pure Redis read; if cold, it
 //      triggers one scan (~40 quote requests) — no worse than a user
 //      loading any of those pages already does.
@@ -24,12 +24,11 @@
 // per symbol per IST day) rather than once per scan tick.
 // ============================================================
 
-import { cached } from '../lib/cache.js';
 import { redis } from '../lib/redis.js';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 import { sendTelegramMessage, isTelegramConfigured } from '../lib/telegram.js';
-import { scanFnoUniverse } from './fno-scanner.js';
+import { getFnoScan } from './fno-scanner.js';
 import { getLiveIndexQuotes } from './indices.js';
 import { buildOptionChain } from './option-chain.js';
 import { INSTITUTIONAL_SYMBOLS } from './institutional-flow.js';
@@ -39,7 +38,6 @@ import type { AlertChannel, Exchange, SignalType } from '@fno/shared';
 
 const SCAN_INTERVAL_MS = 120_000; // 2 minutes
 const INITIAL_DELAY_MS = 30_000; // let the provider/cache warm up after boot before the first tick
-const SCANNER_CACHE_TTL_SECONDS = 180; // must match instruments.ts's fno-scanner cache TTL — same key, shared cache
 
 // Raised from 8/85/15 after a real-world complaint: at the old bar these
 // fired for dozens of the ~180-stock F&O universe on an ordinary day —
@@ -141,7 +139,7 @@ async function checkInstitutionalFlowAlerts(provider: MarketDataProvider): Promi
 
   let rows;
   try {
-    rows = await cached(`fno-scanner:NSE`, SCANNER_CACHE_TTL_SECONDS, () => scanFnoUniverse(provider, 'NSE'));
+    rows = await getFnoScan(provider, 'NSE');
   } catch (err: any) {
     logger.warn({ error: err.message }, 'Alert scan: unusual activity check unavailable this tick');
     return;
@@ -195,7 +193,7 @@ async function checkOiAndIvAlerts(provider: MarketDataProvider): Promise<void> {
 
   let rows;
   try {
-    rows = await cached(`fno-scanner:NSE`, SCANNER_CACHE_TTL_SECONDS, () => scanFnoUniverse(provider, 'NSE'));
+    rows = await getFnoScan(provider, 'NSE');
   } catch (err: any) {
     logger.warn({ error: err.message }, 'Alert scan: F&O universe scan unavailable this tick');
     return;

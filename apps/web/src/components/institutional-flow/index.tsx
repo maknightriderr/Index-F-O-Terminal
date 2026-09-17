@@ -54,7 +54,7 @@ export function InstitutionalFlowPage() {
       )}
 
       {/* Section 5: Next-Day Market Bias Engine */}
-      <SectionHeader title="Next-Day Market Bias Engine" subtitle="Gap / trend / range / volatility read from the current bias, regime, and India VIX — a fixed rule, not a fitted model. Each card shows how often its direction call has actually been right." />
+      <SectionHeader title="Next-Day Market Bias Engine" subtitle="Next-session odds measured from each index’s own daily history — only reads that held up out of sample, and deliberately no direction call." />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {biases.map((b) => (
           <NextDayBiasCard key={b.symbol} bias={b} />
@@ -72,7 +72,7 @@ export function InstitutionalFlowPage() {
       {commentary && <CommentaryCard commentary={commentary} />}
 
       {/* Section 7: Historical Accuracy Tracking */}
-      <SectionHeader title="Historical Accuracy Tracking" subtitle="Starts from zero real history today — honestly reads 'not enough data yet' until real trading days accumulate." />
+      <SectionHeader title="Historical Accuracy Tracking" subtitle="Every prediction is graded against the next session’s daily candle. Legacy rows are the old intraday-bias direction calls, kept for the record." />
       <AccuracySection symbol={accuracySymbol} onSymbolChange={setAccuracySymbol} predictions={predictions} accuracy={accuracy} loading={accuracyLoading} />
 
       {/* Section 8: Alerts Engine */}
@@ -188,72 +188,119 @@ function ProbabilityBar({ label, value, color }: { label: string; value: number;
   );
 }
 
-// A direction call needs this many resolved days, and this hit rate, before
-// the card presents it (and its probabilities) as a read rather than an
-// experiment. Checked on 17 Sep: NIFTY's call was right 9 of 25 days (36%),
-// worse than always saying "bearish" (44%) — while the IV range held 80%.
-const NEXT_DAY_MIN_RESOLVED = 10;
-const NEXT_DAY_MIN_DIRECTION_ACCURACY_PCT = 55;
+// The empirical model (server: next-day-model.ts) makes no direction call —
+// no tested rule predicted the next close out of sample — and states only
+// base rates or reads that held up walk-forward. The card shows each figure
+// with its sample and, once predictions are graded, how it has tracked.
+const RANGE_TARGET_PCT = 68;
+const MIN_GRADED_TO_SHOW = 5;
+
+function formatShortDate(date: string): string {
+  const d = new Date(`${date}T12:00:00+05:30`);
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' });
+}
 
 function NextDayBiasCard({ bias }: { bias: NextDayBias }) {
   const { accuracy } = usePredictionAccuracy(bias.symbol);
   const record = accuracy?.last30 ?? null;
-  const rated = record != null && record.resolvedCount >= NEXT_DAY_MIN_RESOLVED && record.directionAccuracyPercent != null;
-  const directionTrusted = rated && record!.directionAccuracyPercent! >= NEXT_DAY_MIN_DIRECTION_ACCURACY_PCT;
-  const dirColor = !directionTrusted
-    ? 'text-gray-400 light:text-slate-600'
-    : bias.predictedDirection === 'BULLISH' ? 'text-emerald-400' : bias.predictedDirection === 'BEARISH' ? 'text-red-400' : 'text-gray-400';
+  const ev = bias.evidence;
+  const [showWhy, setShowWhy] = useState(false);
 
-  const probabilityBars = (
-    <>
-      <div className="grid grid-cols-2 gap-x-4 gap-y-2.5 mb-3">
-        <ProbabilityBar label="Gap Up" value={bias.gapUpProbability} color="bg-emerald-500" />
-        <ProbabilityBar label="Gap Down" value={bias.gapDownProbability} color="bg-red-500" />
-        <ProbabilityBar label="Trend Day" value={bias.trendDayProbability} color="bg-cyan-500" />
-        <ProbabilityBar label="Range-Bound" value={bias.rangeBoundProbability} color="bg-amber-500" />
-      </div>
-      <ProbabilityBar label="Volatile Session" value={bias.volatileSessionProbability} color="bg-fuchsia-500" />
-    </>
-  );
+  // An old server build without the empirical model: show the raw numbers, clearly unrated.
+  if (!ev) {
+    return (
+      <Card accent="border-t-purple-500/50">
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-sm font-bold text-gray-200 light:text-slate-800">{bias.symbol}</span>
+          <span className="text-xs text-gray-400 light:text-slate-600">rule-based read · unvalidated</span>
+        </div>
+        <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
+          <ProbabilityBar label="Gap Up" value={bias.gapUpProbability} color="bg-emerald-500" />
+          <ProbabilityBar label="Gap Down" value={bias.gapDownProbability} color="bg-red-500" />
+        </div>
+      </Card>
+    );
+  }
+
+  const graded = (n: number | undefined) => (n ?? 0) >= MIN_GRADED_TO_SHOW;
 
   return (
     <Card accent="border-t-purple-500/50">
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-sm font-bold text-gray-200 light:text-slate-800">{bias.symbol}</span>
-        <span className={`text-xs font-bold ${dirColor}`}>
-          {bias.predictedDirection} · {bias.confidence}/100{!directionTrusted && ' · experimental'}
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div>
+          <div className="text-sm font-bold text-gray-200 light:text-slate-800">{bias.symbol}</div>
+          <div className="text-[11px] text-gray-400 light:text-slate-600">
+            {ev.basisFinal ? `From the ${formatShortDate(ev.basisDate)} close` : `Preview — ${formatShortDate(ev.basisDate)} is still trading`}
+          </div>
+        </div>
+        <span
+          className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-800/70 light:bg-slate-100 text-gray-300 light:text-slate-700 whitespace-nowrap"
+          title="No tested price rule predicted the next close’s direction out of sample (2023–2026), so none is given."
+        >
+          No direction call
         </span>
       </div>
 
-      <div className="flex items-center justify-between pb-3 mb-3 border-b border-gray-800/60 light:border-slate-200">
+      <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5">
+        Next open vs close · last {ev.gapSample} sessions
+      </div>
+      <div className="grid grid-cols-3 gap-3 mb-3">
+        <ProbabilityBar label="Gap up" value={bias.gapUpProbability} color="bg-emerald-500" />
+        <ProbabilityBar label="Flat" value={bias.flatOpenProbability ?? Math.max(0, 100 - bias.gapUpProbability - bias.gapDownProbability)} color="bg-gray-500" />
+        <ProbabilityBar label="Gap down" value={bias.gapDownProbability} color="bg-red-500" />
+      </div>
+
+      <div className="grid grid-cols-2 gap-x-4 gap-y-2.5 mb-3">
+        <ProbabilityBar label={`Volatile session · after a ${ev.rangeBucket.toLowerCase()} day`} value={bias.volatileSessionProbability} color="bg-fuchsia-500" />
+        <ProbabilityBar label="Trend day · base rate" value={bias.trendDayProbability} color="bg-cyan-500" />
+      </div>
+
+      <div className="flex items-center justify-between pt-3 border-t border-gray-800/60 light:border-slate-200">
         <span className="text-[11px] text-gray-400 light:text-slate-600">
-          Expected Range
-          {rated && record!.rangeAccuracyPercent != null && (
-            <span className="ml-1 tabular-nums">· held {record!.rangeAccuracyPercent}% of the last {record!.resolvedCount} days</span>
-          )}
+          Expected close range
+          {ev.atmIvPct != null && <span className="tabular-nums"> · ±1σ, ATM IV {ev.atmIvPct.toFixed(1)}%</span>}
         </span>
         <span className="text-xs font-bold text-gray-200 light:text-slate-800 tabular-nums">
-          {formatIndianNumber(bias.expectedRangeLow, 0)} – {formatIndianNumber(bias.expectedRangeHigh, 0)}
+          {bias.expectedRangeLow > 0 ? `${formatIndianNumber(bias.expectedRangeLow, 0)} – ${formatIndianNumber(bias.expectedRangeHigh, 0)}` : '—'}
         </span>
       </div>
 
-      <p className="text-[11px] leading-snug text-gray-400 light:text-slate-600 mb-3">
-        {!rated
-          ? `Direction track record: ${record ? `${record.resolvedCount} resolved day${record.resolvedCount === 1 ? '' : 's'}` : 'loading'} — not enough to rate yet.`
-          : `Direction right ${record!.directionAccuracyPercent}% of the last ${record!.resolvedCount} resolved days${
-              directionTrusted ? '.' : ` — below the ${NEXT_DAY_MIN_DIRECTION_ACCURACY_PCT}% needed to rely on it, so treat the call and the rule-based probabilities as experimental.`
-            }`}
-      </p>
+      <div className="mt-2.5 text-[11px] leading-snug text-gray-400 light:text-slate-600 space-y-0.5">
+        {record && graded(record.rangeCount) ? (
+          <>
+            <div className="tabular-nums">
+              Track record ({record.rangeCount} graded): close inside the range {record.rangeAccuracyPercent}% (≈{RANGE_TARGET_PCT}% if IV is fair)
+            </div>
+            {record.gapUpPredictedPercent != null && (
+              <div className="tabular-nums">
+                Gap up predicted {record.gapUpPredictedPercent}% · happened {record.gapUpActualPercent}% — gap down {record.gapDownPredictedPercent}% · {record.gapDownActualPercent}%
+              </div>
+            )}
+            {record.volatilePredictedPercent != null && (
+              <div className="tabular-nums">
+                Volatile session predicted {record.volatilePredictedPercent}% · happened {record.volatileActualPercent}%
+              </div>
+            )}
+          </>
+        ) : (
+          <div>Track record builds from here: {record?.rangeCount ?? 0} graded so far — each prediction is graded against the next session’s candle.</div>
+        )}
+      </div>
 
-      {directionTrusted ? (
-        probabilityBars
-      ) : (
-        <details className="group">
-          <summary className="cursor-pointer text-[11px] font-semibold text-gray-400 light:text-slate-600 hover:text-gray-200 light:hover:text-slate-800 select-none">
-            Show rule-based probabilities (not calibrated)
-          </summary>
-          <div className="mt-3">{probabilityBars}</div>
-        </details>
+      <button
+        type="button"
+        onClick={() => setShowWhy((v) => !v)}
+        className="mt-2.5 text-[11px] font-semibold text-gray-400 light:text-slate-600 hover:text-gray-200 light:hover:text-slate-800"
+        aria-expanded={showWhy}
+      >
+        {showWhy ? 'Hide how these are measured' : 'How these are measured'}
+      </button>
+      {showWhy && (
+        <ul className="mt-1.5 space-y-1 text-[11px] leading-snug text-gray-400 light:text-slate-600 list-disc pl-4">
+          {bias.reasoning.map((r, i) => (
+            <li key={i}>{r}</li>
+          ))}
+        </ul>
       )}
     </Card>
   );
@@ -352,28 +399,37 @@ function AccuracySection({
               <thead>
                 <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
                   <th className="text-left px-2 py-1.5 font-medium">Date</th>
-                  <th className="text-center px-2 py-1.5 font-medium">Predicted</th>
-                  <th className="text-right px-2 py-1.5 font-medium">Range</th>
-                  <th className="text-center px-2 py-1.5 font-medium">Actual</th>
-                  <th className="text-center px-2 py-1.5 font-medium">Direction</th>
-                  <th className="text-center px-2 py-1.5 font-medium">Range Hit</th>
-                  <th className="text-right px-2 py-1.5 font-medium">Fwd Return</th>
+                  <th className="text-center px-2 py-1.5 font-medium">Prediction</th>
+                  <th className="text-right px-2 py-1.5 font-medium">Close range</th>
+                  <th className="text-center px-2 py-1.5 font-medium">Open</th>
+                  <th className="text-center px-2 py-1.5 font-medium">Volatile</th>
+                  <th className="text-center px-2 py-1.5 font-medium">In range / call</th>
+                  <th className="text-right px-2 py-1.5 font-medium">Next close</th>
                 </tr>
               </thead>
               <tbody>
                 {predictions.map((p) => (
                   <tr key={p.id} className="border-t border-gray-800/40 light:border-slate-200">
                     <td className="px-2 py-1.5 text-gray-400 light:text-slate-600">{p.predictionDate}</td>
-                    <td className="text-center px-2 py-1.5 font-medium">{p.predictedDirection}</td>
-                    <td className="text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600">
-                      {formatIndianNumber(p.predictedRangeLow, 0)}–{formatIndianNumber(p.predictedRangeHigh, 0)}
+                    <td className="text-center px-2 py-1.5 font-medium tabular-nums whitespace-nowrap">
+                      {p.model === 'empirical-v2' ? (
+                        <span className="text-gray-300 light:text-slate-700">↑{p.gapUpProbability} ↓{p.gapDownProbability} · vol {p.volatileSessionProbability}%</span>
+                      ) : (
+                        <span title="Old intraday-bias direction call">{p.predictedDirection} <span className="text-[10px] text-gray-500">legacy</span></span>
+                      )}
                     </td>
-                    <td className="text-center px-2 py-1.5">{p.resolved ? p.actualDirection ?? '—' : <span className="text-gray-400 light:text-slate-600 italic">pending</span>}</td>
-                    <td className="text-center px-2 py-1.5">
-                      {p.directionCorrect == null ? '—' : p.directionCorrect ? <span className="text-emerald-400">✓</span> : <span className="text-red-400">✕</span>}
+                    <td className="text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600 whitespace-nowrap">
+                      {p.model === 'empirical-v2' && p.predictedRangeLow > 0 ? `${formatIndianNumber(p.predictedRangeLow, 0)}–${formatIndianNumber(p.predictedRangeHigh, 0)}` : '—'}
                     </td>
                     <td className="text-center px-2 py-1.5">
-                      {p.rangeAccurate == null ? '—' : p.rangeAccurate ? <span className="text-emerald-400">✓</span> : <span className="text-red-400">✕</span>}
+                      {p.resolved ? (p.actualGapType === 'GAP_UP' ? 'Gap up' : p.actualGapType === 'GAP_DOWN' ? 'Gap down' : 'Flat') : <span className="text-gray-400 light:text-slate-600 italic">pending</span>}
+                    </td>
+                    <td className="text-center px-2 py-1.5">{p.volatileActual == null ? '—' : p.volatileActual ? 'Yes' : 'No'}</td>
+                    <td className="text-center px-2 py-1.5">
+                      {(() => {
+                        const hit = p.model === 'empirical-v2' ? p.rangeAccurate : p.directionCorrect;
+                        return hit == null ? '—' : hit ? <span className="text-emerald-400">✓</span> : <span className="text-red-400">✕</span>;
+                      })()}
                     </td>
                     <td className={`text-right px-2 py-1.5 tabular-nums font-medium ${p.forwardReturnPercent == null ? 'text-gray-400' : p.forwardReturnPercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                       {p.forwardReturnPercent != null ? `${p.forwardReturnPercent >= 0 ? '+' : ''}${p.forwardReturnPercent.toFixed(2)}%` : '—'}
@@ -390,18 +446,30 @@ function AccuracySection({
 }
 
 function AccuracyWindowCard({ title, window: w }: { title: string; window: PredictionAccuracyWindow }) {
+  const ranges = w.rangeCount ?? 0;
+  const legacyCalls = w.directionCallCount ?? 0;
   return (
     <Card>
       <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-2">{title}</div>
       {w.resolvedCount === 0 ? (
-        <p className="text-[11px] text-gray-400 light:text-slate-600">Not enough data yet</p>
+        <p className="text-[11px] text-gray-400 light:text-slate-600">Nothing graded yet</p>
       ) : (
         <>
-          <div className="text-2xl font-bold tabular-nums text-gray-100 light:text-slate-900">{w.directionAccuracyPercent ?? '—'}%</div>
-          <div className="text-[10px] text-gray-400 light:text-slate-600 mb-2">direction accuracy · {w.resolvedCount} resolved</div>
-          <div className="flex justify-between text-[10px] text-gray-400 light:text-slate-600">
-            <span>Range hit: {w.rangeAccuracyPercent ?? '—'}%</span>
-            <span>Avg: {w.avgForwardReturnPercent != null ? `${w.avgForwardReturnPercent >= 0 ? '+' : ''}${w.avgForwardReturnPercent}%` : '—'}</span>
+          <div className="text-2xl font-bold tabular-nums text-gray-100 light:text-slate-900">{ranges > 0 ? `${w.rangeAccuracyPercent}%` : '—'}</div>
+          <div className="text-[10px] text-gray-400 light:text-slate-600 mb-2">
+            {ranges > 0 ? `close inside range · ${ranges} graded · ≈${RANGE_TARGET_PCT}% expected` : 'no empirical-model predictions graded yet'}
+          </div>
+          <div className="space-y-0.5 text-[10px] text-gray-400 light:text-slate-600 tabular-nums">
+            {w.gapUpPredictedPercent != null && (
+              <div>Gap up {w.gapUpPredictedPercent}% predicted · {w.gapUpActualPercent}% actual</div>
+            )}
+            {w.volatilePredictedPercent != null && (
+              <div>Volatile {w.volatilePredictedPercent}% predicted · {w.volatileActualPercent}% actual</div>
+            )}
+            {legacyCalls > 0 && (
+              <div>Legacy direction calls: {w.directionAccuracyPercent}% of {legacyCalls}</div>
+            )}
+            <div>Avg next-day move: {w.avgForwardReturnPercent != null ? `${w.avgForwardReturnPercent >= 0 ? '+' : ''}${w.avgForwardReturnPercent}%` : '—'}</div>
           </div>
         </>
       )}

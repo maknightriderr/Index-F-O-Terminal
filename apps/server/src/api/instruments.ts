@@ -6,10 +6,8 @@ import { Router, type Request, type Response } from 'express';
 import { logger } from '../lib/logger.js';
 import type { MarketDataProvider } from '../providers/interface.js';
 import type { Exchange } from '@fno/shared';
-import { scanFnoUniverse } from '../services/fno-scanner.js';
-import { cached } from '../lib/cache.js';
+import { getFnoScan } from '../services/fno-scanner.js';
 
-const SCANNER_CACHE_TTL_SECONDS = 180;
 
 export function createInstrumentRoutes(provider: MarketDataProvider): Router {
   const router = Router();
@@ -110,9 +108,7 @@ export function createInstrumentRoutes(provider: MarketDataProvider): Router {
   router.get('/fno-scanner', async (req: Request, res: Response) => {
     try {
       const exchange = ((req.query.exchange as string) || 'NSE') as Exchange;
-      const data = await cached(`fno-scanner:${exchange}`, SCANNER_CACHE_TTL_SECONDS, () =>
-        scanFnoUniverse(provider, exchange)
-      );
+      const data = await getFnoScan(provider, exchange);
 
       res.json({
         success: true,

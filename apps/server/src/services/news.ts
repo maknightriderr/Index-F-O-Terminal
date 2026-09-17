@@ -20,6 +20,11 @@ const NEWS_CACHE_TTL_SECONDS = 300; // 5 minutes — news doesn't need sub-minut
 const MAX_ARTICLES = 15;
 const GOOGLE_NEWS_RSS_BASE = 'https://news.google.com/rss/search';
 const FETCH_TIMEOUT_MS = 8000;
+// Google News ranks by relevance across all time: RELIANCE's default feed had
+// 9 articles from the last 30 days among 100 reaching back 301 days, and the
+// page showed items 58 days old. `when:` restricts the search to recent news
+// (48 of 48 within 30 days); the age filter below is the backstop.
+const MAX_ARTICLE_AGE_DAYS = 30;
 
 // Well-known index aliases — Google News understands "NIFTY 50" better
 // than just "NIFTY", and "SENSEX" better than "BSE SENSEX".
@@ -83,14 +88,15 @@ const STOCK_NAME_MAP: Record<string, string> = {
 
 export async function getNewsForSymbol(symbol: string): Promise<NewsArticle[]> {
   const cacheKey = `news:${symbol}`;
-  return cached(cacheKey, NEWS_CACHE_TTL_SECONDS, () => fetchNewsUncached(symbol));
+  // A failed fetch returns [] — don't lock that in for the full TTL.
+  return cached(cacheKey, NEWS_CACHE_TTL_SECONDS, () => fetchNewsUncached(symbol), (articles) => articles.length > 0);
 }
 
 async function fetchNewsUncached(symbol: string): Promise<NewsArticle[]> {
   const searchTerm = buildSearchQuery(symbol);
 
   try {
-    const url = `${GOOGLE_NEWS_RSS_BASE}?q=${encodeURIComponent(searchTerm)}&hl=en-IN&gl=IN&ceid=IN:en`;
+    const url = `${GOOGLE_NEWS_RSS_BASE}?q=${encodeURIComponent(`${searchTerm} when:${MAX_ARTICLE_AGE_DAYS}d`)}&hl=en-IN&gl=IN&ceid=IN:en`;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
@@ -110,7 +116,12 @@ async function fetchNewsUncached(symbol: string): Promise<NewsArticle[]> {
     // chronological — sort newest-first before capping so the freshest
     // articles survive the MAX_ARTICLES cut instead of whatever the feed
     // happened to list first.
+    const cutoff = Date.now() - MAX_ARTICLE_AGE_DAYS * 24 * 60 * 60 * 1000;
     return parseRssXml(xml)
+      .filter((a) => {
+        const t = new Date(a.publishedAt).getTime();
+        return Number.isFinite(t) && t >= cutoff;
+      })
       .sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime())
       .slice(0, MAX_ARTICLES);
   } catch (err: any) {

@@ -21,7 +21,7 @@ import { detectPattern } from '@fno/analytics';
 import type { DetectedChartPattern, Exchange, HistoricalParams, OHLCV } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveSpotToken } from './option-chain.js';
-import { scanFnoUniverse } from './fno-scanner.js';
+import { getFnoScan } from './fno-scanner.js';
 import { INDEX_LIST } from './indices.js';
 import { cached } from '../lib/cache.js';
 import { redis } from '../lib/redis.js';
@@ -92,7 +92,7 @@ async function resolveTargets(provider: MarketDataProvider): Promise<Array<{ sym
   try {
     // Same cache key alerts.ts's OI/IV check reads — if that tick already
     // warmed it, this is a pure Redis read, not a fresh universe scan.
-    const rows = await cached('fno-scanner:NSE', 180, () => scanFnoUniverse(provider, 'NSE'));
+    const rows = await getFnoScan(provider, 'NSE');
     topStocks = rows.slice(0, TOP_FNO_COUNT).map((r) => ({ symbol: r.symbol, exchange: r.exchange }));
   } catch (err: any) {
     logger.warn({ error: err.message }, 'Chart pattern scan: F&O universe unavailable, scanning indices only this tick');

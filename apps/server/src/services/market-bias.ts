@@ -190,15 +190,20 @@ export async function buildMarketBias(
   }
 }
 
-async function computeMarketBias(
+/**
+ * The historical candles a bias read needs (and, for NSE/BSE indices, the
+ * nearest future's volume borrowed onto them), fetched through the same
+ * cache keys and TTLs the read uses. Split out of computeMarketBias so the
+ * cache warmer can pre-load exactly these inputs without computing a bias —
+ * a bias read has side effects (it mints trade setups and advances the vote
+ * hold state), so warming must never call it.
+ */
+export async function loadBiasCandles(
   provider: MarketDataProvider,
   underlying: string,
   exchange: Exchange,
-  resultCacheKey: string,
-  mode: TradingMode = 'INTRADAY'
-): Promise<MarketBiasResult> {
-  const isPositional = mode === 'POSITIONAL';
-
+  isPositional: boolean
+): Promise<{ candles15m: OHLCV[]; candles1h: OHLCV[]; volumeSource: 'UNDERLYING' | 'NEAREST_FUTURE' | 'NONE' }> {
   const spotToken = await resolveSpotToken(provider, underlying, exchange);
   // MCX's "spot" instrument is a synthetic reference feed (e.g. CRUDEOILCOM)
   // with live quotes but no historical candle series at all — Angel One
@@ -245,18 +250,30 @@ async function computeMarketBias(
   // HISTORICAL_CACHE_TTL_SECONDS on success, so this only costs the extra
   // round-trip latency on a cache miss, not on every poll.
   const nonEmpty = (candles: OHLCV[]) => candles.length > 0;
+  // The stagger only matters between real broker calls. It used to run
+  // unconditionally, so every bias read paid 1.2-2.4s of sleep even when
+  // every series came straight from the cache.
+  let fetchedSinceStagger = false;
+  const fetchCandles = (params: Parameters<typeof fetchHistoricalWithRetry>[1]) => {
+    fetchedSinceStagger = true;
+    return fetchHistoricalWithRetry(provider, params);
+  };
+  const staggerIfFetched = async () => {
+    if (fetchedSinceStagger) await sleep(1200);
+    fetchedSinceStagger = false;
+  };
 
   let candles15m = await cached(
     `hist:${exchange}:${historicalToken}:${shortIntervalKey}`,
     isPositional ? POSITIONAL_SHORT_TIER_CACHE_TTL_SECONDS : HISTORICAL_CACHE_TTL_SECONDS,
-    () => fetchHistoricalWithRetry(provider, { exchange, token: historicalToken, interval: shortInterval, fromDate: from15m, toDate }),
+    () => fetchCandles({ exchange, token: historicalToken, interval: shortInterval, fromDate: from15m, toDate }),
     nonEmpty
   );
-  await sleep(1200);
+  await staggerIfFetched();
   let candles1h = await cached(
     `hist:${exchange}:${historicalToken}:${longIntervalKey}`,
     isPositional ? POSITIONAL_LONG_TIER_CACHE_TTL_SECONDS : INTRADAY_LONG_TIER_CACHE_TTL_SECONDS,
-    () => fetchHistoricalWithRetry(provider, { exchange, token: historicalToken, interval: longInterval, fromDate: from1h, toDate }),
+    () => fetchCandles({ exchange, token: historicalToken, interval: longInterval, fromDate: from1h, toDate }),
     nonEmpty
   );
 
@@ -276,12 +293,12 @@ async function computeMarketBias(
     volumeSource = 'NONE';
     const volumeFuture = await resolveNearestFuturesContract(provider, underlying, exchange).catch(() => undefined);
     if (volumeFuture) {
-      await sleep(1200);
+      await staggerIfFetched();
       const futureCandles = await cached(
         `hist:${exchange}:FO:${volumeFuture.token}:${shortIntervalKey}`,
         FUTURES_VOLUME_CACHE_TTL_SECONDS,
         () =>
-          fetchHistoricalWithRetry(provider, {
+          fetchCandles({
             exchange,
             segment: 'FO',
             token: volumeFuture.token,
@@ -298,6 +315,20 @@ async function computeMarketBias(
       }
     }
   }
+
+  return { candles15m, candles1h, volumeSource };
+}
+
+async function computeMarketBias(
+  provider: MarketDataProvider,
+  underlying: string,
+  exchange: Exchange,
+  resultCacheKey: string,
+  mode: TradingMode = 'INTRADAY'
+): Promise<MarketBiasResult> {
+  const isPositional = mode === 'POSITIONAL';
+
+  const { candles15m, candles1h, volumeSource } = await loadBiasCandles(provider, underlying, exchange, isPositional);
 
   const targetExpiry = await resolveTargetExpiry(provider, underlying, exchange, mode);
 

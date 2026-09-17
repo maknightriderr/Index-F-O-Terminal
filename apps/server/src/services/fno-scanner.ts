@@ -16,13 +16,16 @@
 // to ~40 quote requests instead of thousands.
 // ============================================================
 
-import { CM_SEGMENT, FO_SEGMENT, RISK_FREE_RATE, KNOWN_INDEX_TOKENS, getATMStrike, yearsToExpiry, isExpiryActive } from '@fno/shared';
+import { CM_SEGMENT, FO_SEGMENT, RISK_FREE_RATE, KNOWN_INDEX_TOKENS, getATMStrike, yearsToExpiry, isExpiryActive, isMarketOpen, minutesSinceSessionOpen } from '@fno/shared';
 import type { Exchange, Instrument, OIInterpretation, BiasDirection, FnoScannerRow, Greeks } from '@fno/shared';
 import { classifyFuturesOI, calculateGreeksFromPrice } from '@fno/analytics';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { computeChangeOi } from '../lib/oi-baseline.js';
 import { inferStrikeInterval } from './option-chain.js';
 import { sql } from '../lib/db.js';
+import { cached } from '../lib/cache.js';
+import { redis } from '../lib/redis.js';
+import { stockExpiryInForce, ivClockCorrection } from './iv-history-clock.js';
 import { logger } from '../lib/logger.js';
 
 export type { FnoScannerRow };
@@ -34,6 +37,35 @@ interface StockEntry {
   eq: Instrument;
   futures: Instrument[];
   options: Instrument[];
+}
+
+// --- Shared scan cache ---
+// Every reader of the universe scan (F&O Stocks / IV & Greeks / OI pages,
+// alerts, chart patterns, institutional flow, the assistant) goes through
+// getFnoScan, so they share one cached scan. While the exchange trades it
+// lives FNO_SCAN_LIVE_TTL_SECONDS; outside the session the quotes are frozen,
+// so it lives FNO_SCAN_CLOSED_TTL_SECONDS instead of re-running a ~20s scan
+// every few minutes for nothing. The cache warmer keeps it hot in session.
+export const FNO_SCAN_LIVE_TTL_SECONDS = 180;
+export const FNO_SCAN_CLOSED_TTL_SECONDS = 30 * 60;
+
+export function fnoScanCacheKey(exchange: Exchange): string {
+  return `fno-scanner:${exchange}`;
+}
+
+function fnoScanTtl(exchange: Exchange): number {
+  return isMarketOpen(exchange) ? FNO_SCAN_LIVE_TTL_SECONDS : FNO_SCAN_CLOSED_TTL_SECONDS;
+}
+
+export function getFnoScan(provider: MarketDataProvider, exchange: Exchange = 'NSE'): Promise<FnoScannerRow[]> {
+  return cached(fnoScanCacheKey(exchange), fnoScanTtl(exchange), () => scanFnoUniverse(provider, exchange), (rows) => rows.length > 0);
+}
+
+/** Recomputes the scan and replaces the cached copy — for the warmer, which refreshes before expiry. */
+export async function refreshFnoScan(provider: MarketDataProvider, exchange: Exchange = 'NSE'): Promise<number> {
+  const rows = await scanFnoUniverse(provider, exchange);
+  if (rows.length > 0) await redis.set(fnoScanCacheKey(exchange), JSON.stringify(rows), 'EX', fnoScanTtl(exchange));
+  return rows.length;
 }
 
 export async function scanFnoUniverse(provider: MarketDataProvider, exchange: Exchange = 'NSE'): Promise<FnoScannerRow[]> {
@@ -118,7 +150,7 @@ export async function scanFnoUniverse(provider: MarketDataProvider, exchange: Ex
   const now = Date.now();
 
   const rows: FnoScannerRow[] = [];
-  const ivInputs: Array<{ symbol: string; atmIv: number; ceIv: number; peIv: number; ivSkew: number }> = [];
+  const ivInputs: IvInput[] = [];
 
   for (const { stock, inst: futInst } of nearestFutures) {
     const eqQuote = eqByToken.get(stock.eq.token);
@@ -210,7 +242,7 @@ export async function scanFnoUniverse(provider: MarketDataProvider, exchange: Ex
     const ivSkew = ceIv > 0 && peIv > 0 ? ceIv - peIv : 0;
     const { direction, confidence, score } = lightweightBias(changePercent, oiInterpretation, futuresChangeOiPercent, pcr);
 
-    if (atmIv > 0) ivInputs.push({ symbol: stock.symbol, atmIv, ceIv, peIv, ivSkew });
+    if (atmIv > 0 && pick) ivInputs.push({ symbol: stock.symbol, expiry: pick.expiry, atmIv, ceIv, peIv, ivSkew });
 
     rows.push({
       symbol: stock.symbol,
@@ -378,33 +410,54 @@ interface IvRankResult {
   ivPercentile: number | null;
 }
 
-async function computeIvRanks(
-  inputs: Array<{ symbol: string; atmIv: number; ceIv: number; peIv: number; ivSkew: number }>
-): Promise<Map<string, IvRankResult>> {
+interface IvInput {
+  symbol: string;
+  expiry: string;
+  atmIv: number;
+  ceIv: number;
+  peIv: number;
+  ivSkew: number;
+}
+
+// One IV sample per stock per trading day feeds IV Rank. It's taken from a
+// scan at least IV_SAMPLE_MIN_MINUTES into the NSE session: the first scan of
+// the day used to be whatever ran first — often just after midnight or
+// before the open, off frozen quotes — and the "already sampled today"
+// check compared the database's UTC date with the IST date.
+const IV_SAMPLE_MIN_MINUTES = 30;
+
+async function computeIvRanks(inputs: IvInput[]): Promise<Map<string, IvRankResult>> {
   const result = new Map<string, IvRankResult>();
   if (inputs.length === 0) return result;
 
   try {
+    await repairIvHistoryClockOnce();
+
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
     const symbols = inputs.map((r) => r.symbol);
+    const minutesIn = minutesSinceSessionOpen('NSE');
 
-    const existingToday = await sql<{ symbol: string }[]>`
-      SELECT DISTINCT symbol FROM iv_history WHERE symbol = ANY(${symbols}) AND time::date = ${today}
-    `;
-    const already = new Set(existingToday.map((r) => r.symbol));
-
-    const toInsert = inputs.filter((r) => !already.has(r.symbol));
-    if (toInsert.length > 0) {
-      await sql`
-        INSERT INTO iv_history ${sql(toInsert.map((r) => ({
-          time: new Date(),
-          symbol: r.symbol,
-          atm_iv: r.atmIv,
-          ce_iv: r.ceIv || null,
-          pe_iv: r.peIv || null,
-          iv_skew: r.ivSkew || null,
-        })))}
+    if (minutesIn != null && minutesIn >= IV_SAMPLE_MIN_MINUTES) {
+      const existingToday = await sql<{ symbol: string }[]>`
+        SELECT DISTINCT symbol FROM iv_history
+        WHERE symbol = ANY(${symbols}) AND (time AT TIME ZONE 'Asia/Kolkata')::date = ${today}::date
       `;
+      const already = new Set(existingToday.map((r) => r.symbol));
+
+      const toInsert = inputs.filter((r) => !already.has(r.symbol));
+      if (toInsert.length > 0) {
+        await sql`
+          INSERT INTO iv_history ${sql(toInsert.map((r) => ({
+            time: new Date(),
+            symbol: r.symbol,
+            expiry: r.expiry,
+            atm_iv: r.atmIv,
+            ce_iv: r.ceIv || null,
+            pe_iv: r.peIv || null,
+            iv_skew: r.ivSkew || null,
+          })))}
+        `;
+      }
     }
 
     const stats = await sql<{ symbol: string; values: string[] }[]>`
@@ -413,7 +466,7 @@ async function computeIvRanks(
       WHERE symbol = ANY(${symbols}) AND time > NOW() - INTERVAL '365 days' AND atm_iv IS NOT NULL
       GROUP BY symbol
     `;
-    const statsBySymbol = new Map(stats.map((s) => [s.symbol, s.values.map(Number)]));
+    const statsBySymbol = new Map(stats.map((st) => [st.symbol, st.values.map(Number)]));
 
     for (const { symbol, atmIv } of inputs) {
       const values = statsBySymbol.get(symbol) ?? [];
@@ -434,4 +487,64 @@ async function computeIvRanks(
   }
 
   return result;
+}
+
+// --- One-time repair of IV history recorded on the old expiry clock ---
+// Until 17 Sep 2026 14:20 IST, time to expiry ran to 05:30 IST on expiry
+// morning instead of the 15:30 close, so every stored IV was solved with T
+// about 10 hours short and read high (most near expiry). For an ATM option
+// IV scales with 1/sqrt(T), so each sample is rescaled by
+// sqrt(T_old / T_true) at the moment it was recorded. Samples didn't store
+// their expiry, so it's rebuilt from the NSE monthly stock-expiry rule: the
+// last Thursday of the month until Aug 2025, the last Tuesday from Sep 2025,
+// moved back to the previous trading day when that's a holiday.
+const IV_CLOCK_FIX_AT = Date.parse('2026-09-17T14:20:00+05:30');
+const IV_HISTORY_REPAIR_KEY = 'iv_history:clock_repaired:v1';
+let ivRepair: Promise<void> | null = null;
+
+function repairIvHistoryClockOnce(): Promise<void> {
+  if (!ivRepair) {
+    ivRepair = repairIvHistoryClock().catch((err: any) => {
+      logger.warn({ error: err.message }, 'IV history clock repair failed — will retry on the next scan');
+      ivRepair = null;
+    });
+  }
+  return ivRepair;
+}
+
+async function repairIvHistoryClock(): Promise<void> {
+  if (await redis.get(IV_HISTORY_REPAIR_KEY)) return;
+
+  const buckets = await sql<{ bucket: Date; n: string }[]>`
+    SELECT date_trunc('minute', time) AS bucket, COUNT(*) AS n
+    FROM iv_history
+    WHERE time < ${new Date(IV_CLOCK_FIX_AT)} AND expiry IS NULL
+    GROUP BY 1 ORDER BY 1
+  `;
+  let rows = 0;
+  let skipped = 0;
+  for (const { bucket } of buckets) {
+    const at = new Date(bucket).getTime() + 30_000; // mid-minute
+    const expiry = stockExpiryInForce(at);
+    const factor = ivClockCorrection(at, expiry);
+    const from = new Date(bucket);
+    const to = new Date(new Date(bucket).getTime() + 60_000);
+    if (factor == null) {
+      skipped++;
+      await sql`UPDATE iv_history SET expiry = ${expiry} WHERE time >= ${from} AND time < ${to} AND expiry IS NULL`;
+      continue;
+    }
+    const updated = await sql`
+      UPDATE iv_history SET
+        atm_iv = atm_iv * ${factor},
+        ce_iv = ce_iv * ${factor},
+        pe_iv = pe_iv * ${factor},
+        iv_skew = iv_skew * ${factor},
+        expiry = ${expiry}
+      WHERE time >= ${from} AND time < ${to} AND expiry IS NULL
+    `;
+    rows += updated.count;
+  }
+  await redis.set(IV_HISTORY_REPAIR_KEY, String(Date.now()));
+  logger.info({ buckets: buckets.length, rows, skipped }, 'IV history rescaled onto the close-anchored expiry clock');
 }
