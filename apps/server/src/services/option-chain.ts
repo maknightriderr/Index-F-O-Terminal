@@ -98,10 +98,24 @@ async function buildOptionChainUncached(
     throw new Error(`No option expiries found for ${underlying} on ${exchange}`);
   }
 
+  const instruments = await provider.getInstrumentMaster();
+  const contractsFor = (forExpiry: string) =>
+    instruments.filter(
+      (i) =>
+        i.underlying === underlying &&
+        i.exchange === exchange &&
+        (i.instrumentType === 'OPTIDX' || i.instrumentType === 'OPTSTK' || i.instrumentType === 'OPTFUT') &&
+        i.expiry === forExpiry &&
+        i.strike !== undefined
+    );
+
+  // Belt and braces alongside the provider's option-only expiry list: pick the
+  // nearest expiry that actually has contracts, so one odd entry can't take
+  // the whole chain down (it did for CRUDEOIL on 17 Sep).
   const expiry =
-    requestedExpiry && availableExpiries.includes(requestedExpiry)
+    requestedExpiry && availableExpiries.includes(requestedExpiry) && contractsFor(requestedExpiry).length > 0
       ? requestedExpiry
-      : availableExpiries[0];
+      : availableExpiries.find((e) => contractsFor(e).length > 0) ?? availableExpiries[0];
 
   const { ltp: spotPrice, close: spotClose } = await getSpotQuote(provider, underlying, exchange);
 
@@ -117,15 +131,7 @@ async function buildOptionChainUncached(
     throw new Error(`Unable to resolve a live spot price for ${underlying}`);
   }
 
-  const instruments = await provider.getInstrumentMaster();
-  const optionInstruments = instruments.filter(
-    (i) =>
-      i.underlying === underlying &&
-      i.exchange === exchange &&
-      (i.instrumentType === 'OPTIDX' || i.instrumentType === 'OPTSTK' || i.instrumentType === 'OPTFUT') &&
-      i.expiry === expiry &&
-      i.strike !== undefined
-  );
+  const optionInstruments = contractsFor(expiry);
 
   if (optionInstruments.length === 0) {
     throw new Error(`No option contracts found for ${underlying} expiry ${expiry}`);

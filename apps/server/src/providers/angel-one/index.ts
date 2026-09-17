@@ -452,6 +452,16 @@ export class AngelOneProvider implements MarketDataProvider {
     return instruments.find(i => i.token === token && i.exchange === exchange) || null;
   }
 
+  /**
+   * Expiries that actually have OPTION contracts. Every caller wants this for
+   * an option chain (the chain builder, the expiry dropdown, the positional
+   * target expiry) — futures expiries used to be mixed in, and on MCX they
+   * don't coincide: when CRUDEOIL's 17 Sep option expiry rolled off, the list
+   * began with the 21 Sep FUTURES expiry, the chain builder picked it, found
+   * no option contracts and failed outright — no chain, no Greeks, no setups
+   * for CRUDEOIL until the next option expiry. Futures contracts are resolved
+   * from the instrument master directly (see futures.ts), never from here.
+   */
   async getExpiries(underlying: string, exchange: Exchange): Promise<string[]> {
     const instruments = await this.getInstrumentMaster();
     const expiries = new Set<string>();
@@ -461,8 +471,7 @@ export class AngelOneProvider implements MarketDataProvider {
         i.underlying === underlying &&
         i.exchange === exchange &&
         isExpiryActive(i.expiry) &&
-        (i.instrumentType === 'OPTIDX' || i.instrumentType === 'OPTSTK' || i.instrumentType === 'OPTFUT' ||
-         i.instrumentType === 'FUTIDX' || i.instrumentType === 'FUTSTK' || i.instrumentType === 'FUTCOM')
+        (i.instrumentType === 'OPTIDX' || i.instrumentType === 'OPTSTK' || i.instrumentType === 'OPTFUT')
       )
       .forEach(i => {
         if (i.expiry) expiries.add(i.expiry);
