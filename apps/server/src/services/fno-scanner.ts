@@ -501,7 +501,7 @@ async function computeIvRanks(inputs: IvInput[]): Promise<Map<string, IvRankResu
 // moved back to the previous trading day when that's a holiday.
 const IV_CLOCK_FIX_AT = Date.parse('2026-09-17T14:20:00+05:30');
 const IV_HISTORY_REPAIR_KEY = 'iv_history:clock_repaired:v1';
-const IV_HISTORY_DEDUPE_KEY = 'iv_history:deduped:v1';
+const IV_HISTORY_DEDUPE_KEY = 'iv_history:deduped:v2';
 let ivRepair: Promise<void> | null = null;
 
 function repairIvHistoryClockOnce(): Promise<void> {
@@ -552,6 +552,13 @@ async function dedupeIvHistory(): Promise<void> {
   const after = await sql<{ n: string }[]>`SELECT COUNT(*) AS n FROM iv_history`;
   // Plain VACUUM (no FULL): returns the space for reuse without locking the table.
   await sql`VACUUM (ANALYZE) iv_history`.catch((err: any) => logger.warn({ error: err.message }, "IV history vacuum skipped"));
+
+  // The plain VACUUM above frees the space for reuse but leaves the file at
+  // its bloated size — 481MB of a 500MB volume, which is what took the
+  // database down. With the backlog gone (about 800k rows down to ~7k) a one-off
+  // VACUUM FULL rewrites the table and returns the disk. It takes an exclusive
+  // lock, but only this scanner touches iv_history and it is now tiny.
+  await sql`VACUUM FULL iv_history`.catch((err: any) => logger.warn({ error: err.message }, "IV history VACUUM FULL skipped — space stays reusable but the file will not shrink"));
 
   await redis.set(IV_HISTORY_DEDUPE_KEY, String(Date.now()));
   logger.info(
