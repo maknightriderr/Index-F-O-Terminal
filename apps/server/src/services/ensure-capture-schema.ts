@@ -30,6 +30,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { sql } from '../lib/db.js';
+import { DATA_QUALITY_CUTOVER_AT } from './capture-quality.js';
 import { logger } from '../lib/logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -50,6 +51,7 @@ const FILES = [
   '009_lineage_and_taxonomy.sql',
   '010_capture_quality_lineage.sql',
   '011_contract_generations.sql',
+  '012_milestone_derivation.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */
@@ -146,20 +148,80 @@ export async function ensureCaptureSchema(): Promise<SchemaEnsureResult> {
  * worse than none, because it would look authoritative while meaning
  * "whenever the server last came up".
  */
+/**
+ * The evidence each cutover is seeded from.
+ *
+ * A cutover is the instant a WRITE CONTRACT changed, which is knowable from
+ * the earliest row actually carrying the field that transition introduced —
+ * not from when a process happened to start. The first recorder wrote "now"
+ * for all four and produced timestamps four milliseconds apart for
+ * transitions that were hours apart.
+ *
+ * Each entry either names a compiled constant or a single query over the
+ * captured rows. The result is written ONCE and frozen; a milestone already
+ * carrying a derivation is never recomputed, so this cannot become a value
+ * that drifts on every restart.
+ */
+const CUTOVER_EVIDENCE: {
+  layer: string;
+  note: string;
+  derivation: string;
+  resolve: () => Promise<Date | null>;
+}[] = [
+  {
+    layer: 'data_quality_cutover_at',
+    note: 'absence stopped being stored as zero (NULL_PRESERVING)',
+    derivation: 'compiled constant DATA_QUALITY_CUTOVER_AT — the deploy that changed the write contract',
+    resolve: async () => new Date(DATA_QUALITY_CUTOVER_AT),
+  },
+  {
+    layer: 'capture_lineage_cutover_at',
+    note: 'capture_run_id began being written onto captured rows',
+    derivation: 'earliest oi_snapshots row carrying a capture_run_id',
+    resolve: () => earliestRowWith('capture_run_id IS NOT NULL'),
+  },
+  {
+    layer: 'validity_contract_cutover_at',
+    note: 'greeks_valid and the availability flags began being written',
+    derivation: 'earliest oi_snapshots row carrying greeks_valid',
+    resolve: () => earliestRowWith('greeks_valid IS NOT NULL'),
+  },
+  {
+    layer: 'greek_provenance_cutover_at',
+    note: 'model name, version and calculation inputs began being written',
+    derivation: 'earliest oi_snapshots row carrying greeks_model_name',
+    resolve: () => earliestRowWith('greeks_model_name IS NOT NULL'),
+  },
+];
+
+async function earliestRowWith(predicate: string): Promise<Date | null> {
+  try {
+    const [row] = await sql.unsafe<{ t: Date | null }[]>(
+      `SELECT MIN(time) AS t FROM oi_snapshots WHERE ${predicate}`
+    );
+    return row?.t ? new Date(row.t) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Records when each layer began, and seeds the four cutovers from evidence.
+ *
+ * Two write paths, both write-once:
+ *
+ *   A layer with no row yet is inserted. For a cutover that means the
+ *   evidence-derived instant; for an ordinary layer it means now, which is
+ *   correct because "when did this layer start recording" is exactly the
+ *   boot that first ran it.
+ *
+ *   A cutover row written by the earlier naive recorder — recognisable by
+ *   its NULL derivation — is corrected once. After that it carries a
+ *   derivation and is never touched again. This is a bounded repair of a
+ *   known-wrong value, not a mechanism that keeps moving it.
+ */
 async function recordMilestones(): Promise<void> {
-  // The four contract transitions, kept as SEPARATE milestones. They landed
-  // within an hour of each other, which is exactly why folding them into one
-  // "post-instrumentation" concept was tempting and wrong: a row written
-  // between two of them belongs to neither the old contract nor the new one.
-  //
-  // Written once via ON CONFLICT DO NOTHING, so the first boot after a
-  // transition records it and every boot afterwards leaves it alone. None of
-  // them is ever inferred from query results after the fact.
   const layers: { layer: string; note: string }[] = [
-    { layer: 'capture_lineage_cutover_at', note: 'capture_run_id began being written onto captured rows' },
-    { layer: 'data_quality_cutover_at', note: 'absence stopped being stored as zero (NULL_PRESERVING)' },
-    { layer: 'validity_contract_cutover_at', note: 'greeks_valid and the availability flags began being written' },
-    { layer: 'greek_provenance_cutover_at', note: 'model name, version and calculation inputs began being written' },
     { layer: 'market_state_capture', note: 'Option chain, futures, positioning and underlying capture' },
     { layer: 'decision_snapshots', note: 'Every evaluation recorded, TAKE and REFUSE alike' },
     { layer: 'trade_health_shadow', note: 'Trade health computed and logged, never acting' },
@@ -183,18 +245,50 @@ async function recordMilestones(): Promise<void> {
       // failing a boot over.
     }
   }
+
+  for (const cutover of CUTOVER_EVIDENCE) {
+    try {
+      const at = await cutover.resolve();
+      if (at == null) continue; // No evidence yet — record nothing rather than guess.
+
+      await sql`
+        INSERT INTO research_milestones (layer, recording_started_at, note, derivation, derived_at)
+        VALUES (${cutover.layer}, ${at}, ${cutover.note}, ${cutover.derivation}, ${new Date()})
+        ON CONFLICT (layer) DO UPDATE
+          SET recording_started_at = EXCLUDED.recording_started_at,
+              note = EXCLUDED.note,
+              derivation = EXCLUDED.derivation,
+              derived_at = EXCLUDED.derived_at
+          -- ONLY where the existing row has no derivation, i.e. was written
+          -- by the naive boot-time recorder. A row that already carries one
+          -- is frozen.
+          WHERE research_milestones.derivation IS NULL
+      `;
+    } catch {
+      // Older schema without the derivation column. Leave it alone.
+    }
+  }
 }
 
 /** When each recorded layer began, for reports that must not say "yesterday". */
-export async function researchMilestones(): Promise<{ layer: string; recording_started_at: string; note: string | null }[]> {
+export async function researchMilestones(): Promise<
+  { layer: string; recording_started_at: string; note: string | null; derivation: string | null }[]
+> {
   try {
-    const rows = await sql<{ layer: string; recording_started_at: Date; note: string | null }[]>`
-      SELECT layer, recording_started_at, note FROM research_milestones ORDER BY recording_started_at ASC
+    const rows = await sql<
+      { layer: string; recording_started_at: Date; note: string | null; derivation: string | null }[]
+    >`
+      SELECT layer, recording_started_at, note, derivation
+      FROM research_milestones ORDER BY recording_started_at ASC
     `;
     return rows.map((r) => ({
       layer: r.layer,
       recording_started_at: new Date(r.recording_started_at).toISOString(),
       note: r.note,
+      // How the instant was established. A cutover with no derivation is a
+      // boot-time value that has not been corrected, and should be read as
+      // "when the process started", not "when the contract changed".
+      derivation: r.derivation,
     }));
   } catch {
     return [];
