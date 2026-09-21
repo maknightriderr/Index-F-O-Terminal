@@ -85,6 +85,28 @@ const captureMarkKey = (exchange: Exchange, underlying: string) => `capture:last
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Persists a zero placeholder as NULL.
+ *
+ * The chain builder fills a missing quote with zero — `quote?.bid ?? 0` —
+ * and the LIVE engine depends on that: its `hasQuote` check reads `bid > 0`
+ * to mean "no two-sided market". That convention is correct for a decision
+ * and wrong for a historical record, where a 0 bid is indistinguishable from
+ * a bid of zero rupees, and a 0 delta reads as a real measurement of a
+ * contract with no sensitivity at all.
+ *
+ * So the conversion happens HERE, at the write boundary, and nowhere else.
+ * The decision path is untouched; the history stops claiming measurements it
+ * never had. Found by the NULL-versus-zero audit on the first day of
+ * capture: 346 of 2,050 legs carried zero Greeks and 172 carried a zero bid,
+ * every one of them an absent quote rather than an observation.
+ *
+ * Only for fields where zero is NOT a possible measurement. Open interest,
+ * change in open interest and volume keep their zeros, which are real.
+ */
+const nullIfZero = (v: number | null | undefined): number | null =>
+  v == null || !Number.isFinite(v) || v === 0 ? null : v;
+
 let started = false;
 
 export function startMarketStateCapture(provider: MarketDataProvider): void {
@@ -396,20 +418,22 @@ async function captureChain(
         oi: leg.oi,
         change_oi: leg.changeOi,
         volume: leg.volume,
-        ltp: leg.ltp,
-        bid: leg.bid,
-        ask: leg.ask,
+        ltp: nullIfZero(leg.ltp),
+        bid: nullIfZero(leg.bid),
+        ask: nullIfZero(leg.ask),
         // Depth quantities are not on the chain leg today. Recorded as NULL
         // rather than zero: a missing observation and an empty book are
         // different facts, and a replay must be able to tell them apart.
         bid_qty: null,
         ask_qty: null,
-        iv: leg.iv,
-        delta: leg.delta,
-        gamma: leg.gamma,
-        theta: leg.theta,
-        vega: leg.vega,
-        spot_price: chain.spotPrice,
+        // A zero Greek is not a measurement of zero sensitivity — it is what
+        // the model returns for a leg with no usable price. Stored as absent.
+        iv: nullIfZero(leg.iv),
+        delta: nullIfZero(leg.delta),
+        gamma: nullIfZero(leg.gamma),
+        theta: nullIfZero(leg.theta),
+        vega: nullIfZero(leg.vega),
+        spot_price: nullIfZero(chain.spotPrice),
         moneyness: leg.moneyness,
         greeks_source: leg.greeksSource,
       });
@@ -464,8 +488,8 @@ async function captureFutures(
     exchange,
     expiry: c.expiry,
     spot_price: futures.spotPrice,
-    futures_price: c.futuresPrice,
-    ltp: c.futuresPrice,
+    futures_price: nullIfZero(c.futuresPrice),
+    ltp: nullIfZero(c.futuresPrice),
     basis: c.basis,
     premium_discount: c.premiumDiscount,
     volume: c.volume,

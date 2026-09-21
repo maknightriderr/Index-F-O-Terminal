@@ -33,13 +33,26 @@ const pct = (n: number, d: number): number | null => (d === 0 ? null : Math.roun
 
 export interface GreekCoverage {
   greek: string;
+  /** Rows where the column is not NULL. */
   nonNull: number;
+  /**
+   * Rows carrying an actual measurement — non-null AND non-zero.
+   *
+   * The distinction is not pedantic. A zero delta is what the pricing model
+   * returns for a leg with no usable price, not a measurement of a contract
+   * with no sensitivity. Grading on non-null alone reported 100% PASS on a
+   * day when 17% of legs carried zeros throughout, which is exactly the kind
+   * of narrow-question-answered-broadly that this module exists to prevent.
+   */
+  usable: number;
   total: number;
   coveragePct: number | null;
+  usablePct: number | null;
   grade: CoverageGrade;
   brokerPublished: number;
   locallySolved: number;
   missing: number;
+  zeroPlaceholders: number;
 }
 
 /**
@@ -55,11 +68,13 @@ export async function greekCoverage(): Promise<{
   overallGrade: CoverageGrade;
   provenanceRecorded: { nonNull: number; total: number; grade: CoverageGrade };
   totalLegs: number;
+  caveats: string[];
 }> {
   const [row] = await sql<
     {
       total: string;
       delta_nn: string; gamma_nn: string; theta_nn: string; vega_nn: string;
+      delta_use: string; gamma_use: string; theta_use: string; vega_use: string;
       delta_broker: string; gamma_broker: string; theta_broker: string; vega_broker: string;
       delta_local: string; gamma_local: string; theta_local: string; vega_local: string;
       provenance_nn: string;
@@ -71,6 +86,10 @@ export async function greekCoverage(): Promise<{
       COUNT(gamma) AS gamma_nn,
       COUNT(theta) AS theta_nn,
       COUNT(vega)  AS vega_nn,
+      COUNT(*) FILTER (WHERE delta IS NOT NULL AND delta <> 0) AS delta_use,
+      COUNT(*) FILTER (WHERE gamma IS NOT NULL AND gamma <> 0) AS gamma_use,
+      COUNT(*) FILTER (WHERE theta IS NOT NULL AND theta <> 0) AS theta_use,
+      COUNT(*) FILTER (WHERE vega  IS NOT NULL AND vega  <> 0) AS vega_use,
       COUNT(delta) FILTER (WHERE greeks_source = 'BROKER')     AS delta_broker,
       COUNT(gamma) FILTER (WHERE greeks_source = 'BROKER')     AS gamma_broker,
       COUNT(theta) FILTER (WHERE greeks_source = 'BROKER')     AS theta_broker,
@@ -84,25 +103,37 @@ export async function greekCoverage(): Promise<{
   `.catch(() => [] as never[]);
 
   const total = Number(row?.total ?? 0);
-  const build = (greek: string, nn: string | undefined, broker: string | undefined, local: string | undefined): GreekCoverage => {
+  const build = (
+    greek: string,
+    nn: string | undefined,
+    use: string | undefined,
+    broker: string | undefined,
+    local: string | undefined
+  ): GreekCoverage => {
     const nonNull = Number(nn ?? 0);
+    const usable = Number(use ?? 0);
     return {
       greek,
       nonNull,
+      usable,
       total,
       coveragePct: pct(nonNull, total),
-      grade: gradeCoverage(nonNull, total),
+      usablePct: pct(usable, total),
+      // Graded on USABLE, not on non-null. A column full of zero
+      // placeholders is not complete data however few NULLs it contains.
+      grade: gradeCoverage(usable, total),
       brokerPublished: Number(broker ?? 0),
       locallySolved: Number(local ?? 0),
       missing: total - nonNull,
+      zeroPlaceholders: nonNull - usable,
     };
   };
 
   const greeks = [
-    build('delta', row?.delta_nn, row?.delta_broker, row?.delta_local),
-    build('gamma', row?.gamma_nn, row?.gamma_broker, row?.gamma_local),
-    build('theta', row?.theta_nn, row?.theta_broker, row?.theta_local),
-    build('vega', row?.vega_nn, row?.vega_broker, row?.vega_local),
+    build('delta', row?.delta_nn, row?.delta_use, row?.delta_broker, row?.delta_local),
+    build('gamma', row?.gamma_nn, row?.gamma_use, row?.gamma_broker, row?.gamma_local),
+    build('theta', row?.theta_nn, row?.theta_use, row?.theta_broker, row?.theta_local),
+    build('vega', row?.vega_nn, row?.vega_use, row?.vega_broker, row?.vega_local),
   ];
 
   // The overall grade is the WORST of the four. A checklist line that reads
@@ -120,6 +151,11 @@ export async function greekCoverage(): Promise<{
     overallGrade,
     provenanceRecorded: { nonNull: provenanceNn, total, grade: gradeCoverage(provenanceNn, total) },
     totalLegs: total,
+    caveats: [
+      'Graded on USABLE values (non-null and non-zero). A zero Greek is what the pricing model returns for a leg with no usable price, not a measurement.',
+      'Provenance matters as much as presence: a locally-solved Greek is a modelled value, and a replay that cannot tell it from a broker-published one will treat a model output as an observation.',
+      'Rows captured before the write boundary preserved absence still carry zero placeholders; they are counted here and are not rewritten.',
+    ],
   };
 }
 
