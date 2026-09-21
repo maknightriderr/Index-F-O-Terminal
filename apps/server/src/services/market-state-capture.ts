@@ -56,6 +56,7 @@ import {
   storeIfPositive,
   storeIfFinite,
   CAPTURE_QUALITY_VERSION,
+  CURRENT_CONTRACT_GENERATION,
   GREEKS_MODEL_NAME,
   GREEKS_MODEL_VERSION,
 } from './capture-quality.js';
@@ -422,6 +423,9 @@ async function captureChain(
         // captures share a second.
         capture_run_id: runId,
         capture_quality_version: CAPTURE_QUALITY_VERSION,
+        // Stamped, not inferred. A row that says which contract wrote it
+        // needs no date arithmetic to be classified later.
+        contract_generation: CURRENT_CONTRACT_GENERATION,
         token: leg.token,
         symbol: underlying,
         exchange,
@@ -502,7 +506,7 @@ async function captureChain(
 
   await sql`INSERT INTO oi_snapshots ${sql(
     rows,
-    'time', 'capture_run_id', 'capture_quality_version', 'token', 'symbol', 'exchange',
+    'time', 'capture_run_id', 'capture_quality_version', 'contract_generation', 'token', 'symbol', 'exchange',
     'instrument_type', 'strike', 'option_type', 'expiry',
     'oi', 'change_oi', 'volume', 'ltp', 'bid', 'ask', 'bid_qty', 'ask_qty',
     'iv', 'delta', 'gamma', 'theta', 'vega', 'spot_price', 'moneyness', 'greeks_source',

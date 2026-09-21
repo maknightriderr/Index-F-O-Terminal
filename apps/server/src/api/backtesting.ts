@@ -30,6 +30,15 @@ import {
 } from '../services/data-integrity.js';
 import { researchMilestones } from '../services/ensure-capture-schema.js';
 import { dailyReport } from '../services/daily-report.js';
+import {
+  generationCensus,
+  greekReplayEligibility,
+  researchPopulationScope,
+  decisionPopulation,
+  ELIGIBILITY_DEFINITIONS,
+  CUTOVER_MILESTONES,
+} from '../services/contract-generations.js';
+import { DATA_QUALITY_CUTOVER_AT } from '../services/capture-quality.js';
 
 export function createBacktestingRoutes(provider: MarketDataProvider): Router {
   const router = Router();
@@ -157,6 +166,70 @@ export function createBacktestingRoutes(provider: MarketDataProvider): Router {
       res.json({ success: true, data: await dailyReport(sinceHours) });
     } catch (err: any) {
       logger.error({ error: err.message }, 'Daily report failed');
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
+   * GET /api/backtesting/data-contract
+   *
+   * The formal data-contract health check. One boundary, one denominator, and
+   * every metric carrying its own as_of and population_definition — so a
+   * future report cannot mix denominators the way the last one did.
+   *
+   * Observability only. Nothing here is read by the trading engine.
+   */
+  router.get('/data-contract', async (req: Request, res: Response) => {
+    try {
+      const asOf = new Date();
+      const sinceHours = Math.min(Number(req.query.sinceHours ?? 48) || 48, 24 * 400);
+
+      const [generations, eligibility, scope, decisions, lineage, milestones] = await Promise.all([
+        generationCensus(asOf, DATA_QUALITY_CUTOVER_AT),
+        greekReplayEligibility(asOf, DATA_QUALITY_CUTOVER_AT),
+        researchPopulationScope(asOf, DATA_QUALITY_CUTOVER_AT),
+        decisionPopulation(asOf, sinceHours),
+        snapshotLineage(newBoundary(asOf)),
+        researchMilestones(),
+      ]);
+
+      const cutovers = Object.fromEntries(
+        CUTOVER_MILESTONES.map((m) => {
+          const found = milestones.find((x) => x.layer === m);
+          return [m, found?.recording_started_at ?? null];
+        })
+      );
+
+      res.json({
+        success: true,
+        data: {
+          report_as_of: asOf.toISOString(),
+          timestampContract:
+            'Every metric below was evaluated against report_as_of and carries its own as_of and population_definition. Never compare a figure here against one from another reading without checking both.',
+          contract_generations: generations,
+          cutover_timestamps: {
+            as_of: asOf.toISOString(),
+            population_definition: 'Immutable milestones from research_milestones, written once and never moved on restart.',
+            ...cutovers,
+            // The data-quality cutover is a compiled constant rather than a
+            // recorded milestone, because it names the deploy that changed the
+            // write contract and must not drift with a restart.
+            data_quality_cutover_at_constant: new Date(DATA_QUALITY_CUTOVER_AT).toISOString(),
+            note:
+              'Four independent transitions. They landed close together and are NOT the same event: a row written between two of them belongs to neither the old contract nor the new one.',
+          },
+          replay_eligibility: {
+            definitions: ELIGIBILITY_DEFINITIONS,
+            ...eligibility,
+          },
+          research_population: scope,
+          lineage_integrity: lineage,
+          decision_population: decisions,
+          allMilestones: milestones,
+        },
+      });
+    } catch (err: any) {
+      logger.error({ error: err.message }, 'Data-contract health check failed');
       res.status(500).json({ success: false, error: err.message });
     }
   });

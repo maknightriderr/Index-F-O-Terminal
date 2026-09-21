@@ -35,6 +35,16 @@ export type CaptureQualityVersion = 'LEGACY_ZERO_MAPPING' | 'NULL_PRESERVING_V1'
 export const CAPTURE_QUALITY_VERSION: CaptureQualityVersion = 'NULL_PRESERVING_V1';
 
 /**
+ * The contract generation rows written by THIS build belong to.
+ *
+ * Stamped on every row so no future reader has to infer it. The inference
+ * path in contract-generations.ts exists only for rows written before this
+ * column did — which is why it reports the evidence it used rather than
+ * asserting a generation.
+ */
+export const CURRENT_CONTRACT_GENERATION = 'FULL_CAPTURE_CONTRACT_V1';
+
+/**
  * The instant the write contract changed, fixed and never recomputed.
  *
  * Rows written before it followed LEGACY_ZERO_MAPPING; rows after it follow

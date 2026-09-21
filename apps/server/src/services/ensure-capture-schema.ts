@@ -49,6 +49,7 @@ const FILES = [
   '008_capture_instrumentation.sql',
   '009_lineage_and_taxonomy.sql',
   '010_capture_quality_lineage.sql',
+  '011_contract_generations.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */
@@ -146,7 +147,19 @@ export async function ensureCaptureSchema(): Promise<SchemaEnsureResult> {
  * "whenever the server last came up".
  */
 async function recordMilestones(): Promise<void> {
+  // The four contract transitions, kept as SEPARATE milestones. They landed
+  // within an hour of each other, which is exactly why folding them into one
+  // "post-instrumentation" concept was tempting and wrong: a row written
+  // between two of them belongs to neither the old contract nor the new one.
+  //
+  // Written once via ON CONFLICT DO NOTHING, so the first boot after a
+  // transition records it and every boot afterwards leaves it alone. None of
+  // them is ever inferred from query results after the fact.
   const layers: { layer: string; note: string }[] = [
+    { layer: 'capture_lineage_cutover_at', note: 'capture_run_id began being written onto captured rows' },
+    { layer: 'data_quality_cutover_at', note: 'absence stopped being stored as zero (NULL_PRESERVING)' },
+    { layer: 'validity_contract_cutover_at', note: 'greeks_valid and the availability flags began being written' },
+    { layer: 'greek_provenance_cutover_at', note: 'model name, version and calculation inputs began being written' },
     { layer: 'market_state_capture', note: 'Option chain, futures, positioning and underlying capture' },
     { layer: 'decision_snapshots', note: 'Every evaluation recorded, TAKE and REFUSE alike' },
     { layer: 'trade_health_shadow', note: 'Trade health computed and logged, never acting' },
