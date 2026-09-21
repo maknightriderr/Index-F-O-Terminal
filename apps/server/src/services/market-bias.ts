@@ -78,6 +78,8 @@ import { cached } from '../lib/cache.js';
 import { redis } from '../lib/redis.js';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
+import { decisionNow, decisionDate, decisionIstDate, assertNoFutureData } from './decision-clock.js';
+import { ivRankFor } from './fno-scanner.js';
 import { notifyTradeSetup } from './telegram.js';
 import { trackSymbolForOiSnapshot } from './oi-close-snapshot.js';
 import { riskOffReason } from './risk-circuit-breaker.js';
@@ -220,7 +222,9 @@ export async function loadBiasCandles(
   const historicalToken =
     exchange === 'MCX' ? (await resolveNearestFuturesContract(provider, underlying, exchange))?.token ?? spotToken : spotToken;
 
-  const now = new Date();
+  // The fetch window ends at the decision instant, never at the wall clock,
+  // so a replay asks the broker for exactly the bars that existed then.
+  const now = decisionDate();
   const toDate = formatAngelDateTime(now);
 
   // NOTE on naming below: the variables `candles15m`/`c15`/`rsi15`/`st15`
@@ -320,6 +324,16 @@ export async function loadBiasCandles(
       }
     }
   }
+
+  // The look-ahead tripwire. In production the decision instant IS now, so
+  // nothing can be ahead of it and this costs one pass over the array. In a
+  // replay it is the check that stops the engine scoring on bars that had
+  // not printed yet: a bar is allowed to have OPENED at or before the
+  // decision instant (the newest one is legitimately still forming, which
+  // is why the tolerance is one interval), and a bar that opens after it
+  // throws rather than quietly becoming evidence.
+  assertNoFutureData(`${underlying} ${shortInterval}`, candles15m.map((c) => Date.parse(c.timestamp)));
+  assertNoFutureData(`${underlying} ${longInterval}`, candles1h.map((c) => Date.parse(c.timestamp)));
 
   return { candles15m, candles1h, volumeSource };
 }
@@ -456,7 +470,15 @@ async function computeMarketBias(
   // zone tracking, and premium/discount context. See
   // market-structure/index.ts for what each concept means.
   const marketStructure = analyzeMarketStructure(c15.highs, c15.lows);
-  const liquiditySweep = detectLiquiditySweep(c15.highs, c15.lows, c15.closes);
+  // Closed bars only. A sweep is defined as a wick THROUGH a swing level
+  // followed by a close back inside it, so run on the forming bar it was
+  // being judged against a running close: a wick through a swing high with
+  // price merely still below it read as a completed sweep, and pushed a
+  // structure vote (which, unlike the price votes, carries no hysteresis)
+  // that disappeared when the bar closed above the level. Same treatment
+  // fair value gaps already had. Costs one bar of latency, which is the
+  // honest price of the signal meaning what it says.
+  const liquiditySweep = detectLiquiditySweep(c15.highs.slice(0, -1), c15.lows.slice(0, -1), c15.closes.slice(0, -1));
   const orderBlocks = detectOrderBlocks(c15.highs, c15.lows, c15.closes);
   const activeOrderBlock = testActiveOrderBlock(orderBlocks, spot);
   const premiumDiscount = classifyPremiumDiscount(c15.highs, c15.lows, spot);
@@ -1514,7 +1536,7 @@ const MIN_REMAINING_SESSION_FRACTION = 0.05;
 
 function remainingSessionFraction(exchange: Exchange): number {
   const hours = TRADING_HOURS[exchange];
-  const ist = new Date(new Date().toLocaleString('en-US', { timeZone: hours.timezone }));
+  const ist = new Date(decisionDate().toLocaleString('en-US', { timeZone: hours.timezone }));
   const [openH, openM] = hours.open.split(':').map(Number);
   const [closeH, closeM] = getSessionCloseTime(exchange).split(':').map(Number);
   const openMinutes = openH * 60 + openM;
@@ -1541,7 +1563,7 @@ const NOISY_WINDOW_VOLUME_MULTIPLIER = 1.5;
 
 function isNoisyIntradayWindow(exchange: Exchange): boolean {
   const hours = TRADING_HOURS[exchange];
-  const ist = new Date(new Date().toLocaleString('en-US', { timeZone: hours.timezone }));
+  const ist = new Date(decisionDate().toLocaleString('en-US', { timeZone: hours.timezone }));
   const [openH, openM] = hours.open.split(':').map(Number);
   const [closeH, closeM] = getSessionCloseTime(exchange).split(':').map(Number);
   const openMinutes = openH * 60 + openM;
@@ -1723,8 +1745,8 @@ async function checkReliabilityFilters(
   if (isNseStock) {
     try {
       const actions = await getCorporateActionsForSymbol(underlying);
-      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-      const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      const today = decisionIstDate();
+      const tomorrow = new Date(decisionNow() + 24 * 60 * 60 * 1000).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
       const upcoming = actions.find((a) => a.exDate === today || a.exDate === tomorrow);
       if (upcoming) {
         return `${upcoming.type} ex-date ${upcoming.exDate === today ? 'today' : 'tomorrow'} (${upcoming.purpose}) — the price move around this is the corporate action, not a technical signal.`;
@@ -1940,14 +1962,14 @@ function slLossCountKey(exchange: Exchange, underlying: string, mode: TradingMod
  * would end that direction for the day after a single loss.
  */
 async function registerLosingClose(exchange: Exchange, underlying: string, mode: TradingMode, direction: BiasDirection, setupId: string): Promise<void> {
-  const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const day = decisionIstDate();
   const countKey = slLossCountKey(exchange, underlying, mode, direction, day);
   try {
     await redis.set(slCooldownKey(exchange, underlying, mode, direction), '1', 'EX', mode === 'POSITIONAL' ? SL_COOLDOWN_SECONDS_POSITIONAL : SL_COOLDOWN_SECONDS);
     // Short settle across every symbol on this exchange+mode, then a raised
     // bar for the rest of the day.
     await redis.set(postLossSettleKey(exchange, mode), '1', 'EX', POST_LOSS_SETTLE_MINUTES * 60);
-    const istDay = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const istDay = decisionIstDate();
     await redis.set(postLossDayKey(exchange, mode, istDay), '1', 'EX', 24 * 60 * 60);
     const firstCount = await redis.set(`trade_setup_loss_counted:${setupId}`, '1', 'EX', 60 * 60 * 48, 'NX');
     if (firstCount === 'OK') {
@@ -1980,7 +2002,7 @@ async function registerLosingClose(exchange: Exchange, underlying: string, mode:
  */
 async function losingCloseCooldownReason(underlying: string, exchange: Exchange, direction: BiasDirection, mode: TradingMode, confidence: number): Promise<GateRefusal | null> {
   if (direction === 'NEUTRAL') return null;
-  const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const day = decisionIstDate();
   try {
     const settleTtl = await redis.ttl(postLossSettleKey(exchange, mode));
     if (settleTtl > 0) {
@@ -2043,7 +2065,7 @@ async function resolveStickyTradeSetup(
   // holding period), not variations of one setup, so they can't share a
   // Redis slot.
   const key = `trade_setup:${exchange}:${underlying}:${mode}`;
-  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const today = decisionIstDate();
 
   let stored: StoredTradeSetup | null = null;
   try {
@@ -2211,7 +2233,7 @@ async function resolveStickyTradeSetup(
       // A confident opposite read — confirm it once on refreshed data
       // before exiting, rather than acting on a single read that may share
       // cached candles with the one before it (see REVERSAL_CONFIRM_SECONDS).
-      const now = Date.now();
+      const now = decisionNow();
       const since = stored!.reversalSince ?? now;
       const streak = (stored!.reversalStreak ?? 0) + 1;
       const confirmMs = (isPositional ? REVERSAL_CONFIRM_SECONDS_POSITIONAL : REVERSAL_CONFIRM_SECONDS) * 1000;
@@ -2263,7 +2285,7 @@ async function resolveStickyTradeSetup(
   const unreliableReason = refusal?.reason ?? null;
   if (refusal != null) {
     logDecision({
-      at: Date.now(),
+      at: decisionNow(),
       symbol: underlying,
       exchange,
       mode,
@@ -2368,7 +2390,31 @@ async function resolveStickyTradeSetup(
         }.`
       : '';
 
-  const builtRaw = buildTradeSetup(chain.strikes, chain.atmStrike, direction, confidence, targetMovePoints, slPremiumPct, vix, chain.dte, chain.lotSize, entryContext?.atrPoints ?? null);
+  // Option-quality context. The instrument is part of the trade, so the
+  // builder is told what the premium it is about to buy costs in decay and
+  // where its IV sits in its own year — neither of which the chain leg
+  // carries. Expected hold is the session remaining for an intraday setup
+  // and a working week for a positional one, since that is what decides how
+  // much theta actually gets paid.
+  const ivRank = await ivRankFor(underlying, chain.expiry, computeAtmIv(chain)).catch(() => null);
+  const expectedHoldHours = isPositional
+    ? 5 * 6.25
+    : Math.max(0.5, remainingSessionMinutesFrom(exchange, decisionNow()) / 60);
+  const builtRaw = buildTradeSetup(
+    chain.strikes,
+    chain.atmStrike,
+    direction,
+    confidence,
+    targetMovePoints,
+    slPremiumPct,
+    vix,
+    chain.dte,
+    chain.lotSize,
+    entryContext?.atrPoints ?? null,
+    // 0.05 is the premium tick on NSE/BSE options and the MCX option
+    // contracts this engine trades; the chain leg does not carry its own.
+    { ivRank, hvPct: entryContext?.hvPct ?? null, tickSize: 0.05, expectedHoldHours }
+  );
   // Record WHICH contract the strike/entry/SL/target belong to. A strike
   // alone is ambiguous — the same strike exists in every listed expiry at a
   // different premium — and this is what later tracking prices against.
@@ -2409,7 +2455,7 @@ async function resolveStickyTradeSetup(
   const signalId = await recordTradeSetupGenerated(underlying, exchange, fresh, direction, confidence, regime, intelligenceScore, mode, voteSnapshot, entryContext);
 
   logDecision({
-    at: Date.now(),
+    at: decisionNow(),
     symbol: underlying,
     exchange,
     mode,
@@ -2434,7 +2480,7 @@ async function resolveStickyTradeSetup(
     ...fresh,
     direction,
     day: today,
-    generatedAt: Date.now(),
+    generatedAt: decisionNow(),
     signalId,
     initialStopLoss: fresh.stopLoss,
     voteSnapshot,
@@ -2573,10 +2619,10 @@ async function recordTradeSetupOutcome(
         SET inputs = inputs || ${sql.json({
           outcome,
           exitPrice: exitValue,
-          exitTime: Date.now(),
+          exitTime: decisionNow(),
           // Structured, not guessed: every exit says which kind it was.
           closeReason: close.reason,
-          holdMinutes: stored.generatedAt ? Math.round((Date.now() - stored.generatedAt) / 60000) : null,
+          holdMinutes: stored.generatedAt ? Math.round((decisionNow() - stored.generatedAt) / 60000) : null,
           excursion: stored.excursion ? { ...stored.excursion } : null,
           healthAtExit: stored.health ? { ...stored.health } : null,
         })}, fwd_1d_return = ${returnPercent}
@@ -2807,7 +2853,7 @@ export async function checkLockedSetupPriceLevels(
   // asked for is gone — never price this setup off that other contract.
   const pricingChain = !stored.expiry || chain.expiry === stored.expiry ? chain : null;
 
-  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const today = decisionIstDate();
   if (mode === 'INTRADAY' && stored.day !== today) {
     // A prior-day INTRADAY setup used to just get silently skipped here —
     // day-rollover EXPIRY only ever happened in resolveStickyTradeSetup's
@@ -2867,7 +2913,7 @@ export async function checkLockedSetupPriceLevels(
   // real outcomes first (see trade-health.ts).
   if (!isSpread && stored.entry != null && stored.entry > 0) {
     const bullish = stored.side !== 'PE';
-    const generatedAt = stored.generatedAt ?? Date.now();
+    const generatedAt = stored.generatedAt ?? decisionNow();
     const base = stored.excursion ?? emptyExcursion(pricingChain?.spotPrice ?? null, stored.entryContext?.atrPoints ?? null, stored.entry);
     const { excursion, changed } = updateExcursion(base, {
       premium: currentValue,
@@ -2875,11 +2921,11 @@ export async function checkLockedSetupPriceLevels(
       entryPremium: stored.entry,
       initialStop: stored.initialStopLoss ?? stored.stopLoss ?? null,
       bullish,
-      at: Date.now(),
+      at: decisionNow(),
       generatedAt,
     });
 
-    const elapsedMinutes = Math.max(0, (Date.now() - generatedAt) / 60000);
+    const elapsedMinutes = Math.max(0, (decisionNow() - generatedAt) / 60000);
     const health = assessTradeHealth({
       elapsedMinutes,
       horizonMinutes: mode === 'POSITIONAL' ? (stored.dte ?? 1) * 375 : remainingSessionMinutesFrom(exchange, generatedAt),
@@ -2897,7 +2943,7 @@ export async function checkLockedSetupPriceLevels(
       const updated: StoredTradeSetup = {
         ...stored,
         excursion,
-        health: { state: health.state, score: health.score, wouldExit: health.wouldExit, reason: health.reason, at: Date.now() },
+        health: { state: health.state, score: health.score, wouldExit: health.wouldExit, reason: health.reason, at: decisionNow() },
       };
       stored = updated;
       try {
@@ -3220,7 +3266,7 @@ function extractOHLC(candles: OHLCV[]) {
 }
 
 function filterToday(candles: OHLCV[]): OHLCV[] {
-  const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const todayIST = decisionIstDate();
   const todays = candles.filter(
     (c) => new Date(c.timestamp).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) === todayIST
   );
@@ -3229,7 +3275,7 @@ function filterToday(candles: OHLCV[]): OHLCV[] {
 
 /** Candles from the most recent trading day strictly before today (IST) — the session pivot points are computed from. */
 function filterPreviousSession(candles: OHLCV[]): OHLCV[] {
-  const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const todayIST = decisionIstDate();
   const byDate = new Map<string, OHLCV[]>();
   for (const c of candles) {
     const d = new Date(c.timestamp).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });

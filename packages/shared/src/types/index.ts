@@ -343,6 +343,8 @@ export interface TradeSetup {
   targetInAtr?: number | null;
   /** Structured refusal code when available === false. */
   noTradeCode?: NoTradeCode;
+  /** The option-quality read on the contract this setup is built on. Recorded on every available setup; only a mechanical tradeability failure refuses. */
+  optionQuality?: TradeSetupOptionQuality;
 
   /**
    * NIFTY's direction, when this setup runs AGAINST it. Absent when the
@@ -1293,6 +1295,8 @@ export type NoTradeCode =
   | 'RELIABILITY_FILTER'
   | 'NO_QUOTE'
   | 'WIDE_SPREAD'
+  | 'POOR_OPTION_QUALITY'
+  | 'LOW_OPTION_LIQUIDITY'
   | 'UNREALISTIC_TARGET'
   | 'INSUFFICIENT_ROOM'
   | 'POOR_LOCATION'
@@ -1598,4 +1602,32 @@ export interface StrategyTrackRecord {
   byConfidence: StrategyTrackBucket[];
   /** When during the session recommendations are snapshotted and graded, e.g. "14:45 IST". */
   snapshotTime: string;
+}
+
+/**
+ * What the option-quality engine read off the contract a setup is built on.
+ *
+ * Structural mirror of the assessment analytics produces, declared here so
+ * the shared types stay free of a dependency on the analytics package. Only
+ * `tradeable: false` ever refuses a setup, and only for a mechanical
+ * execution failure (a premium too small to hold a stop, or a contract
+ * nobody is trading). The score and grade are recorded on every setup and
+ * gate nothing yet — the hypothesis that low delta, heavy theta and rich IV
+ * lose money is untested on this book, and gets promoted on its own
+ * out-of-sample evidence like every other rule here.
+ */
+export interface TradeSetupOptionQuality {
+  /** 0-100, weighted across the components below. */
+  score: number;
+  grade: 'GOOD' | 'ACCEPTABLE' | 'POOR' | 'UNTRADEABLE';
+  /** False only for a mechanical tradeability failure. */
+  tradeable: boolean;
+  /** Premium points the expected underlying move should produce, delta-implied. */
+  expectedPremiumGain: number | null;
+  /** Premium points of decay paid over the expected hold. */
+  thetaCostOverHold: number | null;
+  /** Expected gain over theta paid. Below 1 the clock wins even when the direction is right. */
+  thetaEfficiency: number | null;
+  components: { name: string; score: number; detail: string }[];
+  summary: string;
 }

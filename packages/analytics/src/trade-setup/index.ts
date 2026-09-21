@@ -19,7 +19,8 @@
 // numbers were derived so it can be checked, not just trusted.
 // ============================================================
 
-import type { OptionChainStrike, OptionType, BiasDirection, TradeSetup, PositionSize } from '@fno/shared';
+import type { OptionChainStrike, OptionType, BiasDirection, TradeSetup, PositionSize, TradeSetupOptionQuality } from '@fno/shared';
+import { assessOptionQuality, type OptionQualityInput } from '../option-quality/index.js';
 import { DEFAULT_RISK_CONFIG, TRADING_COST_MODEL } from '@fno/shared';
 
 // 30% premium stop for an intraday hold — standard retail heuristic for
@@ -250,7 +251,9 @@ export function buildTradeSetup(
   dte: number | null = null,
   lotSize: number = 1,
   /** ATR of the underlying on the read's own timeframe, in index/price points. Null disables the volatility gates. */
-  atrPoints: number | null = null
+  atrPoints: number | null = null,
+  /** Extra inputs for the option-quality read. See SetupInstrumentContext. */
+  instrument: SetupInstrumentContext = {}
 ): TradeSetup {
   if (confidence < MIN_CONFIDENCE) {
     return {
@@ -265,7 +268,7 @@ export function buildTradeSetup(
   }
 
   const side: OptionType = direction === 'BULLISH' ? 'CE' : 'PE';
-  return buildNakedLong(strikes, atmStrike, direction, side, confidence, expectedMovePoints, slPremiumPct, vix, dte, lotSize, atrPoints);
+  return buildNakedLong(strikes, atmStrike, direction, side, confidence, expectedMovePoints, slPremiumPct, vix, dte, lotSize, atrPoints, instrument);
 }
 
 // ============================================================
@@ -283,7 +286,8 @@ function buildNakedLong(
   vix: number | null,
   dte: number | null = null,
   lotSize: number = 1,
-  atrPoints: number | null = null
+  atrPoints: number | null = null,
+  instrument: SetupInstrumentContext = {}
 ): TradeSetup {
   const atmEntry = strikes.find((s) => s.strike === atmStrike);
   const leg = side === 'CE' ? atmEntry?.call : atmEntry?.put;
@@ -323,6 +327,7 @@ function buildNakedLong(
   if (atmSpreadPct != null && atmSpreadPct > MAX_ATM_SPREAD_PCT) {
     return {
       available: false,
+      noTradeCode: 'WIDE_SPREAD',
       reason: `ATM ${side} ${atmStrike} bid-ask spread (${atmSpreadPct.toFixed(1)}% of mid) is too wide to trade — likely illiquid this tick.`,
     };
   }
@@ -355,6 +360,59 @@ function buildNakedLong(
   // book and far from where an order would actually fill.
   const entry = round2(mid);
   const target = round2(entry + deltaMove);
+
+  // ---- Option quality ----
+  // The instrument is part of the trade, not a detail of it: a correct
+  // directional call on a contract with 0.15 delta and a theta bigger than
+  // the move is worth loses money being right. Assessed here so the live
+  // engine and any replay read the same function over the same inputs.
+  //
+  // Only the two MECHANICAL floors refuse — a premium too small to hold a
+  // stop, and a contract with neither volume nor open interest. Those are
+  // statements about whether the trade can be executed and exited, not
+  // predictions about what wins, and being wrong about them costs money with
+  // certainty. Everything else (delta efficiency, theta burn, IV richness)
+  // is scored onto the setup and gates nothing until it has out-of-sample
+  // evidence of its own.
+  const expectedHoldHours = instrument.expectedHoldHours ?? (dte != null && dte <= 1 ? 3 : 5);
+  const optionQualityInput: OptionQualityInput = {
+    entryPremium: entry,
+    bid: leg.bid,
+    ask: leg.ask,
+    volume: leg.volume,
+    openInterest: leg.oi,
+    delta: leg.delta,
+    theta: leg.theta,
+    iv: leg.iv,
+    ivRank: instrument.ivRank ?? null,
+    hvPct: instrument.hvPct ?? null,
+    dte: dte ?? 0,
+    distanceFromSpot: Math.abs(atmEntry?.distanceFromSpot ?? 0),
+    expectedMovePoints,
+    expectedHoldHours,
+    tickSize: instrument.tickSize ?? 0.05,
+    moneyness: leg.moneyness,
+    greeksSource: leg.greeksSource,
+  };
+  const optionQuality = assessOptionQuality(optionQualityInput);
+  if (!optionQuality.tradeable) {
+    return {
+      available: false,
+      noTradeCode: optionQuality.refusalReason?.includes('Nobody is trading') ? 'LOW_OPTION_LIQUIDITY' : 'POOR_OPTION_QUALITY',
+      reason: `${direction} bias at ${confidence}/100, but the contract it would have to be expressed through is not tradeable. ${optionQuality.refusalReason}`,
+    };
+  }
+  const optionQualityRecord: TradeSetupOptionQuality = {
+    score: optionQuality.score,
+    grade: optionQuality.grade,
+    tradeable: optionQuality.tradeable,
+    expectedPremiumGain: optionQuality.expectedPremiumGain,
+    thetaCostOverHold: optionQuality.thetaCostOverHold,
+    thetaEfficiency: optionQuality.thetaEfficiency,
+    components: optionQuality.components.map((c) => ({ name: c.name, score: c.score, detail: c.detail })),
+    summary: optionQuality.summary,
+  };
+
   const grossReward = target - entry;
 
   // Costs are charged against BOTH legs when judging whether the ratio is
@@ -456,6 +514,7 @@ function buildNakedLong(
     estimatedCostPct: costPct,
     stopInAtr: stopInAtr != null ? round2(stopInAtr) : null,
     targetInAtr: targetInAtr != null ? round2(targetInAtr) : null,
+    optionQuality: optionQualityRecord,
     positionSize: positionSize ?? undefined,
     reason:
       `${direction} bias at ${confidence}/100 confidence — ATM ${side} ${atmStrike} @ ${entry.toFixed(2)}${hasQuote ? ' (bid-ask mid)' : ''}. ` +
@@ -465,7 +524,11 @@ function buildNakedLong(
       `. R:R ${riskReward.toFixed(2)} gross, ~${riskRewardNet.toFixed(2)} after costs.` +
       (dte != null ? ` DTE ${dte}.` : '') +
       ` The entry/SL/target figures themselves are pre-cost — the round trip is estimated at ~${costPct}% of premium (~${estimatedCost.toFixed(2)} per unit: this contract's bid-ask spread, a slippage allowance, statutory charges, and brokerage for one lot), a broker-dependent estimate, which is why it gates the setup rather than being subtracted from the displayed prices.` +
-      sizingNote,
+      sizingNote +
+      // Recorded and shown, not enforced. If this read turns out to predict
+      // outcomes out of sample it becomes a gate; until then the honest thing
+      // is to say what the instrument looks like and still take the trade.
+      ` ${optionQuality.summary}`,
   };
 }
 
@@ -482,6 +545,21 @@ function buildNakedLong(
  * `netPremium` itself, just with live prices instead of entry prices, so
  * `currentValue - netPremium` is P&L in both the debit and credit case.
  */
+/**
+ * Inputs the option-quality engine needs that the chain leg does not carry:
+ * the symbol's IV history, its realised volatility, the contract tick size,
+ * and how long the position is expected to be held (which is what decides
+ * how much theta actually gets paid). All optional — with none of it the
+ * engine still scores liquidity, spread and delta, and still enforces the
+ * two mechanical tradeability floors.
+ */
+export interface SetupInstrumentContext {
+  ivRank?: number | null;
+  hvPct?: number | null;
+  tickSize?: number;
+  expectedHoldHours?: number;
+}
+
 export interface SetupProgress {
   currentValue: number | null;
   hitTarget: boolean;

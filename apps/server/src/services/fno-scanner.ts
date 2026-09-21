@@ -426,6 +426,33 @@ interface IvInput {
 // check compared the database's UTC date with the IST date.
 const IV_SAMPLE_MIN_MINUTES = 30;
 
+/**
+ * IV rank for one symbol, for the option-quality read on a trade setup.
+ *
+ * The option-quality engine needs to know whether the premium it is about to
+ * buy sits high or low in its own trailing year, and the bias engine had no
+ * access to that — the rank was computed only inside the F&O scan's batch.
+ * This wraps the same batch path for a single symbol and caches the answer
+ * for a few minutes, because the rank moves on a daily sample and a bias
+ * poll must not pay a database round trip for it every time.
+ *
+ * Returns null whenever the rank is genuinely unknown (too little recorded
+ * history, or the query failed). Null means "no information" and the
+ * option-quality engine falls back to the IV-vs-realised read alone; it must
+ * never be read as a mid-range rank.
+ */
+export async function ivRankFor(symbol: string, expiry: string, atmIvPct: number): Promise<number | null> {
+  if (!(atmIvPct > 0)) return null;
+  const cacheKey = `iv_rank_one:${symbol}:${expiry}:${Math.round(atmIvPct * 10)}`;
+  const ranks = await cached(cacheKey, IV_RANK_LOOKUP_TTL_SECONDS, async () => {
+    const map = await computeIvRanks([{ symbol, expiry, atmIv: atmIvPct, ceIv: 0, peIv: 0, ivSkew: 0 }]);
+    return { ivRank: map.get(symbol)?.ivRank ?? null };
+  });
+  return ranks?.ivRank ?? null;
+}
+
+const IV_RANK_LOOKUP_TTL_SECONDS = 300;
+
 async function computeIvRanks(inputs: IvInput[]): Promise<Map<string, IvRankResult>> {
   const result = new Map<string, IvRankResult>();
   if (inputs.length === 0) return result;
