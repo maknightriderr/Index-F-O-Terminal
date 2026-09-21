@@ -343,6 +343,14 @@ export async function snapshotLineage(boundary: ReportBoundary = newBoundary()):
   const runById = new Map(runs.map((r) => [r.id, r]));
   const runsWithSnapshot = new Set<string>();
 
+  // When the hard lineage column began being written. A run that ran BEFORE
+  // this cannot have a snapshot carrying its id, and counting it as a run
+  // with no snapshot would report a schema rollout as a data-integrity
+  // failure. Derived from the rows themselves rather than a constant, so it
+  // is correct whenever the column actually started being populated.
+  const linkedTimes = snapshots.filter((x) => x.run_id != null).map((x) => new Date(x.time).getTime());
+  const lineageStartedAt = linkedTimes.length > 0 ? Math.min(...linkedTimes) : null;
+
   let preSnapshots = 0;
   let postSnapshots = 0;
   let preLegs = 0;
@@ -393,11 +401,18 @@ export async function snapshotLineage(boundary: ReportBoundary = newBoundary()):
     });
   }
 
-  const successfulRuns = runs.filter((r) => r.status === 'SUCCESS' || r.status === 'PARTIAL').length;
+  const successfulAll = runs.filter((r) => r.status === 'SUCCESS' || r.status === 'PARTIAL');
+  // Only runs inside the lineage era are subject to the invariant.
+  const successfulInEra = successfulAll.filter(
+    (r) => lineageStartedAt != null && new Date(r.time).getTime() >= lineageStartedAt
+  );
+  const runsBeforeLineage = successfulAll.length - successfulInEra.length;
+  const successfulRuns = successfulInEra.length;
+
   // A successful run that wrote no snapshot is the other half of the
   // invariant, and it was never checked before.
-  const runsWithoutSnapshot = runs
-    .filter((r) => (r.status === 'SUCCESS' || r.status === 'PARTIAL') && !runsWithSnapshot.has(r.id))
+  const runsWithoutSnapshot = successfulInEra
+    .filter((r) => !runsWithSnapshot.has(r.id))
     .map((r) => ({
       capture_run_id: r.id,
       timestamp: new Date(r.time).toISOString(),
@@ -415,9 +430,18 @@ export async function snapshotLineage(boundary: ReportBoundary = newBoundary()):
     pre_instrumentation_legs: preLegs,
     post_instrumentation_legs: postLegs,
     total_legs: preLegs + postLegs,
+    lineage_started_at: lineageStartedAt == null ? null : new Date(lineageStartedAt).toISOString(),
     total_option_snapshots: preSnapshots + postSnapshots,
     total_capture_runs: runs.length,
+    /** Successful runs INSIDE the lineage era — the only ones the invariant governs. */
     successful_capture_runs: successfulRuns,
+    successful_capture_runs_all_time: successfulAll.length,
+    /**
+     * Successful runs that predate the lineage column. They cannot have a
+     * snapshot carrying their id, and counting them as violations would
+     * report a schema rollout as a data-integrity failure.
+     */
+    runs_before_lineage: runsBeforeLineage,
     snapshots_linked_to_capture_run: linkedSnapshots,
     snapshots_without_capture_run: preSnapshots + orphans.length,
     /** A snapshot carrying a run id that no run matches. Must be 0. */
@@ -432,14 +456,22 @@ export async function snapshotLineage(boundary: ReportBoundary = newBoundary()):
       successful_capture_runs: successfulRuns,
       snapshots_linked_to_capture_run: linkedSnapshots,
       orphan_snapshots: orphans.length,
+      /**
+       * null, not false, when there is nothing to check. Reporting `false`
+       * for an empty lineage era says the invariant was VIOLATED, which is a
+       * different claim from "no row is subject to it yet" — and it is the
+       * kind of false alarm that teaches a reader to ignore the field.
+       */
       holds:
-        postSnapshots === successfulRuns && successfulRuns === linkedSnapshots && orphans.length === 0,
+        lineageStartedAt == null
+          ? null
+          : postSnapshots === successfulRuns && successfulRuns === linkedSnapshots && orphans.length === 0,
       detail:
-        postSnapshots === 0
-          ? 'no snapshot carries a run id yet, so the invariant has nothing to check'
+        lineageStartedAt == null
+          ? 'no snapshot carries a run id yet, so the invariant has nothing to check. Not a violation.'
           : postSnapshots === successfulRuns && successfulRuns === linkedSnapshots && orphans.length === 0
             ? 'holds exactly'
-            : `MISMATCH: ${postSnapshots} snapshots, ${successfulRuns} successful runs, ${linkedSnapshots} linked, ${orphans.length} orphans`,
+            : `MISMATCH: ${postSnapshots} snapshots, ${successfulRuns} successful runs in the lineage era, ${linkedSnapshots} linked, ${orphans.length} orphans`,
     },
     postInstrumentationSnapshots: postDetail,
     note:
