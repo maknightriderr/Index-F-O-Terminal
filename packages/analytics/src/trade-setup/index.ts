@@ -255,12 +255,13 @@ export function buildTradeSetup(
   if (confidence < MIN_CONFIDENCE) {
     return {
       available: false,
+      noTradeCode: 'LOW_SETUP_QUALITY',
       reason: `Bias confidence (${confidence}/100) is below the ${MIN_CONFIDENCE} threshold needed for a setup — signals are too mixed.`,
     };
   }
 
   if (direction === 'NEUTRAL') {
-    return { available: false, reason: 'Market bias is neutral — no high-conviction directional setup right now.' };
+    return { available: false, noTradeCode: 'NEUTRAL_BIAS', reason: 'Market bias is neutral — no high-conviction directional setup right now.' };
   }
 
   const side: OptionType = direction === 'BULLISH' ? 'CE' : 'PE';
@@ -288,19 +289,19 @@ function buildNakedLong(
   const leg = side === 'CE' ? atmEntry?.call : atmEntry?.put;
 
   if (!leg || leg.ltp <= 0) {
-    return { available: false, reason: `No live ${side} quote at the ATM strike (${atmStrike}) to build a setup from.` };
+    return { available: false, noTradeCode: 'NO_QUOTE', reason: `No live ${side} quote at the ATM strike (${atmStrike}) to build a setup from.` };
   }
 
   // Defense-in-depth: delta must be in [-1, 1]. If upstream sanitization
   // missed an edge case and a broker-garbage delta leaked through, refuse
   // to project a target from it rather than handing out a 90x R:R number.
   if (!isFinite(leg.delta) || Math.abs(leg.delta) > 1) {
-    return { available: false, reason: `ATM ${side} delta (${leg.delta}) is out of range — upstream Greeks data is unreliable this tick.` };
+    return { available: false, noTradeCode: 'NO_QUOTE', reason: `ATM ${side} delta (${leg.delta}) is out of range — upstream Greeks data is unreliable this tick.` };
   }
 
   const deltaMove = Math.abs(leg.delta) * Math.max(expectedMovePoints, 0);
   if (deltaMove <= 0) {
-    return { available: false, reason: `No usable delta/expected-move data at the ATM strike (${atmStrike}) to project a target.` };
+    return { available: false, noTradeCode: 'UNREALISTIC_TARGET', reason: `No usable delta/expected-move data at the ATM strike (${atmStrike}) to project a target.` };
   }
 
   // Measured, not gated. On 5-minute ATR the recorded trades said targets
@@ -368,6 +369,7 @@ function buildNakedLong(
   if (netReward <= 0) {
     return {
       available: false,
+      noTradeCode: 'COST_EXCEEDS_EDGE',
       reason: `Projected target (${target.toFixed(2)}) doesn't clear the ~${costPct}% estimated round-trip cost of trading it (spread, slippage, charges, brokerage) — no edge left after costs.`,
     };
   }
@@ -383,6 +385,7 @@ function buildNakedLong(
     const impliedRr = round2(netReward / (minStopWidth + roundTripCost));
     return {
       available: false,
+      noTradeCode: 'REWARD_RISK_TOO_LOW',
       reason:
         `Reward:risk after costs (${impliedRr.toFixed(2)}) is below the ${MIN_RISK_REWARD} minimum even at the tightest tradeable stop ` +
         `(${Math.round(MIN_SL_PREMIUM_PCT * 100)}% of premium, ~${costPct}% est. costs). The ${deltaMove.toFixed(2)}-point projected move can't pay for the risk — skip, don't size down.`,

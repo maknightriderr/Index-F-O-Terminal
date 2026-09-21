@@ -27,7 +27,17 @@ export type TradeCloseReason =
   | 'BREAKEVEN_STOP'
   | 'BIAS_REVERSED'
   | 'SESSION_ENDED'
-  | 'SETUP_INVALIDATED';
+  | 'SETUP_INVALIDATED'
+  // Added with the trade-health work: an exit has to say which of these it
+  // was, or the next review has to guess (see trade-health.ts).
+  | 'TIME_STOP'
+  | 'TRADE_DECAY'
+  | 'THESIS_INVALIDATED'
+  | 'IV_COLLAPSE'
+  | 'LIQUIDITY_DETERIORATION'
+  | 'MANUAL_EXIT'
+  | 'SYSTEM_ERROR'
+  | 'UNKNOWN';
 
 const REASON_TEXT: Record<TradeCloseReason, string> = {
   TARGET: 'Target hit',
@@ -37,6 +47,14 @@ const REASON_TEXT: Record<TradeCloseReason, string> = {
   BIAS_REVERSED: 'Closed early — bias reversed before stop-loss or target',
   SESSION_ENDED: 'Closed — the trading session ended before stop-loss or target',
   SETUP_INVALIDATED: 'Closed — setup failed a data sanity check',
+  TIME_STOP: 'Closed — the trade ran out of time without making progress',
+  TRADE_DECAY: 'Closed — the trade stopped working and was bleeding premium',
+  THESIS_INVALIDATED: 'Closed — the reason for the trade no longer held',
+  IV_COLLAPSE: 'Closed — implied volatility collapsed and took the premium with it',
+  LIQUIDITY_DETERIORATION: 'Closed — the contract stopped quoting a tradeable market',
+  MANUAL_EXIT: 'Closed manually',
+  SYSTEM_ERROR: 'Closed after a system error',
+  UNKNOWN: 'Closed — reason not recorded',
 };
 
 export interface TradeCloseNotice {

@@ -68,6 +68,7 @@ import {
   getExchangeHoliday,
   getSessionCloseTime,
   minutesSinceSessionOpen,
+  getSessionWindow,
 } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveSpotToken, resolveNearestFuturesContract, buildOptionChain } from './option-chain.js';
@@ -79,6 +80,10 @@ import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 import { notifyTradeSetup } from './telegram.js';
 import { trackSymbolForOiSnapshot } from './oi-close-snapshot.js';
+import { riskOffReason } from './risk-circuit-breaker.js';
+import { assessLocation, assessRoom, type StructuralLevel } from './location-quality.js';
+import type { NoTradeCode, TradeDecision } from '@fno/shared';
+import { assessTradeHealth, emptyExcursion, updateExcursion, mfeInAtr, type TradeExcursion, type TradeHealthAssessment } from './trade-health.js';
 import { notifyTradeSetupClosed } from './trade-setup-close-notifier.js';
 import type { TradeCloseReason } from './trade-setup-close-notifier.js';
 import type { OptionChain } from '@fno/shared';
@@ -1428,6 +1433,35 @@ async function computeMarketBias(
   const setupConfidence = direction === 'NEUTRAL' ? confidence : Math.round(confidence * REGIME_CONFIDENCE_FACTOR[alignment]);
   const room = roomToTarget(direction, chain?.spotPrice ?? spot, callLevels, putLevels, pivots);
 
+  // Location quality (shadow): where this entry sits among the levels that
+  // matter, rather than only which way the read points. Recorded on every
+  // setup and refusal so it can be validated on live trades before it is
+  // allowed to gate anything — see location-quality.ts.
+  const locationSpot = chain?.spotPrice ?? spot;
+  const todayCandles = filterToday(candles15m);
+  const structuralLevels: StructuralLevel[] = [
+    ...callLevels.map((l): StructuralLevel => ({ price: l.strike, kind: 'OI_WALL', strengthPct: l.strengthPct })),
+    ...putLevels.map((l): StructuralLevel => ({ price: l.strike, kind: 'OI_WALL', strengthPct: l.strengthPct })),
+    ...(pivots ? ([
+      { price: pivots.r1, kind: 'PIVOT' as const }, { price: pivots.r2, kind: 'PIVOT' as const }, { price: pivots.r3, kind: 'PIVOT' as const },
+      { price: pivots.s1, kind: 'PIVOT' as const }, { price: pivots.s2, kind: 'PIVOT' as const }, { price: pivots.s3, kind: 'PIVOT' as const },
+    ] as StructuralLevel[]) : []),
+    ...(vwapDataAvailable && sessionVwap > 0 ? ([{ price: sessionVwap, kind: 'VWAP' as const }] as StructuralLevel[]) : []),
+    ...(todayCandles.length > 0
+      ? ([
+          { price: Math.max(...todayCandles.map((c) => c.high)), kind: 'DAY_HIGH' as const },
+          { price: Math.min(...todayCandles.map((c) => c.low)), kind: 'DAY_LOW' as const },
+        ] as StructuralLevel[])
+      : []),
+    ...(previousSessionCandles.length > 0
+      ? ([
+          { price: Math.max(...previousSessionCandles.map((c) => c.high)), kind: 'PREV_DAY_HIGH' as const },
+          { price: Math.min(...previousSessionCandles.map((c) => c.low)), kind: 'PREV_DAY_LOW' as const },
+        ] as StructuralLevel[])
+      : []),
+  ].filter((l) => Number.isFinite(l.price) && l.price > 0);
+  const location = assessLocation({ spot: locationSpot, direction, atrPoints: atrShortNow > 0 ? atrShortNow : null, levels: structuralLevels });
+
   const entryContext: SetupEntryContext = {
     regime,
     regimeAlignment: alignment,
@@ -1444,6 +1478,11 @@ async function computeMarketBias(
     volumeSource,
     roomToTargetPoints: room ? Math.round(room.points * 100) / 100 : null,
     atrPoints: atrShortNow > 0 ? Math.round(atrShortNow * 100) / 100 : null,
+    locationScore: location.score,
+    locationAheadAtr: location.aheadAtr != null ? Math.round(location.aheadAtr * 100) / 100 : null,
+    locationBehindAtr: location.behindAtr != null ? Math.round(location.behindAtr * 100) / 100 : null,
+    locationAheadKind: location.nearestAhead?.kind ?? null,
+    locationReason: location.reasons[0] ?? null,
     roomLevel: room ? Math.round(room.level * 100) / 100 : null,
     roomLevelSource: room?.source ?? null,
     optionOiBaselineCoverage: Math.round(optionOiBaselineCoverage * 100) / 100,
@@ -1749,6 +1788,9 @@ interface StoredTradeSetup extends TradeSetup {
   reversalStreak?: number; // confident opposite reads since the streak started — see REVERSAL_CONFIRM_POLLS
   reversalSince?: number; // when the first of those reads landed (epoch ms) — see REVERSAL_CONFIRM_SECONDS
   initialStopLoss?: number; // the SL at generation time, fixed — `stopLoss` itself trails upward as price moves favorably, this is what "1x/2x initial risk" is measured against
+  generatedAt?: number; // epoch ms, for elapsed-time reads
+  excursion?: TradeExcursion; // best/worst seen since entry — see trade-health.ts
+  health?: { state: string; score: number; wouldExit: boolean; reason: string; at: number }; // shadow only, never closes a position
 }
 
 // A fixed 30%-of-entry SL gives back a lot of a real trending move waiting
@@ -1829,24 +1871,31 @@ const SL_COOLDOWN_SECONDS = 60 * 60;
 const SL_COOLDOWN_SECONDS_POSITIONAL = 60 * 60 * 24; // a positional thesis that just stopped out isn't re-evaluated within the hour
 const MAX_SAME_DIRECTION_LOSSES_PER_DAY = 2;
 
-function sessionGateReason(exchange: Exchange, mode: TradingMode): string | null {
+interface GateRefusal {
+  code: NoTradeCode;
+  reason: string;
+}
+
+function sessionGateReason(exchange: Exchange, mode: TradingMode): GateRefusal | null {
   const sinceOpen = minutesSinceSessionOpen(exchange);
   if (sinceOpen == null) {
     const holiday = getExchangeHoliday(exchange);
     const closedFor = holiday ? ` for ${holiday.name}${holiday.closed === 'FULL' ? '' : ` (${holiday.closed.toLowerCase()} session)`}` : '';
-    return `${exchange} is closed${closedFor} — new trade setups are only built from live session quotes, not the frozen last prints.`;
+    return { code: 'MARKET_CLOSED', reason: `${exchange} is closed${closedFor} — new trade setups are only built from live session quotes, not the frozen last prints.` };
   }
   if (sinceOpen < SETUP_OPENING_SETTLE_MINUTES) {
-    return `Waiting out the first ${SETUP_OPENING_SETTLE_MINUTES} minutes after the session opens — quotes are still settling from the pre-open auction.`;
+    return { code: 'OPENING_HOUR', reason: `Waiting out the first ${SETUP_OPENING_SETTLE_MINUTES} minutes after the session opens — quotes are still settling from the pre-open auction.` };
   }
   // The opening hour is where the losses are. Positional entries are day-scale
   // reads and aren't judged on where the first hour's noise put the price, so
   // the guard is intraday only.
   if (mode === 'INTRADAY' && sinceOpen < SETUP_OPENING_GUARD_MINUTES) {
-    return (
-      `Market structure is still forming — ${Math.round(sinceOpen)} minutes into the session, and intraday setups wait for ${SETUP_OPENING_GUARD_MINUTES}. ` +
-      `Across the recorded history the first hour's entries lost 7.5R over 20 trades while everything after it made money.`
-    );
+    return {
+      code: 'OPENING_HOUR',
+      reason:
+        `Market structure is still forming — ${Math.round(sinceOpen)} minutes into the session, and intraday setups wait for ${SETUP_OPENING_GUARD_MINUTES}. ` +
+        `Across the recorded history the first hour's entries lost 7.5R over 20 trades while everything after it made money.`,
+    };
   }
   return null;
 }
@@ -1856,12 +1905,12 @@ function sessionGateReason(exchange: Exchange, mode: TradingMode): string | null
 // combination already nets to NEUTRAL (+3 vs -3) and can't produce a
 // direction — it's kept as an explicit guard so a future re-weighting can't
 // quietly reopen the CRUDEOIL case, and so the refusal reads plainly.
-function positioningConflictReason(direction: BiasDirection, votes: BiasVoteSnapshot | undefined): string | null {
+function positioningConflictReason(direction: BiasDirection, votes: BiasVoteSnapshot | undefined): GateRefusal | null {
   if (!votes || direction === 'NEUTRAL') return null;
   const against = direction === 'BULLISH' ? -1 : 1;
   const { futuresOi, pcr, optionOiFlow } = votes.positioning;
   if (futuresOi === against && pcr === against && optionOiFlow === against) {
-    return `Futures OI, PCR and option OI flow all read ${direction === 'BULLISH' ? 'bearish' : 'bullish'} — not taking a ${direction} setup against every positioning signal.`;
+    return { code: 'POSITIONING_CONFLICT', reason: `Futures OI, PCR and option OI flow all read ${direction === 'BULLISH' ? 'bearish' : 'bullish'} — not taking a ${direction} setup against every positioning signal.` };
   }
   return null;
 }
@@ -1929,23 +1978,23 @@ async function registerLosingClose(exchange: Exchange, underlying: string, mode:
  * everything, the full hour only for the setup that just failed, and a
  * higher confidence bar for the rest of the day.
  */
-async function losingCloseCooldownReason(underlying: string, exchange: Exchange, direction: BiasDirection, mode: TradingMode, confidence: number): Promise<string | null> {
+async function losingCloseCooldownReason(underlying: string, exchange: Exchange, direction: BiasDirection, mode: TradingMode, confidence: number): Promise<GateRefusal | null> {
   if (direction === 'NEUTRAL') return null;
   const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
   try {
     const settleTtl = await redis.ttl(postLossSettleKey(exchange, mode));
     if (settleTtl > 0) {
-      return (
+      return { code: 'POST_LOSS_COOLDOWN', reason: (
         `A setup stopped out ${POST_LOSS_SETTLE_MINUTES - Math.ceil(settleTtl / 60)} minutes ago — new entries wait ${POST_LOSS_SETTLE_MINUTES} minutes for the move that caused it to finish. ` +
         `Re-entries inside that window lost 0.28R a trade across 12 recorded trades; the same setups taken 15-60 minutes later made 0.82R.`
-      );
+      ) };
     }
     const lostToday = await redis.get(postLossDayKey(exchange, mode, day));
     if (lostToday && confidence < POST_LOSS_MIN_CONFIDENCE) {
-      return (
+      return { code: 'POST_LOSS_COOLDOWN', reason: (
         `Something already stopped out on ${exchange} today, so the bar for the next setup is confidence ${POST_LOSS_MIN_CONFIDENCE} — this reads ${confidence}. ` +
         `A fresh, clearly stronger setup is allowed immediately; a marginal one is not.`
-      );
+      ) };
     }
     const [cooldownTtl, losses] = await Promise.all([
       redis.ttl(slCooldownKey(exchange, underlying, mode, direction)),
@@ -1953,10 +2002,10 @@ async function losingCloseCooldownReason(underlying: string, exchange: Exchange,
     ]);
     const lossCount = Number(losses ?? 0);
     if (lossCount >= MAX_SAME_DIRECTION_LOSSES_PER_DAY) {
-      return `${underlying} has already stopped out ${lossCount} ${direction} setups today — no more ${direction} entries until tomorrow.`;
+      return { code: 'DIRECTION_LOCKED', reason: `${underlying} has already stopped out ${lossCount} ${direction} setups today — no more ${direction} entries until tomorrow.` };
     }
     if (cooldownTtl > 0) {
-      return `${underlying}'s last ${direction} setup hit its stop-loss — no same-direction re-entry for another ${Math.ceil(cooldownTtl / 60)} min (that repeat lost 0.48R a trade in the recorded history).`;
+      return { code: 'SAME_SYMBOL_SIDE', reason: `${underlying}'s last ${direction} setup hit its stop-loss — no same-direction re-entry for another ${Math.ceil(cooldownTtl / 60)} min (that repeat lost 0.48R a trade in the recorded history).` };
     }
   } catch (err: any) {
     logger.warn({ error: err.message, underlying }, 'Losing-close cooldown read failed — proceeding ungated');
@@ -2197,21 +2246,47 @@ async function resolveStickyTradeSetup(
   // Everything above only resolves an EXISTING setup, which is safe off-hours
   // (the frozen last print is the session's real close). Minting a NEW one
   // needs live quotes and no fresh stop-out in the same direction.
-  const unreliableReason =
+  const riskOff = await riskOffReason(exchange, mode);
+  const reliability = riskOff ? null : await checkReliabilityFilters(underlying, exchange, direction, mode);
+  const refusal: GateRefusal | null =
+    (riskOff ? { code: 'RISK_OFF' as const, reason: riskOff } : null) ??
     sessionGateReason(exchange, mode) ??
     (confidence < MIN_SETUP_CONFIDENCE
-      ? `Confidence ${confidence}/100 is below the ${MIN_SETUP_CONFIDENCE} a setup needs. Below that bar the recorded trades lost 6.6R across 34 of them, and 85% of the weakest band expired without touching either level.`
+      ? {
+          code: 'LOW_SETUP_QUALITY' as const,
+          reason: `Confidence ${confidence}/100 is below the ${MIN_SETUP_CONFIDENCE} a setup needs. Below that bar the recorded trades lost 6.6R across 34 of them, and 85% of the weakest band expired without touching either level.`,
+        }
       : null) ??
     positioningConflictReason(direction, voteSnapshot) ??
     (await losingCloseCooldownReason(underlying, exchange, direction, mode, confidence)) ??
-    (await checkReliabilityFilters(underlying, exchange, direction, mode));
+    (reliability ? { code: 'RELIABILITY_FILTER' as const, reason: reliability } : null);
+  const unreliableReason = refusal?.reason ?? null;
+  if (refusal != null) {
+    logDecision({
+      at: Date.now(),
+      symbol: underlying,
+      exchange,
+      mode,
+      decision: 'SKIP',
+      code: refusal.code,
+      reason: refusal.reason,
+      regime: entryContext?.regime ?? null,
+      bias: direction,
+      setupQuality: confidence,
+      locationScore: entryContext?.locationScore ?? null,
+      locationReason: entryContext?.locationReason ?? null,
+      roomAvailableAtr: entryContext?.roomAvailableAtr ?? null,
+      roomRequiredAtr: entryContext?.roomRequiredAtr ?? null,
+      roomSufficient: entryContext?.roomSufficient ?? null,
+    });
+  }
   if (unreliableReason != null) {
     try {
       await redis.del(key);
     } catch (err: any) {
       logger.warn({ error: err.message, underlying }, 'Sticky trade setup clear failed');
     }
-    return { available: false, reason: unreliableReason };
+    return { available: false, reason: unreliableReason, noTradeCode: refusal?.code };
   }
 
   // Reported, not enforced — see checkCounterToIndex. Attached to the built
@@ -2260,6 +2335,26 @@ async function resolveStickyTradeSetup(
   // between, and the further it reached the worse it did: setups projecting
   // R:R 2.2+ won 0 of 16 (avg -0.37R) vs +0.17R below 1.9. A capped target
   // that no longer clears the minimum R:R is refused, like any other.
+  // Room to run (shadow): the space ahead against the move the target needs.
+  // The existing cap already trims the target to the nearest wall or pivot;
+  // this records whether there was ever enough room to be worth taking.
+  const atrForRoom = entryContext?.atrPoints ?? null;
+  const roomCheck = assessRoom(
+    entryContext?.locationAheadAtr ?? null,
+    atrForRoom && atrForRoom > 0 ? targetExpectedMovePoints / atrForRoom : null
+  );
+  if (entryContext) {
+    entryContext.roomAvailableAtr = roomCheck.availableAtr != null ? Math.round(roomCheck.availableAtr * 100) / 100 : null;
+    entryContext.roomRequiredAtr = roomCheck.requiredAtr != null ? Math.round(roomCheck.requiredAtr * 100) / 100 : null;
+    entryContext.roomSufficient = roomCheck.sufficient;
+  }
+  if (roomCheck.sufficient === false) {
+    logger.info(
+      { shadow: 'ROOM_TO_RUN', underlying, exchange, mode, availableAtr: roomCheck.availableAtr, requiredAtr: roomCheck.requiredAtr, locationScore: entryContext?.locationScore ?? null },
+      'Room to run: this setup WOULD be refused for insufficient room (shadow only)'
+    );
+  }
+
   const roomPoints = entryContext?.roomToTargetPoints ?? null;
   const targetCapped = roomPoints != null && roomPoints < targetExpectedMovePoints;
   const targetMovePoints = targetCapped ? roomPoints : targetExpectedMovePoints;
@@ -2312,6 +2407,28 @@ async function resolveStickyTradeSetup(
   }
 
   const signalId = await recordTradeSetupGenerated(underlying, exchange, fresh, direction, confidence, regime, intelligenceScore, mode, voteSnapshot, entryContext);
+
+  logDecision({
+    at: Date.now(),
+    symbol: underlying,
+    exchange,
+    mode,
+    decision: "ENTER",
+    code: "ENTERED",
+    reason: fresh.reason ?? "Setup taken",
+    regime,
+    bias: direction,
+    setupQuality: confidence,
+    locationScore: entryContext?.locationScore ?? null,
+    locationReason: entryContext?.locationReason ?? null,
+    roomAvailableAtr: entryContext?.roomAvailableAtr ?? null,
+    roomRequiredAtr: entryContext?.roomRequiredAtr ?? null,
+    roomSufficient: entryContext?.roomSufficient ?? null,
+    riskReward: fresh.riskReward ?? null,
+    estimatedCostPct: fresh.estimatedCostPct ?? null,
+    // What the not-yet-live gates would have said about this same trade.
+    shadow: { room: entryContext?.roomSufficient !== false, location: (entryContext?.locationScore ?? 100) >= 40 },
+  });
 
   const toStore: StoredTradeSetup = {
     ...fresh,
@@ -2453,7 +2570,16 @@ async function recordTradeSetupOutcome(
     try {
       await sql`
         UPDATE signals
-        SET inputs = inputs || ${sql.json({ outcome, exitPrice: exitValue, exitTime: Date.now() })}, fwd_1d_return = ${returnPercent}
+        SET inputs = inputs || ${sql.json({
+          outcome,
+          exitPrice: exitValue,
+          exitTime: Date.now(),
+          // Structured, not guessed: every exit says which kind it was.
+          closeReason: close.reason,
+          holdMinutes: stored.generatedAt ? Math.round((Date.now() - stored.generatedAt) / 60000) : null,
+          excursion: stored.excursion ? { ...stored.excursion } : null,
+          healthAtExit: stored.health ? { ...stored.health } : null,
+        })}, fwd_1d_return = ${returnPercent}
         WHERE id = ${stored.signalId}
       `;
     } catch (err: any) {
@@ -2735,6 +2861,56 @@ export async function checkLockedSetupPriceLevels(
     return null;
   }
 
+  // --- Excursion + trade health (observational) --------------------------
+  // Runs on every sweep and every tick. Nothing here closes a position: the
+  // health engine records what it WOULD do so the rule can be judged against
+  // real outcomes first (see trade-health.ts).
+  if (!isSpread && stored.entry != null && stored.entry > 0) {
+    const bullish = stored.side !== 'PE';
+    const generatedAt = stored.generatedAt ?? Date.now();
+    const base = stored.excursion ?? emptyExcursion(pricingChain?.spotPrice ?? null, stored.entryContext?.atrPoints ?? null, stored.entry);
+    const { excursion, changed } = updateExcursion(base, {
+      premium: currentValue,
+      underlying: pricingChain?.spotPrice ?? null,
+      entryPremium: stored.entry,
+      initialStop: stored.initialStopLoss ?? stored.stopLoss ?? null,
+      bullish,
+      at: Date.now(),
+      generatedAt,
+    });
+
+    const elapsedMinutes = Math.max(0, (Date.now() - generatedAt) / 60000);
+    const health = assessTradeHealth({
+      elapsedMinutes,
+      horizonMinutes: mode === 'POSITIONAL' ? (stored.dte ?? 1) * 375 : remainingSessionMinutesFrom(exchange, generatedAt),
+      mfeAtr: mfeInAtr(excursion),
+      currentProgressAtr:
+        excursion.atrAtEntry && excursion.atrAtEntry > 0 && excursion.underlyingEntry && pricingChain?.spotPrice
+          ? ((bullish ? pricingChain.spotPrice - excursion.underlyingEntry : excursion.underlyingEntry - pricingChain.spotPrice) / excursion.atrAtEntry)
+          : null,
+      targetAtr: stored.targetInAtr ?? null,
+      premiumRatio: currentValue != null && stored.entry > 0 ? currentValue / stored.entry : null,
+    });
+
+    const healthChanged = stored.health?.state !== health.state;
+    if (changed || healthChanged) {
+      const updated: StoredTradeSetup = {
+        ...stored,
+        excursion,
+        health: { state: health.state, score: health.score, wouldExit: health.wouldExit, reason: health.reason, at: Date.now() },
+      };
+      stored = updated;
+      try {
+        await redis.set(key, JSON.stringify(updated), 'EX', mode === 'POSITIONAL' ? STICKY_TRADE_SETUP_TTL_SECONDS_POSITIONAL : STICKY_TRADE_SETUP_TTL_SECONDS);
+      } catch (err: any) {
+        logger.warn({ error: err.message, underlying }, 'Trade health: excursion write failed');
+      }
+    }
+    if (healthChanged) {
+      logShadowHealth(underlying, exchange, mode, health, elapsedMinutes, excursion);
+    }
+  }
+
   if (!hitSL && !hitTarget) return watch;
 
   const outcome = classifyPriceHitOutcome(stored, isSpread, hitTarget);
@@ -2761,6 +2937,52 @@ export async function checkLockedSetupPriceLevels(
     'Price-level monitor: closed a locked setup that hit SL/target between on-demand checks'
   );
   return null;
+}
+
+/**
+ * Every entry decision, taken or refused, as one structured line. Skipped
+ * trades were previously invisible: the engine explained itself in prose to
+ * whoever happened to be looking at the tab, and nothing counted them. These
+ * are what the next review reads to ask "what did we turn down, and should we
+ * have?".
+ */
+function logDecision(decision: TradeDecision): void {
+  logger.info(
+    { tradeDecision: decision },
+    decision.decision === 'ENTER' ? `Trade decision: ENTER ${decision.symbol}` : `Trade decision: SKIP ${decision.symbol} (${decision.code})`
+  );
+}
+
+/** Minutes left in the session from a trade's entry — its realistic horizon. */
+function remainingSessionMinutesFrom(exchange: Exchange, generatedAt: number): number {
+  const day = new Date(generatedAt).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const session = getSessionWindow(exchange, day);
+  if (!session) return 375;
+  return Math.max(30, (session.close - generatedAt) / 60000);
+}
+
+/**
+ * Shadow log for the time-stop. Every state change is recorded with what the
+ * rule would have done, so its value can be measured before it is allowed to
+ * close anything.
+ */
+function logShadowHealth(underlying: string, exchange: Exchange, mode: TradingMode, health: TradeHealthAssessment, elapsedMinutes: number, excursion: TradeExcursion): void {
+  logger.info(
+    {
+      shadow: 'TRADE_HEALTH',
+      underlying,
+      exchange,
+      mode,
+      state: health.state,
+      score: health.score,
+      wouldExit: health.wouldExit,
+      elapsedMinutes: Math.round(elapsedMinutes),
+      mfeAtr: mfeInAtr(excursion),
+      progressRatio: health.progressRatio,
+      reason: health.reason,
+    },
+    health.wouldExit ? 'Trade health: a time-stop WOULD close this position (shadow only)' : 'Trade health: state changed'
+  );
 }
 
 // --- Helpers ---
@@ -2833,6 +3055,16 @@ interface SetupEntryContext {
   roomToTargetPoints: number | null;
   /** ATR of the underlying on this read's short tier, in points — the scale a stop or target should be judged against. */
   atrPoints: number | null;
+  /** Location quality at entry (shadow — recorded, not yet gating). See location-quality.ts. */
+  locationScore: number | null;
+  locationAheadAtr: number | null;
+  locationBehindAtr: number | null;
+  locationAheadKind: string | null;
+  locationReason: string | null;
+  /** Room to run versus what the target needs, in ATR (shadow). */
+  roomAvailableAtr?: number | null;
+  roomRequiredAtr?: number | null;
+  roomSufficient?: boolean | null;
   roomLevel: number | null;
   roomLevelSource: 'CALL_WALL' | 'PUT_WALL' | 'PIVOT' | null;
   optionOiBaselineCoverage: number;

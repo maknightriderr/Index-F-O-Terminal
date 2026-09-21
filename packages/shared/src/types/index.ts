@@ -341,6 +341,8 @@ export interface TradeSetup {
   /** How far the stop sits from entry in the underlying's ATR, and how far the target is. Null when no ATR was available. */
   stopInAtr?: number | null;
   targetInAtr?: number | null;
+  /** Structured refusal code when available === false. */
+  noTradeCode?: NoTradeCode;
 
   /**
    * NIFTY's direction, when this setup runs AGAINST it. Absent when the
@@ -1272,6 +1274,55 @@ export interface NextDayBias {
   /** 'empirical-v2' — trailing-window rates from daily history, no direction call. Absent on the old rule-based read. */
   model?: string;
   evidence?: NextDayEvidence;
+}
+
+/**
+ * Why a setup was not taken, as a code rather than only prose. Every refusal
+ * path sets one, so skipped trades can be counted and reviewed the same way
+ * taken ones are.
+ */
+export type NoTradeCode =
+  | 'RISK_OFF'
+  | 'MARKET_CLOSED'
+  | 'OPENING_HOUR'
+  | 'LOW_SETUP_QUALITY'
+  | 'POSITIONING_CONFLICT'
+  | 'POST_LOSS_COOLDOWN'
+  | 'SAME_SYMBOL_SIDE'
+  | 'DIRECTION_LOCKED'
+  | 'RELIABILITY_FILTER'
+  | 'NO_QUOTE'
+  | 'WIDE_SPREAD'
+  | 'UNREALISTIC_TARGET'
+  | 'INSUFFICIENT_ROOM'
+  | 'POOR_LOCATION'
+  | 'COST_EXCEEDS_EDGE'
+  | 'REWARD_RISK_TOO_LOW'
+  | 'NEUTRAL_BIAS'
+  | 'NO_CHAIN'
+  | 'UNKNOWN';
+
+/** A structured account of one entry decision — why it was taken, or why it was not. */
+export interface TradeDecision {
+  at: number;
+  symbol: string;
+  exchange: Exchange;
+  mode: TradingMode;
+  decision: 'ENTER' | 'SKIP';
+  code: NoTradeCode | 'ENTERED';
+  reason: string;
+  regime?: MarketRegime | null;
+  bias?: BiasDirection | null;
+  setupQuality?: number | null;
+  locationScore?: number | null;
+  locationReason?: string | null;
+  roomAvailableAtr?: number | null;
+  roomRequiredAtr?: number | null;
+  roomSufficient?: boolean | null;
+  riskReward?: number | null;
+  estimatedCostPct?: number | null;
+  /** Shadow verdicts: what the not-yet-live gates would have done. */
+  shadow?: { room?: boolean; location?: boolean };
 }
 
 export interface NextDayEvidence {
