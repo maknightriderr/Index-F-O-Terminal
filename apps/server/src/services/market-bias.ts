@@ -81,6 +81,8 @@ import { logger } from '../lib/logger.js';
 import { decisionNow, decisionDate, decisionIstDate, assertNoFutureData } from './decision-clock.js';
 import { ivRankFor } from './fno-scanner.js';
 import { recordDecisionSnapshot } from './decision-snapshot.js';
+import { recordStopEvent } from './stop-event.js';
+import { classifySetup, sessionBucket, type SetupClassification } from '@fno/analytics';
 import { captureUnderlyingObservation } from './market-state-capture.js';
 import { dataQualityBlock } from './data-quality.js';
 import { notifyTradeSetup } from './telegram.js';
@@ -1487,6 +1489,30 @@ async function computeMarketBias(
   ].filter((l) => Number.isFinite(l.price) && l.price > 0);
   const location = assessLocation({ spot: locationSpot, direction, atrPoints: atrShortNow > 0 ? atrShortNow : null, levels: structuralLevels });
 
+  // Name the setup the engine has ALREADY detected. Every argument below is a
+  // reading computed earlier in this function and already voted on; nothing
+  // here detects anything, and the result is written to the decision record
+  // and read by no rule.
+  const setupClassification = classifySetup({
+    direction,
+    shortPattern: shortTermPattern?.pattern ?? null,
+    longPattern: longTermPattern?.pattern ?? null,
+    vcpDetected: vcp != null,
+    vcpBreakoutConfirmed,
+    structureEvent: marketStructure.lastEvent
+      ? { type: marketStructure.lastEvent.type, direction: marketStructure.lastEvent.direction }
+      : null,
+    liquiditySweep: liquiditySweep ? { type: liquiditySweep.type } : null,
+    activeFvg: activeFvg ? { direction: activeFvg.gap.type } : null,
+    activeOrderBlock: activeOrderBlock ? { type: activeOrderBlock.block.type } : null,
+    supertrendFlipConfirmed: st15JustFlipped && volumeConfirms,
+    bollingerBreakout: (bbPercentB > 1 || bbPercentB < 0) && volumeConfirms,
+    emaTrendAligned: emaTrend?.aligned === true && emaTrend?.slopeOk === true,
+    vwapReclaim: false,
+    rsiDivergence:
+      rsiDivergence && rsiDivergence.signal !== 'NONE' ? { direction: rsiDivergence.signal } : null,
+  });
+
   const entryContext: SetupEntryContext = {
     regime,
     regimeAlignment: alignment,
@@ -1511,6 +1537,7 @@ async function computeMarketBias(
     roomLevel: room ? Math.round(room.level * 100) / 100 : null,
     roomLevelSource: room?.source ?? null,
     optionOiBaselineCoverage: Math.round(optionOiBaselineCoverage * 100) / 100,
+    setupClassification,
   };
 
   const tradeSetup: TradeSetup = chain
@@ -2314,7 +2341,9 @@ async function resolveStickyTradeSetup(
     // against what the market actually did, which is the only way to tell
     // capital protection from having simply stopped trading.
     const blocks = snapshotBlocks(chain, entryContext, null, direction === 'BEARISH' ? 'PE' : 'CE');
+    const instrumentation = snapshotInstrumentation(exchange, entryContext, null);
     recordDecisionSnapshot({
+      ...instrumentation,
       symbol: underlying,
       exchange,
       mode,
@@ -2506,7 +2535,9 @@ async function resolveStickyTradeSetup(
   });
   {
     const blocks = snapshotBlocks(chain, entryContext, fresh, fresh.available ? fresh.side ?? null : null);
+    const instrumentation = snapshotInstrumentation(exchange, entryContext, fresh);
     recordDecisionSnapshot({
+      ...instrumentation,
       symbol: underlying,
       exchange,
       mode,
@@ -2693,6 +2724,50 @@ async function recordTradeSetupOutcome(
     } catch (err: any) {
       logger.warn({ error: err.message, signalId: stored.signalId }, 'Backtesting: failed to record trade setup outcome');
     }
+  }
+
+  // A stop, recorded with the state that explains it, at the instant it
+  // fires. Six of the seventeen historical stops are permanently unclassified
+  // because the chain state that would have settled them was gone by the time
+  // anyone looked; this is what stops that happening again. Historical
+  // unknowns are not rewritten.
+  if (close.reason === 'STOP_LOSS' || close.reason === 'TRAILING_STOP' || close.reason === 'BREAKEVEN_STOP') {
+    recordStopEvent({
+      setupId: stored.signalId ?? null,
+      symbol: close.underlying,
+      exchange: close.exchange,
+      mode: close.mode,
+      direction: stored.direction ?? null,
+      // No live underlying price at this point in the close path; the entry
+      // price and the excursion are what the classification actually needs.
+      underlyingPrice: null,
+      underlyingAtEntry: stored.excursion?.underlyingEntry ?? null,
+      optionPrice: exitValue,
+      entryPrice: stored.entry ?? null,
+      stopPrice: stored.stopLoss ?? null,
+      targetPrice: stored.target ?? null,
+      atr: stored.excursion?.atrAtEntry ?? null,
+      stopInAtr: stored.stopInAtr ?? null,
+      targetInAtr: stored.targetInAtr ?? null,
+      mfe: stored.excursion?.premiumMfe ?? null,
+      mae: stored.excursion?.premiumMae ?? null,
+      // The UNDERLYING excursion in its own ATR is what separates a broken
+      // thesis from a decayed option, so it is derived here from the two
+      // values the monitor folded forward rather than left to a later guess.
+      mfeAtr:
+        stored.excursion?.atrAtEntry && stored.excursion.atrAtEntry > 0
+          ? stored.excursion.underlyingMfe / stored.excursion.atrAtEntry
+          : null,
+      maeAtr:
+        stored.excursion?.atrAtEntry && stored.excursion.atrAtEntry > 0
+          ? stored.excursion.underlyingMae / stored.excursion.atrAtEntry
+          : null,
+      holdMinutes: stored.generatedAt ? Math.round((decisionNow() - stored.generatedAt) / 60000) : null,
+      marketRegime: stored.entryContext?.regime ?? null,
+      setupType: stored.entryContext?.setupClassification?.setupType ?? null,
+      tradeHealth: stored.health?.state ?? null,
+      context: { closeReason: close.reason, outcome, returnPercent },
+    });
   }
 
   const dedupeId = stored.signalId ?? `${close.exchange}:${close.underlying}:${close.mode}:${stored.generatedAt ?? 'unknown'}`;
@@ -3064,6 +3139,64 @@ export async function checkLockedSetupPriceLevels(
  * the observation the reason was derived from, including the parts no rule
  * currently reads.
  */
+/**
+ * The instrumentation fields both decision sites record identically.
+ *
+ * `shadowWouldRefuse` is what the not-yet-live layers TOGETHER would have
+ * concluded — location below its cramped threshold, or room insufficient, or
+ * the option graded poor. It is written to the record, compared against what
+ * live actually did, and consulted by nothing. Null when none of the shadow
+ * layers produced a reading, which is a different fact from "they agreed"
+ * and is stored as one.
+ */
+function snapshotInstrumentation(
+  exchange: Exchange,
+  entryContext: SetupEntryContext | undefined,
+  setup: TradeSetup | null
+): {
+  setupTag: { setupType: string; setupFamily: string; primaryTrigger: string; detail: Record<string, unknown> } | null;
+  minutesFromSessionOpen: number | null;
+  sessionBucket: string | null;
+  targetAtr: number | null;
+  stopAtr: number | null;
+  shadow: { wouldRefuse: boolean | null; reasons: string[] } | null;
+} {
+  const cls = entryContext?.setupClassification ?? null;
+  const minutes = minutesSinceSessionOpen(exchange);
+
+  const reasons: string[] = [];
+  let anyShadowReading = false;
+  if (entryContext?.locationScore != null) {
+    anyShadowReading = true;
+    if (entryContext.locationScore < 40) reasons.push('POOR_LOCATION');
+  }
+  if (entryContext?.roomSufficient != null) {
+    anyShadowReading = true;
+    if (entryContext.roomSufficient === false) reasons.push('INSUFFICIENT_ROOM');
+  }
+  const grade = setup?.available ? setup.optionQuality?.grade ?? null : null;
+  if (grade != null) {
+    anyShadowReading = true;
+    if (grade === 'POOR' || grade === 'UNTRADEABLE') reasons.push('POOR_OPTION_QUALITY');
+  }
+
+  return {
+    setupTag: cls
+      ? {
+          setupType: cls.setupType,
+          setupFamily: cls.setupFamily,
+          primaryTrigger: cls.primaryTrigger,
+          detail: { ...cls.detail, allTriggers: cls.allTriggers },
+        }
+      : null,
+    minutesFromSessionOpen: minutes,
+    sessionBucket: sessionBucket(minutes),
+    targetAtr: setup?.available ? setup.targetInAtr ?? null : null,
+    stopAtr: setup?.available ? setup.stopInAtr ?? null : null,
+    shadow: anyShadowReading ? { wouldRefuse: reasons.length > 0, reasons } : null,
+  };
+}
+
 function snapshotBlocks(
   chain: OptionChain | null,
   entryContext: SetupEntryContext | undefined,
@@ -3272,6 +3405,12 @@ interface SetupEntryContext {
   locationBehindAtr: number | null;
   locationAheadKind: string | null;
   locationReason: string | null;
+  /**
+   * What the engine detected, named. Written to the decision record and read
+   * by nothing — see setup-classifier. Optional so a decision made before
+   * classification is available still records cleanly as UNKNOWN.
+   */
+  setupClassification?: SetupClassification | null;
   /** Room to run versus what the target needs, in ATR (shadow). */
   roomAvailableAtr?: number | null;
   roomRequiredAtr?: number | null;

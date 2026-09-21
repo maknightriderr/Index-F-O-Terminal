@@ -43,7 +43,7 @@ const CANDIDATE_DIRS = [
   path.resolve(__dirname, '../../../../../database/init'),
 ];
 
-const FILES = ['006_market_state_capture.sql', '007_capture_timescale.sql'];
+const FILES = ['006_market_state_capture.sql', '007_capture_timescale.sql', '008_capture_instrumentation.sql'];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */
 const BEST_EFFORT = new Set(['007_capture_timescale.sql']);

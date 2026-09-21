@@ -56,6 +56,29 @@ export interface DecisionSnapshotInput {
   /** The setup, when one was built. Absent on a refusal that never got that far. */
   setup?: TradeSetup | null;
 
+  /**
+  * What the engine had already detected, named. Instrumentation only — no
+  * rule reads any of this, and a test asserts that tagging cannot change a
+  * decision.
+  */
+  setupTag?: {
+    setupType: string;
+    setupFamily: string;
+    primaryTrigger: string;
+    detail: Record<string, unknown>;
+  } | null;
+  /** Position within the session, from the exchange calendar, immutable once written. */
+  minutesFromSessionOpen?: number | null;
+  sessionBucket?: string | null;
+  /** Target and stop distance in ATR, promoted out of the risk block for grouping. */
+  targetAtr?: number | null;
+  stopAtr?: number | null;
+  /** What the not-yet-live layers together would have said. Recorded, compared, never consulted. */
+  shadow?: {
+    wouldRefuse: boolean | null;
+    reasons: string[];
+  } | null;
+
   /** Raw blocks, recorded verbatim so later research is not limited to today's questions. */
   underlying?: Record<string, unknown>;
   market?: Record<string, unknown>;
@@ -75,6 +98,14 @@ export function recordDecisionSnapshot(input: DecisionSnapshotInput): void {
   const available = setup?.available === true ? setup : null;
   const oq = available?.optionQuality ?? null;
 
+  // Agreement is only meaningful when the shadow layers actually produced a
+  // reading. A null here means "not comparable", which is a different fact
+  // from "they disagreed" and is stored as one.
+  const shadowAgreement =
+    input.shadow?.wouldRefuse == null
+      ? null
+      : input.shadow.wouldRefuse === (input.decision === 'REFUSE');
+
   const spreadPct =
     available && (available.entry ?? 0) > 0 && input.option?.bid != null && input.option?.ask != null
       ? ((Number(input.option.ask) - Number(input.option.bid)) /
@@ -93,6 +124,9 @@ export function recordDecisionSnapshot(input: DecisionSnapshotInput): void {
       option_quality_score, option_quality_grade,
       location_score, room_available_atr, room_required_atr, room_ratio,
       stop_loss, target, risk_reward, position_lots,
+      setup_type, setup_family, primary_trigger, setup_timeframe, setup_detail,
+      minutes_from_session_open, session_bucket, target_atr, stop_atr,
+      shadow_would_refuse, shadow_refuse_reasons, shadow_agrees_with_live,
       underlying, market, futures, option, location, room, risk
     ) VALUES (
       ${at},
@@ -123,6 +157,14 @@ export function recordDecisionSnapshot(input: DecisionSnapshotInput): void {
       ${(input.room?.ratio as number) ?? null},
       ${available?.stopLoss ?? null}, ${available?.target ?? null},
       ${available?.riskReward ?? null}, ${available?.positionSize?.lots ?? null},
+      ${input.setupTag?.setupType ?? null}, ${input.setupTag?.setupFamily ?? null},
+      ${input.setupTag?.primaryTrigger ?? null}, ${(input.market?.timeframe as string) ?? input.mode ?? null},
+      ${sql.json((input.setupTag?.detail ?? {}) as never)},
+      ${input.minutesFromSessionOpen ?? null}, ${input.sessionBucket ?? null},
+      ${input.targetAtr ?? null}, ${input.stopAtr ?? null},
+      ${input.shadow?.wouldRefuse ?? null},
+      ${input.shadow?.reasons?.length ? input.shadow.reasons.join(',').slice(0, 200) : null},
+      ${shadowAgreement},
       ${sql.json((input.underlying ?? {}) as never)},
       ${sql.json((input.market ?? {}) as never)},
       ${sql.json((input.futures ?? {}) as never)},

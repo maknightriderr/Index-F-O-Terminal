@@ -11,6 +11,14 @@ import { captureSchemaStatus } from '../services/ensure-capture-schema.js';
 import { decisionCoverage, rejectionBreakdown } from '../services/decision-snapshot.js';
 import { missedWinnerReport } from '../services/missed-winner-audit.js';
 import { dataQualitySummary } from '../services/data-quality.js';
+import {
+  captureTimeline,
+  chainCompleteness,
+  refusalMaturity,
+  captureUniverse,
+  replayReadiness,
+} from '../services/capture-diagnostics.js';
+import { dailyReport } from '../services/daily-report.js';
 
 export function createBacktestingRoutes(): Router {
   const router = Router();
@@ -53,6 +61,55 @@ export function createBacktestingRoutes(): Router {
       });
     } catch (err: any) {
       logger.error({ error: err.message }, 'Coverage report failed');
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
+   * GET /api/backtesting/diagnostics
+   *
+   * Answers, from rows rather than inference, the questions the first capture
+   * report could not: when capture actually started, whether each chain
+   * snapshot was complete and why not when it was not, which instruments are
+   * being collected, how many refusals have aged far enough to grade, and
+   * whether the data contract can support a replay yet.
+   *
+   * Observability only. Nothing here is read by the trading engine.
+   */
+  router.get('/diagnostics', async (req: Request, res: Response) => {
+    try {
+      const sinceHours = Math.min(Number(req.query.sinceHours ?? 48) || 48, 720);
+      const [timeline, chains, maturity, universe, replay] = await Promise.all([
+        captureTimeline(),
+        chainCompleteness(sinceHours),
+        refusalMaturity(),
+        captureUniverse(),
+        replayReadiness(),
+      ]);
+      res.json({ success: true, data: { timeline, chains, maturity, universe, replay } });
+    } catch (err: any) {
+      logger.error({ error: err.message }, 'Capture diagnostics failed');
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
+   * GET /api/backtesting/daily-report
+   *
+   * End-of-day capture health, decision health, data quality, stop
+   * classifications, the live-versus-shadow agreement table, and every
+   * breakdown the accumulating record can support — each one carrying its
+   * sample size, its mature/immature split, and an exploratory flag when the
+   * graded sample is below the inference minimum.
+   *
+   * Observability only. Nothing here is read by the trading engine.
+   */
+  router.get('/daily-report', async (req: Request, res: Response) => {
+    try {
+      const sinceHours = Math.min(Number(req.query.sinceHours ?? 24) || 24, 24 * 400);
+      res.json({ success: true, data: await dailyReport(sinceHours) });
+    } catch (err: any) {
+      logger.error({ error: err.message }, 'Daily report failed');
       res.status(500).json({ success: false, error: err.message });
     }
   });

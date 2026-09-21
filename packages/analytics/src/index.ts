@@ -7,6 +7,7 @@ export * from './expected-move/index.js';
 export * from './indicators/index.js';
 export * from './trade-setup/index.js';
 export * from './option-quality/index.js';
+export * from './setup-classifier/index.js';
 export * from './patterns/index.js';
 export * from './candlestick-patterns/index.js';
 export * from './gamma-exposure/index.js';

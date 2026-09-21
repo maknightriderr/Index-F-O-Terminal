@@ -169,6 +169,14 @@ async function captureSymbol(
   expiry: string
 ): Promise<void> {
   const at = new Date(decisionNow());
+  const startedAt = Date.now();
+
+  // The attempt is recorded BEFORE the outcome is known. An interval with no
+  // capture_runs row is a pass that never ran; a row still reading ATTEMPT is
+  // a capture that died mid-flight. Without this, a pass that wrote 40 legs
+  // instead of 86 was indistinguishable from one that never ran at all,
+  // which is exactly the ambiguity that made "656 option legs" unexplainable.
+  const runId = await openCaptureRun(at, exchange, underlying, expiry);
 
   const [chain, futures] = await Promise.all([
     buildOptionChain(provider, underlying, exchange, expiry).catch(() => null),
@@ -183,10 +191,15 @@ async function captureSymbol(
       severity: 'WARN',
       detail: `No option chain returned for ${underlying} ${expiry} during a live session.`,
     });
+    await closeCaptureRun(runId, {
+      status: 'FAILED',
+      detail: 'buildOptionChain returned nothing during a live session',
+      durationMs: Date.now() - startedAt,
+    });
     return;
   }
 
-  await Promise.all([
+  const [chainResult, futuresRows] = await Promise.all([
     captureChain(at, exchange, underlying, chain),
     captureFutures(at, exchange, underlying, futures),
     capturePositioning(at, underlying, chain),
@@ -220,17 +233,113 @@ async function captureSymbol(
     vwap: null,
     atr: null,
   });
+
+  await closeCaptureRun(runId, {
+    status: chainResult.actualLegs < chainResult.expectedLegs ? 'PARTIAL' : 'SUCCESS',
+    strikesAvailable: chainResult.strikesAvailable,
+    strikesCaptured: chainResult.strikesCaptured,
+    expectedLegs: chainResult.expectedLegs,
+    actualLegs: chainResult.actualLegs,
+    futuresRows,
+    positioningRows: 1,
+    underlyingRows: 1,
+    durationMs: Date.now() - startedAt,
+    detail: chainResult.detail,
+  });
+}
+
+// ---------------------------------------------------------------
+// Capture run bookkeeping
+// ---------------------------------------------------------------
+
+async function openCaptureRun(
+  at: Date,
+  exchange: Exchange,
+  symbol: string,
+  expiry: string
+): Promise<string | null> {
+  try {
+    const [row] = await sql<{ id: string }[]>`
+      INSERT INTO capture_runs (time, exchange, symbol, expiry, status)
+      VALUES (${at}, ${exchange}, ${symbol}, ${expiry}, 'ATTEMPT')
+      RETURNING id
+    `;
+    return row?.id ?? null;
+  } catch (err: any) {
+    logger.debug({ error: err.message, symbol }, 'Capture run: could not open');
+    return null;
+  }
+}
+
+async function closeCaptureRun(
+  runId: string | null,
+  outcome: {
+    status: 'SUCCESS' | 'PARTIAL' | 'FAILED';
+    strikesAvailable?: number;
+    strikesCaptured?: number;
+    expectedLegs?: number;
+    actualLegs?: number;
+    futuresRows?: number;
+    positioningRows?: number;
+    underlyingRows?: number;
+    durationMs: number;
+    detail?: string | null;
+  }
+): Promise<void> {
+  if (!runId) return;
+  try {
+    await sql`
+      UPDATE capture_runs SET
+        status = ${outcome.status},
+        strikes_available = ${outcome.strikesAvailable ?? null},
+        strikes_captured = ${outcome.strikesCaptured ?? null},
+        expected_legs = ${outcome.expectedLegs ?? null},
+        actual_legs = ${outcome.actualLegs ?? null},
+        futures_rows = ${outcome.futuresRows ?? null},
+        positioning_rows = ${outcome.positioningRows ?? null},
+        underlying_rows = ${outcome.underlyingRows ?? null},
+        duration_ms = ${outcome.durationMs},
+        detail = ${outcome.detail ?? null}
+      WHERE id = ${runId}
+    `;
+  } catch (err: any) {
+    logger.debug({ error: err.message }, 'Capture run: could not close');
+  }
 }
 
 // ---------------------------------------------------------------
 // Option chain
 // ---------------------------------------------------------------
 
-async function captureChain(at: Date, exchange: Exchange, underlying: string, chain: OptionChain): Promise<void> {
+interface ChainCaptureResult {
+  /** Strikes the chain actually listed inside the capture window. */
+  strikesAvailable: number;
+  strikesCaptured: number;
+  /** Two legs for every strike inside the window. */
+  expectedLegs: number;
+  actualLegs: number;
+  detail: string | null;
+}
+
+async function captureChain(
+  at: Date,
+  exchange: Exchange,
+  underlying: string,
+  chain: OptionChain
+): Promise<ChainCaptureResult> {
   const atmIndex = chain.strikes.findIndex((s) => s.strike === chain.atmStrike);
   const centre = atmIndex >= 0 ? atmIndex : Math.floor(chain.strikes.length / 2);
   const from = Math.max(0, centre - STRIKES_EACH_SIDE);
   const to = Math.min(chain.strikes.length, centre + STRIKES_EACH_SIDE + 1);
+
+  // The window is clipped by the chain itself. A symbol whose chain lists
+  // fewer than 43 strikes around ATM — which is most stock options, and any
+  // index near the edge of its listed range — cannot produce 86 legs, and
+  // that is a property of the instrument, not a capture failure. Recording
+  // both numbers is what makes the difference legible afterwards.
+  const strikesInWindow = to - from;
+  const expectedLegs = strikesInWindow * 2;
+  const missingReasons: string[] = [];
 
   const rows: Record<string, unknown>[] = [];
   for (let i = from; i < to; i++) {
@@ -239,7 +348,13 @@ async function captureChain(at: Date, exchange: Exchange, underlying: string, ch
       ['CE', strike.call],
       ['PE', strike.put],
     ] as const) {
-      if (!leg) continue;
+      if (!leg) {
+        // A strike row that carries only one side. Recorded as a reason, never
+        // padded with a zero-valued leg: a leg that does not exist and a leg
+        // quoted at zero are different facts.
+        missingReasons.push(`${strike.strike}${type} absent from the chain`);
+        continue;
+      }
       rows.push({
         time: at,
         token: leg.token,
@@ -271,7 +386,21 @@ async function captureChain(at: Date, exchange: Exchange, underlying: string, ch
       });
     }
   }
-  if (rows.length === 0) return;
+
+  const result: ChainCaptureResult = {
+    strikesAvailable: chain.strikes.length,
+    strikesCaptured: strikesInWindow,
+    expectedLegs,
+    actualLegs: rows.length,
+    detail:
+      missingReasons.length > 0
+        ? `${missingReasons.length} leg(s) not present in the chain: ${missingReasons.slice(0, 6).join('; ')}${missingReasons.length > 6 ? ` (+${missingReasons.length - 6} more)` : ''}`
+        : strikesInWindow < STRIKES_EACH_SIDE * 2 + 1
+          ? `chain listed only ${chain.strikes.length} strikes, so the ${STRIKES_EACH_SIDE}-either-side window clipped to ${strikesInWindow}`
+          : null,
+  };
+
+  if (rows.length === 0) return result;
 
   await sql`INSERT INTO oi_snapshots ${sql(
     rows,
@@ -279,6 +408,8 @@ async function captureChain(at: Date, exchange: Exchange, underlying: string, ch
     'oi', 'change_oi', 'volume', 'ltp', 'bid', 'ask', 'bid_qty', 'ask_qty',
     'iv', 'delta', 'gamma', 'theta', 'vega', 'spot_price', 'moneyness', 'greeks_source'
   )}`;
+
+  return result;
 }
 
 // ---------------------------------------------------------------
@@ -290,8 +421,8 @@ async function captureFutures(
   exchange: Exchange,
   underlying: string,
   futures: FuturesChainResponse | null
-): Promise<void> {
-  if (!futures || futures.contracts.length === 0) return;
+): Promise<number> {
+  if (!futures || futures.contracts.length === 0) return 0;
 
   const rows = futures.contracts.map((c) => ({
     time: at,
@@ -317,6 +448,8 @@ async function captureFutures(
     'time', 'token', 'symbol', 'exchange', 'expiry', 'spot_price', 'futures_price', 'ltp',
     'basis', 'premium_discount', 'volume', 'oi', 'change_oi', 'interpretation', 'bid', 'ask'
   )}`;
+
+  return rows.length;
 }
 
 // ---------------------------------------------------------------
