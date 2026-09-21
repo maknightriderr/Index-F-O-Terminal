@@ -50,6 +50,16 @@ import { buildOptionChain } from './option-chain.js';
 import { buildFuturesData } from './futures.js';
 import { decisionNow } from './decision-clock.js';
 import { recordDataQuality } from './data-quality.js';
+import {
+  assessLegQuality,
+  rawLegValues,
+  storeIfPositive,
+  storeIfFinite,
+  CAPTURE_QUALITY_VERSION,
+  GREEKS_MODEL_NAME,
+  GREEKS_MODEL_VERSION,
+} from './capture-quality.js';
+import { RISK_FREE_RATE, yearsToExpiry } from '@fno/shared';
 
 const EXCHANGES: Exchange[] = ['NSE', 'BSE', 'MCX'];
 
@@ -85,27 +95,14 @@ const captureMarkKey = (exchange: Exchange, underlying: string) => `capture:last
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/**
- * Persists a zero placeholder as NULL.
- *
- * The chain builder fills a missing quote with zero — `quote?.bid ?? 0` —
- * and the LIVE engine depends on that: its `hasQuote` check reads `bid > 0`
- * to mean "no two-sided market". That convention is correct for a decision
- * and wrong for a historical record, where a 0 bid is indistinguishable from
- * a bid of zero rupees, and a 0 delta reads as a real measurement of a
- * contract with no sensitivity at all.
- *
- * So the conversion happens HERE, at the write boundary, and nowhere else.
- * The decision path is untouched; the history stops claiming measurements it
- * never had. Found by the NULL-versus-zero audit on the first day of
- * capture: 346 of 2,050 legs carried zero Greeks and 172 carried a zero bid,
- * every one of them an absent quote rather than an observation.
- *
- * Only for fields where zero is NOT a possible measurement. Open interest,
- * change in open interest and volume keep their zeros, which are real.
- */
-const nullIfZero = (v: number | null | undefined): number | null =>
-  v == null || !Number.isFinite(v) || v === 0 ? null : v;
+// Storage representation now lives in capture-quality.ts, split into
+// storeIfPositive (for prices and IV, where a zero cannot be a measurement)
+// and storeIfFinite (for signed Greeks, where a near-zero can be). The
+// earlier single nullIfZero conflated the two, which is what made a
+// legitimate far-OTM gamma indistinguishable from a missing one.
+//
+// The live decision path is still untouched: the chain builder continues to
+// fill a missing quote with zero, and `hasQuote` still reads `bid > 0`.
 
 let started = false;
 
@@ -222,9 +219,9 @@ async function captureSymbol(
   }
 
   const [chainResult, futuresRows] = await Promise.all([
-    captureChain(at, exchange, underlying, chain),
-    captureFutures(at, exchange, underlying, futures),
-    capturePositioning(at, underlying, chain),
+    captureChain(at, exchange, underlying, chain, runId),
+    captureFutures(at, exchange, underlying, futures, runId),
+    capturePositioning(at, underlying, chain, runId),
   ]);
 
   // The underlying observation on the capture schedule.
@@ -254,6 +251,7 @@ async function captureSymbol(
     volume: null,
     vwap: null,
     atr: null,
+    captureRunId: runId,
   });
 
   // PARTIAL means WE fell short of what the exchange offered. A chain that
@@ -275,7 +273,10 @@ async function captureSymbol(
     durationMs: Date.now() - startedAt,
     clippingReason: chainResult.clippingReason,
     failureReason: chainResult.actualLegs < chainResult.expectedLegs ? chainResult.detail : null,
-    detail: chainResult.detail,
+    detail:
+      chainResult.invalidGreekLegs > 0
+        ? `${chainResult.detail ? chainResult.detail + '; ' : ''}${chainResult.invalidGreekLegs} leg(s) written with Greeks that are not research-usable (recorded, not dropped)`
+        : chainResult.detail,
   });
 }
 
@@ -367,6 +368,8 @@ interface ChainCaptureResult {
   /** Two legs for every strike inside the window. */
   expectedLegs: number;
   actualLegs: number;
+  /** Legs written whose Greeks are not research-usable. Recorded, never dropped. */
+  invalidGreekLegs: number;
   /** The exchange listed fewer strikes than the window asked for. Not a failure. */
   clippingReason: string | null;
   detail: string | null;
@@ -376,7 +379,8 @@ async function captureChain(
   at: Date,
   exchange: Exchange,
   underlying: string,
-  chain: OptionChain
+  chain: OptionChain,
+  runId: string | null
 ): Promise<ChainCaptureResult> {
   const atmIndex = chain.strikes.findIndex((s) => s.strike === chain.atmStrike);
   const centre = atmIndex >= 0 ? atmIndex : Math.floor(chain.strikes.length / 2);
@@ -391,6 +395,7 @@ async function captureChain(
   const strikesInWindow = to - from;
   const expectedLegs = strikesInWindow * 2;
   const missingReasons: string[] = [];
+  let invalidGreekLegs = 0;
 
   const rows: Record<string, unknown>[] = [];
   for (let i = from; i < to; i++) {
@@ -406,8 +411,17 @@ async function captureChain(
         missingReasons.push(`${strike.strike}${type} absent from the chain`);
         continue;
       }
+      const quality = assessLegQuality(leg);
+      if (!quality.greeksValid) invalidGreekLegs++;
+
       rows.push({
         time: at,
+        // Hard lineage: the run that wrote this row, carried ON the row.
+        // Matching (timestamp, symbol) in a reporting query is a
+        // reconstruction, not a lineage, and it fails silently the moment two
+        // captures share a second.
+        capture_run_id: runId,
+        capture_quality_version: CAPTURE_QUALITY_VERSION,
         token: leg.token,
         symbol: underlying,
         exchange,
@@ -418,24 +432,50 @@ async function captureChain(
         oi: leg.oi,
         change_oi: leg.changeOi,
         volume: leg.volume,
-        ltp: nullIfZero(leg.ltp),
-        bid: nullIfZero(leg.bid),
-        ask: nullIfZero(leg.ask),
+        ltp: storeIfPositive(leg.ltp),
+        bid: storeIfPositive(leg.bid),
+        ask: storeIfPositive(leg.ask),
         // Depth quantities are not on the chain leg today. Recorded as NULL
         // rather than zero: a missing observation and an empty book are
         // different facts, and a replay must be able to tell them apart.
         bid_qty: null,
         ask_qty: null,
-        // A zero Greek is not a measurement of zero sensitivity — it is what
-        // the model returns for a leg with no usable price. Stored as absent.
-        iv: nullIfZero(leg.iv),
-        delta: nullIfZero(leg.delta),
-        gamma: nullIfZero(leg.gamma),
-        theta: nullIfZero(leg.theta),
-        vega: nullIfZero(leg.vega),
-        spot_price: nullIfZero(chain.spotPrice),
+        // IV cannot legitimately be zero, so absence is stored as NULL.
+        iv: storeIfPositive(leg.iv),
+        // The Greeks keep whatever finite value the model produced, including
+        // a genuine near-zero. Whether it is USABLE is greeks_valid, not the
+        // number — which is the whole point of stating validity at write time.
+        delta: storeIfFinite(leg.delta),
+        gamma: storeIfFinite(leg.gamma),
+        theta: storeIfFinite(leg.theta),
+        vega: storeIfFinite(leg.vega),
+        spot_price: storeIfPositive(chain.spotPrice),
         moneyness: leg.moneyness,
         greeks_source: leg.greeksSource,
+
+        // Explicit validity, stated by the code that saw the raw value.
+        quote_available: quality.quoteAvailable,
+        depth_available: quality.depthAvailable,
+        iv_available: quality.ivAvailable,
+        greeks_available: quality.greeksAvailable,
+        greeks_valid: quality.greeksValid,
+        validity_reason: quality.validityReason,
+
+        // Raw, exactly as the leg arrived, so the interpretation above stays
+        // auditable rather than lossy.
+        raw_values: JSON.stringify(rawLegValues(leg)),
+
+        // Model provenance. Every captured Greek so far is model output, and
+        // a Greek that cannot be attributed to a model and its inputs cannot
+        // be reproduced by a replay.
+        greeks_model_name: leg.greeksSource === 'BROKER' ? null : GREEKS_MODEL_NAME,
+        greeks_model_version: leg.greeksSource === 'BROKER' ? null : GREEKS_MODEL_VERSION,
+        greeks_calculated_at: leg.greeksSource === 'BROKER' ? null : at,
+        model_spot: storeIfPositive(chain.spotPrice),
+        model_option_price: storeIfPositive(leg.ltp),
+        model_iv_input: storeIfPositive(leg.iv),
+        model_rate: RISK_FREE_RATE,
+        model_time_to_expiry: yearsToExpiry(chain.expiry, exchange, at.getTime()),
       });
     }
   }
@@ -445,6 +485,7 @@ async function captureChain(
     strikesCaptured: strikesInWindow,
     expectedLegs,
     actualLegs: rows.length,
+    invalidGreekLegs,
     clippingReason:
       strikesInWindow < STRIKES_EACH_SIDE * 2 + 1
         ? `the exchange listed ${chain.strikes.length} strikes for this expiry, so the ${STRIKES_EACH_SIDE}-either-side window clipped to ${strikesInWindow} strikes (${expectedLegs} legs)`
@@ -461,9 +502,14 @@ async function captureChain(
 
   await sql`INSERT INTO oi_snapshots ${sql(
     rows,
-    'time', 'token', 'symbol', 'exchange', 'instrument_type', 'strike', 'option_type', 'expiry',
+    'time', 'capture_run_id', 'capture_quality_version', 'token', 'symbol', 'exchange',
+    'instrument_type', 'strike', 'option_type', 'expiry',
     'oi', 'change_oi', 'volume', 'ltp', 'bid', 'ask', 'bid_qty', 'ask_qty',
-    'iv', 'delta', 'gamma', 'theta', 'vega', 'spot_price', 'moneyness', 'greeks_source'
+    'iv', 'delta', 'gamma', 'theta', 'vega', 'spot_price', 'moneyness', 'greeks_source',
+    'quote_available', 'depth_available', 'iv_available', 'greeks_available', 'greeks_valid',
+    'validity_reason', 'raw_values',
+    'greeks_model_name', 'greeks_model_version', 'greeks_calculated_at',
+    'model_spot', 'model_option_price', 'model_iv_input', 'model_rate', 'model_time_to_expiry'
   )}`;
 
   return result;
@@ -477,19 +523,21 @@ async function captureFutures(
   at: Date,
   exchange: Exchange,
   underlying: string,
-  futures: FuturesChainResponse | null
+  futures: FuturesChainResponse | null,
+  runId: string | null
 ): Promise<number> {
   if (!futures || futures.contracts.length === 0) return 0;
 
   const rows = futures.contracts.map((c) => ({
     time: at,
+    capture_run_id: runId,
     token: c.token,
     symbol: underlying,
     exchange,
     expiry: c.expiry,
     spot_price: futures.spotPrice,
-    futures_price: nullIfZero(c.futuresPrice),
-    ltp: nullIfZero(c.futuresPrice),
+    futures_price: storeIfPositive(c.futuresPrice),
+    ltp: storeIfPositive(c.futuresPrice),
     basis: c.basis,
     premium_discount: c.premiumDiscount,
     volume: c.volume,
@@ -502,8 +550,9 @@ async function captureFutures(
 
   await sql`INSERT INTO futures_snapshots ${sql(
     rows,
-    'time', 'token', 'symbol', 'exchange', 'expiry', 'spot_price', 'futures_price', 'ltp',
-    'basis', 'premium_discount', 'volume', 'oi', 'change_oi', 'interpretation', 'bid', 'ask'
+    'time', 'capture_run_id', 'token', 'symbol', 'exchange', 'expiry', 'spot_price',
+    'futures_price', 'ltp', 'basis', 'premium_discount', 'volume', 'oi', 'change_oi',
+    'interpretation', 'bid', 'ask'
   )}`;
 
   return rows.length;
@@ -513,7 +562,12 @@ async function captureFutures(
 // Positioning
 // ---------------------------------------------------------------
 
-async function capturePositioning(at: Date, underlying: string, chain: OptionChain): Promise<void> {
+async function capturePositioning(
+  at: Date,
+  underlying: string,
+  chain: OptionChain,
+  runId: string | null
+): Promise<void> {
   let callOi = 0;
   let putOi = 0;
   let callOiChange = 0;
@@ -540,10 +594,10 @@ async function capturePositioning(at: Date, underlying: string, chain: OptionCha
 
   await sql`
     INSERT INTO pcr_history (
-      time, symbol, expiry, oi_pcr, volume_pcr, change_oi_pcr, near_atm_pcr,
+      time, capture_run_id, symbol, expiry, oi_pcr, volume_pcr, change_oi_pcr, near_atm_pcr,
       call_oi, put_oi, call_oi_change, put_oi_change, call_wall, put_wall, max_pain, spot_price
     ) VALUES (
-      ${at}, ${underlying}, ${chain.expiry},
+      ${at}, ${runId}, ${underlying}, ${chain.expiry},
       ${chain.pcrDetail?.oiPCR ?? null}, ${chain.pcrDetail?.volumePCR ?? null},
       ${chain.pcrDetail?.changeOiPCR ?? null}, ${chain.pcrDetail?.nearAtmPCR ?? null},
       ${callOi}, ${putOi}, ${callOiChange}, ${putOiChange},
@@ -578,11 +632,12 @@ export function captureUnderlyingObservation(input: {
   volume: number | null;
   vwap: number | null;
   atr: number | null;
+  captureRunId?: string | null;
 }): void {
   void sql`
-    INSERT INTO market_ticks (time, token, symbol, exchange, ltp, open_price, high, low, close_price, volume, vwap, atr)
+    INSERT INTO market_ticks (time, capture_run_id, token, symbol, exchange, ltp, open_price, high, low, close_price, volume, vwap, atr)
     VALUES (
-      ${new Date(input.at)}, ${input.token}, ${input.symbol}, ${input.exchange}, ${input.ltp},
+      ${new Date(input.at)}, ${input.captureRunId ?? null}, ${input.token}, ${input.symbol}, ${input.exchange}, ${input.ltp},
       ${input.open}, ${input.high}, ${input.low}, ${input.close}, ${input.volume},
       ${input.vwap}, ${input.atr}
     )

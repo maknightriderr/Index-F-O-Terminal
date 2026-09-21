@@ -20,7 +20,14 @@ import {
   eligibleUniverse,
   captureModeReport,
 } from '../services/capture-diagnostics.js';
-import { greekCoverage, nullZeroAudit, snapshotLineage, universeCoverage, replayStatus } from '../services/data-integrity.js';
+import {
+  greekCoverage,
+  nullZeroAudit,
+  snapshotLineage,
+  universeCoverage,
+  replayStatus,
+  newBoundary,
+} from '../services/data-integrity.js';
 import { researchMilestones } from '../services/ensure-capture-schema.js';
 import { dailyReport } from '../services/daily-report.js';
 
@@ -83,6 +90,12 @@ export function createBacktestingRoutes(provider: MarketDataProvider): Router {
   router.get('/diagnostics', async (req: Request, res: Response) => {
     try {
       const sinceHours = Math.min(Number(req.query.sinceHours ?? 48) || 48, 720);
+      // ONE boundary for the whole report. The previous release compared a
+      // Greek count taken at 16:12 against a leg count taken at 16:18, and the
+      // six-minute drift looked exactly like a missing 82-leg snapshot. Every
+      // query below evaluates against this single instant, and every section
+      // states the instant it used.
+      const boundary = newBoundary();
       const eligible = await eligibleUniverse(provider);
       const [timeline, chains, maturity, universe, replay, greeks, nullZero, lineage, coverage, milestones] =
         await Promise.all([
@@ -90,16 +103,24 @@ export function createBacktestingRoutes(provider: MarketDataProvider): Router {
           chainCompleteness(sinceHours),
           refusalMaturity(),
           captureUniverse(),
-          replayStatus(),
-          greekCoverage(),
-          nullZeroAudit(),
-          snapshotLineage(),
-          universeCoverage(eligible),
+          replayStatus(boundary),
+          greekCoverage(boundary),
+          nullZeroAudit(boundary),
+          snapshotLineage(boundary),
+          universeCoverage(eligible, boundary),
           researchMilestones(),
         ]);
       res.json({
         success: true,
         data: {
+          /**
+           * The single instant every bounded section below was evaluated at.
+           * Sections carrying their own asOf used this one; any that do not
+           * are unbounded by nature and say so.
+           */
+          report_as_of: boundary.asOf.toISOString(),
+          timestampContract:
+            'Every metric carrying an asOf field was evaluated against report_as_of. Never compare a figure from this report against one from another reading without checking both asOf values.',
           timeline,
           chains,
           maturity,

@@ -48,6 +48,7 @@ const FILES = [
   '007_capture_timescale.sql',
   '008_capture_instrumentation.sql',
   '009_lineage_and_taxonomy.sql',
+  '010_capture_quality_lineage.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */

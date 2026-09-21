@@ -23,6 +23,7 @@
 
 import { sql } from '../lib/db.js';
 import { INTRADAY_HORIZON_MS, POSITIONAL_HORIZON_MS } from './missed-winner-audit.js';
+import { classifyRefusal, RESEARCH_THRESHOLDS } from './research-contract.js';
 
 /** Below this, a breakdown is flagged exploratory and must not drive a decision. */
 export const MIN_SAMPLE_FOR_INFERENCE = 30;
@@ -156,12 +157,13 @@ export async function dailyReport(sinceHours = 24): Promise<Record<string, unkno
   const takes = rows.filter((r) => r.decision === 'TAKE');
   const refusals = rows.filter((r) => r.decision === 'REFUSE');
 
-  const [captureHealth, decisionHealth, quality, stops, shadow] = await Promise.all([
+  const [captureHealth, decisionHealth, quality, stops, shadow, missed] = await Promise.all([
     captureHealthSection(since),
     decisionHealthSection(since),
     dataQualitySection(since),
     stopSection(since),
     shadowSection(since),
+    missedOpportunitySection(since),
   ]);
 
   return {
@@ -172,6 +174,12 @@ export async function dailyReport(sinceHours = 24): Promise<Record<string, unkno
     dataQuality: quality,
     stops,
     liveVsShadow: shadow,
+    missedOpportunity: missed,
+    researchThresholds: {
+      ...RESEARCH_THRESHOLDS,
+      note:
+        'Minimum EVIDENCE thresholds for research. They gate what this report is allowed to claim and are read by nothing in the decision engine.',
+    },
     breakdowns: {
       // Every one of these carries n, mature/immature and an exploratory flag.
       bySessionBucket: groupBy(rows, (r) => r.session_bucket, now),
@@ -252,7 +260,39 @@ async function decisionHealthSection(since: Date): Promise<Record<string, unknow
   `.catch(() => []);
 
   const reasons = Object.fromEntries(byReason.map((r) => [r.reason_code ?? 'UNSPECIFIED', Number(r.n)]));
+
+  // Both, side by side. The reason code says which rule fired; the class says
+  // what that implies about the setup. "The setup was weak" and "a risk
+  // control blocked a setup that may have been fine" are different facts and
+  // the missed-winner analysis is close to meaningless without the
+  // distinction.
+  const byClass = await sql<{ refusal_class: string | null; reason_code: string | null; n: string }[]>`
+    SELECT refusal_class, reason_code, COUNT(*) AS n
+    FROM decision_snapshots
+    WHERE time >= ${since} AND decision = 'REFUSE'
+    GROUP BY refusal_class, reason_code
+    ORDER BY COUNT(*) DESC
+  `.catch(() => []);
+
+  const classTotals: Record<string, number> = {};
+  const reasonToClass = byClass.map((r) => {
+    // Recomputed from the pure mapper as a cross-check: a stored class that
+    // disagrees with the current mapping is a schema-drift bug worth seeing.
+    const expected = classifyRefusal(r.reason_code);
+    const cls = r.refusal_class ?? expected;
+    classTotals[cls] = (classTotals[cls] ?? 0) + Number(r.n);
+    return {
+      reason_code: r.reason_code ?? 'UNSPECIFIED',
+      refusal_class: cls,
+      n: Number(r.n),
+      storedMatchesMapping: r.refusal_class == null || r.refusal_class === expected,
+    };
+  });
+
   return {
+    refusalsByClass: classTotals,
+    reasonToClass,
+    classMappingDrift: reasonToClass.filter((r) => !r.storedMatchesMapping),
     take: Number(byDecision.find((d) => d.decision === 'TAKE')?.n ?? 0),
     refuse: Number(byDecision.find((d) => d.decision === 'REFUSE')?.n ?? 0),
     refusalReasons: reasons,
@@ -335,5 +375,97 @@ async function shadowSection(since: Date): Promise<Record<string, unknown>> {
     note:
       'Measurement only. Agreement with live behaviour is NOT evidence for promoting a shadow rule — a rule that ' +
       'agrees with live everywhere adds nothing, and one that disagrees is only right if the outcomes say so.',
+  };
+}
+
+/**
+ * Missed-opportunity analysis, once refusals mature.
+ *
+ * The question this exists to answer is "which filter costs the most
+ * profitable opportunities", and it can only be answered by keeping the
+ * ORIGINAL refusal reason attached to the verdict. A MISSED_WINNER tells you
+ * something was given up; the reason and class tell you what to do about it,
+ * and they are opposite actions depending on whether the setup was weak or a
+ * risk control intervened.
+ *
+ * Returns zero counts and null rates when nothing has matured. It never
+ * reports a rate over an empty set.
+ */
+async function missedOpportunitySection(since: Date): Promise<Record<string, unknown>> {
+  const rows = await sql<
+    {
+      opportunity_verdict: string | null;
+      reason_code: string | null;
+      refusal_class: string | null;
+      setup_type: string | null;
+      session_bucket: string | null;
+      n: string;
+      avg_mfe: string | null;
+      avg_mae: string | null;
+      avg_r: string | null;
+    }[]
+  >`
+    SELECT opportunity_verdict, reason_code, refusal_class, setup_type, session_bucket,
+           COUNT(*) AS n,
+           AVG(outcome_mfe_atr) AS avg_mfe,
+           AVG(outcome_mae_atr) AS avg_mae,
+           AVG(outcome_r) AS avg_r
+    FROM decision_snapshots
+    WHERE time >= ${since} AND decision = 'REFUSE' AND outcome_evaluated_at IS NOT NULL
+    GROUP BY opportunity_verdict, reason_code, refusal_class, setup_type, session_bucket
+    ORDER BY COUNT(*) DESC
+  `.catch(() => []);
+
+  const [pending] = await sql<{ immature: string }[]>`
+    SELECT COUNT(*) AS immature
+    FROM decision_snapshots
+    WHERE time >= ${since} AND decision = 'REFUSE' AND outcome_evaluated_at IS NULL
+  `.catch(() => [{ immature: '0' }]);
+
+  const verdicts: Record<string, number> = { MISSED_WINNER: 0, CORRECT_REFUSAL: 0, UNRESOLVED: 0 };
+  const byFilter: Record<string, { missedWinners: number; correctRefusals: number; unresolved: number; refusalClass: string }> = {};
+
+  for (const r of rows) {
+    const v = r.opportunity_verdict ?? 'UNRESOLVED';
+    verdicts[v] = (verdicts[v] ?? 0) + Number(r.n);
+    const key = r.reason_code ?? 'UNSPECIFIED';
+    const entry = byFilter[key] ?? {
+      missedWinners: 0,
+      correctRefusals: 0,
+      unresolved: 0,
+      refusalClass: r.refusal_class ?? classifyRefusal(r.reason_code),
+    };
+    if (v === 'MISSED_WINNER') entry.missedWinners += Number(r.n);
+    else if (v === 'CORRECT_REFUSAL') entry.correctRefusals += Number(r.n);
+    else entry.unresolved += Number(r.n);
+    byFilter[key] = entry;
+  }
+
+  const graded = Object.values(verdicts).reduce((a, b) => a + b, 0);
+
+  return {
+    graded,
+    immature: Number(pending?.immature ?? 0),
+    verdicts,
+    // Rates only over graded rows, and null when there are none. A filter with
+    // nothing graded has no missed-winner rate, which is different from a rate
+    // of zero.
+    missedWinnerRate: graded > 0 ? round((verdicts.MISSED_WINNER / graded) * 100, 1) : null,
+    byFilter,
+    detail: rows.map((r) => ({
+      opportunity_verdict: r.opportunity_verdict,
+      original_refusal_reason: r.reason_code,
+      refusal_class: r.refusal_class ?? classifyRefusal(r.reason_code),
+      setup_type: r.setup_type,
+      session_position: r.session_bucket,
+      n: Number(r.n),
+      avg_mfe_atr: r.avg_mfe == null ? null : round(Number(r.avg_mfe)),
+      avg_mae_atr: r.avg_mae == null ? null : round(Number(r.avg_mae)),
+      avg_final_r: r.avg_r == null ? null : round(Number(r.avg_r)),
+    })),
+    note:
+      graded === 0
+        ? 'Nothing has matured past its evaluation horizon yet, so there is no verdict to report. Zero shown as zero, not as a result.'
+        : 'Measurement only. No filter is promoted, relaxed or removed on the basis of these numbers.',
   };
 }

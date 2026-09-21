@@ -164,9 +164,28 @@ export async function chainCompleteness(sinceHours = 48): Promise<Record<string,
     }
   }
 
+  // Every figure below is derived from the SAME snapshot set counted above.
+  // Nothing is hardcoded: the previous report quoted a 112-leg shortfall from
+  // a 2,296-leg dataset while the coverage section showed 2,378, because the
+  // two were computed at different instants from different denominators.
+  const legsPerSnapshot = snapshots.length > 0 ? round(actual / snapshots.length, 2) : null;
+
   return {
+    asOf: new Date().toISOString(),
     window: { sinceHours, since: since.toISOString() },
     captureWindow: { strikesEachSide: STRIKES_EACH_SIDE, maxStrikes, maxLegsPerCompleteSnapshot: maxLegs },
+    /** One consistent denominator for every shortfall figure in this section. */
+    dynamicShortfall: {
+      snapshot_count: snapshots.length,
+      legs_per_snapshot: legsPerSnapshot,
+      theoretical_legs: snapshots.length * maxLegs,
+      actual_legs: actual,
+      shortfall: snapshots.length * maxLegs - actual,
+      shortfall_percent:
+        snapshots.length > 0 ? round(((snapshots.length * maxLegs - actual) / (snapshots.length * maxLegs)) * 100, 2) : null,
+      basis:
+        'theoretical_legs = snapshot_count x maxLegsPerCompleteSnapshot. The shortfall is entirely the exchange listing fewer strikes than the window asked for; it is recorded as a clipping reason, not a capture failure.',
+    },
     captureIntervalMinutes: CAPTURE_INTERVAL_MS / 60000,
     snapshotsObserved: snapshots.length,
     captureAttempts: runs.length,
