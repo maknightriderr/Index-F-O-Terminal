@@ -6,6 +6,7 @@ import { Router, type Request, type Response } from 'express';
 import { logger } from '../lib/logger.js';
 import { getTradeSetupHistory, getWinRateAnalytics } from '../services/backtesting.js';
 import type { TradingMode } from '@fno/shared';
+import type { MarketDataProvider } from '../providers/interface.js';
 import { captureCoverage } from '../services/market-state-capture.js';
 import { captureSchemaStatus } from '../services/ensure-capture-schema.js';
 import { decisionCoverage, rejectionBreakdown } from '../services/decision-snapshot.js';
@@ -16,11 +17,14 @@ import {
   chainCompleteness,
   refusalMaturity,
   captureUniverse,
-  replayReadiness,
+  eligibleUniverse,
+  captureModeReport,
 } from '../services/capture-diagnostics.js';
+import { greekCoverage, nullZeroAudit, snapshotLineage, universeCoverage, replayStatus } from '../services/data-integrity.js';
+import { researchMilestones } from '../services/ensure-capture-schema.js';
 import { dailyReport } from '../services/daily-report.js';
 
-export function createBacktestingRoutes(): Router {
+export function createBacktestingRoutes(provider: MarketDataProvider): Router {
   const router = Router();
 
   /**
@@ -79,14 +83,36 @@ export function createBacktestingRoutes(): Router {
   router.get('/diagnostics', async (req: Request, res: Response) => {
     try {
       const sinceHours = Math.min(Number(req.query.sinceHours ?? 48) || 48, 720);
-      const [timeline, chains, maturity, universe, replay] = await Promise.all([
-        captureTimeline(),
-        chainCompleteness(sinceHours),
-        refusalMaturity(),
-        captureUniverse(),
-        replayReadiness(),
-      ]);
-      res.json({ success: true, data: { timeline, chains, maturity, universe, replay } });
+      const eligible = await eligibleUniverse(provider);
+      const [timeline, chains, maturity, universe, replay, greeks, nullZero, lineage, coverage, milestones] =
+        await Promise.all([
+          captureTimeline(),
+          chainCompleteness(sinceHours),
+          refusalMaturity(),
+          captureUniverse(),
+          replayStatus(),
+          greekCoverage(),
+          nullZeroAudit(),
+          snapshotLineage(),
+          universeCoverage(eligible),
+          researchMilestones(),
+        ]);
+      res.json({
+        success: true,
+        data: {
+          timeline,
+          chains,
+          maturity,
+          universe,
+          replay,
+          greeks,
+          nullZero,
+          lineage,
+          universeCoverage: coverage,
+          captureMode: captureModeReport(),
+          milestones,
+        },
+      });
     } catch (err: any) {
       logger.error({ error: err.message }, 'Capture diagnostics failed');
       res.status(500).json({ success: false, error: err.message });

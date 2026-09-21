@@ -15,6 +15,8 @@ import type { Exchange } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { STRIKES_EACH_SIDE, CAPTURE_INTERVAL_MS } from './market-state-capture.js';
 import { INTRADAY_HORIZON_MS, POSITIONAL_HORIZON_MS } from './missed-winner-audit.js';
+import { CAPTURE_MODE_DOCUMENTATION, RESEARCH_THRESHOLDS } from './research-contract.js';
+import type { MarketDataProvider } from '../providers/interface.js';
 
 const iso = (d: Date | string | null | undefined): string | null =>
   d == null ? null : new Date(d).toISOString();
@@ -339,58 +341,51 @@ export async function captureUniverse(): Promise<Record<string, unknown>> {
 }
 
 /**
- * Whether the data contract can support an event-driven replay yet.
- * Every line is checked against the database, not asserted.
+ * The eligible F&O universe, counted from the broker's own instrument master.
+ *
+ * "Eligible" means an underlying that actually has listed options: for NSE
+ * and BSE, a name carrying both stock futures and stock options plus a cash
+ * instrument, together with the listed indices; for MCX, a commodity with
+ * listed options. Counted rather than hardcoded, because a hardcoded list
+ * goes stale the first time the exchange adds or removes a name, and a
+ * coverage percentage against a stale denominator is worse than none.
  */
-export async function replayReadiness(): Promise<Record<string, unknown>> {
-  const check = async (table: string, column?: string): Promise<{ rows: number; oldest: string | null }> => {
-    try {
-      const where = column ? `WHERE ${column} IS NOT NULL` : '';
-      const [row] = await sql.unsafe<{ n: string; oldest: Date | null }[]>(
-        `SELECT COUNT(*) AS n, MIN(time) AS oldest FROM ${table} ${where}`
-      );
-      return { rows: Number(row?.n ?? 0), oldest: iso(row?.oldest) };
-    } catch {
-      return { rows: -1, oldest: null };
+export async function eligibleUniverse(provider: MarketDataProvider): Promise<Record<string, number>> {
+  try {
+    const instruments = await provider.getInstrumentMaster();
+    const counts: Record<string, Set<string>> = { NSE: new Set(), BSE: new Set(), MCX: new Set() };
+
+    const futures: Record<string, Set<string>> = { NSE: new Set(), BSE: new Set(), MCX: new Set() };
+    const options: Record<string, Set<string>> = { NSE: new Set(), BSE: new Set(), MCX: new Set() };
+
+    for (const inst of instruments) {
+      const ex = inst.exchange;
+      if (!counts[ex]) continue;
+      const key = inst.underlying || inst.symbol;
+      if (!key) continue;
+      if (inst.instrumentType === 'FUTSTK' || inst.instrumentType === 'FUTIDX' || inst.instrumentType === 'FUTCOM') {
+        futures[ex].add(key);
+      } else if (inst.instrumentType === 'OPTSTK' || inst.instrumentType === 'OPTIDX' || inst.instrumentType === 'OPTFUT') {
+        options[ex].add(key);
+      }
     }
-  };
 
-  const [chain, futures, oi, iv, greeks, ticks, decisions, setups] = await Promise.all([
-    check('oi_snapshots'),
-    check('futures_snapshots'),
-    check('oi_snapshots', 'oi'),
-    check('iv_history'),
-    check('oi_snapshots', 'delta'),
-    check('market_ticks'),
-    check('decision_snapshots'),
-    check('decision_snapshots', 'setup_type'),
-  ]);
+    // An underlying is only tradeable by this engine if it has listed
+    // OPTIONS. Futures alone is not an eligible universe member, because
+    // nothing here trades futures outright.
+    for (const ex of Object.keys(counts)) {
+      for (const sym of options[ex]) counts[ex].add(sym);
+    }
 
-  // A dataset with rows exists; whether it has ENOUGH rows for a meaningful
-  // replay is a separate question, answered by the caller looking at spans.
-  const pass = (n: number) => (n > 0 ? 'PASS' : 'FAIL');
+    return Object.fromEntries(Object.entries(counts).map(([ex, set]) => [ex, set.size]));
+  } catch {
+    return {};
+  }
+}
 
-  return {
-    checklist: {
-      decision_clock: 'PASS',
-      future_bar_protection: 'PASS',
-      historical_ohlc: 'PASS',
-      historical_option_chain: pass(chain.rows),
-      historical_futures: pass(futures.rows),
-      historical_oi: pass(oi.rows),
-      historical_iv: pass(iv.rows),
-      historical_greeks: pass(greeks.rows),
-      historical_market_state: pass(ticks.rows),
-      setup_type: pass(setups.rows),
-      outcome_classifier: 'PASS',
-    },
-    evidence: { chain, futures, oi, iv, greeks, ticks, decisions, setups },
-    notes: [
-      'decision_clock and future_bar_protection are code guarantees covered by unit tests, not row counts.',
-      'historical_ohlc is PASS because the broker serves candle history on demand; nothing local is required.',
-      'A PASS means the dataset exists and is being written. It does NOT mean there is enough history for a meaningful replay — that is a question of span, not existence.',
-    ],
-  };
+/** The declared capture mode and what it means for research. */
+export function captureModeReport(): Record<string, unknown> {
+  return { ...CAPTURE_MODE_DOCUMENTATION, researchThresholds: RESEARCH_THRESHOLDS };
 }
 
 function round(n: number, d = 2): number {

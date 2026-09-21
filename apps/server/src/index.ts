@@ -103,7 +103,7 @@ app.use('/api/futures', createFuturesRoutes(provider));
 app.use('/api/alerts', createAlertRoutes());
 app.use('/api/ai-assistant', createAiAssistantRoutes(provider));
 app.use('/api/institutional-flow', createInstitutionalFlowRoutes(provider));
-app.use('/api/backtesting', createBacktestingRoutes());
+app.use('/api/backtesting', createBacktestingRoutes(provider));
 app.use('/api/news', createNewsRoutes());
 app.use('/api/corporate-actions', createCorporateActionsRoutes());
 app.use('/api/market-scanner', createMarketScannerRoutes(provider));

@@ -30,6 +30,7 @@ import type { Exchange, TradingMode, NoTradeCode, BiasDirection, MarketRegime, T
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 import { decisionNow } from './decision-clock.js';
+import { classifyRefusal } from './research-contract.js';
 
 export interface DecisionSnapshotInput {
   symbol: string;
@@ -98,6 +99,13 @@ export function recordDecisionSnapshot(input: DecisionSnapshotInput): void {
   const available = setup?.available === true ? setup : null;
   const oq = available?.optionQuality ?? null;
 
+  // What KIND of "no" this was, layered on top of the reason code rather
+  // than replacing it. A setup rejected for being weak and a good setup
+  // blocked by a cooldown are both refusals today, and when grading matures
+  // they would produce identical MISSED_WINNER rows demanding opposite
+  // responses. Only recorded on a refusal; a taken trade has no refusal class.
+  const refusalClass = input.decision === 'REFUSE' ? classifyRefusal(input.reasonCode) : null;
+
   // Agreement is only meaningful when the shadow layers actually produced a
   // reading. A null here means "not comparable", which is a different fact
   // from "they disagreed" and is stored as one.
@@ -127,6 +135,7 @@ export function recordDecisionSnapshot(input: DecisionSnapshotInput): void {
       setup_type, setup_family, primary_trigger, setup_timeframe, setup_detail,
       minutes_from_session_open, session_bucket, target_atr, stop_atr,
       shadow_would_refuse, shadow_refuse_reasons, shadow_agrees_with_live,
+      refusal_class,
       underlying, market, futures, option, location, room, risk
     ) VALUES (
       ${at},
@@ -165,6 +174,7 @@ export function recordDecisionSnapshot(input: DecisionSnapshotInput): void {
       ${input.shadow?.wouldRefuse ?? null},
       ${input.shadow?.reasons?.length ? input.shadow.reasons.join(',').slice(0, 200) : null},
       ${shadowAgreement},
+      ${refusalClass},
       ${sql.json((input.underlying ?? {}) as never)},
       ${sql.json((input.market ?? {}) as never)},
       ${sql.json((input.futures ?? {}) as never)},

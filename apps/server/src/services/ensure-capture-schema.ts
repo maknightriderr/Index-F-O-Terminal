@@ -43,7 +43,12 @@ const CANDIDATE_DIRS = [
   path.resolve(__dirname, '../../../../../database/init'),
 ];
 
-const FILES = ['006_market_state_capture.sql', '007_capture_timescale.sql', '008_capture_instrumentation.sql'];
+const FILES = [
+  '006_market_state_capture.sql',
+  '007_capture_timescale.sql',
+  '008_capture_instrumentation.sql',
+  '009_lineage_and_taxonomy.sql',
+];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */
 const BEST_EFFORT = new Set(['007_capture_timescale.sql']);
@@ -113,6 +118,11 @@ export async function ensureCaptureSchema(): Promise<SchemaEnsureResult> {
     }
   }
 
+  // Record when each recorded layer first wrote a row, once, so no report
+  // ever has to say "recording began yesterday" — relative wording that is
+  // wrong the moment somebody reads it on a different day.
+  await recordMilestones();
+
   lastResult = result;
   if (result.failed > 0) {
     logger.error(result, 'Capture schema: incomplete — some history will not be recorded');
@@ -123,4 +133,56 @@ export async function ensureCaptureSchema(): Promise<SchemaEnsureResult> {
     );
   }
   return result;
+}
+
+/**
+ * The instant each recorded layer began, written once and never updated.
+ *
+ * ON CONFLICT DO NOTHING is the whole mechanism: the first boot after a
+ * layer ships records its start, and every boot after that leaves the
+ * original instant alone. A milestone that moved on every restart would be
+ * worse than none, because it would look authoritative while meaning
+ * "whenever the server last came up".
+ */
+async function recordMilestones(): Promise<void> {
+  const layers: { layer: string; note: string }[] = [
+    { layer: 'market_state_capture', note: 'Option chain, futures, positioning and underlying capture' },
+    { layer: 'decision_snapshots', note: 'Every evaluation recorded, TAKE and REFUSE alike' },
+    { layer: 'trade_health_shadow', note: 'Trade health computed and logged, never acting' },
+    { layer: 'location_quality_shadow', note: 'Location scored, never gating' },
+    { layer: 'room_to_run_shadow', note: 'Room to run measured, never gating' },
+    { layer: 'option_quality', note: 'Option quality scored; only mechanical tradeability gates' },
+    { layer: 'setup_tagging', note: 'Setup named from what the engine already detected' },
+    { layer: 'stop_events', note: 'Full state captured and classified at stop-fire time' },
+    { layer: 'capture_runs', note: 'Capture attempts recorded before their outcome is known' },
+  ];
+
+  for (const { layer, note } of layers) {
+    try {
+      await sql`
+        INSERT INTO research_milestones (layer, recording_started_at, note)
+        VALUES (${layer}, ${new Date()}, ${note})
+        ON CONFLICT (layer) DO NOTHING
+      `;
+    } catch {
+      // The milestone table may not exist on an older schema. Not worth
+      // failing a boot over.
+    }
+  }
+}
+
+/** When each recorded layer began, for reports that must not say "yesterday". */
+export async function researchMilestones(): Promise<{ layer: string; recording_started_at: string; note: string | null }[]> {
+  try {
+    const rows = await sql<{ layer: string; recording_started_at: Date; note: string | null }[]>`
+      SELECT layer, recording_started_at, note FROM research_milestones ORDER BY recording_started_at ASC
+    `;
+    return rows.map((r) => ({
+      layer: r.layer,
+      recording_started_at: new Date(r.recording_started_at).toISOString(),
+      note: r.note,
+    }));
+  } catch {
+    return [];
+  }
 }

@@ -39,6 +39,7 @@ import type { Exchange } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveSpotToken } from './option-chain.js';
 import { classifyOutcome, NEUTRAL_BAND_R, type OutcomeClass } from './outcome-classifier.js';
+import { opportunityVerdict } from './research-contract.js';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 
@@ -161,11 +162,18 @@ async function gradeDecision(provider: MarketDataProvider, row: PendingRow): Pro
   let hitTarget = false;
   let hitStop = false;
   let settledR: number | null = null;
+  // Bars from the decision to the best excursion, and to the target. Null
+  // where the level was never reached — never zero, which would read as
+  // "reached instantly".
+  let barsToMfe: number | null = null;
+  let barsToTarget: number | null = null;
+  let barIndex = 0;
 
   for (const c of candles) {
+    barIndex++;
     const favourable = direction > 0 ? c.high - entry : entry - c.low;
     const adverse = direction > 0 ? entry - c.low : c.high - entry;
-    if (favourable > mfe) mfe = favourable;
+    if (favourable > mfe) { mfe = favourable; barsToMfe = barIndex; }
     if (adverse > mae) mae = adverse;
 
     // Within a single bar there is no way to know which side printed first,
@@ -176,7 +184,7 @@ async function gradeDecision(provider: MarketDataProvider, row: PendingRow): Pro
     const stopped = direction > 0 ? c.low <= stopLevel : c.high >= stopLevel;
     const targeted = direction > 0 ? c.high >= targetLevel : c.low <= targetLevel;
     if (stopped) { hitStop = true; settledR = -1; break; }
-    if (targeted) { hitTarget = true; settledR = targetAtr / stopAtr; break; }
+    if (targeted) { hitTarget = true; settledR = targetAtr / stopAtr; barsToTarget = barIndex; break; }
   }
 
   const mfeAtr = mfe / atr;
@@ -194,6 +202,9 @@ async function gradeDecision(provider: MarketDataProvider, row: PendingRow): Pro
   }
 
   const outcomeClass = classifyOutcome(row.decision, settledR, mfeR);
+  const verdict = opportunityVerdict(outcomeClass);
+  // Bars to minutes, using the interval this mode actually replayed on.
+  const barMinutes = row.mode === 'POSITIONAL' ? 60 : 15;
 
   await sql`
     UPDATE decision_snapshots SET
@@ -207,6 +218,9 @@ async function gradeDecision(provider: MarketDataProvider, row: PendingRow): Pro
       outcome_reached_05r = ${mfeR >= 0.5},
       outcome_reached_1r = ${mfeR >= 1},
       outcome_r = ${round(settledR)},
+      opportunity_verdict = ${verdict},
+      outcome_time_to_mfe_min = ${barsToMfe == null ? null : barsToMfe * barMinutes},
+      outcome_time_to_target_min = ${barsToTarget == null ? null : barsToTarget * barMinutes},
       outcome_note = ${`graded on the underlying over ${candles.length} bars; the option's own path needs a historical chain`}
     WHERE decision_id = ${row.decision_id}
   `;

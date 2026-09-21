@@ -193,7 +193,7 @@ async function captureSymbol(
     });
     await closeCaptureRun(runId, {
       status: 'FAILED',
-      detail: 'buildOptionChain returned nothing during a live session',
+      failureReason: 'buildOptionChain returned nothing during a live session',
       durationMs: Date.now() - startedAt,
     });
     return;
@@ -234,16 +234,25 @@ async function captureSymbol(
     atr: null,
   });
 
+  // PARTIAL means WE fell short of what the exchange offered. A chain that
+  // simply lists fewer strikes than the window asked for is a SUCCESS with a
+  // clipping reason — the capture is complete for what exists. Collapsing the
+  // two would make every MCX commodity look like a partial capture forever.
   await closeCaptureRun(runId, {
     status: chainResult.actualLegs < chainResult.expectedLegs ? 'PARTIAL' : 'SUCCESS',
+    spot: chain.spotPrice,
     strikesAvailable: chainResult.strikesAvailable,
     strikesCaptured: chainResult.strikesCaptured,
+    expectedStrikes: STRIKES_EACH_SIDE * 2 + 1,
+    actualStrikes: chainResult.strikesCaptured,
     expectedLegs: chainResult.expectedLegs,
     actualLegs: chainResult.actualLegs,
     futuresRows,
     positioningRows: 1,
     underlyingRows: 1,
     durationMs: Date.now() - startedAt,
+    clippingReason: chainResult.clippingReason,
+    failureReason: chainResult.actualLegs < chainResult.expectedLegs ? chainResult.detail : null,
     detail: chainResult.detail,
   });
 }
@@ -259,9 +268,14 @@ async function openCaptureRun(
   expiry: string
 ): Promise<string | null> {
   try {
+    // STARTED, with the start instant recorded separately from the
+    // completion instant. A row left reading STARTED with a null completion
+    // is a capture that died mid-flight — which is a different fact from a
+    // capture that never ran, and neither is visible without this.
+    const sessionDate = at.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
     const [row] = await sql<{ id: string }[]>`
-      INSERT INTO capture_runs (time, exchange, symbol, expiry, status)
-      VALUES (${at}, ${exchange}, ${symbol}, ${expiry}, 'ATTEMPT')
+      INSERT INTO capture_runs (time, capture_started_at, session_date, exchange, symbol, expiry, status)
+      VALUES (${at}, ${at}, ${sessionDate}, ${exchange}, ${symbol}, ${expiry}, 'STARTED')
       RETURNING id
     `;
     return row?.id ?? null;
@@ -274,15 +288,22 @@ async function openCaptureRun(
 async function closeCaptureRun(
   runId: string | null,
   outcome: {
-    status: 'SUCCESS' | 'PARTIAL' | 'FAILED';
+    status: 'SUCCESS' | 'PARTIAL' | 'FAILED' | 'SKIPPED';
     strikesAvailable?: number;
     strikesCaptured?: number;
+    expectedStrikes?: number;
+    actualStrikes?: number;
     expectedLegs?: number;
     actualLegs?: number;
     futuresRows?: number;
     positioningRows?: number;
     underlyingRows?: number;
+    spot?: number | null;
     durationMs: number;
+    /** The exchange did not list the strikes we asked for. Nothing failed. */
+    clippingReason?: string | null;
+    /** We did not store what the exchange offered. The gap is ours. */
+    failureReason?: string | null;
     detail?: string | null;
   }
 ): Promise<void> {
@@ -291,14 +312,20 @@ async function closeCaptureRun(
     await sql`
       UPDATE capture_runs SET
         status = ${outcome.status},
+        capture_completed_at = ${new Date()},
+        spot = ${outcome.spot ?? null},
         strikes_available = ${outcome.strikesAvailable ?? null},
         strikes_captured = ${outcome.strikesCaptured ?? null},
+        expected_strikes = ${outcome.expectedStrikes ?? null},
+        actual_strikes = ${outcome.actualStrikes ?? null},
         expected_legs = ${outcome.expectedLegs ?? null},
         actual_legs = ${outcome.actualLegs ?? null},
         futures_rows = ${outcome.futuresRows ?? null},
         positioning_rows = ${outcome.positioningRows ?? null},
         underlying_rows = ${outcome.underlyingRows ?? null},
         duration_ms = ${outcome.durationMs},
+        clipping_reason = ${outcome.clippingReason ?? null},
+        failure_reason = ${outcome.failureReason ?? null},
         detail = ${outcome.detail ?? null}
       WHERE id = ${runId}
     `;
@@ -318,6 +345,8 @@ interface ChainCaptureResult {
   /** Two legs for every strike inside the window. */
   expectedLegs: number;
   actualLegs: number;
+  /** The exchange listed fewer strikes than the window asked for. Not a failure. */
+  clippingReason: string | null;
   detail: string | null;
 }
 
@@ -392,6 +421,10 @@ async function captureChain(
     strikesCaptured: strikesInWindow,
     expectedLegs,
     actualLegs: rows.length,
+    clippingReason:
+      strikesInWindow < STRIKES_EACH_SIDE * 2 + 1
+        ? `the exchange listed ${chain.strikes.length} strikes for this expiry, so the ${STRIKES_EACH_SIDE}-either-side window clipped to ${strikesInWindow} strikes (${expectedLegs} legs)`
+        : null,
     detail:
       missingReasons.length > 0
         ? `${missingReasons.length} leg(s) not present in the chain: ${missingReasons.slice(0, 6).join('; ')}${missingReasons.length > 6 ? ` (+${missingReasons.length - 6} more)` : ''}`
