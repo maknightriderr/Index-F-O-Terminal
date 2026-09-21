@@ -191,6 +191,35 @@ async function captureSymbol(
     captureFutures(at, exchange, underlying, futures),
     capturePositioning(at, underlying, chain),
   ]);
+
+  // The underlying observation on the capture schedule.
+  //
+  // captureUnderlyingObservation is also called from the decision path,
+  // where it records the VWAP and ATR the engine ACTUALLY used. That is the
+  // more valuable row — but it only fires when a setup is taken, and the
+  // engine refuses most of what it sees, so relying on it alone left
+  // market_ticks empty while every other capture table filled up. A replay
+  // needs the underlying at every step, not only at the rare steps that
+  // became trades.
+  //
+  // This row carries no VWAP or ATR: they are written as NULL rather than
+  // recomputed here, because a value this service derived from a slightly
+  // different candle window would silently disagree with the one the engine
+  // decided on, and a replay could not tell which it was looking at.
+  captureUnderlyingObservation({
+    at: at.getTime(),
+    symbol: underlying,
+    exchange,
+    token: chain.underlying ?? underlying,
+    ltp: chain.spotPrice,
+    open: null,
+    high: null,
+    low: null,
+    close: chain.spotPrice,
+    volume: null,
+    vwap: null,
+    atr: null,
+  });
 }
 
 // ---------------------------------------------------------------
