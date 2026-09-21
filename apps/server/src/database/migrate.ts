@@ -27,7 +27,11 @@ import { logger } from '../lib/logger.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const INIT_DIR = path.resolve(__dirname, '../../../../database/init');
 
-const BEST_EFFORT_FILES = new Set(['001_extensions.sql', '003_timescale.sql']);
+// 007 is the retention/compression policies for the capture tables and is
+// best-effort for the same reason 003 is: the production database is a plain
+// managed Postgres with no timescaledb extension, where every statement in it
+// fails harmlessly and the capture service prunes on its own schedule instead.
+const BEST_EFFORT_FILES = new Set(['001_extensions.sql', '003_timescale.sql', '007_capture_timescale.sql']);
 
 function splitStatements(sqlText: string): string[] {
   return sqlText

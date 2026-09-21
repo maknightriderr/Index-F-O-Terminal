@@ -41,6 +41,9 @@ import { startFiiDiiTracker } from './services/fii-dii.js';
 import { startOiCloseSnapshot } from './services/oi-close-snapshot.js';
 import { startCacheWarmer } from './services/cache-warmer.js';
 import { startPositionalStockScan } from './services/positional-stock-scan.js';
+import { startMarketStateCapture } from './services/market-state-capture.js';
+import { startMissedWinnerAudit } from './services/missed-winner-audit.js';
+import { ensureCaptureSchema } from './services/ensure-capture-schema.js';
 
 // --- Initialize Provider + Subscription Manager ---
 
@@ -241,6 +244,27 @@ startOiCloseSnapshot(provider);
 startCacheWarmer(provider);
 startStrategyTracker(provider);
 startPositionalStockScan(provider);
+// The historical market-state record. Until these ran, the five capture
+// tables had never had a row written to them, which is what made the
+// chain-dependent half of the engine unreplayable and left every shadow rule
+// without the forward observations it needs to be promoted.
+//
+// The schema has to be ensured first, and it cannot be assumed: the deploy
+// start command is `node dist/index.js` and runs no migration, so without
+// this the capture writers would insert into tables that do not exist,
+// swallow the error (every capture write is fire-and-forget by design), and
+// record nothing while the service reported itself healthy.
+void ensureCaptureSchema()
+  .then(() => {
+    startMarketStateCapture(provider);
+    startMissedWinnerAudit(provider);
+  })
+  .catch((err: any) => {
+    // Capture is instrumentation. It must never keep the engine down.
+    logger.error({ error: err.message }, 'Capture schema check failed — starting capture anyway');
+    startMarketStateCapture(provider);
+    startMissedWinnerAudit(provider);
+  });
 startHolidayCalendarCheck();
 
 setInterval(() => {

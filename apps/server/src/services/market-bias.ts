@@ -80,6 +80,9 @@ import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 import { decisionNow, decisionDate, decisionIstDate, assertNoFutureData } from './decision-clock.js';
 import { ivRankFor } from './fno-scanner.js';
+import { recordDecisionSnapshot } from './decision-snapshot.js';
+import { captureUnderlyingObservation } from './market-state-capture.js';
+import { dataQualityBlock } from './data-quality.js';
 import { notifyTradeSetup } from './telegram.js';
 import { trackSymbolForOiSnapshot } from './oi-close-snapshot.js';
 import { riskOffReason } from './risk-circuit-breaker.js';
@@ -2270,8 +2273,14 @@ async function resolveStickyTradeSetup(
   // needs live quotes and no fresh stop-out in the same direction.
   const riskOff = await riskOffReason(exchange, mode);
   const reliability = riskOff ? null : await checkReliabilityFilters(underlying, exchange, direction, mode);
+  // A feed the engine cannot read is not a market view. This sits beside the
+  // risk circuit breaker at the front of the chain, ahead of every rule that
+  // reasons about price, because those rules would otherwise be reasoning
+  // about a stale or broken quote and recording the result as a judgement.
+  const feedBlock = dataQualityBlock(exchange, underlying);
   const refusal: GateRefusal | null =
     (riskOff ? { code: 'RISK_OFF' as const, reason: riskOff } : null) ??
+    (feedBlock ? { code: 'NO_QUOTE' as const, reason: feedBlock } : null) ??
     sessionGateReason(exchange, mode) ??
     (confidence < MIN_SETUP_CONFIDENCE
       ? {
@@ -2300,6 +2309,26 @@ async function resolveStickyTradeSetup(
       roomAvailableAtr: entryContext?.roomAvailableAtr ?? null,
       roomRequiredAtr: entryContext?.roomRequiredAtr ?? null,
       roomSufficient: entryContext?.roomSufficient ?? null,
+    });
+    // The refusal, recorded in full. The missed-winner audit grades it later
+    // against what the market actually did, which is the only way to tell
+    // capital protection from having simply stopped trading.
+    const blocks = snapshotBlocks(chain, entryContext, null, direction === 'BEARISH' ? 'PE' : 'CE');
+    recordDecisionSnapshot({
+      symbol: underlying,
+      exchange,
+      mode,
+      expiry: chain.expiry,
+      decision: 'REFUSE',
+      reasonCode: refusal.code,
+      reason: refusal.reason,
+      regime: entryContext?.regime ?? null,
+      bias: direction,
+      confidence,
+      pcr: chain.pcrDetail?.oiPCR ?? null,
+      underlyingPrice: chain.spotPrice,
+      atr: entryContext?.atrPoints ?? null,
+      ...blocks,
     });
   }
   if (unreliableReason != null) {
@@ -2475,6 +2504,39 @@ async function resolveStickyTradeSetup(
     // What the not-yet-live gates would have said about this same trade.
     shadow: { room: entryContext?.roomSufficient !== false, location: (entryContext?.locationScore ?? 100) >= 40 },
   });
+  {
+    const blocks = snapshotBlocks(chain, entryContext, fresh, fresh.available ? fresh.side ?? null : null);
+    recordDecisionSnapshot({
+      symbol: underlying,
+      exchange,
+      mode,
+      expiry: chain.expiry,
+      decision: 'TAKE',
+      reason: fresh.reason ?? 'Setup taken',
+      regime,
+      bias: direction,
+      confidence,
+      pcr: chain.pcrDetail?.oiPCR ?? null,
+      underlyingPrice: chain.spotPrice,
+      atr: entryContext?.atrPoints ?? null,
+      setup: fresh,
+      ...blocks,
+    });
+    captureUnderlyingObservation({
+      at: decisionNow(),
+      symbol: underlying,
+      exchange,
+      token: chain.underlying ?? underlying,
+      ltp: chain.spotPrice,
+      open: null,
+      high: null,
+      low: null,
+      close: chain.spotPrice,
+      volume: null,
+      vwap: null,
+      atr: entryContext?.atrPoints ?? null,
+    });
+  }
 
   const toStore: StoredTradeSetup = {
     ...fresh,
@@ -2992,6 +3054,109 @@ export async function checkLockedSetupPriceLevels(
  * are what the next review reads to ask "what did we turn down, and should we
  * have?".
  */
+/**
+ * The raw blocks a decision snapshot records, assembled from whatever the
+ * decision actually had in scope.
+ *
+ * Kept separate from logDecision because the log line is for a human reading
+ * production logs and the snapshot is for research six months from now. They
+ * want different things: the log wants the short reason, the snapshot wants
+ * the observation the reason was derived from, including the parts no rule
+ * currently reads.
+ */
+function snapshotBlocks(
+  chain: OptionChain | null,
+  entryContext: SetupEntryContext | undefined,
+  setup: TradeSetup | null,
+  side: 'CE' | 'PE' | null
+): {
+  option: Record<string, unknown>;
+  underlying: Record<string, unknown>;
+  market: Record<string, unknown>;
+  location: Record<string, unknown>;
+  room: Record<string, unknown>;
+  risk: Record<string, unknown>;
+} {
+  const strike = setup?.available ? setup.strike : chain?.atmStrike;
+  const row = chain?.strikes.find((st) => st.strike === strike);
+  const leg = side === 'PE' ? row?.put : row?.call;
+
+  return {
+    option: {
+      symbol: leg?.token ?? null,
+      strike: strike ?? null,
+      side,
+      ltp: leg?.ltp ?? null,
+      bid: leg?.bid ?? null,
+      ask: leg?.ask ?? null,
+      volume: leg?.volume ?? null,
+      oi: leg?.oi ?? null,
+      changeOi: leg?.changeOi ?? null,
+      changeOiBaseline: leg?.changeOiBaseline ?? null,
+      iv: leg?.iv ?? null,
+      delta: leg?.delta ?? null,
+      gamma: leg?.gamma ?? null,
+      theta: leg?.theta ?? null,
+      vega: leg?.vega ?? null,
+      moneyness: leg?.moneyness ?? null,
+      greeksSource: leg?.greeksSource ?? null,
+      oiInterpretation: leg?.oiInterpretation ?? null,
+      dte: chain?.dte ?? null,
+      expiry: chain?.expiry ?? null,
+      quality: setup?.available ? setup.optionQuality ?? null : null,
+    },
+    underlying: {
+      spot: chain?.spotPrice ?? null,
+      changePercent: chain?.underlyingChangePercent ?? null,
+      atrPoints: entryContext?.atrPoints ?? null,
+      vwapDeviationPct: entryContext?.vwapDeviationPct ?? null,
+      todayChangePct: entryContext?.todayChangePct ?? null,
+      volumeRatio: entryContext?.volumeRatio ?? null,
+      volumeSource: entryContext?.volumeSource ?? null,
+      minutesSinceOpen: entryContext?.minutesSinceOpen ?? null,
+    },
+    market: {
+      regime: entryContext?.regime ?? null,
+      regimeAlignment: entryContext?.regimeAlignment ?? null,
+      biasConfidence: entryContext?.biasConfidence ?? null,
+      setupConfidence: entryContext?.setupConfidence ?? null,
+      atmIvPct: entryContext?.atmIvPct ?? null,
+      hvPct: entryContext?.hvPct ?? null,
+      ivVsHv: entryContext?.ivVsHv ?? null,
+      ivVsHvSpreadPct: entryContext?.ivVsHvSpreadPct ?? null,
+      pcr: chain?.pcrDetail?.oiPCR ?? null,
+      maxPain: chain?.maxPain ?? null,
+      optionOiBaselineCoverage: entryContext?.optionOiBaselineCoverage ?? null,
+    },
+    location: {
+      score: entryContext?.locationScore ?? null,
+      aheadAtr: entryContext?.locationAheadAtr ?? null,
+      behindAtr: entryContext?.locationBehindAtr ?? null,
+      aheadKind: entryContext?.locationAheadKind ?? null,
+      reason: entryContext?.locationReason ?? null,
+    },
+    room: {
+      availableAtr: entryContext?.roomAvailableAtr ?? null,
+      requiredAtr: entryContext?.roomRequiredAtr ?? null,
+      ratio:
+        entryContext?.roomAvailableAtr != null && entryContext?.roomRequiredAtr
+          ? entryContext.roomAvailableAtr / entryContext.roomRequiredAtr
+          : null,
+      sufficient: entryContext?.roomSufficient ?? null,
+      levelPoints: entryContext?.roomToTargetPoints ?? null,
+      level: entryContext?.roomLevel ?? null,
+      levelSource: entryContext?.roomLevelSource ?? null,
+    },
+    risk: {
+      stopInAtr: setup?.available ? setup.stopInAtr ?? null : null,
+      targetInAtr: setup?.available ? setup.targetInAtr ?? null : null,
+      estimatedCostPct: setup?.available ? setup.estimatedCostPct ?? null : null,
+      riskReward: setup?.available ? setup.riskReward ?? null : null,
+      lots: setup?.available ? setup.positionSize?.lots ?? null : null,
+    },
+  };
+}
+
 function logDecision(decision: TradeDecision): void {
   logger.info(
     { tradeDecision: decision },
