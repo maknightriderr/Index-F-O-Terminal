@@ -34,61 +34,92 @@ import { sql } from '../lib/db.js';
 /**
  * The instant the lineage contract became mandatory in production.
  *
- * Source: Railway deployment `809e0f2e-1e27-479b-8329-9d89e3f064e0` of
- * commit `44f12f5` ("Hard capture lineage, explicit validity, model
- * provenance, one report boundary"), created 2026-09-21T16:48:18.960Z. That
- * commit contains BOTH migration 010, which adds `capture_run_id`, and the
- * capture writer that stamps it — so its deployment is the single instant at
- * which an unstamped snapshot stopped being acceptable.
+ * RUNTIME ACTIVATION, from the deployment's own startup log.
  *
- * This is a compiled constant for the same reason DATA_QUALITY_CUTOVER_AT
- * is: a boundary that moves is not a boundary. It is read from the
- * deployment record, never from the captured rows.
+ * Railway deployment `809e0f2e-1e27-479b-8329-9d89e3f064e0` carries commit
+ * `44f12f5`, which contains BOTH migration 010, adding `capture_run_id`,
+ * and the capture writer that stamps it. Its runtime log records:
  *
- * It is deliberately the deployment's creation instant rather than an
- * estimate of when the new container began serving. The build window is
- * therefore INSIDE the era, which is the conservative direction: the
- * boundary can surface a row the old code legitimately wrote, and a reader
- * will see it listed, but it cannot hide a row the new code failed to stamp.
- * An over-strict boundary announces itself; an over-lax one does not.
+ *   Starting Container
+ *   > node dist/index.js
+ *   [INFO] F&O Terminal Server started   time=1790009429706
+ *   [INFO] Capture schema ready          time=1790009429830  applied=96
+ *   [INFO] Market state capture started  time=1790009429831
+ *
+ * The `time=` values are the application's own clock, not Railway's log
+ * ingestion timestamps (which arrive batched and identical). The third line
+ * is the moment the lineage-aware capture writer began running, one
+ * millisecond after the schema check confirmed migration 010 applied. That
+ * is the instant an unstamped snapshot stopped being acceptable.
+ *
+ * This REPLACES the deployment CREATION instant (2026-09-21T16:48:18.960Z),
+ * which was the conservative stand-in used while no runtime evidence had
+ * been read. Creation is when the build started; it preceded activation by
+ * 130.871s, and every row written in that window belonged to the outgoing
+ * container. Labelling build-start as activation would have been wrong in
+ * the safe direction, but still wrong.
+ *
+ * It remains a compiled constant, and is still never derived from the rows
+ * it governs: a boundary that moves is not a boundary.
  */
-export const LINEAGE_CONTRACT_ACTIVATED_AT = Date.parse('2026-09-21T16:48:18.960Z');
+export const LINEAGE_CONTRACT_ACTIVATED_AT = Date.parse('2026-09-21T16:50:29.831Z');
 
 /** The milestone row that carries the boundary. */
 export const LINEAGE_CONTRACT_LAYER = 'capture_lineage_cutover_at';
 
-/** Marker authority. Only the first of these may carry an invariant. */
+/**
+ * Marker authority, strongest first. Only a source in AUTHORITATIVE_SOURCES
+ * may carry an invariant.
+ */
 export const MARKER_SOURCES = {
+  /** The deployment's own runtime log proving the new writer was running. */
+  RUNTIME_ACTIVATION: 'railway_runtime_activation',
+  /** A compiled constant tied to the deploy that changed a write contract. */
   AUTHORITATIVE: 'authoritative_contract_marker',
+  /**
+   * Deployment CREATION — when the build started, not when the code ran.
+   * Earlier than true activation by one build. Retained as an honest label
+   * for a boundary that has no runtime evidence behind it; it must never be
+   * described as runtime activation.
+   */
+  DEPLOYMENT_CREATION: 'deployment_creation_conservative',
+  /** The earliest row carrying the field. Describes success, not activation. */
   INFERRED: 'inferred_from_rows',
+  /** Written when a process started, by the recorder that predates 012. */
   BOOT_UNVERIFIED: 'boot_time_unverified',
 } as const;
 
+/**
+ * The sources permitted to carry the post-lineage invariant.
+ *
+ * DEPLOYMENT_CREATION is deliberately absent even though it is conservative:
+ * it is not activation, and a boundary allowed to claim authority it does
+ * not have is how the derived boundary went unquestioned for so long.
+ */
+export const AUTHORITATIVE_SOURCES: readonly string[] = [
+  MARKER_SOURCES.RUNTIME_ACTIVATION,
+  MARKER_SOURCES.AUTHORITATIVE,
+];
+
 export const LINEAGE_CONTRACT_SOURCE_REFERENCE =
-  'railway deployment 809e0f2e-1e27-479b-8329-9d89e3f064e0, commit 44f12f5, created 2026-09-21T16:48:18.960Z';
+  'railway deployment 809e0f2e-1e27-479b-8329-9d89e3f064e0 (commit 44f12f5) runtime log: "Market state capture started" time=1790009429831, one millisecond after "Capture schema ready" applied=96 confirmed migration 010. Application clock, not log-ingestion time.';
 
 /**
- * What the authoritative marker can and cannot tell us.
-  *
- * Railway records when a deployment was CREATED — when its build started —
- * and exposes no go-live instant. The contract is only genuinely in force
- * once the new container serves, which is one build later. Taking the
- * earlier instant is the conservative choice: the boundary can surface a
-  * row the OLD code legitimately wrote, but it cannot hide a row the NEW
- * code failed to stamp. An over-strict boundary announces itself; an
- * over-lax one does not.
-  *
- * A violation timestamped inside this window is therefore ambiguous — it
- * may be a pre-contract row from the outgoing container. It is still
- * reported as a violation, because exempting it would reintroduce exactly
- * the blind spot this marker exists to close. The window is published so
- * the ambiguity is visible rather than implicit.
-  */
-export const LINEAGE_ACTIVATION_WINDOW_NOTE =
-  'lineage_era_started_at is the deployment CREATION instant — when the build that carried the stamping writer began. Railway exposes no go-live timestamp, so the true activation is one build duration later. An unstamped snapshot timestamped within a few minutes of this instant may have been written by the outgoing container rather than by a stamping failure. It is still counted as a violation: an authoritative-but-early boundary announces its errors, whereas a boundary tuned to make the report green would hide them. Resolve such a case by checking the deployment logs for the container start, not by moving the boundary.';
+ * Whether the boundary rests on runtime evidence or on a stand-in.
+ *
+ * It now rests on runtime evidence, so there is no activation window left
+ * to caveat: the boundary IS the instant the writer started. The field
+ * stays in the response because a reader should be able to see that the
+ * question was asked and answered, rather than inferring it from silence.
+ */
+export const LINEAGE_ACTIVATION_EVIDENCE_NOTE =
+  'lineage_era_started_at is the RUNTIME ACTIVATION instant, read from the deployment log line "Market state capture started" — the moment the lineage-aware writer began running, one millisecond after the schema check confirmed migration 010. It is not the deployment creation instant, which preceded it by 130.871s while the build ran and the outgoing container was still serving. Rows written in that build window belong to the previous code and are pre-lineage history, not stamping failures.';
+
+/** True only while the boundary has no runtime evidence behind it. */
+export const RUNTIME_ACTIVATION_TIMESTAMP_UNVERIFIED = false;
 
 export const LINEAGE_CONTRACT_DERIVATION =
-  'compiled constant LINEAGE_CONTRACT_ACTIVATED_AT — the deployment that made capture_run_id stamping mandatory. NOT derived from the captured rows.';
+  'compiled constant LINEAGE_CONTRACT_ACTIVATED_AT — the runtime instant the lineage-aware capture writer began running, from the deployment startup log. NOT derived from the captured rows, and NOT the deployment creation time.';
 
 /**
  * Raised when the boundary cannot be established from an authoritative
@@ -142,15 +173,16 @@ export async function lineageEra(
       `no lineage contract marker is recorded (research_milestones.layer = '${LINEAGE_CONTRACT_LAYER}'). The boundary is unknown, so every snapshot's pre/post classification is unknown. Refusing to infer one from the earliest stamped row.`
     );
   }
-  if (row.source !== MARKER_SOURCES.AUTHORITATIVE) {
+  if (!AUTHORITATIVE_SOURCES.includes(row.source ?? '')) {
     throw new LineageContractError(
-      `the lineage contract marker is present but NOT authoritative (source = ${row.source ?? 'null'}, derivation = ${row.derivation ?? 'null'}). A boundary derived from the rows it governs cannot detect a stamping failure at its own beginning, so it may not carry the post-lineage invariant.`
+      `the lineage contract marker is present but NOT authoritative (source = ${row.source ?? 'null'}, derivation = ${row.derivation ?? 'null'}). Only ${AUTHORITATIVE_SOURCES.join(' or ')} may carry the post-lineage invariant: a boundary derived from the rows it governs cannot detect a stamping failure at its own beginning, and a deployment-creation stand-in is not activation.`
     );
   }
 
   return {
     activatedAt: new Date(row.recording_started_at),
-    source: row.source,
+    // Narrowed by the AUTHORITATIVE_SOURCES check above, which rejects null.
+    source: row.source as string,
     sourceReference: row.source_reference ?? LINEAGE_CONTRACT_SOURCE_REFERENCE,
     derivation: row.derivation ?? LINEAGE_CONTRACT_DERIVATION,
   };

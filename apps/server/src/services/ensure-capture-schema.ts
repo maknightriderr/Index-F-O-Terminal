@@ -196,9 +196,9 @@ const CUTOVER_EVIDENCE: {
     // happened before it — the failure simply moves the boundary. It now
     // comes from the deployment that made stamping mandatory.
     layer: LINEAGE_CONTRACT_LAYER,
-    note: 'capture_run_id stamping became MANDATORY (lineage contract deployed)',
+    note: 'capture_run_id stamping became MANDATORY (lineage-aware writer started)',
     derivation: LINEAGE_CONTRACT_DERIVATION,
-    source: MARKER_SOURCES.AUTHORITATIVE,
+    source: MARKER_SOURCES.RUNTIME_ACTIVATION,
     sourceReference: LINEAGE_CONTRACT_SOURCE_REFERENCE,
     resolve: async () => new Date(LINEAGE_CONTRACT_ACTIVATED_AT),
   },
@@ -298,16 +298,21 @@ async function recordMilestones(): Promise<void> {
               derived_at = EXCLUDED.derived_at,
               source = EXCLUDED.source,
               source_reference = EXCLUDED.source_reference
-          -- Write-once with respect to AUTHORITY, not to presence.
+          -- Write-once with respect to reaching ITS OWN intended authority.
           --
-          -- 012 froze on "derivation IS NULL", which was right for the
-          -- defect it fixed but leaves the lineage row frozen at its
-          -- inferred value: it already carries a derivation, so nothing can
-          -- replace it. The guard is now "not yet authoritative", so a
-          -- derived boundary is corrected exactly once and an authoritative
-          -- one is never touched again. This is still a bounded repair of a
-          -- known-wrong value, not a value that drifts on every restart.
-          WHERE research_milestones.source IS DISTINCT FROM ${MARKER_SOURCES.AUTHORITATIVE}
+          -- 012 froze on "derivation IS NULL", which was right for the defect
+          -- it fixed but left the lineage row stuck at its inferred value: it
+          -- already carried a derivation, so nothing could replace it. The
+          -- guard then became "not yet authoritative", which had the same
+          -- shape of problem one level up — once the row read
+          -- authoritative_contract_marker it froze, and could not be raised
+          -- to the stronger railway_runtime_activation once the deployment
+          -- log was actually read.
+          --
+          -- So the guard is now each cutover's own target source. A marker
+          -- climbs to its intended authority exactly once and is frozen
+          -- there; it can never drift, and never downgrade.
+          WHERE research_milestones.source IS DISTINCT FROM ${cutover.source}
       `;
     } catch {
       // Older schema without the derivation column. Leave it alone.
