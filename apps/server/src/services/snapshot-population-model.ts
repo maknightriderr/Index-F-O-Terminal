@@ -257,3 +257,97 @@ export function expiryKey(v: string | Date | null | undefined): string {
 export function attributionKey(exchange: string, symbol: string, expiry: string | Date | null): string {
   return `${exchange}|${symbol}|${expiryKey(expiry)}`;
 }
+
+// ============================================================
+// CLASSIFICATION
+// ============================================================
+
+/** Where one snapshot lands, and why. */
+export type SnapshotClass =
+  /** Written before the contract. Carries no run id, legitimately. */
+  | 'PRE_LINEAGE'
+  /** Written before the contract but carrying a run id anyway — impossible, so flagged. */
+  | 'PRE_LINEAGE_STAMPED'
+  /** In the era, stamped, and the run exists. */
+  | 'POST_LINEAGE_LINKED'
+  /** In the era, stamped, but no run matches. */
+  | 'POST_LINEAGE_ORPHAN'
+  /** In the era with NO run id. A capture-path failure, never history. */
+  | 'POST_LINEAGE_VIOLATION';
+
+export interface Classification {
+  population: SnapshotClass;
+  /** Which of the two snapshot populations the row counts toward. */
+  counts_as: 'pre_lineage' | 'post_lineage';
+  is_violation: boolean;
+  reason: string;
+}
+
+/**
+ * Classifies one snapshot against the authoritative lineage boundary.
+ *
+ * Pure, and separate from the query, so the cases that matter can be tested
+ * as behaviour rather than inferred from the shape of a loop.
+ *
+ * The ordering is the whole point. TIME decides which population a row
+ * belongs to; the run id only decides linked-vs-orphan WITHIN the
+ * post-lineage population. Deciding membership by the run id — which is what
+ * this code used to do — is what let a row written after the contract but
+ * without a stamp be filed as pre-lineage history.
+ */
+export function classifySnapshot(input: {
+  /** The snapshot's timestamp, in epoch ms. */
+  at: number;
+  /** The authoritative contract activation, in epoch ms. */
+  eraStart: number;
+  runId: string | null;
+  /** Whether a capture_runs row with that id exists. */
+  runExists: boolean;
+}): Classification {
+  const { at, eraStart, runId, runExists } = input;
+
+  if (at < eraStart) {
+    // Historical rows are NEVER promoted, whatever else is true of them —
+    // not by a sibling snapshot of the same instrument having a run, and not
+    // by carrying a run id themselves.
+    if (runId != null) {
+      return {
+        population: 'PRE_LINEAGE_STAMPED',
+        counts_as: 'pre_lineage',
+        is_violation: false,
+        reason:
+          'written before the lineage contract was activated, yet carries a capture_run_id. The column did not exist then, so this is an anomaly worth surfacing — but the row stays pre-lineage, because a historical row is never promoted.',
+      };
+    }
+    return {
+      population: 'PRE_LINEAGE',
+      counts_as: 'pre_lineage',
+      is_violation: false,
+      reason: 'written before the lineage contract was activated, so it legitimately carries no capture_run_id',
+    };
+  }
+
+  if (runId == null) {
+    return {
+      population: 'POST_LINEAGE_VIOLATION',
+      counts_as: 'post_lineage',
+      is_violation: true,
+      reason:
+        'written at or after the lineage contract was activated but carries no capture_run_id. This is a capture-path stamping failure, NOT pre-lineage history.',
+    };
+  }
+
+  return runExists
+    ? {
+        population: 'POST_LINEAGE_LINKED',
+        counts_as: 'post_lineage',
+        is_violation: false,
+        reason: 'written inside the era, stamped, and the capture_runs row it names exists',
+      }
+    : {
+        population: 'POST_LINEAGE_ORPHAN',
+        counts_as: 'post_lineage',
+        is_violation: false,
+        reason: 'written inside the era and stamped, but no capture_runs row matches the id it carries',
+      };
+}

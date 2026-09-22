@@ -26,8 +26,8 @@ import {
   snapshotLineage,
   universeCoverage,
   replayStatus,
-  newBoundary,
 } from '../services/data-integrity.js';
+import { createReportAsOf, checkBoundaries, type SectionBoundary } from '../services/report-boundary.js';
 import { researchMilestones } from '../services/ensure-capture-schema.js';
 import { dailyReport } from '../services/daily-report.js';
 import {
@@ -43,6 +43,7 @@ import {
   getSnapshotPopulations,
   populationInvocationCount,
 } from '../services/snapshot-populations.js';
+import { LineageContractError } from '../services/lineage-contract.js';
 
 export function createBacktestingRoutes(provider: MarketDataProvider): Router {
   const router = Router();
@@ -64,17 +65,28 @@ export function createBacktestingRoutes(provider: MarketDataProvider): Router {
    */
   router.get('/coverage', async (_req: Request, res: Response) => {
     try {
-      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      // One clock read here too. Both windows are measured back from the
+      // same instant; two Date.now() calls are two instants even when they
+      // land in the same millisecond, and "usually identical" is not a
+      // property a report should rest on.
+      const boundary = createReportAsOf();
+      const since = new Date(boundary.asOf.getTime() - 24 * 60 * 60 * 1000);
+      const missedSince = new Date(boundary.asOf.getTime() - 90 * 24 * 60 * 60 * 1000);
       const [tables, decisions, rejections, missed, dataQuality] = await Promise.all([
         captureCoverage(),
         decisionCoverage(),
         rejectionBreakdown(since),
-        missedWinnerReport(new Date(Date.now() - 90 * 24 * 60 * 60 * 1000)),
+        missedWinnerReport(missedSince),
         dataQualitySummary(since),
       ]);
       res.json({
         success: true,
         data: {
+          report_as_of: boundary.asOf.toISOString(),
+          windows: {
+            rejectionsLast24h: { since: since.toISOString(), until: boundary.asOf.toISOString() },
+            missedWinners: { since: missedSince.toISOString(), until: boundary.asOf.toISOString() },
+          },
           schema: captureSchemaStatus(),
           tables,
           decisions,
@@ -103,12 +115,15 @@ export function createBacktestingRoutes(provider: MarketDataProvider): Router {
   router.get('/diagnostics', async (req: Request, res: Response) => {
     try {
       const sinceHours = Math.min(Number(req.query.sinceHours ?? 48) || 48, 720);
-      // ONE boundary for the whole report. The previous release compared a
-      // Greek count taken at 16:12 against a leg count taken at 16:18, and the
-      // six-minute drift looked exactly like a missing 82-leg snapshot. Every
-      // query below evaluates against this single instant, and every section
-      // states the instant it used.
-      const boundary = newBoundary();
+
+      // THE ONLY CLOCK READ IN THIS REQUEST.
+      //
+      // Every bounded section below receives this instant. Sections used to
+      // be free to call new Date() themselves, and did: report_as_of came
+      // back at .097, coverage_as_of at .172, chains.asOf at .244. Small
+      // drift, but it meant the response as a whole described no single
+      // instant — and nothing in it said so.
+      const boundary = createReportAsOf();
       const eligible = await eligibleUniverse(provider);
 
       // ONE population calculation for the whole report.
@@ -125,10 +140,10 @@ export function createBacktestingRoutes(provider: MarketDataProvider): Router {
 
       const [timeline, chains, maturity, universe, replay, greeks, nullZero, lineage, coverage, milestones] =
         await Promise.all([
-          captureTimeline(),
-          chainCompleteness(sinceHours),
-          refusalMaturity(),
-          captureUniverse(),
+          captureTimeline(boundary),
+          chainCompleteness(sinceHours, boundary),
+          refusalMaturity(boundary),
+          captureUniverse(boundary),
           replayStatus(boundary),
           greekCoverage(boundary),
           nullZeroAudit(boundary),
@@ -136,6 +151,39 @@ export function createBacktestingRoutes(provider: MarketDataProvider): Router {
           universeCoverage(eligible, boundary, populations),
           researchMilestones(),
         ]);
+
+      // Every instant this response carries, checked against the one
+      // boundary. Sections carrying evidence time are listed separately —
+      // forcing a milestone to equal the reading instant would be the
+      // opposite error.
+      const asOfOf = (v: unknown, k = 'asOf'): string | null =>
+        (v as Record<string, unknown> | null)?.[k] as string | null ?? null;
+      const sections: SectionBoundary[] = [
+        { section: 'populations', as_of: populations.as_of, kind: 'query_bound' },
+        { section: 'lineage', as_of: asOfOf(lineage), kind: 'query_bound' },
+        { section: 'universeCoverage', as_of: asOfOf(coverage), kind: 'query_bound' },
+        { section: 'chains', as_of: asOfOf(chains), kind: 'query_bound' },
+        { section: 'timeline', as_of: asOfOf(timeline, 'coverage_as_of'), kind: 'query_bound' },
+        { section: 'greeks', as_of: asOfOf(greeks), kind: 'query_bound' },
+        { section: 'nullZero', as_of: asOfOf(nullZero), kind: 'query_bound' },
+        { section: 'replay', as_of: asOfOf(replay), kind: 'query_bound' },
+        { section: 'maturity', as_of: asOfOf(maturity), kind: 'query_bound' },
+        { section: 'universe', as_of: asOfOf(universe), kind: 'query_bound' },
+        {
+          section: 'milestones',
+          as_of: null,
+          kind: 'evidence_time',
+          reason:
+            'every milestone records when a layer first recorded something. These are historical instants, older than report_as_of by construction, and must NOT be forced to equal it.',
+        },
+        {
+          section: 'captureMode',
+          as_of: null,
+          kind: 'unbounded',
+          reason: 'declared configuration; reads no time-varying data.',
+        },
+      ];
+      const boundaryContract = checkBoundaries(boundary.asOf, sections);
       res.json({
         success: true,
         data: {
@@ -145,6 +193,11 @@ export function createBacktestingRoutes(provider: MarketDataProvider): Router {
            * are unbounded by nature and say so.
            */
           report_as_of: boundary.asOf.toISOString(),
+          /**
+           * Proof that this whole response describes ONE instant — not just
+           * the sections that were already bounded.
+           */
+          boundaryContract,
           timestampContract:
             'report_as_of is the instant THIS REPORT was generated — the upper bound every bounded query evaluated against. It is NOT the time any captured evidence was recorded. Timestamps describing when something was first observed, when a layer started recording, or when a cutover happened are historical facts derived from the evidence itself and are older than report_as_of; a field named *_at or *_started_at is evidence time, while report_as_of and any as_of field is reading time. Never compare a figure from this report against one from another reading without checking both as_of values.',
           /**
@@ -170,6 +223,24 @@ export function createBacktestingRoutes(provider: MarketDataProvider): Router {
               universe_as_of: (coverage as any)?.asOf ?? null,
             },
             note: 'The lineage and universe sections are consumers of one immutable result. Neither runs its own snapshot query, so neither can report a different denominator for the same population.',
+          },
+          /**
+           * Where the pre/post lineage boundary comes from.
+           *
+           * It is read from a persisted marker recording the deployment that
+           * made capture_run_id stamping mandatory — NOT from the earliest
+           * row that happens to carry one. A boundary derived from the first
+           * surviving row cannot detect a stamping failure before it,
+           * because the failure simply moves the boundary.
+           */
+          lineageContract: {
+            lineage_era_started_at: populations.lineage_era_started_at,
+            lineage_era_source: populations.lineage_era_source,
+            lineage_era_source_reference: populations.lineage_era_source_reference,
+            lineage_era_derivation: populations.lineage_era_derivation,
+            authoritative: populations.lineage_era_source === 'authoritative_contract_marker',
+            fallback_policy:
+              'NONE. If the authoritative marker is missing or non-authoritative this endpoint returns a contract error instead of classifying, because a boundary that silently degrades to the inferred value is the original defect under a new name.',
           },
           timeline,
           chains,
@@ -203,6 +274,24 @@ export function createBacktestingRoutes(provider: MarketDataProvider): Router {
         },
       });
     } catch (err: any) {
+      // A missing or non-authoritative lineage boundary is reported as a
+      // CONTRACT error, not as a server fault and not by falling back to the
+      // derived boundary. Without an authoritative marker the pre/post
+      // classification of every snapshot is unknown, and a report that
+      // quietly reverted to inferring it would be the original defect under
+      // a new name.
+      if (err instanceof LineageContractError) {
+        logger.error({ error: err.message }, 'Capture diagnostics failed: lineage contract unavailable');
+        res.status(409).json({
+          success: false,
+          error: err.message,
+          contract_error: 'LINEAGE_CONTRACT_UNAVAILABLE',
+          remedy:
+            'The authoritative lineage marker (research_milestones.layer = capture_lineage_cutover_at with source = authoritative_contract_marker) is seeded at boot from LINEAGE_CONTRACT_ACTIVATED_AT. Confirm migration 013 applied and the service has restarted since.',
+          fallback_used: false,
+        });
+        return;
+      }
       logger.error({ error: err.message }, 'Capture diagnostics failed');
       res.status(500).json({ success: false, error: err.message });
     }
@@ -240,11 +329,11 @@ export function createBacktestingRoutes(provider: MarketDataProvider): Router {
    */
   router.get('/data-contract', async (req: Request, res: Response) => {
     try {
-      const asOf = new Date();
       const sinceHours = Math.min(Number(req.query.sinceHours ?? 48) || 48, 24 * 400);
 
-      // One boundary, one population calculation, for this report too.
-      const boundary = newBoundary(asOf);
+      // The only clock read in this request too, through the same creator.
+      const boundary = createReportAsOf();
+      const asOf = boundary.asOf;
       const populations = await getSnapshotPopulations(boundary.asOf);
 
       const [generations, eligibility, scope, decisions, lineage, milestones] = await Promise.all([
@@ -292,6 +381,24 @@ export function createBacktestingRoutes(provider: MarketDataProvider): Router {
         },
       });
     } catch (err: any) {
+      // A missing or non-authoritative lineage boundary is reported as a
+      // CONTRACT error, not as a server fault and not by falling back to the
+      // derived boundary. Without an authoritative marker the pre/post
+      // classification of every snapshot is unknown, and a report that
+      // quietly reverted to inferring it would be the original defect under
+      // a new name.
+      if (err instanceof LineageContractError) {
+        logger.error({ error: err.message }, 'Data-contract health check failed: lineage contract unavailable');
+        res.status(409).json({
+          success: false,
+          error: err.message,
+          contract_error: 'LINEAGE_CONTRACT_UNAVAILABLE',
+          remedy:
+            'The authoritative lineage marker (research_milestones.layer = capture_lineage_cutover_at with source = authoritative_contract_marker) is seeded at boot from LINEAGE_CONTRACT_ACTIVATED_AT. Confirm migration 013 applied and the service has restarted since.',
+          fallback_used: false,
+        });
+        return;
+      }
       logger.error({ error: err.message }, 'Data-contract health check failed');
       res.status(500).json({ success: false, error: err.message });
     }

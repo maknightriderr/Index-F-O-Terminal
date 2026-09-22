@@ -1,0 +1,43 @@
+-- ============================================================
+-- CONTRACT MARKER AUTHORITY
+-- ============================================================
+-- Observability only. No trading behaviour is touched.
+--
+-- A milestone already records WHEN a contract changed and, since 012, HOW
+-- that instant was established. What it does not record is whether that
+-- derivation is AUTHORITATIVE — whether the instant comes from the thing
+-- that activated the contract, or from the first row that happened to
+-- survive it.
+--
+-- That distinction decides a real invariant. The lineage era was derived
+-- from the earliest snapshot carrying a capture_run_id, which answers "when
+-- did stamping first SUCCEED", not "when did stamping become MANDATORY".
+-- The two differ by however long the first failure lasted, and every
+-- unstamped row inside that gap was being filed as legitimate pre-lineage
+-- history:
+--
+--   16:48:18  lineage contract deployed — stamping now mandatory
+--   16:5x:xx  a snapshot is written with NULL capture_run_id   <-- invisible
+--   17:00:55  the first correctly stamped snapshot
+--
+-- Deriving the boundary from the last line makes the middle line look older
+-- than the contract, and therefore innocent.
+--
+-- So `source` states the authority of each milestone, and the lineage era is
+-- no longer permitted to come from an inferred one.
+-- ============================================================
+
+-- One of:
+--   'authoritative_contract_marker'  the deployment/activation that changed
+--                                    the contract. Safe to build invariants on.
+--   'inferred_from_rows'             the earliest row carrying the field the
+--                                    transition introduced. Describes success,
+--                                    not activation. NOT safe for invariants.
+--   'boot_time_unverified'           written when a process started, by the
+--                                    naive recorder that predates 012.
+ALTER TABLE research_milestones ADD COLUMN IF NOT EXISTS source VARCHAR(40);
+
+-- The evidence the marker points at — a deployment id, a commit, a constant.
+-- Kept separate from `derivation` (which says HOW) so a reader can check the
+-- claim against something outside this database.
+ALTER TABLE research_milestones ADD COLUMN IF NOT EXISTS source_reference TEXT;

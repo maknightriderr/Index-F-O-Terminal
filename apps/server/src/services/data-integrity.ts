@@ -13,6 +13,7 @@
 // ============================================================
 
 import { sql } from '../lib/db.js';
+import { newBoundary, type ReportBoundary } from './report-boundary.js';
 import { RESEARCH_THRESHOLDS, CAPTURE_UNIVERSE_MODE } from './research-contract.js';
 import { DATA_QUALITY_CUTOVER_AT } from './capture-quality.js';
 import { isMarketOpen } from '@fno/shared';
@@ -26,25 +27,18 @@ import type { Exchange } from '@fno/shared';
 /**
  * THE REPORT BOUNDARY
  *
- * Every figure in one report must be evaluated against ONE instant. The
- * previous report compared a Greek count taken at 16:12 against a leg count
- * taken at 16:18 and a capture-run count from 16:03, and the six-minute drift
- * between the first two looked exactly like a missing 82-leg snapshot. It was
- * not a lineage gap; it was three different questions asked at three
- * different times.
- *
- * So every query below takes an explicit upper bound and every result states
- * which bound it used. A caller that omits it gets `new Date()` once, at the
- * top, and the same instant reaches every query.
+ * Now defined in its own pure module, so the boundary contract can be tested
+ * without a database pool and so every diagnostics section — including the
+ * ones in capture-diagnostics.ts — can take it without an import cycle.
  */
-export interface ReportBoundary {
-  /** Upper bound for every query in this report. */
-  asOf: Date;
-}
-
-export function newBoundary(asOf: Date = new Date()): ReportBoundary {
-  return { asOf };
-}
+export {
+  createReportAsOf,
+  newBoundary,
+  checkBoundaries,
+  type ReportBoundary,
+  type SectionBoundary,
+  type BoundaryContract,
+} from './report-boundary.js';
 
 export type CoverageGrade = 'PASS' | 'PARTIAL' | 'FAIL';
 
@@ -351,13 +345,16 @@ export async function snapshotLineage(
   const runById = new Map(runs.map((r) => [r.id, r]));
   const runsWithSnapshot = new Set<string>();
 
-  // When the hard lineage column began being written. A run that ran BEFORE
-  // this cannot have a snapshot carrying its id, and counting it as a run
-  // with no snapshot would report a schema rollout as a data-integrity
-  // failure. Derived from the rows themselves rather than a constant, so it
-  // is correct whenever the column actually started being populated.
-  const linkedTimes = snapshots.filter((x) => x.run_id != null).map((x) => new Date(x.time).getTime());
-  const lineageStartedAt = linkedTimes.length > 0 ? Math.min(...linkedTimes) : null;
+  // When stamping became MANDATORY — the authoritative marker, the same one
+  // the population model classifies against.
+  //
+  // This block used to derive its own boundary from the earliest stamped
+  // row. That put two different answers to "when did lineage start" in one
+  // response: this section's derived 17:00:55 beside the population
+  // section's authoritative 16:48:18. Two boundaries in one report is the
+  // same defect as two as_of values in one report, and a run that ran before
+  // the contract still cannot have a snapshot carrying its id.
+  const lineageStartedAt = Date.parse(populations.lineage_era_started_at);
 
   let preSnapshots = 0;
   let postSnapshots = 0;
@@ -412,7 +409,7 @@ export async function snapshotLineage(
   const successfulAll = runs.filter((r) => r.status === 'SUCCESS' || r.status === 'PARTIAL');
   // Only runs inside the lineage era are subject to the invariant.
   const successfulInEra = successfulAll.filter(
-    (r) => lineageStartedAt != null && new Date(r.time).getTime() >= lineageStartedAt
+    (r) => new Date(r.time).getTime() >= lineageStartedAt
   );
   const runsBeforeLineage = successfulAll.length - successfulInEra.length;
   const successfulRuns = successfulInEra.length;
@@ -484,7 +481,13 @@ export async function snapshotLineage(
     pre_instrumentation_legs: preLegs,
     post_instrumentation_legs: postLegs,
     total_legs: preLegs + postLegs,
-    lineage_started_at: lineageStartedAt == null ? null : new Date(lineageStartedAt).toISOString(),
+    /**
+     * The SAME authoritative boundary the population section reports. Not a
+     * second answer computed here — there is only one lineage era, and this
+     * section no longer derives its own.
+     */
+    lineage_started_at: populations.lineage_era_started_at,
+    lineage_started_at_source: populations.lineage_era_source,
     total_option_snapshots: preSnapshots + postSnapshots,
     total_capture_runs: runs.length,
     /** Successful runs INSIDE the lineage era — the only ones the invariant governs. */
@@ -505,27 +508,41 @@ export async function snapshotLineage(
     runs_without_snapshot: runsWithoutSnapshot.length,
     runsWithoutSnapshot,
     invariant: {
-      statement: 'post_instrumentation_snapshots = successful_capture_runs = snapshots_linked_to_capture_run, and orphan_snapshots = 0',
+      /**
+       * The invariant is `post = linked + orphan` with no unstamped rows in
+       * the era — NOT `snapshots = runs`.
+       *
+       * This used to assert post_instrumentation_snapshots = successful_runs
+       * = linked. Those first two count different things: a snapshot count
+       * and a run count. They are equal today only because each successful
+       * run currently writes exactly one snapshot, which is a property of
+       * the capture service rather than an identity. Asserting it would turn
+       * a run legitimately writing two expiries into a spurious failure, and
+       * would let a real failure hide behind the coincidence.
+       *
+       * The run-to-snapshot relationship is still reported — MEASURED, in
+       * runToSnapshotRelationship — and a successful run that wrote nothing
+       * is still listed in runs_without_snapshot. It is an observation, not
+       * a pass/fail.
+       */
+      statement:
+        'post_lineage_snapshots = linked + orphan, orphan_snapshots = 0, and no snapshot inside the lineage era lacks a capture_run_id',
       post_instrumentation_snapshots: postSnapshots,
       successful_capture_runs: successfulRuns,
       snapshots_linked_to_capture_run: linkedSnapshots,
       orphan_snapshots: orphans.length,
-      /**
-       * null, not false, when there is nothing to check. Reporting `false`
-       * for an empty lineage era says the invariant was VIOLATED, which is a
-       * different claim from "no row is subject to it yet" — and it is the
-       * kind of false alarm that teaches a reader to ignore the field.
-       */
-      holds:
-        lineageStartedAt == null
-          ? null
-          : postSnapshots === successfulRuns && successfulRuns === linkedSnapshots && orphans.length === 0,
+      /** Sourced from the shared reconciliation, not recomputed here. */
+      holds: populations.reconciliation.post_splits_into_linked_and_orphan &&
+        populations.reconciliation.no_post_lineage_null_run_id &&
+        orphans.length === 0,
       detail:
-        lineageStartedAt == null
-          ? 'no snapshot carries a run id yet, so the invariant has nothing to check. Not a violation.'
-          : postSnapshots === successfulRuns && successfulRuns === linkedSnapshots && orphans.length === 0
-            ? 'holds exactly'
-            : `MISMATCH: ${postSnapshots} snapshots, ${successfulRuns} successful runs in the lineage era, ${linkedSnapshots} linked, ${orphans.length} orphans`,
+        populations.reconciliation.post_splits_into_linked_and_orphan &&
+        populations.reconciliation.no_post_lineage_null_run_id &&
+        orphans.length === 0
+          ? 'holds exactly'
+          : populations.reconciliation.detail,
+      runs_vs_snapshots_is_not_an_invariant:
+        'successful_capture_runs and snapshots_linked_to_capture_run are a run count and a snapshot count. Their equality is measured in runToSnapshotRelationship, never asserted.',
     },
     postInstrumentationSnapshots: postDetail,
     note:

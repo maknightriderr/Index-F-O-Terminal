@@ -31,6 +31,13 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { sql } from '../lib/db.js';
 import { DATA_QUALITY_CUTOVER_AT } from './capture-quality.js';
+import {
+  LINEAGE_CONTRACT_ACTIVATED_AT,
+  LINEAGE_CONTRACT_LAYER,
+  LINEAGE_CONTRACT_DERIVATION,
+  LINEAGE_CONTRACT_SOURCE_REFERENCE,
+  MARKER_SOURCES,
+} from './lineage-contract.js';
 import { logger } from '../lib/logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -52,6 +59,7 @@ const FILES = [
   '010_capture_quality_lineage.sql',
   '011_contract_generations.sql',
   '012_milestone_derivation.sql',
+  '013_contract_marker_authority.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */
@@ -166,30 +174,52 @@ const CUTOVER_EVIDENCE: {
   layer: string;
   note: string;
   derivation: string;
+  /** Whether this instant may carry an invariant. See MARKER_SOURCES. */
+  source: string;
+  sourceReference: string;
   resolve: () => Promise<Date | null>;
 }[] = [
   {
     layer: 'data_quality_cutover_at',
     note: 'absence stopped being stored as zero (NULL_PRESERVING)',
     derivation: 'compiled constant DATA_QUALITY_CUTOVER_AT — the deploy that changed the write contract',
+    source: MARKER_SOURCES.AUTHORITATIVE,
+    sourceReference: 'deploy of commit 88164aa, when nullIfZero reached production',
     resolve: async () => new Date(DATA_QUALITY_CUTOVER_AT),
   },
   {
-    layer: 'capture_lineage_cutover_at',
-    note: 'capture_run_id began being written onto captured rows',
-    derivation: 'earliest oi_snapshots row carrying a capture_run_id',
-    resolve: () => earliestRowWith('capture_run_id IS NOT NULL'),
+    // AUTHORITATIVE, and the reason this file changed.
+    //
+    // This was `earliest oi_snapshots row carrying a capture_run_id`, which
+    // answers when stamping first SUCCEEDED. A boundary derived from the
+    // first surviving row cannot, by construction, detect a failure that
+    // happened before it — the failure simply moves the boundary. It now
+    // comes from the deployment that made stamping mandatory.
+    layer: LINEAGE_CONTRACT_LAYER,
+    note: 'capture_run_id stamping became MANDATORY (lineage contract deployed)',
+    derivation: LINEAGE_CONTRACT_DERIVATION,
+    source: MARKER_SOURCES.AUTHORITATIVE,
+    sourceReference: LINEAGE_CONTRACT_SOURCE_REFERENCE,
+    resolve: async () => new Date(LINEAGE_CONTRACT_ACTIVATED_AT),
   },
   {
+    // Still inferred, and now labelled as such. These two carry no
+    // invariant, so describing when the field first appeared is honest and
+    // sufficient. If either ever needs to gate a hard check, it needs an
+    // authoritative marker first.
     layer: 'validity_contract_cutover_at',
     note: 'greeks_valid and the availability flags began being written',
     derivation: 'earliest oi_snapshots row carrying greeks_valid',
+    source: MARKER_SOURCES.INFERRED,
+    sourceReference: 'oi_snapshots.greeks_valid',
     resolve: () => earliestRowWith('greeks_valid IS NOT NULL'),
   },
   {
     layer: 'greek_provenance_cutover_at',
     note: 'model name, version and calculation inputs began being written',
     derivation: 'earliest oi_snapshots row carrying greeks_model_name',
+    source: MARKER_SOURCES.INFERRED,
+    sourceReference: 'oi_snapshots.greeks_model_name',
     resolve: () => earliestRowWith('greeks_model_name IS NOT NULL'),
   },
 ];
@@ -236,9 +266,14 @@ async function recordMilestones(): Promise<void> {
   for (const { layer, note } of layers) {
     try {
       await sql`
-        INSERT INTO research_milestones (layer, recording_started_at, note)
-        VALUES (${layer}, ${new Date()}, ${note})
-        ON CONFLICT (layer) DO NOTHING
+        INSERT INTO research_milestones (layer, recording_started_at, note, source, source_reference)
+        VALUES (${layer}, ${new Date()}, ${note}, ${MARKER_SOURCES.BOOT_UNVERIFIED}, 'process start')
+        ON CONFLICT (layer) DO UPDATE
+          -- Label only. The instant is never touched; these rows record when
+          -- a process started and are honest about it rather than corrected
+          -- into looking evidence-derived.
+          SET source = EXCLUDED.source, source_reference = EXCLUDED.source_reference
+          WHERE research_milestones.source IS NULL
       `;
     } catch {
       // The milestone table may not exist on an older schema. Not worth
@@ -252,17 +287,27 @@ async function recordMilestones(): Promise<void> {
       if (at == null) continue; // No evidence yet — record nothing rather than guess.
 
       await sql`
-        INSERT INTO research_milestones (layer, recording_started_at, note, derivation, derived_at)
-        VALUES (${cutover.layer}, ${at}, ${cutover.note}, ${cutover.derivation}, ${new Date()})
+        INSERT INTO research_milestones
+          (layer, recording_started_at, note, derivation, derived_at, source, source_reference)
+        VALUES (${cutover.layer}, ${at}, ${cutover.note}, ${cutover.derivation}, ${new Date()},
+                ${cutover.source}, ${cutover.sourceReference})
         ON CONFLICT (layer) DO UPDATE
           SET recording_started_at = EXCLUDED.recording_started_at,
               note = EXCLUDED.note,
               derivation = EXCLUDED.derivation,
-              derived_at = EXCLUDED.derived_at
-          -- ONLY where the existing row has no derivation, i.e. was written
-          -- by the naive boot-time recorder. A row that already carries one
-          -- is frozen.
-          WHERE research_milestones.derivation IS NULL
+              derived_at = EXCLUDED.derived_at,
+              source = EXCLUDED.source,
+              source_reference = EXCLUDED.source_reference
+          -- Write-once with respect to AUTHORITY, not to presence.
+          --
+          -- 012 froze on "derivation IS NULL", which was right for the
+          -- defect it fixed but leaves the lineage row frozen at its
+          -- inferred value: it already carries a derivation, so nothing can
+          -- replace it. The guard is now "not yet authoritative", so a
+          -- derived boundary is corrected exactly once and an authoritative
+          -- one is never touched again. This is still a bounded repair of a
+          -- known-wrong value, not a value that drifts on every restart.
+          WHERE research_milestones.source IS DISTINCT FROM ${MARKER_SOURCES.AUTHORITATIVE}
       `;
     } catch {
       // Older schema without the derivation column. Leave it alone.
@@ -272,13 +317,27 @@ async function recordMilestones(): Promise<void> {
 
 /** When each recorded layer began, for reports that must not say "yesterday". */
 export async function researchMilestones(): Promise<
-  { layer: string; recording_started_at: string; note: string | null; derivation: string | null }[]
+  {
+    layer: string;
+    recording_started_at: string;
+    note: string | null;
+    derivation: string | null;
+    source: string | null;
+    source_reference: string | null;
+  }[]
 > {
   try {
     const rows = await sql<
-      { layer: string; recording_started_at: Date; note: string | null; derivation: string | null }[]
+      {
+        layer: string;
+        recording_started_at: Date;
+        note: string | null;
+        derivation: string | null;
+        source: string | null;
+        source_reference: string | null;
+      }[]
     >`
-      SELECT layer, recording_started_at, note, derivation
+      SELECT layer, recording_started_at, note, derivation, source, source_reference
       FROM research_milestones ORDER BY recording_started_at ASC
     `;
     return rows.map((r) => ({
@@ -289,6 +348,11 @@ export async function researchMilestones(): Promise<
       // boot-time value that has not been corrected, and should be read as
       // "when the process started", not "when the contract changed".
       derivation: r.derivation,
+      // Whether that derivation may carry an invariant. Only
+      // 'authoritative_contract_marker' may: a boundary inferred from the
+      // rows it governs cannot detect a failure at its own beginning.
+      source: r.source,
+      source_reference: r.source_reference,
     }));
   } catch {
     return [];

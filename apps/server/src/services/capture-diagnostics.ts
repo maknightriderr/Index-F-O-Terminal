@@ -17,6 +17,7 @@ import { STRIKES_EACH_SIDE, CAPTURE_INTERVAL_MS } from './market-state-capture.j
 import { INTRADAY_HORIZON_MS, POSITIONAL_HORIZON_MS } from './missed-winner-audit.js';
 import { CAPTURE_MODE_DOCUMENTATION, RESEARCH_THRESHOLDS } from './research-contract.js';
 import type { MarketDataProvider } from '../providers/interface.js';
+import { newBoundary, type ReportBoundary } from './report-boundary.js';
 
 const iso = (d: Date | string | null | undefined): string | null =>
   d == null ? null : new Date(d).toISOString();
@@ -34,22 +35,31 @@ const iso = (d: Date | string | null | undefined): string | null =>
  *
  * A reader cannot confuse them because they are named and shown together.
  */
-export async function captureTimeline(): Promise<Record<string, unknown>> {
-  const now = new Date();
+export async function captureTimeline(
+  boundary: ReportBoundary = newBoundary()
+): Promise<Record<string, unknown>> {
+  // The report's instant, not this function's. Reading the clock here is
+  // what produced a coverage_as_of 75ms later than report_as_of.
+  const now = boundary.asOf;
 
   const [runs] = await sql<{ first_attempt: Date | null; first_success: Date | null; n: string }[]>`
     SELECT MIN(time) AS first_attempt,
            MIN(time) FILTER (WHERE status IN ('SUCCESS', 'PARTIAL')) AS first_success,
            COUNT(*) AS n
     FROM capture_runs
+    WHERE time <= ${now}
   `.catch(() => [{ first_attempt: null, first_success: null, n: '0' }]);
 
   const tables = ['oi_snapshots', 'futures_snapshots', 'pcr_history', 'market_ticks', 'decision_snapshots', 'capture_runs'];
   const firstRows: Record<string, { firstRowAt: string | null; lastRowAt: string | null; rows: number }> = {};
   for (const table of tables) {
     try {
+      // Bounded too: an unbounded MAX(time) can return a row written after
+      // report_as_of, which would make one section describe a later world
+      // than the rest of the report.
       const [row] = await sql.unsafe<{ n: string; oldest: Date | null; newest: Date | null }[]>(
-        `SELECT COUNT(*) AS n, MIN(time) AS oldest, MAX(time) AS newest FROM ${table}`
+        `SELECT COUNT(*) AS n, MIN(time) AS oldest, MAX(time) AS newest FROM ${table} WHERE time <= $1`,
+        [now]
       );
       firstRows[table] = {
         rows: Number(row?.n ?? 0),
@@ -93,8 +103,15 @@ export async function captureTimeline(): Promise<Record<string, unknown>> {
  * Both numbers are reported so the difference is legible instead of being
  * inferred from a total that does not divide evenly.
  */
-export async function chainCompleteness(sinceHours = 48): Promise<Record<string, unknown>> {
-  const since = new Date(Date.now() - sinceHours * 3600_000);
+export async function chainCompleteness(
+  sinceHours = 48,
+  boundary: ReportBoundary = newBoundary()
+): Promise<Record<string, unknown>> {
+  // The window is measured BACK from the report boundary, so the section
+  // covers exactly the N hours ending at report_as_of rather than N hours
+  // ending whenever this function happened to run.
+  const asOf = boundary.asOf;
+  const since = new Date(asOf.getTime() - sinceHours * 3600_000);
   const maxStrikes = STRIKES_EACH_SIDE * 2 + 1;
   const maxLegs = maxStrikes * 2;
 
@@ -103,7 +120,7 @@ export async function chainCompleteness(sinceHours = 48): Promise<Record<string,
   >`
     SELECT time, symbol, expiry, COUNT(*) AS legs, COUNT(DISTINCT strike) AS strikes
     FROM oi_snapshots
-    WHERE time >= ${since}
+    WHERE time >= ${since} AND time <= ${asOf}
     GROUP BY time, symbol, expiry
     ORDER BY time DESC
   `.catch(() => []);
@@ -171,8 +188,8 @@ export async function chainCompleteness(sinceHours = 48): Promise<Record<string,
   const legsPerSnapshot = snapshots.length > 0 ? round(actual / snapshots.length, 2) : null;
 
   return {
-    asOf: new Date().toISOString(),
-    window: { sinceHours, since: since.toISOString() },
+    asOf: asOf.toISOString(),
+    window: { sinceHours, since: since.toISOString(), until: asOf.toISOString() },
     captureWindow: { strikesEachSide: STRIKES_EACH_SIDE, maxStrikes, maxLegsPerCompleteSnapshot: maxLegs },
     /** One consistent denominator for every shortfall figure in this section. */
     dynamicShortfall: {
@@ -216,8 +233,13 @@ export async function chainCompleteness(sinceHours = 48): Promise<Record<string,
  * computes maturity from the same constants the audit itself uses, so the
  * report and the grader can never disagree about what "mature" means.
  */
-export async function refusalMaturity(): Promise<Record<string, unknown>> {
-  const now = Date.now();
+export async function refusalMaturity(
+  boundary: ReportBoundary = newBoundary()
+): Promise<Record<string, unknown>> {
+  // Maturity is measured from the report instant. Reading the clock here
+  // would let a refusal be "mature" in this section and not in another.
+  const asOf = boundary.asOf;
+  const now = asOf.getTime();
 
   const rows = await sql<
     { mode: string; decision: string; graded: boolean; outcome_class: string | null; time: Date; n: string }[]
@@ -225,13 +247,14 @@ export async function refusalMaturity(): Promise<Record<string, unknown>> {
     SELECT mode, decision, (outcome_evaluated_at IS NOT NULL) AS graded,
            outcome_class, MIN(time) AS time, COUNT(*) AS n
     FROM decision_snapshots
+    WHERE time <= ${asOf}
     GROUP BY mode, decision, (outcome_evaluated_at IS NOT NULL), outcome_class
   `.catch(() => []);
 
   const perDecision = await sql<{ decision_id: string; mode: string; time: Date; graded: boolean }[]>`
     SELECT decision_id, mode, time, (outcome_evaluated_at IS NOT NULL) AS graded
     FROM decision_snapshots
-    WHERE decision = 'REFUSE'
+    WHERE decision = 'REFUSE' AND time <= ${asOf}
   `.catch(() => []);
 
   let mature = 0;
@@ -290,13 +313,18 @@ export async function refusalMaturity(): Promise<Record<string, unknown>> {
  * What this deployment is actually collecting — read from the rows, not from
  * configuration or assumption.
  */
-export async function captureUniverse(): Promise<Record<string, unknown>> {
+export async function captureUniverse(
+  boundary: ReportBoundary = newBoundary()
+): Promise<Record<string, unknown>> {
+  const asOf = boundary.asOf;
+
   const chains = await sql<
     { exchange: string; symbol: string; expiry: string | null; legs: string; snapshots: string; first: Date; last: Date }[]
   >`
     SELECT exchange, symbol, expiry, COUNT(*) AS legs, COUNT(DISTINCT time) AS snapshots,
            MIN(time) AS first, MAX(time) AS last
     FROM oi_snapshots
+    WHERE time <= ${asOf}
     GROUP BY exchange, symbol, expiry
     ORDER BY COUNT(*) DESC
   `.catch(() => []);
@@ -304,6 +332,7 @@ export async function captureUniverse(): Promise<Record<string, unknown>> {
   const decisions = await sql<{ exchange: string; symbol: string; mode: string; n: string }[]>`
     SELECT exchange, symbol, mode, COUNT(*) AS n
     FROM decision_snapshots
+    WHERE time <= ${asOf}
     GROUP BY exchange, symbol, mode
     ORDER BY COUNT(*) DESC
   `.catch(() => []);
@@ -311,6 +340,7 @@ export async function captureUniverse(): Promise<Record<string, unknown>> {
   const futures = await sql<{ exchange: string; symbol: string; expiry: string | null; n: string }[]>`
     SELECT exchange, symbol, expiry, COUNT(*) AS n
     FROM futures_snapshots
+    WHERE time <= ${asOf}
     GROUP BY exchange, symbol, expiry
     ORDER BY COUNT(*) DESC
   `.catch(() => []);
@@ -319,7 +349,10 @@ export async function captureUniverse(): Promise<Record<string, unknown>> {
   const sessions: Record<string, unknown> = {};
   for (const ex of ['NSE', 'BSE', 'MCX'] as Exchange[]) {
     const hours = TRADING_HOURS[ex];
-    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    // The session window is the one containing report_as_of, so this
+    // section describes the same day as the rest of the report even when a
+    // request straddles an IST midnight.
+    const today = asOf.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
     const window = getSessionWindow(ex, today);
     sessions[ex] = {
       open: hours?.open ?? null,

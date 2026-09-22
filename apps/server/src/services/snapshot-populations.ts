@@ -27,15 +27,27 @@
 // noticing. So the era is tracked by time as well, and a snapshot inside it
 // carrying no run id is surfaced as a data-integrity failure.
 //
+// WHERE THE ERA BOUNDARY COMES FROM
+//
+// It used to be the earliest snapshot that actually carried a run id, which
+// answers when stamping first SUCCEEDED rather than when it became
+// MANDATORY. A boundary derived from the first surviving row cannot detect a
+// failure before it, because the failure just moves the boundary. It is now
+// read from an authoritative persisted marker — the deployment that
+// activated the contract — and there is NO fallback: if the marker is
+// missing, this refuses to classify rather than quietly reverting.
+//
 // Nothing here is read by the trading engine.
 // ============================================================
 
 import { sql } from '../lib/db.js';
+import { lineageEra, LineageContractError, type LineageEra } from './lineage-contract.js';
 import {
   SNAPSHOT_POPULATION_DEFINITIONS,
   CAPTURE_RUN_POPULATION_DEFINITIONS,
   attributionKey,
   reconcile,
+  classifySnapshot,
   type SnapshotPopulation,
   type CaptureRunPopulation,
   type SymbolPopulation,
@@ -82,7 +94,11 @@ export interface PopulationResult {
   as_of: string;
   snapshot_population_definitions: typeof SNAPSHOT_POPULATION_DEFINITIONS;
   capture_run_population_definitions: typeof CAPTURE_RUN_POPULATION_DEFINITIONS;
-  lineage_era_started_at: string | null;
+  lineage_era_started_at: string;
+  /** Always 'authoritative_contract_marker'; anything else raises instead. */
+  lineage_era_source: string;
+  lineage_era_source_reference: string;
+  lineage_era_derivation: string;
   /** The five SNAPSHOT populations. */
   snapshots: SnapshotPopulation;
   /** The CAPTURE-RUN populations. A count of runs, not a slice of the snapshots. */
@@ -92,6 +108,15 @@ export interface PopulationResult {
   /** Snapshots inside the lineage era with no run id. Must be 0. */
   post_lineage_null_run_id_count: number;
   lineageEraViolations: LineageEraViolation[];
+  /**
+   * Snapshots BEFORE the contract carrying a run id anyway.
+   *
+   * Should be impossible — the column did not exist — so this is an
+   * anomaly counter rather than a population. Such a row stays pre-lineage
+   * (a pre-contract row is never linked, per the historical-safety rule)
+   * and is surfaced here instead of being quietly promoted.
+   */
+  pre_lineage_stamped_count: number;
   /**
    * Whether each successful run in the era wrote exactly one snapshot.
    *
@@ -135,9 +160,14 @@ export function resetPopulationInvocationCount(): void {
 export async function getSnapshotPopulations(asOf: Date): Promise<PopulationResult> {
   invocationCount++;
 
-  const empty = { snapshots: [] as SnapshotRow[], runs: [] as RunRow[] };
-  const { snapshots, runs } = await sql
-    .begin('ISOLATION LEVEL REPEATABLE READ READ ONLY', async (tx) => {
+  // The era marker is read inside the SAME transaction as the rows it
+  // classifies, so the boundary and the data are one consistent observation.
+  let era: LineageEra;
+  let snapshots: SnapshotRow[];
+  let runs: RunRow[];
+  try {
+    const read = await sql.begin('ISOLATION LEVEL REPEATABLE READ READ ONLY', async (tx) => {
+      const marker = await lineageEra(tx as unknown as { unsafe: typeof sql.unsafe });
       const snapshotRows = await tx<SnapshotRow[]>`
         SELECT exchange, symbol, expiry, time,
                MAX(capture_run_id::text) AS run_id,
@@ -153,17 +183,25 @@ export async function getSnapshotPopulations(asOf: Date): Promise<PopulationResu
         FROM capture_runs
         WHERE COALESCE(capture_started_at, time) <= ${asOf}
       `;
-      return { snapshots: snapshotRows, runs: runRows };
-    })
-    .catch(() => empty);
+      return { marker, snapshots: snapshotRows, runs: runRows };
+    });
+    era = read.marker;
+    snapshots = read.snapshots;
+    runs = read.runs;
+  } catch (err) {
+    // A missing or non-authoritative boundary is NOT degraded into an
+    // inferred one. It is the caller's problem to report, because a report
+    // that silently reverts to the derived boundary is the original defect
+    // wearing the new name.
+    if (err instanceof LineageContractError) throw err;
+    throw new LineageContractError(
+      `the population read failed (${(err as Error).message}). No population is reported rather than a partial one, because a partial read produces denominators that look complete.`
+    );
+  }
+
+  const eraStart = era.activatedAt.getTime();
 
   const runIds = new Set(runs.map((r) => r.id));
-
-  // The lineage era begins at the earliest snapshot actually carrying a run
-  // id. Derived from the rows, because a run that ran before the column
-  // existed cannot have a linked snapshot.
-  const linkedTimes = snapshots.filter((s) => s.run_id != null).map((s) => new Date(s.time).getTime());
-  const eraStart = linkedTimes.length > 0 ? Math.min(...linkedTimes) : null;
 
   const blankSnapshots = (): SnapshotPopulation => ({
     historical_snapshot_count: 0,
@@ -181,6 +219,7 @@ export async function getSnapshotPopulations(asOf: Date): Promise<PopulationResu
   const bySymbolMap = new Map<string, SymbolPopulation>();
   const violations: LineageEraViolation[] = [];
   const snapshotsPerRun = new Map<string, number>();
+  let preLineageStamped = 0;
 
   const unattributed: UnattributedCounts = {
     unattributed_snapshot_count: 0,
@@ -223,49 +262,54 @@ export async function getSnapshotPopulations(asOf: Date): Promise<PopulationResu
     entry.historical_snapshot_count++;
     entry.historical_leg_count += legs;
 
-    const at = new Date(s.time).getTime();
-    const insideEra = eraStart != null && at >= eraStart;
+    // Classification is by TIME against the authoritative contract boundary,
+    // for every row. Presence of a run id decides linked-vs-orphan WITHIN
+    // the post-lineage population; it no longer decides which population a
+    // row belongs to, which is what let an unstamped row hide in history.
+    //
+    // The rule itself lives in the pure model, where each case can be
+    // exercised directly instead of inferred from the shape of this loop.
+    const verdict = classifySnapshot({
+      at: new Date(s.time).getTime(),
+      eraStart,
+      runId: s.run_id,
+      runExists: s.run_id != null && runIds.has(s.run_id),
+    });
 
-    if (s.run_id == null) {
-      if (insideEra) {
-        // THE INVARIANT. A row inside the lineage era with no run id is a
-        // capture-path failure, not history. Filing it as pre-lineage would
-        // make it indistinguishable from a legitimately old snapshot.
-        violations.push({
-          timestamp: new Date(s.time).toISOString(),
-          exchange: s.exchange,
-          symbol: s.symbol,
-          expiry: s.expiry,
-          legs,
-          issue:
-            'snapshot written at or after lineage_era_started_at but carries no capture_run_id — the capture path wrote a row without stamping it',
-        });
-        // Counted post-lineage BY ERA so the violation cannot hide inside the
-        // pre-lineage count. It is neither linked nor orphan — it has no id
-        // to match or fail to match — so `post = linked + orphan` also fails,
-        // which is the intended loud second signal.
-        global.post_lineage_snapshot_count++;
-        global.post_lineage_leg_count += legs;
-        entry.post_lineage_snapshot_count++;
-        entry.post_lineage_leg_count += legs;
-        continue;
-      }
+    if (verdict.counts_as === 'pre_lineage') {
       global.pre_lineage_snapshot_count++;
       global.pre_lineage_leg_count += legs;
       entry.pre_lineage_snapshot_count++;
       entry.pre_lineage_leg_count += legs;
+      if (verdict.population === 'PRE_LINEAGE_STAMPED') preLineageStamped++;
       continue;
     }
 
+    // Counted post-lineage BY ERA, so a violation cannot hide inside the
+    // pre-lineage count. A violation is neither linked nor orphan — it has
+    // no id to match or fail to match — so `post = linked + orphan` fails
+    // too, which is the intended loud second signal.
     global.post_lineage_snapshot_count++;
     global.post_lineage_leg_count += legs;
     entry.post_lineage_snapshot_count++;
     entry.post_lineage_leg_count += legs;
 
-    if (runIds.has(s.run_id)) {
+    if (verdict.population === 'POST_LINEAGE_VIOLATION') {
+      violations.push({
+        timestamp: new Date(s.time).toISOString(),
+        exchange: s.exchange,
+        symbol: s.symbol,
+        expiry: s.expiry,
+        legs,
+        issue: verdict.reason,
+      });
+      continue;
+    }
+
+    if (verdict.population === 'POST_LINEAGE_LINKED') {
       global.linked_snapshot_count++;
       entry.linked_snapshot_count++;
-      snapshotsPerRun.set(s.run_id, (snapshotsPerRun.get(s.run_id) ?? 0) + 1);
+      snapshotsPerRun.set(s.run_id!, (snapshotsPerRun.get(s.run_id!) ?? 0) + 1);
     } else {
       global.orphan_snapshot_count++;
       entry.orphan_snapshot_count++;
@@ -274,7 +318,7 @@ export async function getSnapshotPopulations(asOf: Date): Promise<PopulationResu
 
   // ---- Capture-run populations. Runs, not snapshots. ----
   const successfulAll = runs.filter((r) => r.status === 'SUCCESS' || r.status === 'PARTIAL');
-  const successfulInEra = successfulAll.filter((r) => eraStart != null && new Date(r.time).getTime() >= eraStart);
+  const successfulInEra = successfulAll.filter((r) => new Date(r.time).getTime() >= eraStart);
   globalRuns.successful_capture_run_count = successfulInEra.length;
   globalRuns.runs_before_lineage = successfulAll.length - successfulInEra.length;
 
@@ -321,13 +365,17 @@ export async function getSnapshotPopulations(asOf: Date): Promise<PopulationResu
     as_of: asOf.toISOString(),
     snapshot_population_definitions: SNAPSHOT_POPULATION_DEFINITIONS,
     capture_run_population_definitions: CAPTURE_RUN_POPULATION_DEFINITIONS,
-    lineage_era_started_at: eraStart == null ? null : new Date(eraStart).toISOString(),
+    lineage_era_started_at: era.activatedAt.toISOString(),
+    lineage_era_source: era.source,
+    lineage_era_source_reference: era.sourceReference,
+    lineage_era_derivation: era.derivation,
     snapshots: global,
     runs: globalRuns,
     bySymbol,
     unattributed,
     post_lineage_null_run_id_count: violations.length,
     lineageEraViolations: violations,
+    pre_lineage_stamped_count: preLineageStamped,
     runToSnapshotRelationship: {
       runs_with_exactly_one_snapshot: exactlyOne,
       runs_with_no_snapshot: none,
