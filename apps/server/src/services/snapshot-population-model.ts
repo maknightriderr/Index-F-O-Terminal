@@ -62,6 +62,17 @@ export interface PopulationReconciliation {
   per_symbol_post_sums_to_global: boolean;
   /** Σ per-symbol linked == global linked */
   per_symbol_linked_sums_to_global: boolean;
+  /** Σ per-symbol historical == global historical */
+  per_symbol_historical_sums_to_global: boolean;
+  /**
+   * Σ per-symbol successful runs == global successful runs.
+   *
+   * Added after this identity's absence let a real bug through: runs were
+   * grouped by symbol alone and attributed to every expiry row that symbol
+   * had, so a two-expiry instrument double-counted. The identity that is not
+   * asserted is the one that breaks.
+   */
+  per_symbol_runs_sum_to_global: boolean;
   holds: boolean;
   detail: string;
 }

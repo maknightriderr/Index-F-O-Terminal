@@ -91,6 +91,12 @@ export async function snapshotPopulations(asOf: Date): Promise<{
   const linkedTimes = snapshots.filter((s) => s.run_id != null).map((s) => new Date(s.time).getTime());
   const eraStart = linkedTimes.length > 0 ? Math.min(...linkedTimes) : null;
 
+  // The expiry component of a symbol's key, normalised to a date string so a
+  // Date from one query and a string from another cannot produce two keys for
+  // the same chain.
+  const expiryKeyOf = (v: string | Date | null): string =>
+    v == null ? '' : new Date(v).toISOString().slice(0, 10);
+
   const blank = (): SnapshotPopulation => ({
     historical_snapshot_count: 0,
     pre_lineage_snapshot_count: 0,
@@ -108,7 +114,7 @@ export async function snapshotPopulations(asOf: Date): Promise<{
 
   for (const s of snapshots) {
     const legs = Number(s.legs);
-    const key = `${s.exchange}|${s.symbol}|${s.expiry ?? ''}`;
+    const key = `${s.exchange}|${s.symbol}|${expiryKeyOf(s.expiry)}`;
     let entry = bySymbolMap.get(key);
     if (!entry) {
       entry = {
@@ -154,21 +160,26 @@ export async function snapshotPopulations(asOf: Date): Promise<{
   );
   global.successful_capture_run_count = successfulInEra.length;
 
-  const runsBySymbol = await sql<{ symbol: string; exchange: string; n: string }[]>`
-    SELECT symbol, exchange, COUNT(*) AS n
+  // Grouped by (exchange, symbol, EXPIRY) to match how bySymbolMap is keyed.
+  //
+  // Grouping by symbol alone attributed a symbol's whole run count to EVERY
+  // expiry row it had. FINNIFTY carries two expiries, so its 25 runs were
+  // counted twice and the per-symbol total came to 891 against a global 866.
+  // The expiry is part of a capture's identity — one run captures one chain
+  // for one expiry — so it has to be part of the join key.
+  const runsBySymbol = await sql<{ symbol: string; exchange: string; expiry: string | null; n: string }[]>`
+    SELECT symbol, exchange, expiry, COUNT(*) AS n
     FROM capture_runs
     WHERE COALESCE(capture_started_at, time) <= ${asOf}
       AND status IN ('SUCCESS', 'PARTIAL')
       ${eraStart != null ? sql`AND COALESCE(capture_started_at, time) >= ${new Date(eraStart)}` : sql`AND FALSE`}
-    GROUP BY symbol, exchange
+    GROUP BY symbol, exchange, expiry
   `.catch(() => []);
 
+  const expiryKey = (v: string | Date | null): string => (v == null ? '' : new Date(v).toISOString().slice(0, 10));
   for (const r of runsBySymbol) {
-    for (const entry of bySymbolMap.values()) {
-      if (entry.symbol === r.symbol && entry.exchange === r.exchange) {
-        entry.successful_capture_run_count += Number(r.n);
-      }
-    }
+    const entry = bySymbolMap.get(`${r.exchange}|${r.symbol}|${expiryKey(r.expiry)}`);
+    if (entry) entry.successful_capture_run_count += Number(r.n);
   }
 
   const runsBeforeLineage =
@@ -187,6 +198,10 @@ export async function snapshotPopulations(asOf: Date): Promise<{
   // rather than in a report six weeks later.
   const sumPost = bySymbol.reduce((a, s) => a + s.post_lineage_snapshot_count, 0);
   const sumLinked = bySymbol.reduce((a, s) => a + s.linked_snapshot_count, 0);
+  const sumHistorical = bySymbol.reduce((a, s) => a + s.historical_snapshot_count, 0);
+  // The identity that was missing, and that let a double-attributed run count
+  // through: per-symbol successful runs must sum to the global figure.
+  const sumRuns = bySymbol.reduce((a, s) => a + s.successful_capture_run_count, 0);
 
   const checks = {
     historical_splits_into_pre_and_post:
@@ -196,6 +211,8 @@ export async function snapshotPopulations(asOf: Date): Promise<{
     linked_within_post: global.linked_snapshot_count <= global.post_lineage_snapshot_count,
     per_symbol_post_sums_to_global: sumPost === global.post_lineage_snapshot_count,
     per_symbol_linked_sums_to_global: sumLinked === global.linked_snapshot_count,
+    per_symbol_historical_sums_to_global: sumHistorical === global.historical_snapshot_count,
+    per_symbol_runs_sum_to_global: sumRuns === global.successful_capture_run_count,
   };
   const holds = Object.values(checks).every(Boolean);
 
