@@ -67,6 +67,26 @@ export const MARKER_SOURCES = {
 export const LINEAGE_CONTRACT_SOURCE_REFERENCE =
   'railway deployment 809e0f2e-1e27-479b-8329-9d89e3f064e0, commit 44f12f5, created 2026-09-21T16:48:18.960Z';
 
+/**
+ * What the authoritative marker can and cannot tell us.
+  *
+ * Railway records when a deployment was CREATED — when its build started —
+ * and exposes no go-live instant. The contract is only genuinely in force
+ * once the new container serves, which is one build later. Taking the
+ * earlier instant is the conservative choice: the boundary can surface a
+  * row the OLD code legitimately wrote, but it cannot hide a row the NEW
+ * code failed to stamp. An over-strict boundary announces itself; an
+ * over-lax one does not.
+  *
+ * A violation timestamped inside this window is therefore ambiguous — it
+ * may be a pre-contract row from the outgoing container. It is still
+ * reported as a violation, because exempting it would reintroduce exactly
+ * the blind spot this marker exists to close. The window is published so
+ * the ambiguity is visible rather than implicit.
+  */
+export const LINEAGE_ACTIVATION_WINDOW_NOTE =
+  'lineage_era_started_at is the deployment CREATION instant — when the build that carried the stamping writer began. Railway exposes no go-live timestamp, so the true activation is one build duration later. An unstamped snapshot timestamped within a few minutes of this instant may have been written by the outgoing container rather than by a stamping failure. It is still counted as a violation: an authoritative-but-early boundary announces its errors, whereas a boundary tuned to make the report green would hide them. Resolve such a case by checking the deployment logs for the container start, not by moving the boundary.';
+
 export const LINEAGE_CONTRACT_DERIVATION =
   'compiled constant LINEAGE_CONTRACT_ACTIVATED_AT — the deployment that made capture_run_id stamping mandatory. NOT derived from the captured rows.';
 

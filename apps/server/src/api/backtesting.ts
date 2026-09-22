@@ -43,7 +43,7 @@ import {
   getSnapshotPopulations,
   populationInvocationCount,
 } from '../services/snapshot-populations.js';
-import { LineageContractError } from '../services/lineage-contract.js';
+import { LineageContractError, LINEAGE_ACTIVATION_WINDOW_NOTE } from '../services/lineage-contract.js';
 
 export function createBacktestingRoutes(provider: MarketDataProvider): Router {
   const router = Router();
@@ -241,6 +241,17 @@ export function createBacktestingRoutes(provider: MarketDataProvider): Router {
             authoritative: populations.lineage_era_source === 'authoritative_contract_marker',
             fallback_policy:
               'NONE. If the authoritative marker is missing or non-authoritative this endpoint returns a contract error instead of classifying, because a boundary that silently degrades to the inferred value is the original defect under a new name.',
+            /**
+             * The marker is build-start, not go-live — see the note. A
+             * violation inside this window may belong to the outgoing
+             * container. It is still a violation; the window is published so
+             * that ambiguity is visible rather than argued about.
+             */
+            activation_window_caveat: LINEAGE_ACTIVATION_WINDOW_NOTE,
+            violations_inside_activation_window: populations.lineageEraViolations.filter(
+              (v) =>
+                Date.parse(v.timestamp) - Date.parse(populations.lineage_era_started_at) < 10 * 60 * 1000
+            ).length,
           },
           timeline,
           chains,

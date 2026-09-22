@@ -282,6 +282,7 @@ export async function refusalMaturity(
   const outcomes = Object.fromEntries(byOutcome.map((r) => [r.outcome_class ?? 'NULL', Number(r.n)]));
 
   return {
+    asOf: asOf.toISOString(),
     horizons: {
       intradayHours: INTRADAY_HORIZON_MS / 3600_000,
       positionalDays: POSITIONAL_HORIZON_MS / (24 * 3600_000),
@@ -364,6 +365,10 @@ export async function captureUniverse(
   }
 
   return {
+    // Stated, not merely applied. The boundary contract flagged this
+    // section as bounded-but-silent: a reader cannot check a bound that the
+    // section does not report.
+    asOf: asOf.toISOString(),
     exchangesWithCapturedChains: exchanges,
     underlyings: chains.map((c) => ({
       exchange: c.exchange,
