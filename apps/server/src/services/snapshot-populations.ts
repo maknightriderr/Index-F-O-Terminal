@@ -1,124 +1,216 @@
 // ============================================================
 // SNAPSHOT POPULATIONS
 // ============================================================
-// One query, one boundary, six explicitly named populations — used by BOTH
-// the lineage section and the universe section so the two cannot diverge.
+// One query, one boundary, computed ONCE per report and handed to every
+// consumer.
 //
 // WHY THIS EXISTS
 //
-// The previous report put "CRUDEOIL 13, NATURALGAS 13, GOLD 9, SILVER 6"
-// (summing to 41) in the same table as "All instruments, post-lineage: 24".
-// Two things were wrong at once:
+// A previous report put per-symbol snapshot counts (summing to 41, the TOTAL
+// population, read at 17:01) in the same table as a post-lineage count (24,
+// read at 19:21). Two populations and two instants presented as one figure.
 //
-//   The 41 was the TOTAL snapshot count — every snapshot ever written. The
-//   24 was the POST-LINEAGE count. Different populations, presented as one.
+// The first fix gave both consumers the same function and the same `as_of`.
+// That was still two independent calculations against a live table: two
+// queries milliseconds apart can observe different data, and "same as_of"
+// only proved they asked the same question, not that they got the same
+// answer. Now the calculation runs once and its immutable result is passed
+// to both consumers.
 //
-//   The 41 was read at 17:01 and the 24 at 19:21. Different instants too.
-//   Between them 23 more post-lineage snapshots were captured.
+// THE LINEAGE-ERA INVARIANT
 //
-// A `Snapshots` column whose population is ambiguous is how both happened.
-// Every field below names its population, and the lineage and universe
-// sections are computed from this one function rather than from two queries
-// that can drift apart.
+// Membership in the post-lineage population is decided by the persisted
+// capture_run_id. That alone cannot catch the failure where the capture path
+// writes a row in the lineage era WITHOUT stamping it: such a row would be
+// filed as pre-lineage history, indistinguishable from a legitimately old
+// snapshot, and the capture service could stop stamping without anything
+// noticing. So the era is tracked by time as well, and a snapshot inside it
+// carrying no run id is surfaced as a data-integrity failure.
 //
 // Nothing here is read by the trading engine.
 // ============================================================
 
 import { sql } from '../lib/db.js';
 import {
-  POPULATION_DEFINITIONS,
+  SNAPSHOT_POPULATION_DEFINITIONS,
+  CAPTURE_RUN_POPULATION_DEFINITIONS,
+  attributionKey,
+  reconcile,
   type SnapshotPopulation,
+  type CaptureRunPopulation,
   type SymbolPopulation,
   type PopulationReconciliation,
+  type LineageEraViolation,
+  type UnattributedCounts,
 } from './snapshot-population-model.js';
 
-export { POPULATION_DEFINITIONS } from './snapshot-population-model.js';
+export {
+  SNAPSHOT_POPULATION_DEFINITIONS,
+  CAPTURE_RUN_POPULATION_DEFINITIONS,
+  POPULATION_DEFINITIONS,
+  attributionKey,
+  expiryKey,
+} from './snapshot-population-model.js';
 export type {
   SnapshotPopulation,
+  CaptureRunPopulation,
   SymbolPopulation,
   PopulationReconciliation,
+  LineageEraViolation,
+  UnattributedCounts,
 } from './snapshot-population-model.js';
 
 interface SnapshotRow {
-  exchange: string;
-  symbol: string;
+  exchange: string | null;
+  symbol: string | null;
   expiry: string | null;
   run_id: string | null;
   legs: string;
   time: Date;
 }
 
-/**
- * Every population, global and per symbol, from one pass over one boundary.
- *
- * The lineage and universe sections both consume this. Neither runs its own
- * snapshot query, which is the structural reason they can no longer report
- * different denominators for the same thing.
- */
-export async function snapshotPopulations(asOf: Date): Promise<{
-  as_of: string;
-  population_definitions: typeof POPULATION_DEFINITIONS;
-  lineage_era_started_at: string | null;
-  global: SnapshotPopulation;
-  bySymbol: SymbolPopulation[];
-  runs_before_lineage: number;
-  reconciliation: PopulationReconciliation;
-}> {
-  // One row per snapshot: a (time, symbol, expiry) group, with the run id
-  // carried on the rows themselves.
-  const snapshots = await sql<SnapshotRow[]>`
-    SELECT exchange, symbol, expiry, time,
-           MAX(capture_run_id::text) AS run_id,
-           COUNT(*) AS legs
-    FROM oi_snapshots
-    WHERE time <= ${asOf}
-    GROUP BY exchange, symbol, expiry, time
-    ORDER BY time ASC
-  `.catch(() => []);
+interface RunRow {
+  id: string;
+  time: Date;
+  status: string;
+  symbol: string | null;
+  exchange: string | null;
+  expiry: string | null;
+}
 
-  const runs = await sql<{ id: string; time: Date; status: string }[]>`
-    SELECT id::text AS id, COALESCE(capture_started_at, time) AS time, status
-    FROM capture_runs
-    WHERE COALESCE(capture_started_at, time) <= ${asOf}
-  `.catch(() => []);
+export interface PopulationResult {
+  as_of: string;
+  snapshot_population_definitions: typeof SNAPSHOT_POPULATION_DEFINITIONS;
+  capture_run_population_definitions: typeof CAPTURE_RUN_POPULATION_DEFINITIONS;
+  lineage_era_started_at: string | null;
+  /** The five SNAPSHOT populations. */
+  snapshots: SnapshotPopulation;
+  /** The CAPTURE-RUN populations. A count of runs, not a slice of the snapshots. */
+  runs: CaptureRunPopulation;
+  bySymbol: SymbolPopulation[];
+  unattributed: UnattributedCounts;
+  /** Snapshots inside the lineage era with no run id. Must be 0. */
+  post_lineage_null_run_id_count: number;
+  lineageEraViolations: LineageEraViolation[];
+  /**
+   * Whether each successful run in the era wrote exactly one snapshot.
+   *
+   * NOT assumed from the two counts happening to be equal. If the capture
+   * contract guarantees one run to one (symbol, expiry) snapshot, this is
+   * where that guarantee is measured rather than inferred.
+   */
+  runToSnapshotRelationship: {
+    runs_with_exactly_one_snapshot: number;
+    runs_with_no_snapshot: number;
+    runs_with_multiple_snapshots: number;
+    one_run_one_snapshot_holds: boolean;
+    note: string;
+  };
+  reconciliation: PopulationReconciliation;
+}
+
+/**
+ * How many times the calculation has run.
+ *
+ * Exposed so a test can assert that one diagnostics request performs exactly
+ * one calculation rather than one per consumer — the requirement being
+ * 1 as_of, 1 calculation, 1 result, N consumers.
+ */
+let invocationCount = 0;
+export function populationInvocationCount(): number {
+  return invocationCount;
+}
+export function resetPopulationInvocationCount(): void {
+  invocationCount = 0;
+}
+
+/**
+ * Computes every population once, from one consistent read.
+ *
+ * Both reads run inside a single REPEATABLE READ transaction so the snapshot
+ * table and the run table cannot be observed at different points in time.
+ * Sharing an `as_of` is not by itself a guarantee that two queries saw the
+ * same data.
+ */
+export async function getSnapshotPopulations(asOf: Date): Promise<PopulationResult> {
+  invocationCount++;
+
+  const empty = { snapshots: [] as SnapshotRow[], runs: [] as RunRow[] };
+  const { snapshots, runs } = await sql
+    .begin('ISOLATION LEVEL REPEATABLE READ READ ONLY', async (tx) => {
+      const snapshotRows = await tx<SnapshotRow[]>`
+        SELECT exchange, symbol, expiry, time,
+               MAX(capture_run_id::text) AS run_id,
+               COUNT(*) AS legs
+        FROM oi_snapshots
+        WHERE time <= ${asOf}
+        GROUP BY exchange, symbol, expiry, time
+        ORDER BY time ASC
+      `;
+      const runRows = await tx<RunRow[]>`
+        SELECT id::text AS id, COALESCE(capture_started_at, time) AS time, status,
+               symbol, exchange, expiry
+        FROM capture_runs
+        WHERE COALESCE(capture_started_at, time) <= ${asOf}
+      `;
+      return { snapshots: snapshotRows, runs: runRows };
+    })
+    .catch(() => empty);
 
   const runIds = new Set(runs.map((r) => r.id));
 
   // The lineage era begins at the earliest snapshot actually carrying a run
   // id. Derived from the rows, because a run that ran before the column
-  // existed cannot have a linked snapshot and must not be judged as though
-  // it could.
+  // existed cannot have a linked snapshot.
   const linkedTimes = snapshots.filter((s) => s.run_id != null).map((s) => new Date(s.time).getTime());
   const eraStart = linkedTimes.length > 0 ? Math.min(...linkedTimes) : null;
 
-  // The expiry component of a symbol's key, normalised to a date string so a
-  // Date from one query and a string from another cannot produce two keys for
-  // the same chain.
-  const expiryKeyOf = (v: string | Date | null): string =>
-    v == null ? '' : new Date(v).toISOString().slice(0, 10);
-
-  const blank = (): SnapshotPopulation => ({
+  const blankSnapshots = (): SnapshotPopulation => ({
     historical_snapshot_count: 0,
     pre_lineage_snapshot_count: 0,
     post_lineage_snapshot_count: 0,
     linked_snapshot_count: 0,
     orphan_snapshot_count: 0,
-    successful_capture_run_count: 0,
     historical_leg_count: 0,
     pre_lineage_leg_count: 0,
     post_lineage_leg_count: 0,
   });
 
-  const global = blank();
+  const global = blankSnapshots();
+  const globalRuns: CaptureRunPopulation = { successful_capture_run_count: 0, runs_before_lineage: 0 };
   const bySymbolMap = new Map<string, SymbolPopulation>();
+  const violations: LineageEraViolation[] = [];
+  const snapshotsPerRun = new Map<string, number>();
+
+  const unattributed: UnattributedCounts = {
+    unattributed_snapshot_count: 0,
+    unattributed_run_count: 0,
+    unattributed_symbol_count: 0,
+    unattributed_expiry_count: 0,
+  };
 
   for (const s of snapshots) {
     const legs = Number(s.legs);
-    const key = `${s.exchange}|${s.symbol}|${expiryKeyOf(s.expiry)}`;
+    global.historical_snapshot_count++;
+    global.historical_leg_count += legs;
+
+    // A row missing its mandatory identity is counted, never dropped. Without
+    // this it would vanish from the per-symbol view while the global count
+    // still looked correct.
+    if (s.exchange == null || s.symbol == null) {
+      unattributed.unattributed_snapshot_count++;
+      if (s.symbol == null) unattributed.unattributed_symbol_count++;
+      if (s.expiry == null) unattributed.unattributed_expiry_count++;
+      continue;
+    }
+
+    const key = attributionKey(s.exchange, s.symbol, s.expiry);
     let entry = bySymbolMap.get(key);
     if (!entry) {
       entry = {
-        ...blank(),
+        ...blankSnapshots(),
+        successful_capture_run_count: 0,
+        runs_before_lineage: 0,
         exchange: s.exchange,
         symbol: s.symbol,
         expiry: s.expiry,
@@ -128,110 +220,122 @@ export async function snapshotPopulations(asOf: Date): Promise<{
       bySymbolMap.set(key, entry);
     }
     entry.last_seen = new Date(s.time).toISOString();
+    entry.historical_snapshot_count++;
+    entry.historical_leg_count += legs;
 
-    for (const bucket of [global, entry]) {
-      bucket.historical_snapshot_count++;
-      bucket.historical_leg_count += legs;
-    }
+    const at = new Date(s.time).getTime();
+    const insideEra = eraStart != null && at >= eraStart;
 
-    // Membership is decided by the PERSISTED column, never by a timestamp
-    // comparison. A snapshot with no run id is historically unlinked, full
-    // stop — it does not become linked because a later snapshot of the same
-    // instrument has a run.
     if (s.run_id == null) {
-      for (const bucket of [global, entry]) {
-        bucket.pre_lineage_snapshot_count++;
-        bucket.pre_lineage_leg_count += legs;
+      if (insideEra) {
+        // THE INVARIANT. A row inside the lineage era with no run id is a
+        // capture-path failure, not history. Filing it as pre-lineage would
+        // make it indistinguishable from a legitimately old snapshot.
+        violations.push({
+          timestamp: new Date(s.time).toISOString(),
+          exchange: s.exchange,
+          symbol: s.symbol,
+          expiry: s.expiry,
+          legs,
+          issue:
+            'snapshot written at or after lineage_era_started_at but carries no capture_run_id — the capture path wrote a row without stamping it',
+        });
+        // Counted post-lineage BY ERA so the violation cannot hide inside the
+        // pre-lineage count. It is neither linked nor orphan — it has no id
+        // to match or fail to match — so `post = linked + orphan` also fails,
+        // which is the intended loud second signal.
+        global.post_lineage_snapshot_count++;
+        global.post_lineage_leg_count += legs;
+        entry.post_lineage_snapshot_count++;
+        entry.post_lineage_leg_count += legs;
+        continue;
       }
+      global.pre_lineage_snapshot_count++;
+      global.pre_lineage_leg_count += legs;
+      entry.pre_lineage_snapshot_count++;
+      entry.pre_lineage_leg_count += legs;
       continue;
     }
 
-    for (const bucket of [global, entry]) {
-      bucket.post_lineage_snapshot_count++;
-      bucket.post_lineage_leg_count += legs;
-      if (runIds.has(s.run_id)) bucket.linked_snapshot_count++;
-      else bucket.orphan_snapshot_count++;
+    global.post_lineage_snapshot_count++;
+    global.post_lineage_leg_count += legs;
+    entry.post_lineage_snapshot_count++;
+    entry.post_lineage_leg_count += legs;
+
+    if (runIds.has(s.run_id)) {
+      global.linked_snapshot_count++;
+      entry.linked_snapshot_count++;
+      snapshotsPerRun.set(s.run_id, (snapshotsPerRun.get(s.run_id) ?? 0) + 1);
+    } else {
+      global.orphan_snapshot_count++;
+      entry.orphan_snapshot_count++;
     }
   }
 
-  // Successful runs, scoped to the lineage era and attributed per symbol.
-  const successfulInEra = runs.filter(
-    (r) => (r.status === 'SUCCESS' || r.status === 'PARTIAL') && eraStart != null && new Date(r.time).getTime() >= eraStart
-  );
-  global.successful_capture_run_count = successfulInEra.length;
+  // ---- Capture-run populations. Runs, not snapshots. ----
+  const successfulAll = runs.filter((r) => r.status === 'SUCCESS' || r.status === 'PARTIAL');
+  const successfulInEra = successfulAll.filter((r) => eraStart != null && new Date(r.time).getTime() >= eraStart);
+  globalRuns.successful_capture_run_count = successfulInEra.length;
+  globalRuns.runs_before_lineage = successfulAll.length - successfulInEra.length;
 
-  // Grouped by (exchange, symbol, EXPIRY) to match how bySymbolMap is keyed.
-  //
-  // Grouping by symbol alone attributed a symbol's whole run count to EVERY
-  // expiry row it had. FINNIFTY carries two expiries, so its 25 runs were
-  // counted twice and the per-symbol total came to 891 against a global 866.
-  // The expiry is part of a capture's identity — one run captures one chain
-  // for one expiry — so it has to be part of the join key.
-  const runsBySymbol = await sql<{ symbol: string; exchange: string; expiry: string | null; n: string }[]>`
-    SELECT symbol, exchange, expiry, COUNT(*) AS n
-    FROM capture_runs
-    WHERE COALESCE(capture_started_at, time) <= ${asOf}
-      AND status IN ('SUCCESS', 'PARTIAL')
-      ${eraStart != null ? sql`AND COALESCE(capture_started_at, time) >= ${new Date(eraStart)}` : sql`AND FALSE`}
-    GROUP BY symbol, exchange, expiry
-  `.catch(() => []);
-
-  const expiryKey = (v: string | Date | null): string => (v == null ? '' : new Date(v).toISOString().slice(0, 10));
-  for (const r of runsBySymbol) {
-    const entry = bySymbolMap.get(`${r.exchange}|${r.symbol}|${expiryKey(r.expiry)}`);
-    if (entry) entry.successful_capture_run_count += Number(r.n);
+  for (const r of successfulInEra) {
+    if (r.exchange == null || r.symbol == null) {
+      unattributed.unattributed_run_count++;
+      continue;
+    }
+    // Keyed by expiry as well as symbol: one run captures one chain for one
+    // expiry, so a symbol with two expiries must not have its runs counted
+    // against both.
+    const entry = bySymbolMap.get(attributionKey(r.exchange, r.symbol, r.expiry));
+    if (entry) entry.successful_capture_run_count++;
+    else unattributed.unattributed_run_count++;
   }
 
-  const runsBeforeLineage =
-    runs.filter(
-      (r) =>
-        (r.status === 'SUCCESS' || r.status === 'PARTIAL') &&
-        (eraStart == null || new Date(r.time).getTime() < eraStart)
-    ).length;
+  // ---- Run-to-snapshot relationship, measured rather than assumed ----
+  let exactlyOne = 0;
+  let none = 0;
+  let multiple = 0;
+  for (const r of successfulInEra) {
+    const n = snapshotsPerRun.get(r.id) ?? 0;
+    if (n === 1) exactlyOne++;
+    else if (n === 0) none++;
+    else multiple++;
+  }
 
   const bySymbol = [...bySymbolMap.values()].sort(
     (a, b) => b.historical_snapshot_count - a.historical_snapshot_count
   );
 
-  // Reconciliation. These identities hold by construction; asserting them
-  // here means a future refactor that breaks one is visible in the payload
-  // rather than in a report six weeks later.
-  const sumPost = bySymbol.reduce((a, s) => a + s.post_lineage_snapshot_count, 0);
-  const sumLinked = bySymbol.reduce((a, s) => a + s.linked_snapshot_count, 0);
-  const sumHistorical = bySymbol.reduce((a, s) => a + s.historical_snapshot_count, 0);
-  // The identity that was missing, and that let a double-attributed run count
-  // through: per-symbol successful runs must sum to the global figure.
-  const sumRuns = bySymbol.reduce((a, s) => a + s.successful_capture_run_count, 0);
-
-  const checks = {
-    historical_splits_into_pre_and_post:
-      global.historical_snapshot_count === global.pre_lineage_snapshot_count + global.post_lineage_snapshot_count,
-    post_splits_into_linked_and_orphan:
-      global.post_lineage_snapshot_count === global.linked_snapshot_count + global.orphan_snapshot_count,
-    linked_within_post: global.linked_snapshot_count <= global.post_lineage_snapshot_count,
-    per_symbol_post_sums_to_global: sumPost === global.post_lineage_snapshot_count,
-    per_symbol_linked_sums_to_global: sumLinked === global.linked_snapshot_count,
-    per_symbol_historical_sums_to_global: sumHistorical === global.historical_snapshot_count,
-    per_symbol_runs_sum_to_global: sumRuns === global.successful_capture_run_count,
-  };
-  const holds = Object.values(checks).every(Boolean);
+  const reconciliation = reconcile({
+    global,
+    globalRuns,
+    perSymbolHistorical: bySymbol.reduce((a, s) => a + s.historical_snapshot_count, 0),
+    perSymbolPost: bySymbol.reduce((a, s) => a + s.post_lineage_snapshot_count, 0),
+    perSymbolLinked: bySymbol.reduce((a, s) => a + s.linked_snapshot_count, 0),
+    perSymbolRuns: bySymbol.reduce((a, s) => a + s.successful_capture_run_count, 0),
+    unattributed,
+    postLineageNullRunIdCount: violations.length,
+  });
 
   return {
     as_of: asOf.toISOString(),
-    population_definitions: POPULATION_DEFINITIONS,
+    snapshot_population_definitions: SNAPSHOT_POPULATION_DEFINITIONS,
+    capture_run_population_definitions: CAPTURE_RUN_POPULATION_DEFINITIONS,
     lineage_era_started_at: eraStart == null ? null : new Date(eraStart).toISOString(),
-    global,
+    snapshots: global,
+    runs: globalRuns,
     bySymbol,
-    runs_before_lineage: runsBeforeLineage,
-    reconciliation: {
-      ...checks,
-      holds,
-      detail: holds
-        ? 'every identity holds: historical = pre + post, post = linked + orphan, linked <= post, and the per-symbol totals sum to the global ones'
-        : `MISMATCH: ${Object.entries(checks)
-            .filter(([, v]) => !v)
-            .map(([k]) => k)
-            .join(', ')}`,
+    unattributed,
+    post_lineage_null_run_id_count: violations.length,
+    lineageEraViolations: violations,
+    runToSnapshotRelationship: {
+      runs_with_exactly_one_snapshot: exactlyOne,
+      runs_with_no_snapshot: none,
+      runs_with_multiple_snapshots: multiple,
+      one_run_one_snapshot_holds: none === 0 && multiple === 0,
+      note:
+        'Measured, not inferred from successful_capture_run_count happening to equal linked_snapshot_count. Those are a run count and a snapshot count; their equality is a property of the current capture service, not an identity of this model.',
     },
+    reconciliation,
   };
 }

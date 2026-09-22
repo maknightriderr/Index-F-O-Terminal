@@ -39,6 +39,10 @@ import {
   CUTOVER_MILESTONES,
 } from '../services/contract-generations.js';
 import { DATA_QUALITY_CUTOVER_AT } from '../services/capture-quality.js';
+import {
+  getSnapshotPopulations,
+  populationInvocationCount,
+} from '../services/snapshot-populations.js';
 
 export function createBacktestingRoutes(provider: MarketDataProvider): Router {
   const router = Router();
@@ -106,6 +110,19 @@ export function createBacktestingRoutes(provider: MarketDataProvider): Router {
       // states the instant it used.
       const boundary = newBoundary();
       const eligible = await eligibleUniverse(provider);
+
+      // ONE population calculation for the whole report.
+      //
+      // 1 as_of -> 1 calculation -> 1 immutable result -> 2 consumers.
+      //
+      // The lineage section and the universe section used to call the same
+      // function separately. Same question, same boundary — but two reads of
+      // a live table milliseconds apart, which is a shared question and not
+      // a shared answer. The result is computed here, once, and handed down.
+      const populationCallsBefore = populationInvocationCount();
+      const populations = await getSnapshotPopulations(boundary.asOf);
+      const populationCalculations = populationInvocationCount() - populationCallsBefore;
+
       const [timeline, chains, maturity, universe, replay, greeks, nullZero, lineage, coverage, milestones] =
         await Promise.all([
           captureTimeline(),
@@ -115,8 +132,8 @@ export function createBacktestingRoutes(provider: MarketDataProvider): Router {
           replayStatus(boundary),
           greekCoverage(boundary),
           nullZeroAudit(boundary),
-          snapshotLineage(boundary),
-          universeCoverage(eligible, boundary),
+          snapshotLineage(boundary, populations),
+          universeCoverage(eligible, boundary, populations),
           researchMilestones(),
         ]);
       res.json({
@@ -129,7 +146,31 @@ export function createBacktestingRoutes(provider: MarketDataProvider): Router {
            */
           report_as_of: boundary.asOf.toISOString(),
           timestampContract:
-            'Every metric carrying an asOf field was evaluated against report_as_of. Never compare a figure from this report against one from another reading without checking both asOf values.',
+            'report_as_of is the instant THIS REPORT was generated — the upper bound every bounded query evaluated against. It is NOT the time any captured evidence was recorded. Timestamps describing when something was first observed, when a layer started recording, or when a cutover happened are historical facts derived from the evidence itself and are older than report_as_of; a field named *_at or *_started_at is evidence time, while report_as_of and any as_of field is reading time. Never compare a figure from this report against one from another reading without checking both as_of values.',
+          /**
+           * Proof that every population figure in this report came from ONE
+           * calculation, not from several that happened to agree.
+           */
+          populationContract: {
+            population_calculation_invocation_count: populationCalculations,
+            single_calculation:
+              populationCalculations === 1
+                ? 'PASS: exactly one population calculation for this report'
+                : `FAIL: ${populationCalculations} population calculations in one report`,
+            consumers: ['lineage', 'universeCoverage'],
+            population_as_of: populations.as_of,
+            as_of_consistent:
+              populations.as_of === boundary.asOf.toISOString() &&
+              (lineage as any)?.asOf === boundary.asOf.toISOString() &&
+              (coverage as any)?.asOf === boundary.asOf.toISOString(),
+            as_of_values: {
+              report_as_of: boundary.asOf.toISOString(),
+              population_as_of: populations.as_of,
+              lineage_as_of: (lineage as any)?.asOf ?? null,
+              universe_as_of: (coverage as any)?.asOf ?? null,
+            },
+            note: 'The lineage and universe sections are consumers of one immutable result. Neither runs its own snapshot query, so neither can report a different denominator for the same population.',
+          },
           timeline,
           chains,
           maturity,
@@ -141,6 +182,24 @@ export function createBacktestingRoutes(provider: MarketDataProvider): Router {
           universeCoverage: coverage,
           captureMode: captureModeReport(),
           milestones,
+          /**
+           * How to read a milestone timestamp.
+           *
+           * These are EVIDENCE times, not reading times. Each one is the
+           * instant a layer first recorded something, derived once from the
+           * evidence named in `derivation` and then frozen. They are older
+           * than report_as_of by construction, and a reader comparing one
+           * against report_as_of is comparing when a thing happened against
+           * when this report was generated.
+           */
+          milestonesContract: {
+            recording_started_at:
+              'EVIDENCE TIME. When this layer first recorded data, derived from the evidence named in `derivation` and frozen on first write. Not the time this report ran.',
+            derivation:
+              'The evidence the timestamp was read from. A milestone with a null derivation predates the evidence-seeding fix and was written at boot time; it is the one case where a milestone timestamp is not evidence-derived, and it is labelled rather than silently corrected.',
+            report_as_of:
+              'READING TIME. When this report was generated. Every bounded query used it as its upper bound. No milestone should ever equal it.',
+          },
         },
       });
     } catch (err: any) {
@@ -184,12 +243,16 @@ export function createBacktestingRoutes(provider: MarketDataProvider): Router {
       const asOf = new Date();
       const sinceHours = Math.min(Number(req.query.sinceHours ?? 48) || 48, 24 * 400);
 
+      // One boundary, one population calculation, for this report too.
+      const boundary = newBoundary(asOf);
+      const populations = await getSnapshotPopulations(boundary.asOf);
+
       const [generations, eligibility, scope, decisions, lineage, milestones] = await Promise.all([
         generationCensus(asOf, DATA_QUALITY_CUTOVER_AT),
         greekReplayEligibility(asOf, DATA_QUALITY_CUTOVER_AT),
         researchPopulationScope(asOf, DATA_QUALITY_CUTOVER_AT),
         decisionPopulation(asOf, sinceHours),
-        snapshotLineage(newBoundary(asOf)),
+        snapshotLineage(boundary, populations),
         researchMilestones(),
       ]);
 

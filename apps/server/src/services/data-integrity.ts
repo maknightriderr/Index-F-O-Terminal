@@ -16,7 +16,11 @@ import { sql } from '../lib/db.js';
 import { RESEARCH_THRESHOLDS, CAPTURE_UNIVERSE_MODE } from './research-contract.js';
 import { DATA_QUALITY_CUTOVER_AT } from './capture-quality.js';
 import { isMarketOpen } from '@fno/shared';
-import { snapshotPopulations, POPULATION_DEFINITIONS } from './snapshot-populations.js';
+import {
+  SNAPSHOT_POPULATION_DEFINITIONS,
+  CAPTURE_RUN_POPULATION_DEFINITIONS,
+  type PopulationResult,
+} from './snapshot-populations.js';
 import type { Exchange } from '@fno/shared';
 
 /**
@@ -315,7 +319,10 @@ export async function nullZeroAudit(boundary: ReportBoundary = newBoundary()): P
  * For post-instrumentation captures the invariant is one successful run to
  * one snapshot, and any snapshot without a run is reported as an orphan.
  */
-export async function snapshotLineage(boundary: ReportBoundary = newBoundary()): Promise<Record<string, unknown>> {
+export async function snapshotLineage(
+  boundary: ReportBoundary,
+  populations: PopulationResult
+): Promise<Record<string, unknown>> {
   // The lineage is now a HARD link: every row carries the id of the run that
   // wrote it. Grouping by (time, symbol) and matching against run timestamps
   // was a reconstruction, and it is exactly what made a six-minute gap
@@ -422,22 +429,54 @@ export async function snapshotLineage(boundary: ReportBoundary = newBoundary()):
       issue: 'successful capture run with no snapshot carrying its id',
     }));
 
-  // The six named populations, from the SHARED function the universe section
-  // also uses. Neither section runs its own snapshot query any more, which is
-  // the structural reason they can no longer report different denominators
-  // for the same thing.
-  const populations = await snapshotPopulations(boundary.asOf);
+  // The populations are NOT computed here. They arrive already computed, as
+  // the one immutable result the whole report shares.
+  //
+  // Handing both sections the same function at the same boundary was not
+  // enough: two independent calls against a live table are two reads at two
+  // instants, and "same as_of" only proved they asked the same question, not
+  // that they got the same answer. This section is now a consumer, not a
+  // calculator, which is why it cannot report a different denominator.
 
   return {
     asOf: boundary.asOf.toISOString(),
     lineageMethod: 'hard: every row carries the capture_run_id of the run that wrote it',
+    /**
+     * SNAPSHOT populations. Every figure here counts snapshots.
+     */
     populations: {
       as_of: populations.as_of,
-      population_definitions: POPULATION_DEFINITIONS,
-      ...populations.global,
-      runs_before_lineage: populations.runs_before_lineage,
+      population_definitions: SNAPSHOT_POPULATION_DEFINITIONS,
+      ...populations.snapshots,
       lineage_era_started_at: populations.lineage_era_started_at,
     },
+    /**
+     * CAPTURE-RUN populations, listed apart from the snapshot ones so that
+     * `successful_capture_run_count` cannot be read as another slice of the
+     * snapshot population. It is a count of runs.
+     */
+    captureRunPopulations: {
+      as_of: populations.as_of,
+      population_definitions: CAPTURE_RUN_POPULATION_DEFINITIONS,
+      ...populations.runs,
+    },
+    /**
+     * Whether one successful run wrote exactly one snapshot — MEASURED, not
+     * inferred from the two counts happening to be equal. They are a run
+     * count and a snapshot count; their equality is a property of today's
+     * capture service, not an identity of the model.
+     */
+    runToSnapshotRelationship: populations.runToSnapshotRelationship,
+    /**
+     * Snapshots written inside the lineage era that carry no capture_run_id.
+     * MUST be 0. Such a row is a capture-path failure, not pre-lineage
+     * history; under a run-id-presence definition alone it would be filed as
+     * history and the capture service could stop stamping unnoticed.
+     */
+    post_lineage_null_run_id_count: populations.post_lineage_null_run_id_count,
+    lineageEraViolations: populations.lineageEraViolations,
+    /** Rows that could not be attributed to a symbol, expiry or run. Must be 0. */
+    unattributed: populations.unattributed,
     populationReconciliation: populations.reconciliation,
     pre_instrumentation_snapshots: preSnapshots,
     post_instrumentation_snapshots: postSnapshots,
@@ -508,20 +547,17 @@ export async function snapshotLineage(boundary: ReportBoundary = newBoundary()):
  */
 export async function universeCoverage(
   eligibleByExchange: Record<string, number>,
-  boundary: ReportBoundary = newBoundary()
+  boundary: ReportBoundary,
+  populations: PopulationResult
 ): Promise<Record<string, unknown>> {
-  // The per-symbol populations, from the SAME shared function the lineage
-  // section uses, at the SAME boundary. The previous report put per-symbol
-  // snapshot counts read at 17:01 (summing to 41, the TOTAL population) in
-  // one table beside a post-lineage count read at 19:21 (24) — two
-  // populations and two instants presented as one figure.
-  const populations = await snapshotPopulations(boundary.asOf);
-
-  // No second snapshot query here on purpose. The universe section counts
-  // nothing itself: every per-symbol figure comes from `populations` above,
-  // which is the same call the lineage section makes at the same boundary.
-  // A separate query is how 41 historical snapshots came to sit beside 24
-  // post-lineage ones in a single table.
+  // The per-symbol populations arrive already computed — the SAME immutable
+  // result object the lineage section receives, from the SAME single
+  // calculation. Not the same function called twice: the same value.
+  //
+  // The previous report put per-symbol snapshot counts read at 17:01
+  // (summing to 41, the TOTAL population) in one table beside a post-lineage
+  // count read at 19:21 (24) — two populations and two instants presented as
+  // one figure. This section now counts nothing itself.
 
   // Futures-only instruments are captured too, and they are NOT option-chain
   // instruments. Conflating the two inflates the observed count.
@@ -611,13 +647,22 @@ export async function universeCoverage(
       first_seen: s.first_seen,
       last_seen: s.last_seen,
     })),
-    /** The same six populations, aggregated. Identical source to the lineage section. */
+    /**
+     * The aggregated SNAPSHOT populations — the identical object the lineage
+     * section reports, from the one shared calculation.
+     */
     snapshotPopulations: {
       as_of: populations.as_of,
-      population_definitions: POPULATION_DEFINITIONS,
-      ...populations.global,
-      runs_before_lineage: populations.runs_before_lineage,
+      population_definitions: SNAPSHOT_POPULATION_DEFINITIONS,
+      ...populations.snapshots,
     },
+    /** CAPTURE-RUN populations, kept apart from the snapshot counts above. */
+    captureRunPopulations: {
+      as_of: populations.as_of,
+      population_definitions: CAPTURE_RUN_POPULATION_DEFINITIONS,
+      ...populations.runs,
+    },
+    unattributed: populations.unattributed,
     populationReconciliation: populations.reconciliation,
     /** Captured as futures only — explicitly NOT option-chain instruments. */
     futuresOnlyInstruments: futuresOnly.map((r) => ({
