@@ -47,6 +47,7 @@ import {
   LineageContractError,
   LINEAGE_ACTIVATION_EVIDENCE_NOTE,
   RUNTIME_ACTIVATION_TIMESTAMP_UNVERIFIED,
+  AUTHORITATIVE_SOURCES,
 } from '../services/lineage-contract.js';
 
 export function createBacktestingRoutes(provider: MarketDataProvider): Router {
@@ -242,7 +243,11 @@ export function createBacktestingRoutes(provider: MarketDataProvider): Router {
             lineage_era_source: populations.lineage_era_source,
             lineage_era_source_reference: populations.lineage_era_source_reference,
             lineage_era_derivation: populations.lineage_era_derivation,
-            authoritative: populations.lineage_era_source === 'authoritative_contract_marker',
+            // Checked against the authority LIST, not a literal. Comparing to
+            // one hard-coded source string is why this field read false the
+            // moment the marker was raised to a stronger source than the one
+            // the comparison happened to name.
+            authoritative: AUTHORITATIVE_SOURCES.includes(populations.lineage_era_source),
             fallback_policy:
               'NONE. If the authoritative marker is missing or non-authoritative this endpoint returns a contract error instead of classifying, because a boundary that silently degrades to the inferred value is the original defect under a new name.',
             /**
