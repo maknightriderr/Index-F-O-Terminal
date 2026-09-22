@@ -16,6 +16,7 @@ import { sql } from '../lib/db.js';
 import { RESEARCH_THRESHOLDS, CAPTURE_UNIVERSE_MODE } from './research-contract.js';
 import { DATA_QUALITY_CUTOVER_AT } from './capture-quality.js';
 import { isMarketOpen } from '@fno/shared';
+import { snapshotPopulations, POPULATION_DEFINITIONS } from './snapshot-populations.js';
 import type { Exchange } from '@fno/shared';
 
 /**
@@ -421,9 +422,23 @@ export async function snapshotLineage(boundary: ReportBoundary = newBoundary()):
       issue: 'successful capture run with no snapshot carrying its id',
     }));
 
+  // The six named populations, from the SHARED function the universe section
+  // also uses. Neither section runs its own snapshot query any more, which is
+  // the structural reason they can no longer report different denominators
+  // for the same thing.
+  const populations = await snapshotPopulations(boundary.asOf);
+
   return {
     asOf: boundary.asOf.toISOString(),
     lineageMethod: 'hard: every row carries the capture_run_id of the run that wrote it',
+    populations: {
+      as_of: populations.as_of,
+      population_definitions: POPULATION_DEFINITIONS,
+      ...populations.global,
+      runs_before_lineage: populations.runs_before_lineage,
+      lineage_era_started_at: populations.lineage_era_started_at,
+    },
+    populationReconciliation: populations.reconciliation,
     pre_instrumentation_snapshots: preSnapshots,
     post_instrumentation_snapshots: postSnapshots,
     total_snapshots: preSnapshots + postSnapshots,
@@ -495,31 +510,18 @@ export async function universeCoverage(
   eligibleByExchange: Record<string, number>,
   boundary: ReportBoundary = newBoundary()
 ): Promise<Record<string, unknown>> {
-  // Every observed instrument, named. The previous report said "four MCX
-  // commodities" while naming three, which is the kind of summary that hides
-  // exactly the thing a reader would want to check.
-  const observedRows = await sql<
-    {
-      exchange: string;
-      symbol: string;
-      expiry: string | null;
-      snapshots: string;
-      legs: string;
-      runs: string;
-      first: Date;
-      last: Date;
-    }[]
-  >`
-    SELECT exchange, symbol, expiry,
-           COUNT(DISTINCT time) AS snapshots,
-           COUNT(*) AS legs,
-           COUNT(DISTINCT capture_run_id) AS runs,
-           MIN(time) AS first, MAX(time) AS last
-    FROM oi_snapshots
-    WHERE time <= ${boundary.asOf}
-    GROUP BY exchange, symbol, expiry
-    ORDER BY exchange, symbol
-  `.catch(() => []);
+  // The per-symbol populations, from the SAME shared function the lineage
+  // section uses, at the SAME boundary. The previous report put per-symbol
+  // snapshot counts read at 17:01 (summing to 41, the TOTAL population) in
+  // one table beside a post-lineage count read at 19:21 (24) — two
+  // populations and two instants presented as one figure.
+  const populations = await snapshotPopulations(boundary.asOf);
+
+  // No second snapshot query here on purpose. The universe section counts
+  // nothing itself: every per-symbol figure comes from `populations` above,
+  // which is the same call the lineage section makes at the same boundary.
+  // A separate query is how 41 historical snapshots came to sit beside 24
+  // post-lineage ones in a single table.
 
   // Futures-only instruments are captured too, and they are NOT option-chain
   // instruments. Conflating the two inflates the observed count.
@@ -535,7 +537,7 @@ export async function universeCoverage(
   `.catch(() => []);
 
   const observedMap = new Map<string, Set<string>>();
-  for (const r of observedRows) {
+  for (const r of populations.bySymbol) {
     if (!observedMap.has(r.exchange)) observedMap.set(r.exchange, new Set());
     observedMap.get(r.exchange)!.add(r.symbol);
   }
@@ -586,18 +588,37 @@ export async function universeCoverage(
       in_session_observed_count: inSessionObserved,
       in_session_coverage: inSessionEligible > 0 ? pct(inSessionObserved, inSessionEligible) : 'N/A',
     },
-    /** Every observed option-chain instrument, named. No summary counts. */
-    observedInstruments: observedRows.map((r) => ({
-      exchange: r.exchange,
-      symbol: r.symbol,
-      expiry: r.expiry,
+    /**
+      * Every observed option-chain instrument, named, with each snapshot
+      * population separately labelled.
+      *
+      * There is deliberately no bare `snapshot_count` or `capture_count`
+      * field any more: a count whose population is ambiguous is exactly how
+      * 41 historical snapshots ended up in a row labelled post-lineage.
+      */
+    observedInstruments: populations.bySymbol.map((s) => ({
+      exchange: s.exchange,
+      symbol: s.symbol,
+      expiry: s.expiry,
       instrument_kind: 'OPTION_CHAIN',
-      snapshot_count: Number(r.snapshots),
-      leg_count: Number(r.legs),
-      capture_count: Number(r.runs),
-      first_seen: iso(r.first),
-      last_seen: iso(r.last),
+      historical_snapshots: s.historical_snapshot_count,
+      pre_lineage_snapshots: s.pre_lineage_snapshot_count,
+      post_lineage_snapshots: s.post_lineage_snapshot_count,
+      linked_snapshots: s.linked_snapshot_count,
+      orphan_snapshots: s.orphan_snapshot_count,
+      successful_capture_runs: s.successful_capture_run_count,
+      historical_legs: s.historical_leg_count,
+      first_seen: s.first_seen,
+      last_seen: s.last_seen,
     })),
+    /** The same six populations, aggregated. Identical source to the lineage section. */
+    snapshotPopulations: {
+      as_of: populations.as_of,
+      population_definitions: POPULATION_DEFINITIONS,
+      ...populations.global,
+      runs_before_lineage: populations.runs_before_lineage,
+    },
+    populationReconciliation: populations.reconciliation,
     /** Captured as futures only — explicitly NOT option-chain instruments. */
     futuresOnlyInstruments: futuresOnly.map((r) => ({
       exchange: r.exchange,
