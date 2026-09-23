@@ -395,7 +395,6 @@ export async function ensureRegressionCase(input: {
       test_id, learning_event_id, test_name, category, error_signature, description,
       assertion_key, expected_behavior, actual_previous_behavior, status
     ) VALUES (
-    VALUES (
       ${input.testId}, ${input.eventId}, ${input.testName}, ${input.category},
       ${input.signature}, ${input.description}, ${input.assertionKey},
       ${input.expectedBehavior}, ${input.previousBehavior}, 'CREATED'
