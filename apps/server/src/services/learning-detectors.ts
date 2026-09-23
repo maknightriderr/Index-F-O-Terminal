@@ -940,6 +940,9 @@ export function detectExecutionProvenanceFaults(input: {
     rootCause:
       'the signals table records generated setups only. No execution state was ever modelled, so every consumer that needs "did this actually happen" has been reading "was this suggested" instead.',
     rootCauseConfidence: 'HIGH',
+    // The absence of an execution marker is a fact about the source, not an
+    // inference from behaviour, so the evidence is as strong as it gets.
+    evidenceQuality: 'HIGH',
     assertionKey: 'executionProvenance.hasExecutionMarker',
     proposedProtection: {
       type: 'DATA_CONTRACT',

@@ -368,6 +368,13 @@ export async function verifyProtections(signaturesSeen: Set<string>, at: Date): 
  * nothing evaluating it would report PASS forever by saying nothing, which is
  * worse than having no case at all.
  */
+/**
+ * Creates the standing check for a fault.
+ *
+ * Throws on failure. The caller decides what to do about it, and must not
+ * discard it: a regression case that silently fails to be created leaves the
+ * fault with no standing check while the record claims one exists.
+ */
 export async function ensureRegressionCase(input: {
   testId: string;
   eventId: number;
@@ -398,6 +405,12 @@ export async function ensureRegressionCase(input: {
   // The fixture is written separately and idempotently, so re-running the
   // audit refreshes the reproduction input without resetting the case's
   // pass/fail history.
+  //
+  // Logged on failure rather than swallowed. A silent catch in the engine
+  // whose whole purpose is to make failures visible is the one place it is
+  // least acceptable — and it already cost something: a regression case
+  // silently failed to be created for every finding after migration 015, and
+  // nothing said so.
   await sql`
     UPDATE system_regression_cases SET
       fixture = ${input.fixture == null ? null : sql.json(input.fixture as any)},
@@ -405,7 +418,12 @@ export async function ensureRegressionCase(input: {
       deterministic = ${input.deterministic ?? false},
       updated_at = NOW()
     WHERE test_id = ${input.testId}
-  `.catch(() => undefined);
+  `.catch((err: any) =>
+    logger.warn(
+      { testId: input.testId, error: err.message },
+      'Learning engine: regression fixture could not be stored'
+    )
+  );
   await sql`
     UPDATE system_learning_events
     SET regression_test = ${input.testId}, updated_at = NOW()

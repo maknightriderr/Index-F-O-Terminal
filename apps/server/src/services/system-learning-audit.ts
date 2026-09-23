@@ -224,6 +224,8 @@ export interface AuditRunSummary {
   regression_cases_created_this_cycle: number;
   /** Failing, but never green — an open fault rather than a regression. */
   regression_cases_never_passed: number;
+  /** Cases the engine tried and failed to create. Never silently zero. */
+  regression_cases_failed_to_create: number;
   resolved: number;
   monitoring: number;
   needs_review: number;
@@ -274,6 +276,7 @@ export async function runSystemAudit(opts: {
     regression_cases_run: 0,
     regression_cases_created_this_cycle: 0,
     regression_cases_never_passed: 0,
+    regression_cases_failed_to_create: 0,
     resolved: 0,
     monitoring: 0,
     needs_review: 0,
@@ -514,7 +517,19 @@ export async function runSystemAudit(opts: {
           // from the fixture, and claiming otherwise would be worse than
           // admitting it.
           deterministic: false,
-        }).catch(() => undefined);
+        }).catch((err: any) => {
+          // Counted and named. Discarding this is how seven findings ended up
+          // with no standing check and nothing to say about it.
+          summary.regression_cases_failed_to_create++;
+          summary.detector_errors.push({
+            detector: 'regression_case_creation',
+            error: `${f.signature}: ${err.message}`,
+          });
+          logger.error(
+            { signature: f.signature, error: err.message },
+            'Learning engine: regression case could not be created'
+          );
+        });
       }
     }
 
@@ -532,6 +547,11 @@ export async function runSystemAudit(opts: {
     summary.regression_cases_never_passed = regression.filter((r) => r.neverPassed && !r.skipped).length;
 
     // ---- 6. resolution sweep + protection verification ----
+    // A case that could not be created means the audit did not fully succeed.
+    // Reporting SUCCESS would be the same class of untruth as reporting zero
+    // findings on a day the audit never ran.
+    if (summary.regression_cases_failed_to_create > 0) summary.status = 'PARTIAL';
+
     // The sweep is over DEFECTS. An expected finding has nothing to resolve.
     const sweep = await sweepResolutions(new Set(seen.keys()), startedAt);
     summary.resolved = sweep.resolved;
