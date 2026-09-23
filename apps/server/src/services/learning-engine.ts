@@ -17,6 +17,7 @@ import { logger } from '../lib/logger.js';
 import {
   canResolve,
   isOpen,
+  isExpected,
   isStableSignature,
   protectionApplicable,
   isRepeatedFailure,
@@ -44,7 +45,12 @@ export interface IngestOutcome {
   signature: string;
   eventId: number;
   disposition: Disposition;
+  /** Distinct audit DAYS seen. The recurrence number. */
   occurrenceCount: number;
+  /** Times the audit observed it, across all runs. Not recurrence. */
+  auditRunsSeen: number;
+  classification: string | null;
+  expectedByContract: boolean;
   /** True when this sighting arrived after a protection was recorded. */
   protectionFailed: boolean;
   protectionId: string | null;
@@ -91,10 +97,12 @@ export async function ingestFinding(f: DetectorFinding, ctx: IngestContext): Pro
     fix_description: string | null;
     regression_test_status: string | null;
     human_approved: boolean;
+    audit_runs_seen: number | null;
   }[]>`
     SELECT event_id, occurrence_count, recurrence_count, status, protection_id,
            first_seen_at, event_date::text AS event_date, root_cause,
-           fix_applied, fix_description, regression_test_status, human_approved
+           fix_applied, fix_description, regression_test_status, human_approved,
+           audit_runs_seen
     FROM system_learning_events
     WHERE error_signature = ${f.signature}
     ORDER BY event_id DESC
@@ -103,14 +111,35 @@ export async function ingestFinding(f: DetectorFinding, ctx: IngestContext): Pro
 
   const prior = existing[0];
 
+  /**
+   * Where a brand-new finding starts.
+   *
+   * An observation the contract in force permits goes straight to EXPECTED
+   * with its evidence: it is not a defect, so holding it in
+   * NEEDS_HUMAN_REVIEW would queue a person against a fix that must never be
+   * written. Anything else with no established cause goes to human review,
+   * because a cause is never invented.
+   */
+  const initialStatus: string =
+    f.expectedByContract === true
+      ? 'EXPECTED'
+      : f.rootCause == null
+        ? 'NEEDS_HUMAN_REVIEW'
+        : 'NEW';
+
   // A protection recorded on the prior row means this sighting is evidence
   // that the protection does not work.
+  //
+  // An EXPECTED finding is excluded: nothing was protecting against it,
+  // because it is not a fault.
   const protectionId = prior?.protection_id ?? null;
-  const protectionFailed = prior != null && protectionId != null;
+  const protectionFailed =
+    prior != null && protectionId != null && f.expectedByContract !== true;
 
   let eventId: number;
   let disposition: Disposition;
   let occurrenceCount: number;
+  let auditRunsSeen: number;
   let status: string;
 
   if (prior == null) {
@@ -121,6 +150,9 @@ export async function ingestFinding(f: DetectorFinding, ctx: IngestContext): Pro
         expected_value, actual_value, difference, severity,
         root_cause, root_cause_confidence,
         first_seen_at, last_seen_at, occurrence_count, recurrence_count,
+        audit_runs_seen, audit_days_seen,
+        classification, classification_reason, contract_generation,
+        expected_by_contract, evidence_quality,
         fix_required, status,
         human_approval_required,
         source_commit, source_report_as_of, evidence, environment
@@ -131,7 +163,11 @@ export async function ingestFinding(f: DetectorFinding, ctx: IngestContext): Pro
         ${f.expected}, ${f.actual}, ${f.difference ?? null}, ${f.severity},
         ${f.rootCause}, ${f.rootCauseConfidence ?? null},
         ${ctx.detectedAt}, ${ctx.detectedAt}, 1, 0,
-        TRUE, ${f.rootCause == null ? 'NEEDS_HUMAN_REVIEW' : 'NEW'},
+        1, 1,
+        ${f.classification ?? null}, ${f.classificationReason ?? null},
+        ${f.contractGeneration ?? null}, ${f.expectedByContract ?? null},
+        ${f.evidenceQuality ?? null},
+        ${f.expectedByContract === true ? false : true}, ${initialStatus},
         ${f.humanApprovalRequired},
         ${ctx.sourceCommit}, ${ctx.reportAsOf}, ${sql.json(f.evidence as any)}, ${ctx.environment}
       )
@@ -140,7 +176,8 @@ export async function ingestFinding(f: DetectorFinding, ctx: IngestContext): Pro
     eventId = inserted[0].event_id;
     disposition = 'NEW';
     occurrenceCount = 1;
-    status = f.rootCause == null ? 'NEEDS_HUMAN_REVIEW' : 'NEW';
+    auditRunsSeen = 1;
+    status = initialStatus;
   } else {
     // Same audit day means the same condition still standing, not a fresh
     // recurrence — otherwise a persistent fault would inflate its own
@@ -162,14 +199,27 @@ export async function ingestFinding(f: DetectorFinding, ctx: IngestContext): Pro
     occurrenceCount = sameDay ? prior.occurrence_count : prior.occurrence_count + 1;
     const recurrenceCount = prior.recurrence_count + (sameDay ? 0 : 1);
 
-    // A sighting of something previously closed reopens it as a RECURRENCE.
-    status = isOpen(prior.status)
-      ? prior.root_cause == null
-        ? 'NEEDS_HUMAN_REVIEW'
-        : sameDay
-          ? prior.status
-          : 'RECURRENCE'
-      : 'RECURRENCE';
+    // audit_runs_seen counts every sighting. It is the number
+    // occurrence_count used to be, kept because it is worth having — just
+    // never as recurrence.
+    auditRunsSeen = (prior.audit_runs_seen ?? prior.occurrence_count) + 1;
+
+    // An observation the contract permits stays EXPECTED however often it is
+    // seen. Seeing legacy zeros again tomorrow is not a recurring defect; it
+    // is the same history, still there.
+    status = f.expectedByContract === true
+      ? 'EXPECTED'
+      : isExpected(prior.status)
+        // Previously expected, now NOT permitted: the contract governing
+        // those rows changed, which is a genuine new defect.
+        ? 'NEW'
+        : isOpen(prior.status)
+          ? prior.root_cause == null
+            ? 'NEEDS_HUMAN_REVIEW'
+            : sameDay
+              ? prior.status
+              : 'RECURRENCE'
+          : 'RECURRENCE';
 
     await sql`
       UPDATE system_learning_events SET
@@ -177,6 +227,15 @@ export async function ingestFinding(f: DetectorFinding, ctx: IngestContext): Pro
         event_date = ${ctx.eventDate},
         occurrence_count = ${occurrenceCount},
         recurrence_count = ${recurrenceCount},
+        audit_runs_seen = ${auditRunsSeen},
+        audit_days_seen = ${occurrenceCount},
+        classification = ${f.classification ?? null},
+        classification_reason = ${f.classificationReason ?? null},
+        contract_generation = ${f.contractGeneration ?? null},
+        expected_by_contract = ${f.expectedByContract ?? null},
+        evidence_quality = ${f.evidenceQuality ?? null},
+        root_cause = COALESCE(${f.rootCause ?? null}, root_cause),
+        fix_required = ${f.expectedByContract === true ? false : true},
         actual_value = ${f.actual},
         difference = ${f.difference ?? null},
         severity = ${f.severity},
@@ -235,6 +294,9 @@ export async function ingestFinding(f: DetectorFinding, ctx: IngestContext): Pro
     eventId,
     disposition,
     occurrenceCount,
+    auditRunsSeen,
+    classification: f.classification ?? null,
+    expectedByContract: f.expectedByContract === true,
     protectionFailed,
     protectionId,
     status,
@@ -316,18 +378,34 @@ export async function ensureRegressionCase(input: {
   assertionKey: string;
   expectedBehavior: string;
   previousBehavior: string;
+  /** The input that produced the fault, for deterministic reproduction. */
+  fixture?: Record<string, unknown> | null;
+  inputCondition?: string | null;
+  deterministic?: boolean;
 }): Promise<void> {
   await sql`
     INSERT INTO system_regression_cases (
       test_id, learning_event_id, test_name, category, error_signature, description,
       assertion_key, expected_behavior, actual_previous_behavior, status
     ) VALUES (
+    VALUES (
       ${input.testId}, ${input.eventId}, ${input.testName}, ${input.category},
       ${input.signature}, ${input.description}, ${input.assertionKey},
       ${input.expectedBehavior}, ${input.previousBehavior}, 'CREATED'
     )
     ON CONFLICT (test_id) DO NOTHING
   `;
+  // The fixture is written separately and idempotently, so re-running the
+  // audit refreshes the reproduction input without resetting the case's
+  // pass/fail history.
+  await sql`
+    UPDATE system_regression_cases SET
+      fixture = ${input.fixture == null ? null : sql.json(input.fixture as any)},
+      input_condition = COALESCE(${input.inputCondition ?? null}, input_condition),
+      deterministic = ${input.deterministic ?? false},
+      updated_at = NOW()
+    WHERE test_id = ${input.testId}
+  `.catch(() => undefined);
   await sql`
     UPDATE system_learning_events
     SET regression_test = ${input.testId}, updated_at = NOW()
@@ -427,6 +505,7 @@ export async function runRegressionCases(
       await sql`
         UPDATE system_regression_cases SET
           status = 'PASS', last_run_at = ${at}, pass_count = pass_count + 1,
+          never_passed = FALSE,
           current_behavior = 'fault not present', updated_at = NOW()
         WHERE test_id = ${c.test_id}
       `;
@@ -622,6 +701,16 @@ export interface LearningEventRow {
   fix_description: string | null;
   review_note: string | null;
   source_commit: string | null;
+  classification?: string | null;
+  classification_reason?: string | null;
+  contract_generation?: string | null;
+  expected_by_contract?: boolean | null;
+  evidence_quality?: string | null;
+  verification_status?: string | null;
+  /** Distinct audit DAYS seen. The recurrence number. */
+  audit_days_seen?: number;
+  /** Times the audit observed it. Not recurrence. */
+  audit_runs_seen?: number;
 }
 
 const EVENT_COLUMNS = sql`
@@ -630,7 +719,11 @@ const EVENT_COLUMNS = sql`
   severity, root_cause, first_seen_at, last_seen_at, occurrence_count, recurrence_count,
   status, protection_id, protection_type, regression_test, regression_test_status,
   human_approval_required, human_approved, fix_applied, fix_description, review_note,
-  source_commit
+  source_commit,
+  classification, classification_reason, contract_generation, expected_by_contract,
+  evidence_quality, verification_status,
+  COALESCE(audit_days_seen, occurrence_count) AS audit_days_seen,
+  COALESCE(audit_runs_seen, occurrence_count) AS audit_runs_seen
 `;
 
 export async function eventsForDate(eventDate: string): Promise<LearningEventRow[]> {
@@ -641,19 +734,33 @@ export async function eventsForDate(eventDate: string): Promise<LearningEventRow
   `.catch(() => []);
 }
 
-export async function recurringEvents(minOccurrences = 2): Promise<LearningEventRow[]> {
+export async function recurringEvents(minDays = 2): Promise<LearningEventRow[]> {
+  // DAYS seen, not audit runs, and never an EXPECTED finding: seeing legacy
+  // zeros again tomorrow is the same history, not a recurring defect.
   return sql<LearningEventRow[]>`
     SELECT ${EVENT_COLUMNS} FROM system_learning_events
-    WHERE occurrence_count >= ${minOccurrences}
-    ORDER BY occurrence_count DESC, last_seen_at DESC
+    WHERE COALESCE(audit_days_seen, occurrence_count) >= ${minDays}
+      AND status NOT IN ('EXPECTED', 'CLOSED_EXPECTED')
+    ORDER BY COALESCE(audit_days_seen, occurrence_count) DESC, last_seen_at DESC
   `.catch(() => []);
 }
 
 export async function unresolvedEvents(): Promise<LearningEventRow[]> {
+  // EXPECTED is excluded: the contract permits it, so there is nothing to
+  // resolve and nothing a person should be queued against.
   return sql<LearningEventRow[]>`
     SELECT ${EVENT_COLUMNS} FROM system_learning_events
-    WHERE status NOT IN ('RESOLVED', 'CLOSED_EXPECTED')
-    ORDER BY severity DESC, occurrence_count DESC
+    WHERE status NOT IN ('RESOLVED', 'CLOSED_EXPECTED', 'EXPECTED')
+    ORDER BY severity DESC, COALESCE(audit_days_seen, occurrence_count) DESC
+  `.catch(() => []);
+}
+
+/** Findings the contract in force permits, kept visible rather than hidden. */
+export async function expectedEvents(): Promise<LearningEventRow[]> {
+  return sql<LearningEventRow[]>`
+    SELECT ${EVENT_COLUMNS} FROM system_learning_events
+    WHERE status IN ('EXPECTED', 'CLOSED_EXPECTED')
+    ORDER BY last_seen_at DESC
   `.catch(() => []);
 }
 
@@ -661,7 +768,7 @@ export async function reviewQueue(): Promise<LearningEventRow[]> {
   return sql<LearningEventRow[]>`
     SELECT ${EVENT_COLUMNS} FROM system_learning_events
     WHERE human_approval_required = TRUE AND human_approved = FALSE
-      AND status NOT IN ('RESOLVED', 'CLOSED_EXPECTED')
+      AND status NOT IN ('RESOLVED', 'CLOSED_EXPECTED', 'EXPECTED')
     ORDER BY severity DESC, occurrence_count DESC
   `.catch(() => []);
 }
@@ -688,23 +795,36 @@ export async function learningStats(): Promise<ReturnType<typeof learningEffecti
   const [row] = await sql<{
     unique_error_classes: string; protected_classes: string; regression_covered_classes: string;
     recurring_classes: string; unresolved_classes: string; resolved_classes: string;
-    needs_human_review: string; total_occurrences: string;
+    needs_human_review: string; expected_classes: string; recurring_after_protection: string;
+    total_occurrences: string; total_audit_runs_seen: string;
   }[]>`
     SELECT
       COUNT(DISTINCT error_signature) AS unique_error_classes,
       COUNT(DISTINCT error_signature) FILTER (WHERE protection_id IS NOT NULL) AS protected_classes,
       COUNT(DISTINCT error_signature) FILTER (WHERE regression_test IS NOT NULL) AS regression_covered_classes,
-      COUNT(DISTINCT error_signature) FILTER (WHERE occurrence_count > 1) AS recurring_classes,
-      COUNT(DISTINCT error_signature) FILTER (WHERE status NOT IN ('RESOLVED','CLOSED_EXPECTED')) AS unresolved_classes,
+      -- Recurrence is DAYS seen, never audit runs. Counting runs made
+      -- "recurring" mean "somebody ran the audit twice".
+      COUNT(DISTINCT error_signature) FILTER (WHERE COALESCE(audit_days_seen, occurrence_count) > 1) AS recurring_classes,
+      -- EXPECTED is excluded from unresolved: an observation the contract
+      -- permits is not an open defect.
+      COUNT(DISTINCT error_signature) FILTER (WHERE status NOT IN ('RESOLVED','CLOSED_EXPECTED','EXPECTED')) AS unresolved_classes,
       COUNT(DISTINCT error_signature) FILTER (WHERE status = 'RESOLVED') AS resolved_classes,
       COUNT(DISTINCT error_signature) FILTER (WHERE status = 'NEEDS_HUMAN_REVIEW') AS needs_human_review,
-      COALESCE(SUM(occurrence_count), 0) AS total_occurrences
+      COUNT(DISTINCT error_signature) FILTER (WHERE status IN ('EXPECTED','CLOSED_EXPECTED')) AS expected_classes,
+      -- Protected classes that came back anyway: the only measure of a
+      -- protection that does not work.
+      COUNT(DISTINCT error_signature) FILTER (
+        WHERE protection_id IS NOT NULL AND COALESCE(audit_days_seen, occurrence_count) > 1
+      ) AS recurring_after_protection,
+      COALESCE(SUM(COALESCE(audit_days_seen, occurrence_count)), 0) AS total_occurrences,
+      COALESCE(SUM(COALESCE(audit_runs_seen, occurrence_count)), 0) AS total_audit_runs_seen
     FROM system_learning_events
   `.catch(() => [
     {
       unique_error_classes: '0', protected_classes: '0', regression_covered_classes: '0',
       recurring_classes: '0', unresolved_classes: '0', resolved_classes: '0',
-      needs_human_review: '0', total_occurrences: '0',
+      needs_human_review: '0', expected_classes: '0', recurring_after_protection: '0',
+      total_occurrences: '0', total_audit_runs_seen: '0',
     },
   ]);
 
@@ -722,6 +842,9 @@ export async function learningStats(): Promise<ReturnType<typeof learningEffecti
     resolved_classes: Number(row.resolved_classes),
     needs_human_review: Number(row.needs_human_review),
     total_occurrences: Number(row.total_occurrences),
+    expected_classes: Number(row.expected_classes),
+    recurring_after_protection: Number(row.recurring_after_protection),
+    total_audit_runs_seen: Number(row.total_audit_runs_seen),
   });
 }
 
@@ -746,25 +869,31 @@ export async function failureGroups(days: number): Promise<{ group: string; cate
 export async function repeatedFailureAlerts(): Promise<Record<string, unknown>[]> {
   const rows = await sql<{
     error_signature: string; error_title: string; category: string; occurrence_count: number;
+    audit_days_seen: number | null; audit_runs_seen: number | null;
     first_seen_at: string; last_seen_at: string; protection_id: string | null;
-    failure_count: number | null; human_approval_required: boolean;
+    failure_count: number | null; human_approval_required: boolean; status: string;
   }[]>`
     SELECT e.error_signature, e.error_title, e.category, e.occurrence_count,
+           e.audit_days_seen, e.audit_runs_seen, e.status,
            e.first_seen_at, e.last_seen_at, e.protection_id,
            p.failure_count, e.human_approval_required
     FROM system_learning_events e
     LEFT JOIN system_protections p ON p.protection_id = e.protection_id
-    WHERE e.occurrence_count >= ${isRepeatedFailure(0) ? 0 : 3}
-    ORDER BY e.occurrence_count DESC
+    WHERE COALESCE(e.audit_days_seen, e.occurrence_count) >= 1
+      AND e.status NOT IN ('EXPECTED', 'CLOSED_EXPECTED')
+    ORDER BY COALESCE(e.audit_days_seen, e.occurrence_count) DESC
   `.catch(() => []);
 
   return rows
-    .filter((r) => isRepeatedFailure(r.occurrence_count))
+    .filter((r) => isRepeatedFailure(r.audit_days_seen ?? r.occurrence_count))
     .map((r) => ({
       error_signature: r.error_signature,
       error: r.error_title,
       category: r.category,
-      occurrences: r.occurrence_count,
+      /** Days seen. The recurrence number. */
+      occurrences: r.audit_days_seen ?? r.occurrence_count,
+      /** Times the audit observed it. Not recurrence. */
+      audit_runs_seen: r.audit_runs_seen ?? r.occurrence_count,
       first_seen: r.first_seen_at,
       latest: r.last_seen_at,
       existing_protection: r.protection_id != null,

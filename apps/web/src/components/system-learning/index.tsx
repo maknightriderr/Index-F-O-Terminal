@@ -14,12 +14,13 @@ import React, { useState } from 'react';
 import { useLearning } from '@/lib/use-learning';
 import { api } from '@/lib/api';
 
-type Tab = 'overview' | 'errors' | 'recurring' | 'root-causes' | 'protections' | 'regressions' | 'review' | 'history';
+type Tab = 'overview' | 'errors' | 'recurring' | 'expected' | 'root-causes' | 'protections' | 'regressions' | 'review' | 'history';
 
 const TAB_LABELS: Record<Tab, string> = {
   overview: 'Overview',
   errors: 'Errors',
   recurring: 'Recurring',
+  expected: 'Expected',
   'root-causes': 'Root Causes',
   protections: 'Protections',
   regressions: 'Regression Tests',
@@ -82,8 +83,11 @@ function Empty({ children }: { children: React.ReactNode }) {
 }
 
 function EventCard({ e }: { e: any }) {
+  // Days seen, never audit runs — and an expected finding has nothing
+  // protecting against it, so it is neither active nor failed.
+  const daysSeen = e.audit_days_seen ?? e.occurrence_count;
   const protectionTone =
-    e.protection_id == null ? 'flat' : e.occurrence_count > 1 ? 'bad' : 'good';
+    e.protection_id == null ? 'flat' : daysSeen > 1 && e.status !== 'EXPECTED' ? 'bad' : 'good';
   return (
     <div className="border border-gray-700/60 light:border-slate-300 rounded-lg bg-gray-800/30 light:bg-white p-3 space-y-1.5">
       <div className="flex items-start justify-between gap-2 flex-wrap">
@@ -95,7 +99,8 @@ function EventCard({ e }: { e: any }) {
           <span className={`inline-block px-1.5 py-0.5 text-[10px] font-mono uppercase border rounded ${SEV_CLASS[e.severity] ?? SEV_CLASS.INFO}`}>
             {e.severity}
           </span>
-          <Pill>{e.status}</Pill>
+          <Pill tone={e.status === 'EXPECTED' ? 'good' : 'flat'}>{e.status}</Pill>
+          {e.classification && e.classification !== 'DEFECT' && <Pill tone="good">{e.classification}</Pill>}
           {e.human_approval_required && <Pill tone={e.human_approved ? 'good' : 'warn'}>{e.human_approved ? 'approved' : 'approval pending'}</Pill>}
         </div>
       </div>
@@ -104,17 +109,30 @@ function EventCard({ e }: { e: any }) {
         <div><dt className="text-gray-500 light:text-slate-500 inline">expected </dt><dd className="inline text-gray-300 light:text-slate-700 font-mono">{e.expected_value ?? '—'}</dd></div>
         <div><dt className="text-gray-500 light:text-slate-500 inline">actual </dt><dd className="inline text-gray-300 light:text-slate-700 font-mono">{e.actual_value ?? '—'}</dd></div>
         <div><dt className="text-gray-500 light:text-slate-500 inline">module </dt><dd className="inline text-gray-300 light:text-slate-700">{e.module ?? '—'}{e.component ? ` / ${e.component}` : ''}</dd></div>
-        <div><dt className="text-gray-500 light:text-slate-500 inline">occurrences </dt><dd className="inline text-gray-300 light:text-slate-700 tabular-nums">{e.occurrence_count} <span className="text-gray-500 light:text-slate-500">(recurrences {e.recurrence_count})</span></dd></div>
+        {/* Days seen is the recurrence number. Audit runs is shown beside it
+            so the difference is visible rather than implied. */}
+        <div><dt className="text-gray-500 light:text-slate-500 inline">days seen </dt><dd className="inline text-gray-300 light:text-slate-700 tabular-nums">{e.audit_days_seen ?? e.occurrence_count} <span className="text-gray-500 light:text-slate-500">({e.audit_runs_seen ?? e.occurrence_count} audit run{(e.audit_runs_seen ?? e.occurrence_count) === 1 ? '' : 's'})</span></dd></div>
+        {e.contract_generation && (
+          <div><dt className="text-gray-500 light:text-slate-500 inline">contract </dt><dd className="inline text-gray-300 light:text-slate-700 font-mono text-[11px]">{e.contract_generation}</dd></div>
+        )}
+        {e.evidence_quality && (
+          <div><dt className="text-gray-500 light:text-slate-500 inline">evidence </dt><dd className="inline"><Pill tone={e.evidence_quality === 'INSUFFICIENT' ? 'bad' : e.evidence_quality === 'HIGH' ? 'good' : 'warn'}>{e.evidence_quality}</Pill></dd></div>
+        )}
         <div className="sm:col-span-2">
           <dt className="text-gray-500 light:text-slate-500 inline">root cause </dt>
           <dd className="inline text-gray-300 light:text-slate-700">
             {e.root_cause ?? <span className="text-amber-400 light:text-amber-600">not established — routed to human review, never guessed</span>}
           </dd>
         </div>
-        <div><dt className="text-gray-500 light:text-slate-500 inline">protection </dt><dd className="inline"><Pill tone={protectionTone as any}>{e.protection_id == null ? 'none' : e.occurrence_count > 1 ? 'failed' : 'active'}</Pill></dd></div>
+        <div><dt className="text-gray-500 light:text-slate-500 inline">protection </dt><dd className="inline"><Pill tone={protectionTone as any}>{e.protection_id == null ? 'none' : daysSeen > 1 && e.status !== 'EXPECTED' ? 'failed' : 'active'}</Pill></dd></div>
         <div><dt className="text-gray-500 light:text-slate-500 inline">regression </dt><dd className="inline"><Pill tone={e.regression_test_status === 'FAIL' ? 'bad' : e.regression_test_status === 'PASS' ? 'good' : 'flat'}>{e.regression_test_status ?? 'none'}</Pill></dd></div>
       </dl>
 
+      {e.classification_reason && (
+        <p className="text-[11px] text-gray-400 light:text-slate-600 border-l-2 border-emerald-500/40 pl-2">
+          {e.classification_reason}
+        </p>
+      )}
       {e.review_note && (
         <p className="text-[11px] text-amber-400/90 light:text-amber-700 border-l-2 border-amber-500/50 pl-2">
           blocked by: {e.review_note}
@@ -126,7 +144,7 @@ function EventCard({ e }: { e: any }) {
 
 export function SystemLearningPage() {
   const [tab, setTab] = useState<Tab>('overview');
-  const { summary, events, recurring, unresolved, regressions, protections, review, history, loading, isLive, error, refresh } =
+  const { summary, events, recurring, expected, unresolved, regressions, protections, review, history, loading, isLive, error, refresh } =
     useLearning();
   const [reviewer, setReviewer] = useState('');
   const [busy, setBusy] = useState<number | null>(null);
@@ -220,6 +238,7 @@ export function SystemLearningPage() {
           >
             {TAB_LABELS[t]}
             {t === 'review' && review.length > 0 && <span className="ml-1 text-amber-400 light:text-amber-600">({review.length})</span>}
+            {t === 'expected' && expected.length > 0 && <span className="ml-1 text-emerald-400 light:text-emerald-600">({expected.length})</span>}
             {t === 'regressions' && regressions.some((r: any) => r.status === 'FAIL') && <span className="ml-1 text-red-400 light:text-red-600">!</span>}
           </button>
         ))}
@@ -234,6 +253,7 @@ export function SystemLearningPage() {
             <Stat label="Total issues" value={counts.total_issues ?? 0} />
             <Stat label="New" value={counts.new_errors ?? 0} tone={(counts.new_errors ?? 0) > 0 ? 'warn' : undefined} />
             <Stat label="Recurring" value={counts.recurring ?? 0} tone={(counts.recurring ?? 0) > 0 ? 'bad' : undefined} />
+            <Stat label="Expected" value={counts.expected ?? 0} tone="good" />
             <Stat label="Resolved" value={counts.resolved ?? 0} tone="good" />
             <Stat label="Needs review" value={counts.needs_review ?? 0} tone={(counts.needs_review ?? 0) > 0 ? 'warn' : undefined} />
             <Stat label="Regression fails" value={counts.regression_failures ?? 0} tone={(counts.regression_failures ?? 0) > 0 ? 'bad' : undefined} />
@@ -346,6 +366,18 @@ export function SystemLearningPage() {
         <Section title="Recurring errors" subtitle="Seen more than once. Where a protection existed and the fault returned, the protection has failed — which is a different and worse finding than the fault itself.">
           {recurring.length === 0 ? <Empty>no fault has been seen more than once</Empty> : (
             <div className="space-y-2">{recurring.map((e: any) => <EventCard key={e.event_id} e={e} />)}</div>
+          )}
+        </Section>
+      )}
+
+      {/* ---------------- EXPECTED ---------------- */}
+      {tab === 'expected' && !loading && (
+        <Section
+          title="Expected under contract"
+          subtitle="Real observations whose verdict is decided by the contract generation that wrote the rows. Not suppressed, and not defects — if the governing contract changes, the same observation becomes a defect again."
+        >
+          {expected.length === 0 ? <Empty>none</Empty> : (
+            <div className="space-y-2">{expected.map((e: any) => <EventCard key={e.event_id} e={e} />)}</div>
           )}
         </Section>
       )}

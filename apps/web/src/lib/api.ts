@@ -271,6 +271,10 @@ class ApiClient {
     return this.get<any>('/api/learning/recurring');
   }
 
+  async getLearningExpected() {
+    return this.get<any>('/api/learning/expected');
+  }
+
   async getLearningUnresolved() {
     return this.get<any>('/api/learning/unresolved');
   }

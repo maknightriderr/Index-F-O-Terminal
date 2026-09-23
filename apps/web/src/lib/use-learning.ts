@@ -11,6 +11,7 @@ export interface LearningData {
   summary: any | null;
   events: any[];
   recurring: any[];
+  expected: any[];
   unresolved: any[];
   regressions: any[];
   protections: any[];
@@ -28,6 +29,7 @@ export function useLearning(date?: string): LearningData {
     summary: null,
     events: [],
     recurring: [],
+    expected: [],
     unresolved: [],
     regressions: [],
     protections: [],
@@ -49,18 +51,20 @@ export function useLearning(date?: string): LearningData {
         api.getLearningSummary(date),
         api.getLearningEvents(date),
         api.getLearningRecurring(),
+        api.getLearningExpected(),
         api.getLearningUnresolved(),
         api.getLearningRegressions(),
         api.getLearningProtections(),
         api.getLearningReviewQueue(),
         api.getLearningHistory(30),
       ])
-        .then(([summary, events, recurring, unresolved, regressions, protections, review, history]) => {
+        .then(([summary, events, recurring, expected, unresolved, regressions, protections, review, history]) => {
           if (cancelled) return;
           setState({
             summary,
             events: events?.events ?? [],
             recurring: recurring?.events ?? [],
+            expected: expected?.events ?? [],
             unresolved: unresolved?.events ?? [],
             regressions: regressions?.cases ?? [],
             protections: protections?.protections ?? [],

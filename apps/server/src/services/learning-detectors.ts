@@ -26,7 +26,10 @@ import {
   buildSignature,
   qualifiesAsSystemError,
   requiresHumanApproval,
+  classifyAgainstContract,
   type Severity,
+  type Classification,
+  type EvidenceQuality,
 } from './learning-taxonomy.js';
 
 export interface Finding {
@@ -61,6 +64,21 @@ export interface Finding {
   } | null;
   humanApprovalRequired: boolean;
   evidence: Record<string, unknown>;
+
+  // ---- contract awareness ----
+  /**
+   * The verdict against the contract in force for the affected rows.
+   *
+   * Left undefined by detectors for which no contract generation applies; the
+   * engine then treats the finding as a plain defect. It is never defaulted to
+   * "expected", because that would let a detector silence itself by omission.
+   */
+  classification?: Classification | null;
+  classificationReason?: string | null;
+  contractGeneration?: string | null;
+  expectedByContract?: boolean | null;
+  /** How well the evidence supports the stated cause. */
+  evidenceQuality?: EvidenceQuality | null;
 }
 
 /** What one detector produced, including its own failure to run. */
@@ -435,44 +453,125 @@ export function detectDataQualityFaults(input: {
     if (f) out.findings.push(f);
   }
 
-  // Columns the null/zero audit itself flagged as suspicious.
+  // Zeros, split by the CONTRACT GENERATION that wrote them.
   //
-  // The audit returns a SENTENCE per column, not a column name:
-  //   "delta: 17692 rows read exactly 0, where a zero is not a valid ..."
+  // The engine's first lesson from this detector was "zero is bad". That is
+  // wrong, and it produced seven findings that were all correct observations
+  // and all wrong verdicts: under LEGACY_ZERO_MAPPING absence WAS stored as
+  // zero, so those zeros are the contract working exactly as designed. The
+  // identical observation under the current contract is a defect.
   //
-  // Only the column belongs in the signature. The row count belongs in
+  // So one finding per (column, generation), each classified against the
+  // contract that governs it. The split comes from nullZeroAudit, which owns
+  // the measurement; nothing is recounted here.
+  //
+  // The audit returns a SENTENCE per column in `suspicious`, not a column
+  // name — only the column belongs in the signature. The row count belongs in
   // `actual`, where it is expected to change between runs. Putting the whole
   // sentence in the scope carried the count into the signature, so the same
-  // fault produced a different signature every cycle — caught on the first
-  // production run by the stability guard, which refused all seven findings
-  // rather than storing a set of records that could never match each other.
+  // fault produced a different signature every cycle; caught on the first
+  // production run by the stability guard.
+  const byGeneration: any[] = Array.isArray(input.nullZero?.zerosByGeneration)
+    ? input.nullZero!.zerosByGeneration
+    : [];
   const suspicious: string[] = Array.isArray(input.nullZero?.suspicious) ? input.nullZero!.suspicious : [];
-  for (const entry of suspicious) {
-    const col = entry.split(':')[0].trim();
-    const f = makeFinding({
-      category: 'DATA_QUALITY',
-      module: 'data-integrity',
-      component: col,
-      fault: 'SUSPICIOUS_ZERO_DISTRIBUTION',
-      scope: col,
-      title: `Column "${col}" has a suspicious zero distribution`,
-      description:
-        'The null/zero audit flagged this column: a zero rate this high on a measured field usually means absence is being stored as zero.',
-      expected: 'zeros only where zero is a real measurement',
-      actual: entry,
-      severity: 'MEDIUM',
-      violatedContract: 'NULL_PRESERVING write contract — absence is stored as NULL, never as zero',
-      rootCause: null,
-      assertionKey: 'nullZero.suspicious',
-      proposedProtection: {
-        type: 'VALIDATION_RULE',
-        title: 'Absence is written as NULL, not zero',
-        rule: 'storeIfPositive / storeIfFinite at the capture write boundary',
-        implementedIn: 'apps/server/src/services/capture-quality.ts',
-      },
-      evidence: { column: col, finding: entry, columns: input.nullZero?.columns ?? null },
-    });
-    if (f) out.findings.push(f);
+
+  if (byGeneration.length > 0) {
+    for (const g of byGeneration) {
+      const col = String(g.column);
+      const verdict = classifyAgainstContract({
+        generation: g.generation ?? null,
+        contractualUnderGeneration: g.zeroIsContractual === true,
+        generationReason: g.generationReason ?? null,
+      });
+
+      const f = makeFinding({
+        category: 'DATA_QUALITY',
+        module: 'data-integrity',
+        component: `${col} @ ${g.generation}`,
+        // Generation is part of the signature: the same column under two
+        // generations is two different facts with opposite verdicts, and one
+        // signature could not carry both.
+        fault: 'SUSPICIOUS_ZERO_DISTRIBUTION',
+        scope: `${col}_${g.generation}`,
+        title: `Column "${col}" holds zeros under ${g.generation}`,
+        description: verdict.reason,
+        expected:
+          verdict.expectedByContract
+            ? `zeros are permitted for ${col} under ${g.generation}`
+            : `no zeros for ${col} under ${g.generation}, where absence is stored as NULL`,
+        actual: `${g.zeros} of ${g.total} rows read exactly 0`,
+        difference: String(g.zeros),
+        severity: verdict.expectedByContract ? 'INFO' : 'MEDIUM',
+        violatedContract: verdict.expectedByContract
+          ? `${g.generation} zero-mapping contract (observation permitted)`
+          : 'NULL_PRESERVING write contract — absence is stored as NULL, never as zero',
+        // For an expected finding the cause IS established: the generation
+        // explains it. For a defect it is not, and is left null.
+        rootCause: verdict.expectedByContract
+          ? `rows belong to ${g.generation}: ${g.generationReason}`
+          : null,
+        rootCauseConfidence: verdict.expectedByContract ? 'HIGH' : null,
+        assertionKey: `nullZero.zerosByGeneration.${col}.${g.generation}`,
+        proposedProtection: verdict.expectedByContract
+          ? null
+          : {
+              type: 'VALIDATION_RULE',
+              title: 'Absence is written as NULL, not zero',
+              rule: 'storeIfPositive / storeIfFinite at the capture write boundary',
+              implementedIn: 'apps/server/src/services/capture-quality.ts',
+            },
+        classification: verdict.classification,
+        classificationReason: verdict.reason,
+        contractGeneration: g.generation,
+        expectedByContract: verdict.expectedByContract,
+        evidenceQuality: verdict.evidenceQuality,
+        evidence: {
+          column: col,
+          generation: g.generation,
+          generationReason: g.generationReason,
+          zeros: g.zeros,
+          total: g.total,
+          zeroIsContractual: g.zeroIsContractual,
+          auditSentence: suspicious.find((x) => x.startsWith(`${col}:`)) ?? null,
+        },
+      });
+      if (f) out.findings.push(f);
+    }
+  } else if (suspicious.length > 0) {
+    // The audit could not supply the split — an older schema, or the
+    // generation columns are missing. Reported as needing contract review
+    // rather than assumed to be either a defect or expected.
+    for (const entry of suspicious) {
+      const col = entry.split(':')[0].trim();
+      const verdict = classifyAgainstContract({
+        generation: null,
+        contractualUnderGeneration: false,
+        generationReason: null,
+      });
+      const f = makeFinding({
+        category: 'DATA_QUALITY',
+        module: 'data-integrity',
+        component: col,
+        fault: 'SUSPICIOUS_ZERO_DISTRIBUTION_UNKNOWN_CONTRACT',
+        scope: col,
+        title: `Column "${col}" holds zeros, contract generation unknown`,
+        description: verdict.reason,
+        expected: 'the contract generation for these rows to be determinable',
+        actual: entry,
+        severity: 'MEDIUM',
+        violatedContract: 'every captured row carries a determinable contract generation',
+        rootCause: null,
+        assertionKey: 'nullZero.suspicious',
+        classification: verdict.classification,
+        classificationReason: verdict.reason,
+        contractGeneration: null,
+        expectedByContract: false,
+        evidenceQuality: verdict.evidenceQuality,
+        evidence: { column: col, finding: entry, zerosByGeneration: 'unavailable' },
+      });
+      if (f) out.findings.push(f);
+    }
   }
 
   // Data-quality events the engine already records during the session.

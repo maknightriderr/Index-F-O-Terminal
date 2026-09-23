@@ -58,10 +58,26 @@ import {
 } from './learning-engine.js';
 import { readFileSync } from 'node:fs';
 
-const CHECK_INTERVAL_MS = 60 * 60 * 1000;
-const INITIAL_DELAY_MS = 5 * 60 * 1000;
-/** The audit runs after this IST hour, so the day's capture is in. */
-const AUDIT_AFTER_IST_HOUR = 19;
+// Ticks more often than the audit runs, because the gate is no longer the
+// clock: it is "not yet completed for this date AND the source data is
+// ready". A shorter tick only means the audit starts sooner once both are
+// true, and the completion check makes extra ticks free.
+const CHECK_INTERVAL_MS = 15 * 60 * 1000;
+const INITIAL_DELAY_MS = 2 * 60 * 1000;
+
+/**
+ * The earliest the day's capture could plausibly be complete.
+ *
+ * A floor, not the trigger. The previous version used only `hour >= 19`,
+ * which meant a process restarting repeatedly before 19:00 never ran the
+ * audit at all — the redis claim was never attempted, so nothing recorded
+ * that the day had been missed.
+ */
+const AUDIT_EARLIEST_IST_HOUR = 19;
+
+/** The logical identity of an audit, with the date, for idempotency. */
+export const AUDIT_TYPE = 'SYSTEM_LEARNING';
+export const AUDIT_VERSION = 'v1';
 
 let started = false;
 
@@ -86,26 +102,114 @@ function istHour(at: Date): number {
 }
 
 /**
- * One run per IST day, claimed in redis.
+ * Whether the logical audit for a date has already completed.
  *
- * The same NX claim the holiday check uses. Without it an hourly tick would
- * re-run the audit every hour and inflate occurrence counts by a factor of
- * however often the process happens to wake up.
+ * Read from the audit-run table, not from redis. Redis is the concurrency
+ * lock; the table is the record. A redis key that expired, or a redis that
+ * was flushed, must not make a completed audit look un-run — and a claimed
+ * key that then crashed must not make an un-run audit look done.
+ */
+async function alreadyCompleted(eventDate: string): Promise<boolean> {
+  const rows = await sql<{ n: string }[]>`
+    SELECT COUNT(*) AS n FROM system_audit_runs
+    WHERE event_date = ${eventDate}
+      AND audit_type = ${AUDIT_TYPE}
+      AND audit_version = ${AUDIT_VERSION}
+      AND status IN ('SUCCESS', 'PARTIAL')
+      AND already_completed = FALSE
+  `.catch(() => [{ n: '0' }]);
+  return Number(rows[0]?.n ?? 0) > 0;
+}
+
+export interface ReadinessVerdict {
+  ready: boolean;
+  note: string;
+}
+
+/**
+ * Whether the day's source data is in.
+ *
+ * Asked of the data, not the clock. An audit that runs before capture has
+ * finished reports staleness caused by its own earliness — a finding about
+ * the auditor, recorded as a finding about the system.
+ *
+ * Readiness means: the market has closed everywhere, and the newest snapshot
+ * is from today. A day with no snapshot at all is NOT treated as ready,
+ * because the correct finding then is "capture wrote nothing", which the
+ * staleness detector raises during market hours where it is actionable.
+ */
+export async function sourceDataReady(at: Date): Promise<ReadinessVerdict> {
+  if (marketOpenAnywhere(at)) {
+    return { ready: false, note: 'an Indian exchange is still open; the day is not complete' };
+  }
+  if (istHour(at) < AUDIT_EARLIEST_IST_HOUR) {
+    return {
+      ready: false,
+      note: `before ${AUDIT_EARLIEST_IST_HOUR}:00 IST the day's capture cannot be complete`,
+    };
+  }
+  const [row] = await sql<{ t: Date | null }[]>`
+    SELECT MAX(time) AS t FROM oi_snapshots WHERE time <= ${at}
+  `.catch(() => [{ t: null }]);
+  if (row?.t == null) {
+    return { ready: false, note: 'no option-chain snapshot exists at all' };
+  }
+  const newestDay = istDate(new Date(row.t));
+  const today = istDate(at);
+  if (newestDay !== today) {
+    return {
+      ready: false,
+      note: `the newest snapshot is from ${newestDay}, not ${today} — capture has not run today, so auditing today would measure yesterday`,
+    };
+  }
+  return { ready: true, note: `capture has written for ${today}` };
+}
+
+/**
+ * Runs the audit when, and only when, it has not completed for this date and
+ * the source data is ready.
+ *
+ * The condition is no longer "the clock says 19:00". That version missed the
+ * day entirely if the process happened to be restarting through the window;
+ * this one keeps checking until both conditions hold, so the audit executes
+ * exactly once for the logical date whenever that becomes possible.
+ *
+ * Redis still provides the concurrency lock, so two workers ticking at the
+ * same instant cannot both start. It is a lock, not the record of completion.
  */
 async function maybeRun(provider: MarketDataProvider): Promise<void> {
   const now = new Date();
-  if (istHour(now) < AUDIT_AFTER_IST_HOUR) return;
   const day = istDate(now);
-  const claimed = await redis.set(`system_learning_audit:${day}`, '1', 'EX', 36 * 60 * 60, 'NX');
+
+  if (await alreadyCompleted(day)) return;
+
+  const readiness = await sourceDataReady(now);
+  if (!readiness.ready) return;
+
+  // Short TTL: this is a lock against concurrent starts, not a day-long
+  // claim. A crashed run must be retryable within the same day, which a
+  // 36-hour claim prevented.
+  const claimed = await redis.set(`system_learning_audit_lock:${day}`, '1', 'EX', 30 * 60, 'NX');
   if (claimed !== 'OK') return;
-  await runSystemAudit({ trigger: 'SCHEDULED' });
+
+  try {
+    await runSystemAudit({ trigger: 'SCHEDULED' });
+  } finally {
+    await redis.del(`system_learning_audit_lock:${day}`).catch(() => undefined);
+  }
 }
 
 export interface AuditRunSummary {
   audit_run_id: number | null;
   event_date: string;
   report_as_of: string | null;
-  status: 'SUCCESS' | 'PARTIAL' | 'FAILED';
+  status: 'SUCCESS' | 'PARTIAL' | 'FAILED' | 'ALREADY_COMPLETED';
+  /** TRUE when this request was declined because the logical audit had run. */
+  already_completed: boolean;
+  source_data_ready: boolean | null;
+  source_data_note: string | null;
+  /** Findings the contract in force permits. Not defects. */
+  expected_findings: number;
   detectors_run: number;
   detectors_failed: number;
   detector_errors: { detector: string; error: string }[];
@@ -139,7 +243,11 @@ function sourceCommit(): string | null {
 /**
  * The audit itself. Exported so the CLI and the API can run it on demand.
  */
-export async function runSystemAudit(opts: { trigger: string }): Promise<AuditRunSummary> {
+export async function runSystemAudit(opts: {
+  trigger: string;
+  /** Re-run a date that already completed. Records a new run; never duplicates counts. */
+  force?: boolean;
+}): Promise<AuditRunSummary> {
   const boundary = createReportAsOf();
   const startedAt = boundary.asOf;
   const eventDate = istDate(startedAt);
@@ -150,6 +258,10 @@ export async function runSystemAudit(opts: { trigger: string }): Promise<AuditRu
     event_date: eventDate,
     report_as_of: startedAt.toISOString(),
     status: 'SUCCESS',
+    already_completed: false,
+    source_data_ready: null,
+    source_data_note: null,
+    expected_findings: 0,
     detectors_run: 0,
     detectors_failed: 0,
     detector_errors: [],
@@ -168,9 +280,65 @@ export async function runSystemAudit(opts: { trigger: string }): Promise<AuditRu
     error: null,
   };
 
+  // IDEMPOTENCY. A logical audit is (date, type, version). A second request
+  // for one that already completed records that it was asked for and declined
+  // — it does not re-ingest findings, which would advance audit_runs_seen and
+  // every count derived from runs for no new information.
+  if (!opts.force && (await alreadyCompleted(eventDate))) {
+    const [existing] = await sql<Record<string, any>[]>`
+      SELECT audit_run_id, status, findings, new_errors, recurrences,
+             protection_failures, regression_failures, detectors_run, detectors_failed
+      FROM system_audit_runs
+      WHERE event_date = ${eventDate} AND audit_type = ${AUDIT_TYPE}
+        AND audit_version = ${AUDIT_VERSION} AND status IN ('SUCCESS', 'PARTIAL')
+        AND already_completed = FALSE
+      ORDER BY audit_run_id DESC LIMIT 1
+    `.catch(() => []);
+
+    await sql`
+      INSERT INTO system_audit_runs (
+        started_at, finished_at, event_date, report_as_of, status, audit_type,
+        audit_version, trigger_source, already_completed, source_commit
+      ) VALUES (
+        ${startedAt}, NOW(), ${eventDate}, ${startedAt}, 'ALREADY_COMPLETED',
+        ${AUDIT_TYPE}, ${AUDIT_VERSION}, ${opts.trigger}, TRUE, ${commit}
+      )
+    `.catch(() => undefined);
+
+    logger.info(
+      { trigger: opts.trigger, eventDate, existingRun: existing?.audit_run_id ?? null },
+      'System learning audit already completed for this date — declined'
+    );
+
+    return {
+      ...summary,
+      audit_run_id: existing?.audit_run_id ?? null,
+      status: 'ALREADY_COMPLETED',
+      already_completed: true,
+      findings: Number(existing?.findings ?? 0),
+      new_errors: Number(existing?.new_errors ?? 0),
+      recurrences: Number(existing?.recurrences ?? 0),
+      protection_failures: Number(existing?.protection_failures ?? 0),
+      regression_failures: Number(existing?.regression_failures ?? 0),
+      detectors_run: Number(existing?.detectors_run ?? 0),
+      detectors_failed: Number(existing?.detectors_failed ?? 0),
+    };
+  }
+
+  const readiness = await sourceDataReady(startedAt);
+  summary.source_data_ready = readiness.ready;
+  summary.source_data_note = readiness.note;
+
   const [runRow] = await sql<{ audit_run_id: number }[]>`
-    INSERT INTO system_audit_runs (started_at, event_date, report_as_of, status, source_commit)
-    VALUES (${startedAt}, ${eventDate}, ${startedAt}, 'RUNNING', ${commit})
+    INSERT INTO system_audit_runs (
+      started_at, event_date, report_as_of, status, source_commit,
+      audit_type, audit_version, trigger_source, source_data_ready, source_data_note
+    )
+    VALUES (
+      ${startedAt}, ${eventDate}, ${startedAt}, 'RUNNING', ${commit},
+      ${AUDIT_TYPE}, ${AUDIT_VERSION}, ${opts.trigger},
+      ${readiness.ready}, ${readiness.note}
+    )
     RETURNING audit_run_id
   `.catch(() => [{ audit_run_id: 0 }]);
   summary.audit_run_id = runRow?.audit_run_id ?? null;
@@ -265,24 +433,53 @@ export async function runSystemAudit(opts: { trigger: string }): Promise<AuditRu
       if (outcome == null) continue;
       summary.outcomes.push(outcome);
       seen.set(f.signature, f.actual);
-      if (outcome.disposition === 'NEW') summary.new_errors++;
-      if (outcome.disposition === 'RECURRENCE') summary.recurrences++;
-      if (outcome.protectionFailed) summary.protection_failures++;
+      // An observation the contract permits is not a new error and not a
+      // recurrence, however often it is seen.
+      if (outcome.expectedByContract) {
+        summary.expected_findings++;
+      } else {
+        if (outcome.disposition === 'NEW') summary.new_errors++;
+        if (outcome.disposition === 'RECURRENCE') summary.recurrences++;
+        if (outcome.protectionFailed) summary.protection_failures++;
+      }
 
-      // Every fault gets a standing case on first sight. Creating it only
+      // Every DEFECT gets a standing case on first sight. Creating it only
       // after a fix would leave the window in which the fault is most likely
       // to recur — before anyone has done anything — with no check at all.
-      await ensureRegressionCase({
-        testId: `RC:${f.signature}`,
-        eventId: outcome.eventId,
-        testName: f.title,
-        category: f.category,
-        signature: f.signature,
-        description: f.description,
-        assertionKey: f.assertionKey,
-        expectedBehavior: f.expected,
-        previousBehavior: f.actual,
-      }).catch(() => undefined);
+      //
+      // An EXPECTED finding gets none: a case asserting that legacy zeros do
+      // not exist would fail forever against data that is supposed to be
+      // there, and would report as a regression failure every cycle.
+      if (!outcome.expectedByContract) {
+        await ensureRegressionCase({
+          testId: `RC:${f.signature}`,
+          eventId: outcome.eventId,
+          testName: f.title,
+          category: f.category,
+          signature: f.signature,
+          description: f.description,
+          assertionKey: f.assertionKey,
+          expectedBehavior: f.expected,
+          previousBehavior: f.actual,
+          // The reproduction input, so the fault can be re-created once the
+          // live data has moved on.
+          fixture: {
+            assertionKey: f.assertionKey,
+            expected: f.expected,
+            observed: f.actual,
+            evidence: f.evidence,
+            contract_generation: f.contractGeneration ?? null,
+            report_as_of: ctx.reportAsOf,
+            source_commit: ctx.sourceCommit,
+          },
+          inputCondition: `${f.module}${f.component ? ` / ${f.component}` : ''} at report_as_of ${ctx.reportAsOf}`,
+          // Deterministic only when the fixture alone decides the outcome.
+          // A finding whose evidence is a live row count is not reproducible
+          // from the fixture, and claiming otherwise would be worse than
+          // admitting it.
+          deterministic: false,
+        }).catch(() => undefined);
+      }
     }
 
     // ---- 5. regression validation ----
@@ -299,6 +496,7 @@ export async function runSystemAudit(opts: { trigger: string }): Promise<AuditRu
     summary.regression_cases_never_passed = regression.filter((r) => r.neverPassed && !r.skipped).length;
 
     // ---- 6. resolution sweep + protection verification ----
+    // The sweep is over DEFECTS. An expected finding has nothing to resolve.
     const sweep = await sweepResolutions(new Set(seen.keys()), startedAt);
     summary.resolved = sweep.resolved;
     summary.monitoring = sweep.monitoring;
@@ -435,7 +633,9 @@ export const AUDIT_SCOPE = {
   detectors: DETECTOR_NAMES,
   protected_constants_checked: PROTECTED_CONSTANTS.length,
   strikes_each_side: STRIKES_EACH_SIDE,
-  runs_after_ist_hour: AUDIT_AFTER_IST_HOUR,
+  earliest_ist_hour: AUDIT_EARLIEST_IST_HOUR,
+  audit_type: AUDIT_TYPE,
+  audit_version: AUDIT_VERSION,
   note:
     'Every check here is an existing audit re-read, never a second measurement of the same thing. No trading judgement is made: the audit reports measurable contract violations only.',
 } as const;

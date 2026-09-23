@@ -221,13 +221,38 @@ export const LEARNING_STATES = [
   'RECURRENCE',
   'NEEDS_HUMAN_REVIEW',
   'RESOLVED',
-  /** Reviewed and judged not to be a fault. Terminal, and never automatic. */
+  /**
+   * The observation is real and the contract in force permits it.
+   *
+   * A first-class outcome, not a dismissal. The engine's original lesson was
+   * "zero is bad"; the correct one is that a zero under LEGACY_ZERO_MAPPING
+   * is that contract working as designed. Such a finding must not sit in
+   * NEEDS_HUMAN_REVIEW forever, and must not be counted as an unresolved
+   * defect, a regression failure or a protection failure — but it must stay
+   * on the record with its evidence, so a later contract change can make it
+   * a defect again.
+   */
+  'EXPECTED',
+  /** Reviewed by a person and judged not to be a fault. Terminal. */
   'CLOSED_EXPECTED',
 ] as const;
 export type LearningState = (typeof LEARNING_STATES)[number];
 
-/** States that mean "no longer counted as open". */
-export const TERMINAL_STATES: readonly LearningState[] = ['RESOLVED', 'CLOSED_EXPECTED'];
+/**
+ * States that mean "no longer counted as an open defect".
+ *
+ * EXPECTED is here because a finding the contract permits is not a defect.
+ * It is NOT the same as resolved: nothing was fixed, and if the contract
+ * governing those rows changes, the same observation becomes a defect again.
+ */
+export const TERMINAL_STATES: readonly LearningState[] = ['RESOLVED', 'CLOSED_EXPECTED', 'EXPECTED'];
+
+/** States that mean "the contract permits this", for reporting. */
+export const EXPECTED_STATES: readonly LearningState[] = ['EXPECTED', 'CLOSED_EXPECTED'];
+
+export function isExpected(status: string): boolean {
+  return (EXPECTED_STATES as readonly string[]).includes(status);
+}
 
 export function isOpen(status: string): boolean {
   return !(TERMINAL_STATES as readonly string[]).includes(status);
@@ -251,6 +276,12 @@ export interface ResolutionEvidence {
   protectionApplicable: boolean;
   humanApprovalRequired: boolean;
   humanApproved: boolean;
+  /** How well the evidence supports the stated cause. */
+  evidenceQuality?: string | null;
+  /** Set when the contract in force permits the observation. */
+  expectedByContract?: boolean;
+  /** Whether the protection has been verified to work, as opposed to existing. */
+  verificationStatus?: string | null;
 }
 
 export interface ResolutionVerdict {
@@ -262,6 +293,13 @@ export interface ResolutionVerdict {
 
 export function canResolve(e: ResolutionEvidence): ResolutionVerdict {
   const blockers: string[] = [];
+
+  // An observation the contract permits is not a defect, so the defect
+  // checklist does not apply to it. It goes to EXPECTED with its evidence
+  // rather than being held open against a fix that should never be written.
+  if (e.expectedByContract === true) {
+    return { canResolve: false, suggestedStatus: 'EXPECTED', blockers: [] };
+  }
 
   if (e.rootCause == null || e.rootCause.trim() === '') {
     blockers.push('root cause is not established — a finding with an unknown cause has not been understood, only stopped being noisy');
@@ -277,6 +315,18 @@ export function canResolve(e: ResolutionEvidence): ResolutionVerdict {
   }
   if (e.humanApprovalRequired && !e.humanApproved) {
     blockers.push('this finding is in the trading path and has not been approved by a human');
+  }
+  // Evidence quality is checked separately from the cause being written down:
+  // a cause can be recorded and still rest on nothing.
+  if (e.evidenceQuality != null && !evidenceSupportsClosure(e.evidenceQuality)) {
+    blockers.push(
+      `evidence quality is ${e.evidenceQuality} — closing on this would stop the finding being looked at while the cause is still unestablished`
+    );
+  }
+  // A protection existing is not a protection working. Verification is its
+  // own step, and "fix applied" is not proof of either.
+  if (e.protectionId != null && e.verificationStatus === 'FAILED') {
+    blockers.push('the protection for this fault has been verified as NOT working');
   }
 
   // An unknown root cause is the one blocker that changes where the finding
@@ -297,6 +347,121 @@ export function canResolve(e: ResolutionEvidence): ResolutionVerdict {
           : 'FIX_PROPOSED',
     blockers,
   };
+}
+
+// ------------------------------------------------------------
+// CONTRACT-AWARE CLASSIFICATION
+// ------------------------------------------------------------
+
+/**
+ * The verdict on an observation, as distinct from its severity.
+ *
+ * Severity says how much it would matter if it were wrong. This says whether
+ * it is wrong at all — which depends entirely on the contract in force for
+ * the rows involved.
+ */
+export const CLASSIFICATIONS = {
+  DEFECT: 'violates the data contract in force for the rows involved',
+  EXPECTED_UNDER_LEGACY_CONTRACT:
+    'valid under the contract generation that wrote these rows, which is not the current one',
+  EXPECTED_BEHAVIOR: 'valid under the current contract',
+  NEEDS_CONTRACT_REVIEW:
+    'the contract generation could not be determined, so whether this is a defect is unknown',
+} as const;
+
+export type Classification = keyof typeof CLASSIFICATIONS;
+
+export interface ContractVerdict {
+  classification: Classification;
+  reason: string;
+  expectedByContract: boolean;
+  /** Where the finding should sit given the verdict. */
+  suggestedStatus: LearningState;
+  evidenceQuality: EvidenceQuality;
+}
+
+/**
+ * Classifies an observation against the generation that produced it.
+ *
+ *   LEGACY_ZERO_MAPPING       -> EXPECTED_UNDER_LEGACY_CONTRACT
+ *   current contract          -> DEFECT
+ *   UNCLASSIFIED / unknown    -> NEEDS_CONTRACT_REVIEW
+ *
+ * `contractualUnderGeneration` is supplied by the audit that owns the
+ * measurement, not decided here: this function does not know what any
+ * particular contract permits, only how to act on the answer. That keeps the
+ * rule from being a second, drifting copy of the contract definitions.
+ *
+ * Note what this deliberately does NOT do: it never marks an observation
+ * expected merely because it is old, or because the value is a zero. Only an
+ * identified generation whose contract permits the observation qualifies.
+ */
+export function classifyAgainstContract(input: {
+  generation: string | null;
+  /** Whether that generation's contract permits what was observed. */
+  contractualUnderGeneration: boolean;
+  /** How the generation was established — from a stamped column, or inferred. */
+  generationReason: string | null;
+}): ContractVerdict {
+  const gen = input.generation;
+
+  if (gen == null || gen === 'UNCLASSIFIED' || gen.trim() === '') {
+    return {
+      classification: 'NEEDS_CONTRACT_REVIEW',
+      reason:
+        'the contract generation for the affected rows could not be determined, so whether the observation violates anything is unknown. Not assumed either way.',
+      expectedByContract: false,
+      suggestedStatus: 'NEEDS_HUMAN_REVIEW',
+      evidenceQuality: 'INSUFFICIENT',
+    };
+  }
+
+  if (input.contractualUnderGeneration) {
+    const stamped = (input.generationReason ?? '').includes('stamped on the row');
+    return {
+      classification:
+        gen === 'LEGACY_ZERO_MAPPING' ? 'EXPECTED_UNDER_LEGACY_CONTRACT' : 'EXPECTED_BEHAVIOR',
+      reason: `the affected rows belong to ${gen}, whose contract permits this observation (${input.generationReason ?? 'generation established'})`,
+      expectedByContract: true,
+      suggestedStatus: 'EXPECTED',
+      // A stamped generation is a recorded fact; an inferred one rests on a
+      // cutover comparison, which is weaker and says so.
+      evidenceQuality: stamped ? 'HIGH' : 'MEDIUM',
+    };
+  }
+
+  return {
+    classification: 'DEFECT',
+    reason: `the affected rows belong to ${gen}, whose contract does NOT permit this observation (${input.generationReason ?? 'generation established'})`,
+    expectedByContract: false,
+    suggestedStatus: 'NEW',
+    evidenceQuality: 'HIGH',
+  };
+}
+
+// ------------------------------------------------------------
+// EVIDENCE QUALITY
+// ------------------------------------------------------------
+
+export const EVIDENCE_QUALITIES = ['HIGH', 'MEDIUM', 'LOW', 'INSUFFICIENT'] as const;
+export type EvidenceQuality = (typeof EVIDENCE_QUALITIES)[number];
+
+export const EVIDENCE_QUALITY_MEANING: Record<EvidenceQuality, string> = {
+  HIGH: 'a stamped column or an explicit contract field decides it; no inference involved',
+  MEDIUM: 'established by comparison against an authoritative marker or cutover, not by a stamped field',
+  LOW: 'consistent with the available evidence but not established by it',
+  INSUFFICIENT: 'the evidence does not support any stated cause',
+};
+
+/**
+ * Whether the evidence is strong enough to close a finding.
+ *
+ * INSUFFICIENT never is. A finding resolved on insufficient evidence is worse
+ * than one left open, because it stops being looked at while the cause is
+ * still unknown.
+ */
+export function evidenceSupportsClosure(q: string | null): boolean {
+  return q === 'HIGH' || q === 'MEDIUM';
 }
 
 // ------------------------------------------------------------
@@ -475,12 +640,25 @@ export interface LearningStats {
   unique_error_classes: number;
   protected_classes: number;
   regression_covered_classes: number;
+  /** Classes seen on more than one audit DAY. Never audit runs. */
   recurring_classes: number;
   protection_failures: number;
   unresolved_classes: number;
   resolved_classes: number;
   needs_human_review: number;
+  /** Distinct audit days summed across classes. */
   total_occurrences: number;
+  /** Classes the contract in force permits. Not defects. */
+  expected_classes?: number;
+  /**
+   * Protected classes that came back anyway.
+   *
+   * The only honest measure of a protection that does not work: a protection
+   * existing says nothing, and a fix being applied says nothing either.
+   */
+  recurring_after_protection?: number;
+  /** Times the audit observed findings, across all runs. Not recurrence. */
+  total_audit_runs_seen?: number;
 }
 
 /**
@@ -513,8 +691,15 @@ export function learningEffectiveness(s: LearningStats): {
       regression_coverage: 'regression_covered_classes / unique_error_classes * 100',
       recurrence_rate: 'recurring_classes / unique_error_classes * 100',
       average_occurrences_per_class: 'total_occurrences / unique_error_classes',
+      recurring_classes: 'classes seen on more than one audit DAY — never a count of audit runs',
+      recurring_after_protection:
+        'classes with a protection recorded that were still seen on more than one day. This is protection ineffectiveness; a protection merely existing is not evidence it works, and neither is a fix having been applied.',
+      expected_classes:
+        'classes the contract in force permits. Counted apart from defects and excluded from unresolved.',
+      total_audit_runs_seen:
+        'times the audit observed findings across all runs. Reported for transparency and never used as recurrence.',
       note:
-        'No composite score is published. These four are defined; a weighted blend of them would not be, and a single number invites optimising the number instead of the system.',
+        'No composite score is published, and no "learning score" exists. These counts and four ratios are defined; a weighted blend of them would not be, and a single number invites optimising the number instead of the system.',
     },
   };
 }

@@ -16,6 +16,7 @@ import { sql } from '../lib/db.js';
 import { newBoundary, type ReportBoundary } from './report-boundary.js';
 import { RESEARCH_THRESHOLDS, CAPTURE_UNIVERSE_MODE } from './research-contract.js';
 import { DATA_QUALITY_CUTOVER_AT } from './capture-quality.js';
+import { classifyGeneration } from './contract-model.js';
 import { isMarketOpen } from '@fno/shared';
 import {
   SNAPSHOT_POPULATION_DEFINITIONS,
@@ -239,7 +240,38 @@ export interface NullZeroAudit {
  * one of them belongs in an average. This does not fix anything — it makes
  * a silent conversion visible if one is ever introduced.
  */
-export async function nullZeroAudit(boundary: ReportBoundary = newBoundary()): Promise<{ asOf: string; columns: NullZeroAudit[]; suspicious: string[] }> {
+export interface ZerosByGeneration {
+  column: string;
+  generation: string;
+  /** Why classifyGeneration() put this group in that generation. */
+  generationReason: string;
+  zeros: number;
+  total: number;
+  /** TRUE when a zero is what the contract for this generation prescribes. */
+  zeroIsContractual: boolean;
+}
+
+export async function nullZeroAudit(boundary: ReportBoundary = newBoundary()): Promise<{
+  asOf: string;
+  columns: NullZeroAudit[];
+  suspicious: string[];
+  /**
+   * The same zeros, split by the contract generation that wrote them.
+   *
+   * Without this the audit can only say "there are zeros here", and the
+   * engine downstream learned the wrong lesson from it: a zero under
+   * LEGACY_ZERO_MAPPING is the contract working exactly as designed, because
+   * absence WAS stored as zero then. The identical observation under the
+   * current contract is a defect. Same number, opposite verdict, and the
+   * generation is the only thing that decides which.
+   *
+   * The split is produced here, in the audit that owns the measurement,
+   * rather than in the detector — a second count of the same rows somewhere
+   * else would drift, and the day the two disagreed nobody would know which
+   * to believe.
+   */
+  zerosByGeneration: ZerosByGeneration[];
+}> {
   const spec: { column: string; zeroIsMeaningful: boolean; note: string }[] = [
     { column: 'oi', zeroIsMeaningful: true, note: 'A strike with genuinely no open interest reads 0. Null means the feed did not supply it.' },
     { column: 'change_oi', zeroIsMeaningful: true, note: 'Zero change is common and real. Null means no baseline existed to measure from.' },
@@ -294,7 +326,101 @@ export async function nullZeroAudit(boundary: ReportBoundary = newBoundary()): P
     }
   }
 
-  return { asOf: boundary.asOf.toISOString(), columns, suspicious };
+  return {
+    asOf: boundary.asOf.toISOString(),
+    columns,
+    suspicious,
+    zerosByGeneration: await zerosByContractGeneration(spec, boundary),
+  };
+}
+
+/**
+ * Zeros per (column, contract generation).
+ *
+ * Grouped by exactly the fields classifyGeneration() reads, so every row in a
+ * group classifies identically and one representative decides the whole
+ * group. The classifier stays the single source of truth for what a
+ * generation is — reimplementing its precedence in SQL would be a second
+ * implementation of the same rule, and the two would diverge.
+ */
+async function zerosByContractGeneration(
+  spec: { column: string; zeroIsMeaningful: boolean }[],
+  boundary: ReportBoundary
+): Promise<ZerosByGeneration[]> {
+  const out: ZerosByGeneration[] = [];
+
+  for (const s of spec) {
+    if (s.zeroIsMeaningful) continue; // a real zero needs no contract defence
+    try {
+      const rows = await sql.unsafe<
+        {
+          contract_generation: string | null;
+          capture_quality_version: string | null;
+          has_validity: boolean;
+          has_model: boolean;
+          pre_cutover: boolean;
+          zeros: string;
+          total: string;
+        }[]
+      >(
+        `SELECT contract_generation,
+                capture_quality_version,
+                (greeks_valid IS NOT NULL) AS has_validity,
+                (greeks_model_name IS NOT NULL) AS has_model,
+                (time < $2) AS pre_cutover,
+                COUNT(*) FILTER (WHERE ${s.column} = 0) AS zeros,
+                COUNT(*) AS total
+         FROM oi_snapshots
+         WHERE time <= $1
+         GROUP BY contract_generation, capture_quality_version,
+                  (greeks_valid IS NOT NULL), (greeks_model_name IS NOT NULL), (time < $2)`,
+        [boundary.asOf.toISOString(), new Date(DATA_QUALITY_CUTOVER_AT).toISOString()]
+      );
+
+      for (const r of rows) {
+        const zeros = Number(r.zeros ?? 0);
+        if (zeros === 0) continue;
+        const { generation, reason } = classifyGeneration(
+          {
+            contract_generation: r.contract_generation,
+            capture_quality_version: r.capture_quality_version,
+            // classifyGeneration only checks these for null-ness, so the
+            // group's boolean is a faithful stand-in.
+            greeks_valid: r.has_validity ? true : null,
+            greeks_model_name: r.has_model ? 'present' : null,
+            // Any instant on the correct side of the cutover classifies the
+            // group the same way; the boundary itself is the safe choice.
+            time: r.pre_cutover
+              ? new Date(DATA_QUALITY_CUTOVER_AT - 1)
+              : new Date(DATA_QUALITY_CUTOVER_AT),
+          },
+          DATA_QUALITY_CUTOVER_AT
+        );
+
+        const existing = out.find((x) => x.column === s.column && x.generation === generation);
+        if (existing) {
+          existing.zeros += zeros;
+          existing.total += Number(r.total ?? 0);
+        } else {
+          out.push({
+            column: s.column,
+            generation,
+            generationReason: reason,
+            zeros,
+            total: Number(r.total ?? 0),
+            // Under LEGACY_ZERO_MAPPING absence WAS stored as zero. That is
+            // the contract of that generation, not a violation of it.
+            zeroIsContractual: generation === 'LEGACY_ZERO_MAPPING',
+          });
+        }
+      }
+    } catch {
+      // A schema without these columns cannot be split. Reported as absent
+      // rather than as "all generations clean".
+    }
+  }
+
+  return out;
 }
 
 // ============================================================

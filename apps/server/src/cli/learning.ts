@@ -4,6 +4,7 @@
 //   npm run learning -- daily        run the audit, then print the report
 //   npm run learning -- today        today's findings, no audit run
 //   npm run learning -- recurring    faults that have come back
+//   npm run learning -- expected     observations the contract permits
 //   npm run learning -- unresolved   open faults and what blocks each one
 //   npm run learning -- regressions  standing cases and their verdicts
 //   npm run learning -- protections  what guards what, and what has failed
@@ -23,6 +24,7 @@ import {
   eventsForDate,
   recurringEvents,
   unresolvedEvents,
+  expectedEvents,
   reviewQueue,
   protectionRows,
   regressionRows,
@@ -70,14 +72,22 @@ async function printSummary(date: string): Promise<void> {
     console.log(`AUDIT STATUS: ran today — ${run.status}`);
   }
 
-  const openStates = ['RESOLVED', 'CLOSED_EXPECTED'];
+  const openStates = ['RESOLVED', 'CLOSED_EXPECTED', 'EXPECTED'];
   console.log();
-  console.log(`Errors:              ${events.length}`);
+  const isExpectedRow = (e: { status: string }) => e.status === 'EXPECTED' || e.status === 'CLOSED_EXPECTED';
+  const days = (e: { audit_days_seen?: number; occurrence_count: number }) =>
+    e.audit_days_seen ?? e.occurrence_count;
+
+  console.log(`Errors:              ${events.filter((e) => !isExpectedRow(e)).length}`);
   console.log(`New:                 ${events.filter((e) => e.status === 'NEW').length}`);
-  console.log(`Recurring:           ${events.filter((e) => e.occurrence_count > 1).length}`);
+  // Days seen, never audit runs: a fault observed 136 times in one day is one
+  // day observed, not a 136-occurrence recurring defect.
+  console.log(`Recurring:           ${events.filter((e) => days(e) > 1 && !isExpectedRow(e)).length}`);
+  console.log(`Expected:            ${events.filter(isExpectedRow).length}`);
   console.log(`Resolved:            ${events.filter((e) => e.status === 'RESOLVED').length}`);
   console.log(`Needs Review:        ${events.filter((e) => e.status === 'NEEDS_HUMAN_REVIEW').length}`);
   console.log(`Regression Failures: ${events.filter((e) => e.regression_test_status === 'FAIL').length}`);
+  console.log(`Open never-passed:   ${events.filter((e) => e.regression_test_status === 'OPEN').length}`);
   console.log(`Open:                ${events.filter((e) => !openStates.includes(e.status)).length}`);
 
   if (groups.length > 0) {
@@ -132,7 +142,10 @@ async function printEvents(date: string): Promise<void> {
     console.log(`  module      ${e.module ?? '-'}${e.component ? ` / ${e.component}` : ''}`);
     console.log(`  expected    ${e.expected_value ?? '-'}`);
     console.log(`  actual      ${e.actual_value ?? '-'}`);
-    console.log(`  occurrences ${e.occurrence_count} (recurrences ${e.recurrence_count})`);
+    console.log(`  days seen   ${e.audit_days_seen ?? e.occurrence_count}  (audit runs ${e.audit_runs_seen ?? e.occurrence_count})`);
+    if (e.classification) console.log(`  verdict     ${e.classification}`);
+    if (e.contract_generation) console.log(`  contract    ${e.contract_generation}`);
+    if (e.evidence_quality) console.log(`  evidence    ${e.evidence_quality}`);
     console.log(`  root cause  ${e.root_cause ?? 'NOT ESTABLISHED — routed to human review'}`);
     console.log(`  status      ${e.status}`);
     console.log(`  protection  ${e.protection_id ?? 'none'}`);
@@ -151,10 +164,11 @@ async function printRecurring(): Promise<void> {
     return;
   }
   for (const e of events) {
-    const status = e.protection_id == null ? 'NONE' : e.occurrence_count > 1 ? 'FAILED' : 'ACTIVE';
+    const status =
+      e.protection_id == null ? 'NONE' : (e.audit_days_seen ?? e.occurrence_count) > 1 ? 'FAILED' : 'ACTIVE';
     console.log(`\n${e.error_title}`);
     console.log(`  signature    ${e.error_signature}`);
-    console.log(`  occurrences  ${e.occurrence_count}`);
+    console.log(`  days seen    ${e.audit_days_seen ?? e.occurrence_count}  (audit runs ${e.audit_runs_seen ?? e.occurrence_count})`);
     console.log(`  first seen   ${new Date(e.first_seen_at).toISOString()}`);
     console.log(`  latest       ${new Date(e.last_seen_at).toISOString()}`);
     console.log(`  protection   ${e.protection_id ?? 'none'}`);
@@ -162,9 +176,33 @@ async function printRecurring(): Promise<void> {
     if (status === 'FAILED') {
       console.log('  ** the existing protection did not stop this. Root-cause investigation required. **');
     }
-    if (e.occurrence_count >= REPEATED_FAILURE_THRESHOLD) {
+    if ((e.audit_days_seen ?? e.occurrence_count) >= REPEATED_FAILURE_THRESHOLD) {
       console.log(`  ** REPEATED SYSTEM FAILURE (>= ${REPEATED_FAILURE_THRESHOLD} occurrences) **`);
     }
+  }
+}
+
+async function printExpected(): Promise<void> {
+  const events = await expectedEvents();
+  head('EXPECTED UNDER CONTRACT');
+  if (events.length === 0) {
+    console.log('none');
+    return;
+  }
+  console.log(
+    'Real observations whose verdict is decided by the contract generation\n' +
+    'that wrote the rows. Not suppressed, and not defects. If the governing\n' +
+    'contract changes, the same observation becomes a defect again.\n'
+  );
+  for (const e of events) {
+    console.log(`\n${e.error_title}`);
+    console.log(`  signature     ${e.error_signature}`);
+    console.log(`  why detected  ${e.description ?? '-'}`);
+    console.log(`  why expected  ${e.classification_reason ?? '-'}`);
+    console.log(`  contract      ${e.contract_generation ?? '-'}`);
+    console.log(`  evidence      ${e.evidence_quality ?? '-'}`);
+    console.log(`  first seen    ${new Date(e.first_seen_at).toISOString()}`);
+    console.log(`  days seen     ${e.audit_days_seen ?? e.occurrence_count}  (audit runs ${e.audit_runs_seen ?? e.occurrence_count})`);
   }
 }
 
@@ -286,6 +324,7 @@ async function printFullReport(date: string): Promise<void> {
   await printSummary(date);
   await printEvents(date);
   await printRecurring();
+  await printExpected();
   await printProtections();
   await printRegressions();
   await printUnresolved();
@@ -303,7 +342,20 @@ async function main(): Promise<void> {
   switch (cmd) {
     case 'daily': {
       const summary = await runSystemAudit({ trigger: 'CLI' });
-      console.log(`audit ${summary.status}: ${summary.findings} finding(s), ${summary.new_errors} new, ${summary.recurrences} recurrence(s)`);
+      if (summary.already_completed) {
+        console.log(
+          `audit ALREADY_COMPLETED for ${summary.event_date} — declined rather than re-run.\n` +
+          `Re-running would advance audit_runs_seen and every count derived from runs for no new information.`
+        );
+      } else {
+        console.log(
+          `audit ${summary.status}: ${summary.findings} finding(s), ${summary.new_errors} new, ` +
+          `${summary.expected_findings} expected, ${summary.recurrences} recurrence(s)`
+        );
+        if (summary.source_data_ready === false) {
+          console.log(`source data NOT ready: ${summary.source_data_note}`);
+        }
+      }
       if (summary.detector_errors.length > 0) {
         console.log('\nDETECTORS THAT COULD NOT EVALUATE (not the same as passing):');
         for (const d of summary.detector_errors) console.log(`  ${d.detector}: ${d.error}`);
@@ -320,6 +372,9 @@ async function main(): Promise<void> {
       break;
     case 'recurring':
       await printRecurring();
+      break;
+    case 'expected':
+      await printExpected();
       break;
     case 'unresolved':
       await printUnresolved();
@@ -343,7 +398,7 @@ async function main(): Promise<void> {
       await printFullReport(date);
       break;
     default:
-      console.log('usage: npm run learning -- <daily|today|events|recurring|unresolved|regressions|protections|review|history|stats|report> [YYYY-MM-DD]');
+      console.log('usage: npm run learning -- <daily|today|events|recurring|expected|unresolved|regressions|protections|review|history|stats|report> [YYYY-MM-DD]');
       process.exitCode = 1;
   }
 

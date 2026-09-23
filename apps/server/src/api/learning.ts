@@ -16,6 +16,7 @@ import {
   eventsForDate,
   recurringEvents,
   unresolvedEvents,
+  expectedEvents,
   reviewQueue,
   protectionRows,
   regressionRows,
@@ -32,6 +33,9 @@ import {
   TRADING_LOGIC_CATEGORIES,
   AUTO_SAFE_SCOPES,
   REPEATED_FAILURE_THRESHOLD,
+  CLASSIFICATIONS,
+  EVIDENCE_QUALITY_MEANING,
+  isExpected,
 } from '../services/learning-taxonomy.js';
 
 const VALID_DECISIONS: ReviewDecision[] = ['APPROVE', 'REJECT', 'MODIFY', 'DEFER', 'EXPECTED'];
@@ -68,7 +72,11 @@ export function createLearningRoutes(): Router {
         `.catch(() => []),
       ]);
 
-      const open = events.filter((e) => !['RESOLVED', 'CLOSED_EXPECTED'].includes(e.status));
+      // EXPECTED is not open: the contract permits it, so there is nothing
+      // to work on. It stays visible in its own count rather than inflating
+      // the defect numbers.
+      const open = events.filter((e) => !['RESOLVED', 'CLOSED_EXPECTED', 'EXPECTED'].includes(e.status));
+      const expected = events.filter((e) => isExpected(e.status));
       const roll = (rows: { group: string; n: number }[]) => {
         const m: Record<string, number> = {};
         for (const g of Object.values(CATEGORY_GROUPS)) m[g] = 0;
@@ -90,14 +98,38 @@ export function createLearningRoutes(): Router {
           counts: {
             total_issues: events.length,
             new_errors: events.filter((e) => e.status === 'NEW').length,
-            recurring: events.filter((e) => e.occurrence_count > 1).length,
+            /**
+             * DAYS seen, never audit runs, and never an expected finding.
+             * Counting runs made "recurring" mean "the audit ran twice".
+             */
+            recurring: events.filter(
+              (e) => (e.audit_days_seen ?? e.occurrence_count) > 1 && !isExpected(e.status)
+            ).length,
+            expected: expected.length,
             resolved: events.filter((e) => e.status === 'RESOLVED').length,
             needs_review: events.filter((e) => e.status === 'NEEDS_HUMAN_REVIEW').length,
             protection_failures: events.filter(
-              (e) => e.protection_id != null && e.occurrence_count > 1
+              (e) =>
+                e.protection_id != null &&
+                (e.audit_days_seen ?? e.occurrence_count) > 1 &&
+                !isExpected(e.status)
             ).length,
             regression_failures: events.filter((e) => e.regression_test_status === 'FAIL').length,
+            open_never_passed: events.filter((e) => e.regression_test_status === 'OPEN').length,
             open,
+          },
+          /**
+           * The verdict vocabulary, published so a reader can see that
+           * "expected" is a classification with evidence behind it rather
+           * than a category things get dropped into.
+           */
+          classifications: CLASSIFICATIONS,
+          evidence_quality_meaning: EVIDENCE_QUALITY_MEANING,
+          counter_semantics: {
+            audit_days_seen:
+              'distinct audit DAYS this fault was seen. This is the recurrence number and the only one used for recurrence.',
+            audit_runs_seen:
+              'times the audit observed it across all runs. Reported for transparency; audit execution frequency is not defect recurrence.',
           },
           why_did_the_system_fail: {
             today: roll(today),
@@ -157,12 +189,46 @@ export function createLearningRoutes(): Router {
              * something did is a protection that does not work.
              */
             protection_status:
-              e.protection_id == null ? 'NONE' : e.occurrence_count > 1 ? 'FAILED' : 'ACTIVE',
+              e.protection_id == null
+                ? 'NONE'
+                : (e.audit_days_seen ?? e.occurrence_count) > 1
+                  ? 'FAILED'
+                  : 'ACTIVE',
           })),
         },
       });
     } catch (err: any) {
       logger.error({ error: err.message }, 'Learning recurring failed');
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
+   * GET /api/learning/expected
+   *
+   * Findings the contract in force permits. Kept visible with their evidence
+   * rather than suppressed: the record has to be able to answer why each was
+   * originally detected and which generation makes it valid.
+   */
+  router.get('/expected', async (_req: Request, res: Response) => {
+    try {
+      const events = await expectedEvents();
+      res.json({
+        success: true,
+        data: {
+          events: events.map((e) => ({
+            ...e,
+            category_group: CATEGORY_GROUPS[categoryGroup(e.category)],
+            why_detected: e.description,
+            why_expected: e.classification_reason,
+            which_contract: e.contract_generation,
+          })),
+          note:
+            'These are real observations with a contract-aware verdict, not suppressed findings. If the contract governing those rows changes, the same observation becomes a defect again.',
+        },
+      });
+    } catch (err: any) {
+      logger.error({ error: err.message }, 'Learning expected failed');
       res.status(500).json({ success: false, error: err.message });
     }
   });
