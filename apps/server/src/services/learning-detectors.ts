@@ -861,6 +861,112 @@ export function detectDuplicateFaults(duplicates: {
   return out;
 }
 
+// ============================================================
+// EXECUTION PROVENANCE
+// ============================================================
+
+/**
+ * A trading control deciding on trades that were never entered.
+ *
+ * WHAT THIS IS NOT
+ *
+ * It is not "the setups lost money". A losing setup is not a system fault, and
+ * recording one as a fault is how a self-audit becomes a hindsight machine
+ * that proposes strategy changes after every adverse outcome. The taxonomy
+ * gate rejects that claim, and it should.
+ *
+ * WHAT IT IS
+ *
+ * `recordTradeSetupGenerated()` writes a row for every setup the engine MINTS.
+ * The price monitor then resolves each one to WIN/LOSS by watching whether
+ * price reached the hypothetical stop or target. Nothing anywhere records
+ * whether a setup was actually entered — there is no taken, executed or filled
+ * flag in the schema or the code.
+ *
+ * The daily risk breaker reads those rows and sums their R as REALISED P&L,
+ * which its own header claims it is doing. It is not: the population is
+ * generated setups, and the arithmetic over it is hypothetical. On
+ * 2026-09-23 three generated setups were watched into their stops and the
+ * account was stopped for the day at -3.65R of losses nobody had taken.
+ *
+ * That names a contract, an expectation and an observation, which is what
+ * makes it a system defect rather than a bad day.
+ *
+ * The same rows drive the post-loss cooldown, the post-loss confidence floor
+ * and the two-direction lock, so they inherit it. Those consumers are listed
+ * in the evidence rather than given signatures of their own: it is one defect
+ * — no execution tracking — and splitting it would fragment its history
+ * across code paths that all get fixed by the same decision.
+ */
+export function detectExecutionProvenanceFaults(input: {
+  /** Whether any execution/taken/filled marker exists in the schema or code. */
+  hasExecutionMarker: boolean;
+  /** Consumers that treat generated-setup outcomes as realised trading facts. */
+  consumers: { module: string; rule: string; live: boolean }[];
+  /** The setups behind the current figure, as evidence. */
+  affectedSetups?: { symbol: string; outcome: string | null; entry: number; stop: number }[];
+  /** Whether the daily breaker is currently permitted to veto. */
+  breakerEnabled: boolean;
+}): DetectorResult {
+  const out: DetectorResult = { detector: 'execution_provenance', findings: [], error: null };
+
+  // An execution marker existing is the fix. Nothing to report once it does.
+  if (input.hasExecutionMarker) return out;
+
+  const live = input.consumers.filter((c) => c.live);
+  if (live.length === 0 && !input.breakerEnabled) {
+    // Every affected consumer has been disabled. The underlying gap remains,
+    // but nothing is acting on it, so it is not a live fault.
+    return out;
+  }
+
+  const f = makeFinding({
+    category: 'TRADING',
+    module: 'risk-circuit-breaker',
+    component: 'realised P&L source',
+    fault: 'UNTAKEN_SETUPS_COUNTED_AS_REALISED_PNL',
+    title: 'Trading controls treat generated setups as taken trades',
+    description:
+      `No execution marker exists in the schema or the code, so every control that reasons about "what happened today" is reading setups the engine generated rather than trades that were entered. ${live.length} such rule(s) are currently live.`,
+    expected:
+      'a control that vetoes trading reads realised outcomes of trades that were ENTERED',
+    actual:
+      'controls read rows written by recordTradeSetupGenerated(), resolved to WIN/LOSS by watching hypothetical levels; no taken/executed/filled flag exists anywhere',
+    severity: 'HIGH',
+    violatedContract:
+      'the daily risk breaker documents its input as "realised R on closed setups"; realised means entered',
+    // Established, and provable from source rather than inferred: the absence
+    // of an execution marker is a fact about the code, not a hypothesis.
+    rootCause:
+      'the signals table records generated setups only. No execution state was ever modelled, so every consumer that needs "did this actually happen" has been reading "was this suggested" instead.',
+    rootCauseConfidence: 'HIGH',
+    assertionKey: 'executionProvenance.hasExecutionMarker',
+    proposedProtection: {
+      type: 'DATA_CONTRACT',
+      title: 'A trading veto may only read executed trades',
+      rule:
+        'any control that can refuse a setup must read a population carrying an execution marker; generated-setup outcomes may inform research, never a veto',
+      implementedIn: 'apps/server/src/services/risk-circuit-breaker.ts',
+    },
+    // Trading path twice over — category and module — but set explicitly so a
+    // taxonomy edit cannot un-gate a change to a capital control.
+    evidence: {
+      consumers: input.consumers,
+      breaker_currently_enabled: input.breakerEnabled,
+      affected_setups: input.affectedSetups ?? [],
+      note:
+        'The affected setups are EVIDENCE for the provenance defect, not findings in their own right. A losing setup is not a system fault.',
+      remediation_options: [
+        'track execution: add a taken/entered_at marker set when a fill is confirmed, and have the breaker count only those',
+        'separate source: give the breaker its own table of actual positions, leaving the signal record untouched',
+      ],
+    },
+  });
+  if (f) out.findings.push({ ...f, humanApprovalRequired: true });
+
+  return out;
+}
+
 /** Every detector, so the audit run can report how many ran and how many failed. */
 export const DETECTOR_NAMES = [
   'population_reconciliation',
@@ -873,4 +979,5 @@ export const DETECTOR_NAMES = [
   'run_snapshot_relationship',
   'capture_staleness',
   'duplicates',
+  'execution_provenance',
 ] as const;

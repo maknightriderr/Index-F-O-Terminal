@@ -43,6 +43,7 @@ import {
   detectRunSnapshotFaults,
   detectStalenessFaults,
   detectDuplicateFaults,
+  detectExecutionProvenanceFaults,
   DETECTOR_NAMES,
   type DetectorResult,
   type Finding,
@@ -438,6 +439,7 @@ export async function runSystemAudit(opts: {
       })
     );
     results.push(detectDuplicateFaults(duplicates));
+    results.push(detectExecutionProvenanceFaults(await readExecutionProvenance(boundary.asOf)));
 
     summary.detectors_run = results.length;
     for (const r of results) {
@@ -660,6 +662,90 @@ async function scanDuplicates(asOf: Date): Promise<{ table: string; key: string;
     }
   }
   return out;
+}
+
+/**
+ * Whether anything records that a setup was actually entered, and which
+ * controls are currently reasoning as though it did.
+ *
+ * Read from SOURCE, for the same reason the protected-constants audit is: the
+ * running process was built before any fix, so importing a flag would report
+ * the state of the build rather than the state of the code. The markers
+ * searched for are the ones a fix would plausibly introduce; finding any of
+ * them retires the finding.
+ */
+async function readExecutionProvenance(asOf: Date): Promise<{
+  hasExecutionMarker: boolean;
+  consumers: { module: string; rule: string; live: boolean }[];
+  affectedSetups: { symbol: string; outcome: string | null; entry: number; stop: number }[];
+  breakerEnabled: boolean;
+}> {
+  const roots = ['../../../../', '../../../../../'];
+  const read = (rel: string): string => {
+    for (const r of roots) {
+      try {
+        return readFileSync(new URL(`${r}${rel}`, import.meta.url), 'utf-8');
+      } catch {
+        /* try the next layout */
+      }
+    }
+    return '';
+  };
+
+  const breaker = read('apps/server/src/services/risk-circuit-breaker.ts');
+  const bias = read('apps/server/src/services/market-bias.ts');
+  const schema = read('database/init/002_schema.sql');
+
+  // An execution marker in any of the three places a fix could put one.
+  const MARKERS = /\b(entered_at|executed_at|filled_at|is_taken|taken_at|execution_id|position_id)\b/;
+  const hasExecutionMarker =
+    MARKERS.test(breaker) || MARKERS.test(bias) || MARKERS.test(schema);
+
+  const breakerEnabled = /export const DAILY_RISK_BREAKER_ENABLED = true/.test(breaker);
+
+  const consumers = [
+    {
+      module: 'risk-circuit-breaker',
+      rule: 'daily loss R, consecutive stops, trades per day, open positions',
+      live: breakerEnabled,
+    },
+    {
+      module: 'market-bias',
+      rule: 'post-loss cooldown (POST_LOSS_SETTLE_MINUTES)',
+      live: /POST_LOSS_SETTLE_MINUTES = \d+/.test(bias),
+    },
+    {
+      module: 'market-bias',
+      rule: 'post-loss confidence floor (POST_LOSS_MIN_CONFIDENCE)',
+      live: /POST_LOSS_MIN_CONFIDENCE = \d+/.test(bias),
+    },
+    {
+      module: 'market-bias',
+      rule: 'two-direction lock (MAX_SAME_DIRECTION_LOSSES_PER_DAY)',
+      live: /MAX_SAME_DIRECTION_LOSSES_PER_DAY = \d+/.test(bias),
+    },
+  ];
+
+  // The setups behind today's figure, as evidence for the provenance defect —
+  // never as findings of their own.
+  const rows = await sql<{ symbol: string; inputs: any }[]>`
+    SELECT symbol, inputs FROM signals
+    WHERE signal_type = 'TRADE_SETUP'
+      AND (time AT TIME ZONE 'Asia/Kolkata')::date = (${asOf} AT TIME ZONE 'Asia/Kolkata')::date
+    ORDER BY time ASC
+  `.catch(() => []);
+
+  return {
+    hasExecutionMarker,
+    consumers,
+    breakerEnabled,
+    affectedSetups: rows.map((r) => ({
+      symbol: r.symbol,
+      outcome: r.inputs?.outcome ?? null,
+      entry: Number(r.inputs?.entry ?? 0),
+      stop: Number(r.inputs?.stopLoss ?? 0),
+    })),
+  };
 }
 
 /** What the audit covers, for the report's own honesty about its scope. */
