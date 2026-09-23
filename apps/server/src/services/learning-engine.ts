@@ -818,7 +818,11 @@ export async function regressionRows(): Promise<Record<string, unknown>[]> {
   return sql<Record<string, unknown>[]>`
     SELECT test_id, learning_event_id, test_name, category, error_signature, description,
            assertion_key, expected_behavior, actual_previous_behavior, current_behavior,
-           status, last_run_at, pass_count, fail_count, last_failed_at, created_at
+           status, last_run_at, pass_count, fail_count, last_failed_at, created_at,
+           -- Selected, not just written. A column the table carries but the
+           -- API never returns is the same reporting gap as not having it:
+           -- OPEN vs FAIL was recorded and then invisible to every reader.
+           never_passed, deterministic, input_condition
     FROM system_regression_cases ORDER BY status DESC, last_run_at DESC NULLS LAST
   `.catch(() => []);
 }
