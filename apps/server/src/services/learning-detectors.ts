@@ -436,8 +436,19 @@ export function detectDataQualityFaults(input: {
   }
 
   // Columns the null/zero audit itself flagged as suspicious.
+  //
+  // The audit returns a SENTENCE per column, not a column name:
+  //   "delta: 17692 rows read exactly 0, where a zero is not a valid ..."
+  //
+  // Only the column belongs in the signature. The row count belongs in
+  // `actual`, where it is expected to change between runs. Putting the whole
+  // sentence in the scope carried the count into the signature, so the same
+  // fault produced a different signature every cycle — caught on the first
+  // production run by the stability guard, which refused all seven findings
+  // rather than storing a set of records that could never match each other.
   const suspicious: string[] = Array.isArray(input.nullZero?.suspicious) ? input.nullZero!.suspicious : [];
-  for (const col of suspicious) {
+  for (const entry of suspicious) {
+    const col = entry.split(':')[0].trim();
     const f = makeFinding({
       category: 'DATA_QUALITY',
       module: 'data-integrity',
@@ -448,7 +459,7 @@ export function detectDataQualityFaults(input: {
       description:
         'The null/zero audit flagged this column: a zero rate this high on a measured field usually means absence is being stored as zero.',
       expected: 'zeros only where zero is a real measurement',
-      actual: `flagged by nullZeroAudit as suspicious`,
+      actual: entry,
       severity: 'MEDIUM',
       violatedContract: 'NULL_PRESERVING write contract — absence is stored as NULL, never as zero',
       rootCause: null,
@@ -459,7 +470,7 @@ export function detectDataQualityFaults(input: {
         rule: 'storeIfPositive / storeIfFinite at the capture write boundary',
         implementedIn: 'apps/server/src/services/capture-quality.ts',
       },
-      evidence: { column: col, columns: input.nullZero?.columns ?? null },
+      evidence: { column: col, finding: entry, columns: input.nullZero?.columns ?? null },
     });
     if (f) out.findings.push(f);
   }
