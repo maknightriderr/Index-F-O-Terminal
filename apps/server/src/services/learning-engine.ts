@@ -557,17 +557,28 @@ export async function sweepResolutions(signaturesSeen: Set<string>, at: Date): P
   monitoring: number;
   needsReview: number;
 }> {
+  // EXPECTED is excluded from the sweep entirely.
+  //
+  // Found live: the sweep pulled in the rows migration 015 had just
+  // reclassified, ran the DEFECT checklist against them, and moved them from
+  // EXPECTED to FIX_PROPOSED — queueing a fix for an observation the contract
+  // permits. The state has to be stable across a sweep or it is not a state,
+  // just a label the next cycle overwrites.
   const open = await sql<{
     event_id: number; error_signature: string; category: string; status: string;
     root_cause: string | null; fix_applied: boolean; fix_description: string | null;
     protection_id: string | null; regression_test_status: string | null;
     human_approval_required: boolean; human_approved: boolean;
+    expected_by_contract: boolean | null; evidence_quality: string | null;
+    verification_status: string | null;
   }[]>`
     SELECT event_id, error_signature, category, status, root_cause, fix_applied,
            fix_description, protection_id, regression_test_status,
-           human_approval_required, human_approved
+           human_approval_required, human_approved,
+           expected_by_contract, evidence_quality, verification_status
     FROM system_learning_events
-    WHERE status NOT IN ('RESOLVED', 'CLOSED_EXPECTED')
+    WHERE status NOT IN ('RESOLVED', 'CLOSED_EXPECTED', 'EXPECTED')
+      AND COALESCE(expected_by_contract, FALSE) = FALSE
   `;
 
   let resolved = 0;
@@ -587,6 +598,11 @@ export async function sweepResolutions(signaturesSeen: Set<string>, at: Date): P
       protectionApplicable: protectionApplicable(e.category),
       humanApprovalRequired: e.human_approval_required,
       humanApproved: e.human_approved,
+      // Passed through, so a row carrying the contract verdict is never run
+      // through the defect checklist even if it reaches here.
+      expectedByContract: e.expected_by_contract === true,
+      evidenceQuality: e.evidence_quality,
+      verificationStatus: e.verification_status,
     });
 
     if (verdict.suggestedStatus === e.status) continue;

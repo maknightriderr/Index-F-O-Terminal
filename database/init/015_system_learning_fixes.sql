@@ -283,3 +283,19 @@ FROM system_learning_events e
 WHERE c.error_signature = e.error_signature
   AND e.classification = 'EXPECTED_UNDER_LEGACY_CONTRACT'
   AND c.status <> 'RETIRED_EXPECTED';
+
+-- ------------------------------------------------------------
+-- 6 · RESTORE ROWS THE SWEEP MOVED OUT OF EXPECTED
+-- ------------------------------------------------------------
+-- The resolution sweep did not know about the EXPECTED state and pulled the
+-- rows reclassified above through the DEFECT checklist, landing them in
+-- FIX_PROPOSED — a fix queued for an observation the contract permits. The
+-- sweep now excludes them; this restores the ones it already moved.
+--
+-- Guarded on expected_by_contract, so it only ever touches a row that carries
+-- the contract verdict, and idempotent because a row already in EXPECTED is
+-- excluded by the status predicate.
+UPDATE system_learning_events
+SET status = 'EXPECTED', updated_at = NOW()
+WHERE expected_by_contract = TRUE
+  AND status NOT IN ('EXPECTED', 'CLOSED_EXPECTED');
