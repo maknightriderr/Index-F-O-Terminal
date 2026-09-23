@@ -115,6 +115,8 @@ export interface AuditRunSummary {
   protection_failures: number;
   regression_failures: number;
   regression_cases_run: number;
+  /** Cases created by this cycle, which cannot yet regress. */
+  regression_cases_created_this_cycle: number;
   resolved: number;
   monitoring: number;
   needs_review: number;
@@ -155,6 +157,7 @@ export async function runSystemAudit(opts: { trigger: string }): Promise<AuditRu
     protection_failures: 0,
     regression_failures: 0,
     regression_cases_run: 0,
+    regression_cases_created_this_cycle: 0,
     resolved: 0,
     monitoring: 0,
     needs_review: 0,
@@ -280,9 +283,13 @@ export async function runSystemAudit(opts: { trigger: string }): Promise<AuditRu
     }
 
     // ---- 5. regression validation ----
-    const regression = await runRegressionCases(seen, startedAt);
-    summary.regression_cases_run = regression.length;
-    summary.regression_failures = regression.filter((r) => !r.passed).length;
+    // startedAt is passed twice on purpose: it is both the evaluation instant
+    // and the cycle boundary, so a case this cycle just created is skipped
+    // rather than counted as a regression against a fix that never existed.
+    const regression = await runRegressionCases(seen, startedAt, startedAt);
+    summary.regression_cases_run = regression.filter((r) => !r.skipped).length;
+    summary.regression_cases_created_this_cycle = regression.filter((r) => r.skipped).length;
+    summary.regression_failures = regression.filter((r) => !r.passed && !r.skipped).length;
 
     // ---- 6. resolution sweep + protection verification ----
     const sweep = await sweepResolutions(new Set(seen.keys()), startedAt);

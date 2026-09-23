@@ -328,6 +328,8 @@ export interface RegressionOutcome {
   signature: string;
   assertionKey: string;
   passed: boolean;
+  /** True when the case was created by this same cycle and cannot yet regress. */
+  skipped: boolean;
   observed: string;
 }
 
@@ -337,26 +339,60 @@ export interface RegressionOutcome {
  * A case fails when its signature appears in the current findings: the fault
  * it was created for is back. That is a regression by definition, and it is
  * reported as one rather than as a fresh discovery.
+ *
+ * A case CREATED BY THIS CYCLE is skipped, not failed. Cases are created on
+ * first sight of a fault, so without this every new finding would also report
+ * a regression failure against a case that has never passed — and
+ * "regression failures" would stop meaning "something we fixed came back",
+ * which is the only thing it is useful for. Such a case moves to CREATED and
+ * is evaluated from the next cycle onward.
  */
 export async function runRegressionCases(
   signaturesSeen: Map<string, string>,
-  at: Date
+  at: Date,
+  /** Cases created at or after this instant belong to the current cycle. */
+  cycleStartedAt: Date = at
 ): Promise<RegressionOutcome[]> {
   const cases = await sql<{
     test_id: string; error_signature: string; assertion_key: string;
+    created_at: Date; pass_count: number;
   }[]>`
-    SELECT test_id, error_signature, assertion_key FROM system_regression_cases
+    SELECT test_id, error_signature, assertion_key, created_at, pass_count
+    FROM system_regression_cases
   `;
 
   const outcomes: RegressionOutcome[] = [];
   for (const c of cases) {
     const observed = signaturesSeen.get(c.error_signature);
     const passed = observed == null;
+
+    // Created this cycle and never yet green: it is the record of a new
+    // fault, not evidence that a fix regressed.
+    const bornThisCycle =
+      new Date(c.created_at).getTime() >= cycleStartedAt.getTime() && c.pass_count === 0;
+    if (!passed && bornThisCycle) {
+      outcomes.push({
+        testId: c.test_id,
+        signature: c.error_signature,
+        assertionKey: c.assertion_key,
+        passed: false,
+        skipped: true,
+        observed: observed ?? '',
+      });
+      await sql`
+        UPDATE system_regression_cases SET
+          status = 'CREATED', current_behavior = ${observed ?? ''}, updated_at = NOW()
+        WHERE test_id = ${c.test_id}
+      `;
+      continue;
+    }
+
     outcomes.push({
       testId: c.test_id,
       signature: c.error_signature,
       assertionKey: c.assertion_key,
       passed,
+      skipped: false,
       observed: observed ?? 'fault not present',
     });
 
