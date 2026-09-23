@@ -15,6 +15,7 @@ import { MarketScannerPage } from '@/components/market-scanner';
 import { AiAssistantPage } from '@/components/ai-assistant';
 import { InstitutionalFlowPage } from '@/components/institutional-flow';
 import { BacktestingPage } from '@/components/backtesting';
+import { SystemLearningPage } from '@/components/system-learning';
 import { AddAssetModal } from '@/components/common/add-asset-modal';
 import { useMarketStore, useUISettingsStore, useSystemHealthStore } from '@/stores';
 import { useMarketWebSocket } from '@/lib/ws';
@@ -56,6 +57,8 @@ export function TerminalApp() {
         return <AlertsPage />;
       case 'ai-assistant':
         return <AiAssistantPage />;
+      case 'system-learning':
+        return <SystemLearningPage />;
       case 'system-health':
         return <SystemHealthPage />;
       case 'settings':

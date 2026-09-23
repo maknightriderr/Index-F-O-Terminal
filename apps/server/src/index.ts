@@ -14,6 +14,7 @@ import { sql, pingDb } from './lib/db.js';
 import { SubscriptionManager } from './lib/subscription-manager.js';
 import { runInteractive } from './lib/request-priority.js';
 import { startHolidayCalendarCheck } from './services/holiday-calendar-check.js';
+import { startSystemLearningAudit } from './services/system-learning-audit.js';
 import { createMarketWebSocketServer } from './ws/server.js';
 import { AngelOneProvider } from './providers/angel-one/index.js';
 import { createAuthRoutes } from './api/auth.js';
@@ -27,6 +28,7 @@ import { startPatternScanner } from './services/chart-patterns.js';
 import { createAiAssistantRoutes } from './api/ai-assistant.js';
 import { createInstitutionalFlowRoutes } from './api/institutional-flow.js';
 import { createBacktestingRoutes } from './api/backtesting.js';
+import { createLearningRoutes } from './api/learning.js';
 import { startAbandonedSetupSweep } from './services/backtesting.js';
 import { createNewsRoutes } from './api/news.js';
 import { createCorporateActionsRoutes } from './api/corporate-actions.js';
@@ -109,6 +111,7 @@ app.use('/api/corporate-actions', createCorporateActionsRoutes());
 app.use('/api/market-scanner', createMarketScannerRoutes(provider));
 app.use('/api/strategy-scanner', createStrategyScannerRoutes());
 app.use('/api/fii-dii', createFiiDiiRoutes());
+app.use('/api/learning', createLearningRoutes());
 
 // --- Health Check ---
 
@@ -266,6 +269,12 @@ void ensureCaptureSchema()
     startMissedWinnerAudit(provider);
   });
 startHolidayCalendarCheck();
+// The self-audit. Runs after the day's capture is in, feeds the failures the
+// existing audits already report into a durable learning record, and re-runs
+// the standing regression cases. It can change what the system NOTICES; it
+// cannot change what it DOES — every trading-path finding stops at a
+// proposal awaiting human approval.
+startSystemLearningAudit(provider);
 
 setInterval(() => {
   const { apiKey, clientId, password, totpSecret } = config.angelOne;

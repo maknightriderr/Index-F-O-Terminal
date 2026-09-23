@@ -256,6 +256,53 @@ class ApiClient {
   async chatWithAssistant(message: string, history: Array<{ role: 'user' | 'assistant'; content: string }>) {
     return this.post<{ reply: string }>('/api/ai-assistant/chat', { message, history });
   }
+
+  // --- System learning / self-audit ---
+
+  async getLearningSummary(date?: string) {
+    return this.get<any>(`/api/learning/summary${date ? `?date=${date}` : ''}`);
+  }
+
+  async getLearningEvents(date?: string) {
+    return this.get<any>(`/api/learning/events${date ? `?date=${date}` : ''}`);
+  }
+
+  async getLearningRecurring() {
+    return this.get<any>('/api/learning/recurring');
+  }
+
+  async getLearningUnresolved() {
+    return this.get<any>('/api/learning/unresolved');
+  }
+
+  async getLearningRegressions() {
+    return this.get<any>('/api/learning/regressions');
+  }
+
+  async getLearningProtections() {
+    return this.get<any>('/api/learning/protections');
+  }
+
+  async getLearningReviewQueue() {
+    return this.get<any>('/api/learning/review');
+  }
+
+  async getLearningHistory(days = 30) {
+    return this.get<any>(`/api/learning/history?days=${days}`);
+  }
+
+  /**
+   * Records a human decision on a trading-path finding.
+   *
+   * This records consent. It does not apply anything: the backend has no
+   * code path that edits a trading module.
+   */
+  async submitLearningReview(
+    eventId: number,
+    body: { decision: string; reviewer: string; note?: string; fix_description?: string }
+  ) {
+    return this.post<{ ok: boolean; status: string; message: string }>(`/api/learning/review/${eventId}`, body);
+  }
 }
 
 export class ApiError extends Error {

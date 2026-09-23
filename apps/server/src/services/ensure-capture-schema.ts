@@ -60,6 +60,7 @@ const FILES = [
   '011_contract_generations.sql',
   '012_milestone_derivation.sql',
   '013_contract_marker_authority.sql',
+  '014_system_learning.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */

@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "clean": "rimraf dist",
-    "db:migrate": "tsx src/database/migrate.ts"
+    "db:migrate": "tsx src/database/migrate.ts",
+    "learning": "tsx src/cli/learning.ts"
   },
   "dependencies": {
     "@fno/shared": "*",
