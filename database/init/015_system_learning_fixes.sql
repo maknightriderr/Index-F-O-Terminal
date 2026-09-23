@@ -131,6 +131,39 @@ SET audit_type = COALESCE(audit_type, 'SYSTEM_LEARNING'),
     audit_version = COALESCE(audit_version, 'v1')
 WHERE audit_type IS NULL OR audit_version IS NULL;
 
+-- Retrospectively mark redundant re-runs, so the unique index below can be
+-- created at all.
+--
+-- The index failed on first application, and correctly: rows already existed
+-- for the same logical audit because the endpoint was called repeatedly
+-- during verification, before the idempotency check existed. Those later runs
+-- WERE redundant — that is exactly what already_completed means — so labelling
+-- them is the honest reading, not a workaround to get the index built.
+--
+-- The EARLIEST run per logical audit is kept as the authoritative one; every
+-- later one is marked already_completed and thereby leaves the partial index's
+-- predicate. Nothing is deleted, so the history of how often the audit ran
+-- stays queryable.
+UPDATE system_audit_runs r
+SET already_completed = TRUE,
+    source_data_note = COALESCE(
+      source_data_note,
+      'marked redundant by migration 015: an earlier run had already completed this logical audit (date, type, version)'
+    )
+FROM (
+  SELECT event_date, audit_type, audit_version, MIN(audit_run_id) AS keep_id
+  FROM system_audit_runs
+  WHERE status IN ('SUCCESS', 'PARTIAL') AND already_completed = FALSE
+  GROUP BY event_date, audit_type, audit_version
+  HAVING COUNT(*) > 1
+) d
+WHERE r.event_date = d.event_date
+  AND r.audit_type IS NOT DISTINCT FROM d.audit_type
+  AND r.audit_version IS NOT DISTINCT FROM d.audit_version
+  AND r.status IN ('SUCCESS', 'PARTIAL')
+  AND r.already_completed = FALSE
+  AND r.audit_run_id <> d.keep_id;
+
 -- One COMPLETED logical audit per (date, type, version).
 --
 -- Partial so that RUNNING and FAILED rows do not block a retry: a failed
