@@ -117,6 +117,8 @@ export interface AuditRunSummary {
   regression_cases_run: number;
   /** Cases created by this cycle, which cannot yet regress. */
   regression_cases_created_this_cycle: number;
+  /** Failing, but never green — an open fault rather than a regression. */
+  regression_cases_never_passed: number;
   resolved: number;
   monitoring: number;
   needs_review: number;
@@ -158,6 +160,7 @@ export async function runSystemAudit(opts: { trigger: string }): Promise<AuditRu
     regression_failures: 0,
     regression_cases_run: 0,
     regression_cases_created_this_cycle: 0,
+    regression_cases_never_passed: 0,
     resolved: 0,
     monitoring: 0,
     needs_review: 0,
@@ -289,7 +292,11 @@ export async function runSystemAudit(opts: { trigger: string }): Promise<AuditRu
     const regression = await runRegressionCases(seen, startedAt, startedAt);
     summary.regression_cases_run = regression.filter((r) => !r.skipped).length;
     summary.regression_cases_created_this_cycle = regression.filter((r) => r.skipped).length;
-    summary.regression_failures = regression.filter((r) => !r.passed && !r.skipped).length;
+    // A REGRESSION is a case that was green and went red. A case that has
+    // never been green is an open fault, counted separately — otherwise this
+    // number becomes a second, worse count of open bugs.
+    summary.regression_failures = regression.filter((r) => !r.passed && !r.skipped && !r.neverPassed).length;
+    summary.regression_cases_never_passed = regression.filter((r) => r.neverPassed && !r.skipped).length;
 
     // ---- 6. resolution sweep + protection verification ----
     const sweep = await sweepResolutions(new Set(seen.keys()), startedAt);

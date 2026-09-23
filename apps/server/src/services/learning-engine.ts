@@ -330,6 +330,15 @@ export interface RegressionOutcome {
   passed: boolean;
   /** True when the case was created by this same cycle and cannot yet regress. */
   skipped: boolean;
+  /**
+   * True when the assertion is failing but has NEVER passed.
+   *
+   * That is a fault still open since it was found, not a regression. Only a
+   * case that was once green can regress, and conflating the two makes
+   * "regression failures" count open bugs — which is a number the system
+   * already reports, under a name that means something else.
+   */
+  neverPassed: boolean;
   observed: string;
 }
 
@@ -377,6 +386,7 @@ export async function runRegressionCases(
         assertionKey: c.assertion_key,
         passed: false,
         skipped: true,
+        neverPassed: true,
         observed: observed ?? '',
       });
       await sql`
@@ -387,12 +397,17 @@ export async function runRegressionCases(
       continue;
     }
 
+    // Failing, but never green: the fault has simply never been fixed. Real
+    // regressions are the ones that were green and went red.
+    const neverPassed = !passed && c.pass_count === 0;
+
     outcomes.push({
       testId: c.test_id,
       signature: c.error_signature,
       assertionKey: c.assertion_key,
       passed,
       skipped: false,
+      neverPassed,
       observed: observed ?? 'fault not present',
     });
 
@@ -404,17 +419,30 @@ export async function runRegressionCases(
         WHERE test_id = ${c.test_id}
       `;
     } else {
+      // OPEN means "never been green"; FAIL means "was green, went red".
+      // Only the second is a regression, and only the second should push the
+      // event back to RECURRENCE — a fault that was never fixed has not
+      // recurred, it has simply not gone away.
       await sql`
         UPDATE system_regression_cases SET
-          status = 'FAIL', last_run_at = ${at}, fail_count = fail_count + 1,
-          last_failed_at = ${at}, current_behavior = ${observed ?? ''}, updated_at = NOW()
+          status = ${neverPassed ? 'OPEN' : 'FAIL'}, last_run_at = ${at},
+          fail_count = fail_count + 1, last_failed_at = ${at},
+          current_behavior = ${observed ?? ''}, updated_at = NOW()
         WHERE test_id = ${c.test_id}
       `;
-      await sql`
-        UPDATE system_learning_events SET
-          regression_test_status = 'FAIL', status = 'RECURRENCE', updated_at = NOW()
-        WHERE error_signature = ${c.error_signature}
-      `;
+      if (!neverPassed) {
+        await sql`
+          UPDATE system_learning_events SET
+            regression_test_status = 'FAIL', status = 'RECURRENCE', updated_at = NOW()
+          WHERE error_signature = ${c.error_signature}
+        `;
+      } else {
+        await sql`
+          UPDATE system_learning_events SET
+            regression_test_status = 'OPEN', updated_at = NOW()
+          WHERE error_signature = ${c.error_signature}
+        `;
+      }
     }
   }
   return outcomes;
