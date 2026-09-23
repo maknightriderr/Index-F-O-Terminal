@@ -70,6 +70,12 @@ CREATE TABLE IF NOT EXISTS system_learning_events (
   root_cause_confidence VARCHAR(20),
 
   -- Recurrence bookkeeping, maintained by the engine.
+  --
+  -- occurrence_count counts DAYS the fault was seen, not audit cycles: two
+  -- runs on one day are one occurrence. Counting cycles would make it a
+  -- measure of how often somebody ran the audit while the fault was open,
+  -- and "first seen 15 Sep, 8 occurrences" only means something if 8 is
+  -- eight days. Individual sightings live in system_learning_occurrences.
   first_seen_at TIMESTAMPTZ NOT NULL,
   last_seen_at TIMESTAMPTZ NOT NULL,
   occurrence_count INTEGER NOT NULL DEFAULT 1,

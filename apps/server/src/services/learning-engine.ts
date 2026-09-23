@@ -147,7 +147,19 @@ export async function ingestFinding(f: DetectorFinding, ctx: IngestContext): Pro
     // recurrence count once per cycle and drown the genuinely repeating ones.
     const sameDay = prior.event_date === ctx.eventDate;
     disposition = sameDay ? 'REPEAT_SAME_DAY' : 'RECURRENCE';
-    occurrenceCount = prior.occurrence_count + 1;
+
+    // occurrence_count counts DAYS the fault was seen, not audit cycles.
+    //
+    // Incrementing per cycle made it count how often somebody ran the audit
+    // while the fault was open: verifying this engine by calling the manual
+    // endpoint in a loop took seven faults to 742 "occurrences" and tripped
+    // every repeated-failure alert. "First seen 15 Sep, 8 occurrences" is
+    // only a meaningful sentence if the 8 means eight days.
+    //
+    // Every individual sighting is still recorded in
+    // system_learning_occurrences, so nothing is lost — the full history is
+    // there for anything that wants to count cycles.
+    occurrenceCount = sameDay ? prior.occurrence_count : prior.occurrence_count + 1;
     const recurrenceCount = prior.recurrence_count + (sameDay ? 0 : 1);
 
     // A sighting of something previously closed reopens it as a RECURRENCE.
