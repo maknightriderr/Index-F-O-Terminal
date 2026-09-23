@@ -382,9 +382,14 @@ export function createLearningRoutes(): Router {
    * Read-only with respect to trading data: it runs the same detectors the
    * scheduled job does and writes only learning records.
    */
-  router.post('/audit', async (_req: Request, res: Response) => {
+  router.post('/audit', async (req: Request, res: Response) => {
     try {
-      const summary = await runSystemAudit({ trigger: 'MANUAL' });
+      // ?force=true re-runs a date that already completed, superseding the
+      // previous run. Deliberately opt-in and never what the scheduler does:
+      // the default is idempotent, and a forced re-run is an operator saying
+      // "the detector was wrong, evaluate the day again".
+      const force = req.query.force === 'true' || req.body?.force === true;
+      const summary = await runSystemAudit({ trigger: force ? 'MANUAL_FORCED' : 'MANUAL', force });
       res.json({ success: true, data: summary });
     } catch (err: any) {
       logger.error({ error: err.message }, 'Manual learning audit failed');

@@ -341,7 +341,9 @@ async function main(): Promise<void> {
 
   switch (cmd) {
     case 'daily': {
-      const summary = await runSystemAudit({ trigger: 'CLI' });
+      // --force re-runs a date that already completed, superseding it.
+      const force = process.argv.includes('--force');
+      const summary = await runSystemAudit({ trigger: force ? 'CLI_FORCED' : 'CLI', force });
       if (summary.already_completed) {
         console.log(
           `audit ALREADY_COMPLETED for ${summary.event_date} — declined rather than re-run.\n` +

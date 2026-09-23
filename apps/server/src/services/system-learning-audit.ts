@@ -325,6 +325,40 @@ export async function runSystemAudit(opts: {
     };
   }
 
+  // A FORCED re-run supersedes the completed run rather than sitting beside
+  // it. Two authoritative runs for one logical audit is the thing the unique
+  // index exists to prevent, and it is also just untrue: only one of them
+  // describes the current state of the system.
+  //
+  // This is the path for "the detector was wrong, re-run the day" — an
+  // explicit operator action, recorded as such, never something the scheduler
+  // does. The superseded row stays, so the history of what was concluded
+  // before the re-run is not lost.
+  if (opts.force) {
+    await sql`
+      UPDATE system_audit_runs SET
+        already_completed = TRUE,
+        source_data_note = COALESCE(source_data_note, '') ||
+          ' | superseded by a forced re-run at ' || ${startedAt.toISOString()}
+      WHERE event_date = ${eventDate} AND audit_type = ${AUDIT_TYPE}
+        AND audit_version = ${AUDIT_VERSION}
+        AND status IN ('SUCCESS', 'PARTIAL') AND already_completed = FALSE
+    `.catch(async () => {
+      // Older schema without the note column: the supersede itself is what
+      // matters, so it is retried without the annotation rather than skipped.
+      await sql`
+        UPDATE system_audit_runs SET already_completed = TRUE
+        WHERE event_date = ${eventDate} AND audit_type = ${AUDIT_TYPE}
+          AND audit_version = ${AUDIT_VERSION}
+          AND status IN ('SUCCESS', 'PARTIAL') AND already_completed = FALSE
+      `.catch(() => undefined);
+    });
+    logger.warn(
+      { eventDate, trigger: opts.trigger },
+      'System learning audit FORCED — the previously completed run for this date is superseded'
+    );
+  }
+
   const readiness = await sourceDataReady(startedAt);
   summary.source_data_ready = readiness.ready;
   summary.source_data_note = readiness.note;
