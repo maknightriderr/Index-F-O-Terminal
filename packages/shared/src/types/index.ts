@@ -412,6 +412,29 @@ export interface TradeSetup {
 
   /** Suggested quantity sized so a stop-out risks a fixed % of trading capital, not just the SL's % of premium. Naked long only — absent for a spread or an unavailable setup. */
   positionSize?: PositionSize;
+
+  // --- Validation review (present only when the matching flag was on) ---
+  /** How the structural stop was sized (flag STRUCTURAL_STOP). Absent when the flag was off. */
+  structuralStop?: TradeSetupStructuralStop;
+  /** True when structure wanted a stop wider than the 45% cap, so the capped stop fires before the level is reached. */
+  stopBeforeStructure?: boolean;
+  /** The reward:risk this setup had to clear after costs (flag RICH_IV_RR): 1.5 normally, higher when IV was RICH. */
+  requiredRiskReward?: number;
+}
+
+/** Fix 1 of the validation review: the stop widened to structure, never squeezed to fit R:R. */
+export interface TradeSetupStructuralStop {
+  /** entry × the mode/VIX/expiry premium stop — the pre-review ceiling. */
+  baseStopWidth: number;
+  /** |delta| × (|spot − nearestBehindLevel| + bufferAtr × ATR). Null when no level/ATR/spot was known. */
+  structuralStopWidth: number | null;
+  /** entry × MAX_SL_PREMIUM_PCT. */
+  capWidth: number;
+  nearestBehindLevel: number | null;
+  bufferAtr: number;
+  /** STRUCTURE when the structural width won over the base, else BASE. */
+  source: 'STRUCTURE' | 'BASE';
+  stopBeforeStructure: boolean;
 }
 
 /**
@@ -1317,6 +1340,10 @@ export type NoTradeCode =
   | 'REWARD_RISK_TOO_LOW'
   | 'NEUTRAL_BIAS'
   | 'NO_CHAIN'
+  // Validation review: last minutes of the session (flag CLOSING_GUARD) and
+  // too many same-direction/correlated live setups (flag CONCURRENCY_CAP).
+  | 'CLOSING_HOUR'
+  | 'CONCURRENT_EXPOSURE'
   | 'UNKNOWN';
 
 /** A structured account of one entry decision — why it was taken, or why it was not. */
