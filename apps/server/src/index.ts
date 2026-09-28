@@ -44,6 +44,7 @@ import { startFiiDiiTracker } from './services/fii-dii.js';
 import { startOiCloseSnapshot } from './services/oi-close-snapshot.js';
 import { startCacheWarmer } from './services/cache-warmer.js';
 import { startPositionalStockScan } from './services/positional-stock-scan.js';
+import { startBackgroundBiasEvaluator } from './services/background-bias-evaluator.js';
 import { startMarketStateCapture } from './services/market-state-capture.js';
 import { startMissedWinnerAudit } from './services/missed-winner-audit.js';
 import { ensureCaptureSchema } from './services/ensure-capture-schema.js';
@@ -249,6 +250,9 @@ startOiCloseSnapshot(provider);
 startCacheWarmer(provider);
 startStrategyTracker(provider);
 startPositionalStockScan(provider);
+// Non-NSE dashboard symbols (SENSEX, CRUDEOIL, GOLD by default) evaluated on a
+// timer with no browser open — flag BACKGROUND_BIAS, see the service header.
+startBackgroundBiasEvaluator(provider);
 // The historical market-state record. Until these ran, the five capture
 // tables had never had a row written to them, which is what made the
 // chain-dependent half of the engine unreplayable and left every shadow rule

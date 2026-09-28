@@ -61,6 +61,7 @@ import {
   GREEKS_MODEL_VERSION,
 } from './capture-quality.js';
 import { RISK_FREE_RATE, yearsToExpiry } from '@fno/shared';
+import { BACKGROUND_BIAS_SYMBOLS, COVERAGE_LAG_FLAGS } from '../config/trading-flags.js';
 
 const EXCHANGES: Exchange[] = ['NSE', 'BSE', 'MCX'];
 
@@ -144,7 +145,16 @@ async function runCapturePass(provider: MarketDataProvider): Promise<void> {
     // look, to a replay, like real quiet-market observations.
     if (!isMarketOpen(exchange)) continue;
 
-    const tracked = await redis.zrevrange(trackedKey(exchange), 0, MAX_SYMBOLS_PER_PASS * 2 - 1);
+    const recent = await redis.zrevrange(trackedKey(exchange), 0, MAX_SYMBOLS_PER_PASS * 2 - 1);
+    // The background-evaluated symbols go first (flag BACKGROUND_BIAS), so the
+    // per-pass cap can never crowd them out: the intraday positioning window
+    // reads its snapshots from exactly these rows.
+    const tracked = COVERAGE_LAG_FLAGS.BACKGROUND_BIAS
+      ? prioritiseCaptureMembers(
+          recent,
+          BACKGROUND_BIAS_SYMBOLS.filter((s) => s.exchange === exchange).map((s) => s.symbol)
+        )
+      : recent;
     if (tracked.length === 0) continue;
 
     let captured = 0;
@@ -164,6 +174,30 @@ async function runCapturePass(provider: MarketDataProvider): Promise<void> {
       }
     }
   }
+}
+
+/**
+ * Tracked `underlying|expiry` members with the priority underlyings first.
+ *
+ * Within a priority underlying the NEAREST expiry comes first: the capture
+ * mark is per underlying, so only the first of its members is captured each
+ * interval, and the intraday engine reads the nearest expiry's chain (a
+ * POSITIONAL read of the same symbol tracks a later one). Everything else
+ * keeps its recency order.
+ */
+export function prioritiseCaptureMembers(members: string[], priorityUnderlyings: readonly string[]): string[] {
+  if (priorityUnderlyings.length === 0) return members;
+  const priority = new Set(priorityUnderlyings.map((u) => u.toUpperCase()));
+  const underlyingOf = (m: string) => (m.split('|')[0] ?? '').toUpperCase();
+  const first = members
+    .filter((m) => priority.has(underlyingOf(m)))
+    .sort((a, b) => {
+      const [ua, ea = ''] = a.split('|');
+      const [ub, eb = ''] = b.split('|');
+      const byOrder = priorityUnderlyings.findIndex((u) => u.toUpperCase() === ua.toUpperCase()) - priorityUnderlyings.findIndex((u) => u.toUpperCase() === ub.toUpperCase());
+      return byOrder !== 0 ? byOrder : ea < eb ? -1 : ea > eb ? 1 : 0;
+    });
+  return [...first, ...members.filter((m) => !priority.has(underlyingOf(m)))];
 }
 
 /**
