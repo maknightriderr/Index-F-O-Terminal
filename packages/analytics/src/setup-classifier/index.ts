@@ -35,6 +35,9 @@ export type SetupFamily =
   | 'CONTINUATION'
   | 'MEAN_REVERSION'
   | 'STRUCTURE'
+  // Momentum-break setups (a separate family; classifySetup never assigns it —
+  // the server labels a trigger-minted setup directly).
+  | 'MOMENTUM'
   | 'UNKNOWN';
 
 export type SetupType =
@@ -58,6 +61,7 @@ export type SetupType =
   | 'SUPERTREND_FLIP'
   | 'EMA_TREND_CONTINUATION'
   | 'RSI_DIVERGENCE_REVERSAL'
+  | 'MOMENTUM_BREAK'
   | 'UNKNOWN';
 
 /**
@@ -126,6 +130,7 @@ const FAMILY: Record<SetupType, SetupFamily> = {
   FVG_RETEST: 'MEAN_REVERSION',
   ORDER_BLOCK_RETEST: 'MEAN_REVERSION',
   VWAP_RECLAIM: 'MEAN_REVERSION',
+  MOMENTUM_BREAK: 'MOMENTUM',
   UNKNOWN: 'UNKNOWN',
 };
 

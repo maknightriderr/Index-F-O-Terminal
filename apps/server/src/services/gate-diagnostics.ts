@@ -85,7 +85,10 @@ export type GateName =
   | 'CLOSING_HOUR'
   | 'POOR_LOCATION'
   | 'INSUFFICIENT_ROOM'
-  | 'CONCURRENT_EXPOSURE';
+  | 'CONCURRENT_EXPOSURE'
+  // Momentum-break family only (momentum-break-live.ts): the trigger rule
+  // itself. Not part of the consensus chain, so not in LIVE_CHAIN_GATES.
+  | 'TRIGGER_QUALITY';
 
 /**
  * The validation-review gates, in the order the live chain evaluates them:
@@ -189,6 +192,7 @@ export function gateForRefusalCode(code: string | null | undefined): GateName | 
   // The session gate refuses with MARKET_CLOSED outside hours and
   // OPENING_HOUR inside the settle/guard window; both are the same gate.
   if (code === 'MARKET_CLOSED') return 'OPENING_HOUR';
+  if (code === 'TRIGGER_QUALITY') return 'TRIGGER_QUALITY';
   if ((VALIDATION_GATES as readonly string[]).includes(code)) return code as GateName;
   return (LIVE_CHAIN_GATES as readonly string[]).includes(code) ? (code as GateName) : null;
 }

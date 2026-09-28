@@ -413,6 +413,7 @@ export function LossAttributionPage() {
               subtitle="Each decision is stamped with the rule set and flags it was made under (from migration 026). PRE_REVIEW = recorded before stamping. Read the versions side by side — never pooled."
             >
               <GroupTable groups={report.byLogicVersion ?? []} keyLabel="Logic version" />
+              {report.byStrategy && report.byStrategy.length > 0 && <GroupTable groups={report.byStrategy} keyLabel="Strategy (MOMENTUM_BREAK vs CONSENSUS)" />}
               {report.rDefinitions && (
                 <ul className="list-disc pl-4 text-[11px] text-gray-400 light:text-slate-600 space-y-0.5">
                   <li>{report.rDefinitions.simR}</li>

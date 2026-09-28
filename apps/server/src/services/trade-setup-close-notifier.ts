@@ -37,6 +37,10 @@ export type TradeCloseReason =
   | 'LIQUIDITY_DETERIORATION'
   | 'MANUAL_EXIT'
   | 'SYSTEM_ERROR'
+  // Momentum-break round: a trigger trade's level was closed back through,
+  // and a setup closed because a trigger fired the other way.
+  | 'LEVEL_RECLAIMED'
+  | 'TRIGGER_REVERSAL'
   | 'UNKNOWN';
 
 const REASON_TEXT: Record<TradeCloseReason, string> = {
@@ -54,6 +58,8 @@ const REASON_TEXT: Record<TradeCloseReason, string> = {
   LIQUIDITY_DETERIORATION: 'Closed — the contract stopped quoting a tradeable market',
   MANUAL_EXIT: 'Closed manually',
   SYSTEM_ERROR: 'Closed after a system error',
+  LEVEL_RECLAIMED: 'Closed — a 15m bar closed back through the level the momentum break was taken on',
+  TRIGGER_REVERSAL: 'Closed — a momentum-break trigger fired the other way',
   UNKNOWN: 'Closed — reason not recorded',
 };
 

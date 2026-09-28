@@ -45,6 +45,8 @@ export interface AttributionReport {
   exposure?: { sameDirection: AttributionGroup[]; correlated: AttributionGroup[]; note: string };
   /** Validation review: the same outcomes split by logic version. Optional so an older backend still renders. */
   byLogicVersion?: AttributionGroup[];
+  /** Momentum-break round: the same outcomes split by setup family. Optional so an older backend still renders. */
+  byStrategy?: AttributionGroup[];
   /** Validation review: what each R measure is. */
   rDefinitions?: { simR: string; premiumR: string; backtestingR: string };
 }

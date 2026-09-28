@@ -41,8 +41,10 @@ export function invalidationReasonFromCloseReason(closeReason: string | null | u
     // Branch 1, premium target side.
     case 'TARGET':
       return 'OPTION_TARGET_HIT';
-    // Branch 2.
+    // Branch 2 (and the momentum-break family's own underlying exits).
     case 'BIAS_REVERSED':
+    case 'LEVEL_RECLAIMED':
+    case 'TRIGGER_REVERSAL':
       return 'UNDERLYING_STRUCTURAL_INVALIDATION';
     default:
       return null;

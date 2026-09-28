@@ -24,6 +24,7 @@ import type {
   SpreadLeg,
   ExpiredCloseBreakdown,
   LogicVersionBucket,
+  StrategyBucket,
 } from '@fno/shared';
 import { minutesSinceSessionOpen, ESTIMATED_ROUND_TRIP_COST_PCT } from '@fno/shared';
 import { sql } from '../lib/db.js';
@@ -451,7 +452,36 @@ export async function getWinRateAnalytics(modeFilter?: TradingMode | 'ALL', sinc
     ),
     logicVersionFilter,
     byLogicVersion: logicVersionBuckets(splitPool),
+    byStrategy: strategyBuckets(splitPool),
   };
+}
+
+/** Momentum-break round: which family minted a setup. Everything that is not a momentum-break trigger is the consensus engine. */
+export function strategyFamilyOfSetup(r: Pick<TradeSetupRecord, 'strategy'>): 'MOMENTUM_BREAK' | 'CONSENSUS' {
+  return r.strategy === 'MOMENTUM_BREAK' ? 'MOMENTUM_BREAK' : 'CONSENSUS';
+}
+
+/** Headline figures per setup family (MOMENTUM_BREAK vs CONSENSUS), beside the logic-version split — never pooled. */
+export function strategyBuckets(records: readonly TradeSetupRecord[]): StrategyBucket[] {
+  const groups = new Map<string, TradeSetupRecord[]>();
+  for (const r of records) {
+    const key = strategyFamilyOfSetup(r);
+    const g = groups.get(key);
+    if (g) g.push(r);
+    else groups.set(key, [r]);
+  }
+  return [...groups.entries()]
+    .map(([strategy, recs]) => {
+      const rs = recs.map(toRMultiple).filter((x): x is number => x != null);
+      return {
+        strategy,
+        period: strategy,
+        ...bucketStats(recs),
+        profitFactor: computeRiskMetrics(recs).profitFactor,
+        totalRMultiple: rs.length > 0 ? Math.round(rs.reduce((a, b) => a + b, 0) * 100) / 100 : null,
+      };
+    })
+    .sort((a, b) => (a.strategy < b.strategy ? -1 : 1));
 }
 
 // ============================================================

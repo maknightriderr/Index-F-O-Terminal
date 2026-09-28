@@ -136,6 +136,23 @@ import { assessTradeHealth, emptyExcursion, updateExcursion, mfeInAtr, deadTrade
 import { notifyTradeSetupClosed } from './trade-setup-close-notifier.js';
 import type { TradeCloseReason } from './trade-setup-close-notifier.js';
 import type { OptionChain } from '@fno/shared';
+// Momentum-break round (flag MOMENTUM_BREAK): the trigger family that shares
+// the sticky slot. The detector is pure (@fno/analytics); the slot and gate
+// decisions are pure (momentum-break-live.ts); this file only wires them in.
+import { evaluateMomentumBreak, prepareMomentumSeries, recentMomentumBreak, MOMENTUM_BREAK_VARIANTS, type MomentumBreakSignal, type MomentumBreakVariant } from '@fno/analytics';
+import { MOMENTUM_BREAK_PARAMS, momentumBreakEnabledFor } from '../config/trading-flags.js';
+import {
+  MOMENTUM_BREAK_STRATEGY,
+  mergeCandleHistory,
+  storedMomentumBreak,
+  toClosedMomentumBars,
+  triggerQualityDiagnostic,
+  triggerRefusal,
+  triggerSlotAction,
+  triggerSlPremiumPct,
+  type SlotAction,
+  type StoredMomentumBreak,
+} from './momentum-break-live.js';
 
 // Angel One rate-limits historical-candle and Greeks requests far more
 // strictly than quotes (a burst of these returns a flat 403) — cache
@@ -383,6 +400,90 @@ export async function loadBiasCandles(
   assertNoFutureData(`${underlying} ${longInterval}`, candles1h.map((c) => Date.parse(c.timestamp)));
 
   return { candles15m, candles1h, volumeSource };
+}
+
+/** The live momentum-break variant: the pre-registered one the in-sample run chose (env-overridable). */
+function liveMomentumVariant(): MomentumBreakVariant {
+  const { MOMENTUM_BREAK_RANGE_MULT: rangeMult, MOMENTUM_BREAK_VOL_MULT: volMult } = MOMENTUM_BREAK_PARAMS;
+  return MOMENTUM_BREAK_VARIANTS.find((v) => v.rangeMult === rangeMult && v.volMult === volMult) ?? { id: `custom-R${rangeMult}-V${volMult}`, rangeMult, volMult };
+}
+
+/**
+ * The momentum-break read for one symbol: the trigger on the newest closed
+ * 15m bar (or null) and the most recent unreclaimed trigger within
+ * BREAKOUT_PERSIST_BARS for the regime assist. The same-slot volume median
+ * needs ten previous sessions, more than the bias read's 10 calendar days of
+ * 15m candles, so a longer history is loaded (cached longer) and the fresh
+ * candles are merged over it. Null — logged — when it cannot be read; a
+ * missing trigger read never blocks the consensus read.
+ */
+async function readMomentumBreak(
+  provider: MarketDataProvider,
+  underlying: string,
+  exchange: Exchange,
+  candles15m: OHLCV[]
+): Promise<{ trigger: MomentumBreakSignal | null; recent: { signal: MomentumBreakSignal; barsAgo: number } | null } | null> {
+  try {
+    const history = await loadMomentumHistory(provider, underlying, exchange);
+    const bars = toClosedMomentumBars(mergeCandleHistory(history, candles15m), exchange, decisionNow());
+    if (bars.length < 2) {
+      logger.warn({ underlying, exchange, bars: bars.length }, 'Momentum break: not enough closed 15m bars to evaluate');
+      return null;
+    }
+    const series = prepareMomentumSeries(bars);
+    const variant = liveMomentumVariant();
+    const i = bars.length - 1;
+    const evaluation = evaluateMomentumBreak(series, i, variant);
+    const recent = recentMomentumBreak(series, i, COVERAGE_LAG_PARAMS.BREAKOUT_PERSIST_BARS, variant);
+    if (evaluation.signal) {
+      logger.info({ underlying, exchange, trigger: evaluation.signal }, 'Momentum break: trigger on the newest closed 15m bar');
+    }
+    return { trigger: evaluation.signal, recent };
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying, exchange }, 'Momentum break: read failed — no trigger this poll');
+    return null;
+  }
+}
+
+/** MOMENTUM_BREAK_HISTORY_DAYS of 15m candles (index volume borrowed from the nearest future, as loadBiasCandles does). */
+async function loadMomentumHistory(provider: MarketDataProvider, underlying: string, exchange: Exchange): Promise<OHLCV[]> {
+  const spotToken = await resolveSpotToken(provider, underlying, exchange);
+  const token = exchange === 'MCX' ? (await resolveNearestFuturesContract(provider, underlying, exchange))?.token ?? spotToken : spotToken;
+  const now = decisionDate();
+  const days = MOMENTUM_BREAK_PARAMS.MOMENTUM_BREAK_HISTORY_DAYS;
+  const ttl = MOMENTUM_BREAK_PARAMS.MOMENTUM_BREAK_HISTORY_TTL_SECONDS;
+  const fromDate = formatAngelDateTime(new Date(now.getTime() - days * 24 * 60 * 60 * 1000));
+  const toDate = formatAngelDateTime(now);
+  const nonEmpty = (c: OHLCV[]) => c.length > 0;
+  // Same stagger rule as loadBiasCandles: only between real broker calls.
+  let fetched = false;
+  let candles = await cached(
+    `hist:${exchange}:${token}:15m-${days}d`,
+    ttl,
+    () => {
+      fetched = true;
+      return fetchHistoricalWithRetry(provider, { exchange, token, interval: 'FIFTEEN_MINUTE', fromDate, toDate });
+    },
+    nonEmpty
+  );
+  if (exchange !== 'MCX' && !hasRecentVolume(candles)) {
+    const future = await resolveNearestFuturesContract(provider, underlying, exchange).catch((err: any) => {
+      logger.warn({ error: err.message, underlying, exchange }, 'Momentum break: nearest future unresolved — history has no volume');
+      return undefined;
+    });
+    if (future) {
+      if (fetched) await sleep(1200);
+      const futureCandles = await cached(
+        `hist:${exchange}:FO:${future.token}:15m-${days}d`,
+        ttl,
+        () => fetchHistoricalWithRetry(provider, { exchange, segment: 'FO', token: future.token, interval: 'FIFTEEN_MINUTE', fromDate, toDate }),
+        nonEmpty
+      );
+      if (hasRecentVolume(futureCandles)) candles = withBorrowedVolume(candles, futureCandles);
+    }
+  }
+  assertNoFutureData(`${underlying} FIFTEEN_MINUTE ${days}d`, candles.map((c) => Date.parse(c.timestamp)));
+  return candles;
 }
 
 async function computeMarketBias(
@@ -1160,13 +1261,33 @@ async function computeMarketBias(
         volumeConfirmThreshold: VOLUME_CONFIRM_THRESHOLD,
       })
     : null;
-  const { regime, source: regimeSource } = applyFastIntradayRegime({
+  const fastRegime = applyFastIntradayRegime({
     enabled: fastRegimeEnabled,
     baseRegime,
     adx15m: adx15mValue,
     st15Direction: st15DirectionConfirmed,
     persisted: breakoutPersist,
   });
+
+  // --- Momentum-break trigger (flag MOMENTUM_BREAK, INTRADAY, allow-listed symbols) ---
+  // The detector runs on the newest CLOSED 15m bar with the same level
+  // builder the backtest used. Off (or not allow-listed) = nothing is read or
+  // fetched and the regime below is exactly the fast/1H regime. The newest
+  // closed bar is always computed (no fetch) so a trigger trade already in the
+  // slot can be checked for LEVEL_RECLAIMED even after the flag is turned off.
+  const momentumEnabled = momentumBreakEnabledFor(underlying, exchange, mode);
+  const momentumRead = momentumEnabled ? await readMomentumBreak(provider, underlying, exchange, candles15m) : null;
+  // (INTRADAY only: in POSITIONAL mode `candles15m` holds 1H bars, and trigger trades only live in the INTRADAY slot.)
+  const closedNow = isPositional ? [] : toClosedMomentumBars(candles15m, exchange, decisionNow());
+  const lastClosedBar = closedNow.length > 0 ? { time: closedNow[closedNow.length - 1].time, close: closedNow[closedNow.length - 1].close } : null;
+  // Regime assist: a qualified trigger in the last BREAKOUT_PERSIST_BARS bars
+  // (not since closed back through its level) reads as BREAKOUT/BREAKDOWN, so
+  // the consensus side stops calling a crash a weak bull trend. Expiry-day
+  // gamma keeps its priority.
+  const momentumRegime: MarketRegime | null =
+    momentumRead?.recent && fastRegime.regime !== 'EXPIRY_GAMMA' ? (momentumRead.recent.signal.direction === 'BULLISH' ? 'BREAKOUT' : 'BREAKDOWN') : null;
+  const regime: MarketRegime = momentumRegime ?? fastRegime.regime;
+  const regimeSource: RegimeSource = momentumRegime ? 'MOMENTUM_BREAK' : fastRegime.source;
 
   // --- Reasoning (built from the actual computed values, not templated) ---
   // Ordered by priority, not computation order — the frontend card only
@@ -1187,7 +1308,17 @@ async function computeMarketBias(
       `Futures OI, the ${regime === 'OPERATOR_ACCUMULATION' ? 'call' : 'put'} wall under pressure, and PCR skew all agree ${regime === 'OPERATOR_ACCUMULATION' ? 'bullish' : 'bearish'} with a ${fmt(Math.abs(futuresChangeOiPct), 1)}% futures OI change — real positioning, not just price action, is driving this move.`
     );
   }
-  if ((regime === 'BREAKOUT' || regime === 'BREAKDOWN') && regimeSource === 'BREAKOUT_PERSIST' && breakoutPersist) {
+  if (momentumRead?.trigger) {
+    const t = momentumRead.trigger;
+    reasoning.push(
+      `Momentum break (${t.direction.toLowerCase()}): the last closed 15m bar broke the ${t.levelKind.replace(/_/g, ' ').toLowerCase()} at ${fmt(t.levelPrice)} on ${fmt(t.volMult, 1)}x its usual volume and a ${fmt(t.rangeMult, 1)}x-ATR range — stop ${fmt(t.stop)}, target ${fmt(t.target)}.`
+    );
+  }
+  if (regimeSource === 'MOMENTUM_BREAK' && momentumRead?.recent) {
+    reasoning.push(
+      `Regime held at ${regime} by a momentum break ${momentumRead.recent.barsAgo} bar(s) ago through the ${momentumRead.recent.signal.levelKind.replace(/_/g, ' ').toLowerCase()} at ${fmt(momentumRead.recent.signal.levelPrice)}.`
+    );
+  } else if ((regime === 'BREAKOUT' || regime === 'BREAKDOWN') && regimeSource === 'BREAKOUT_PERSIST' && breakoutPersist) {
     reasoning.push(
       `Volume-confirmed ${regime === 'BREAKOUT' ? 'break above the upper' : 'break below the lower'} Bollinger Band ${breakoutPersist.barsAgo} bar(s) ago, still holding ${regime === 'BREAKOUT' ? 'above' : 'below'} the midline — the ${regime.toLowerCase()} regime is held while it does.`
     );
@@ -1727,7 +1858,10 @@ async function computeMarketBias(
   };
 
   const tradeSetup: TradeSetup = chain
-    ? await resolveStickyTradeSetup(provider, underlying, exchange, chain, direction, setupConfidence, regime, overall, mode, voteSnapshot, entryContext)
+    ? await resolveStickyTradeSetup(provider, underlying, exchange, chain, direction, setupConfidence, regime, overall, mode, voteSnapshot, entryContext, {
+        trigger: momentumRead?.trigger ?? null,
+        lastClosedBar,
+      })
     : { available: false, reason: 'Option chain unavailable for this symbol — cannot size a setup.' };
 
   const result: MarketBiasResult = { bias, score, tradeSetup };
@@ -2037,6 +2171,7 @@ interface StoredTradeSetup extends TradeSetup {
   underlyingAtGeneration?: number; // spot when minted — what re-surface staleness is measured against
   signalFreshness?: SurfacedFreshness; // attached to the RETURNED object on a re-surface only, never persisted
   logic?: LogicStamp; // validation review: logicVersion + flags this setup was minted under (absent before stamping)
+  momentumBreak?: StoredMomentumBreak; // momentum-break family only: the trigger it was minted on (LEVEL_RECLAIMED reads it)
 }
 
 /** Staleness of a re-surfaced sticky setup, as shown on the response. Measured only — see signal-freshness.ts. */
@@ -2245,7 +2380,8 @@ async function registerLosingClose(exchange: Exchange, underlying: string, mode:
  * everything, the full hour only for the setup that just failed, and a
  * higher confidence bar for the rest of the day.
  */
-async function losingCloseCooldownReason(underlying: string, exchange: Exchange, direction: BiasDirection, mode: TradingMode, confidence: number): Promise<GateRefusal | null> {
+// Exported for the momentum-break pipeline test (the post-loss floor on a trigger's quality).
+export async function losingCloseCooldownReason(underlying: string, exchange: Exchange, direction: BiasDirection, mode: TradingMode, confidence: number): Promise<GateRefusal | null> {
   if (direction === 'NEUTRAL') return null;
   const day = decisionIstDate();
   try {
@@ -2431,7 +2567,8 @@ async function resolveStickyTradeSetup(
   intelligenceScore: number,
   mode: TradingMode = 'INTRADAY',
   voteSnapshot?: BiasVoteSnapshot,
-  entryContext?: SetupEntryContext
+  entryContext?: SetupEntryContext,
+  momentum?: { trigger: MomentumBreakSignal | null; lastClosedBar: { time: number; close: number } | null }
 ): Promise<TradeSetup> {
   const isPositional = mode === 'POSITIONAL';
   const setupTtl = isPositional ? STICKY_TRADE_SETUP_TTL_SECONDS_POSITIONAL : STICKY_TRADE_SETUP_TTL_SECONDS;
@@ -2527,6 +2664,11 @@ async function resolveStickyTradeSetup(
   // poll's chain happens to be — see chainForStoredSetup.
   const storedChain = stored?.available ? await chainForStoredSetup(provider, underlying, exchange, chain, stored) : chain;
 
+  // Momentum break: a trigger bar acts once — the first caller to claim it
+  // may reverse the slot and mint; every other caller (and every later poll
+  // inside the same 15 minutes) reads the slot as usual.
+  const trigger = momentum?.trigger ? await claimMomentumTrigger(exchange, underlying, mode, momentum.trigger) : null;
+
   if (storedIsPlausible && (isPositional || stored!.day === today)) {
     const isSpread = stored!.structureType === 'SPREAD';
     let currentValue: number | null = null;
@@ -2586,6 +2728,14 @@ async function resolveStickyTradeSetup(
       hitTarget = currentLtp != null && currentLtp >= stored!.target!;
     }
 
+    // Momentum break (checked after the premium stop/target, before any
+    // consensus exit): a trigger trade is exempt from BIAS_REVERSED and holds
+    // until stop, target, session end or LEVEL_RECLAIMED; a fresh trigger the
+    // other way closes whatever the slot holds (TRIGGER_REVERSAL). A
+    // consensus setup with no opposing trigger gets the logic below, as before.
+    const slotAction: SlotAction =
+      hitSL || hitTarget ? { kind: 'CONSENSUS_FLOW' } : triggerSlotAction({ stored: stored!, trigger, lastClosedBar: momentum?.lastClosedBar ?? null });
+
     if (hitSL || hitTarget) {
       const outcome = classifyPriceHitOutcome(stored!, isSpread, hitTarget);
       await recordTradeSetupOutcome(stored!, outcome, exitValueForPriceHit(stored!, isSpread, hitTarget, currentValue), {
@@ -2595,6 +2745,12 @@ async function resolveStickyTradeSetup(
         reason: closeReasonForPriceHit(stored!, isSpread, hitTarget),
       });
       // falls through to fresh generation below (subject to the losing-close cooldown)
+    } else if (slotAction.kind === 'HOLD_TRIGGER') {
+      return surfaceSticky(stored!, currentValue, isSpread, storedChain, underlying);
+    } else if (slotAction.kind === 'CLOSE') {
+      logger.info({ underlying, exchange, mode, reason: slotAction.reason, held: stored!.strategy ?? 'CONSENSUS', heldDirection: stored!.direction }, 'Momentum break: closing the held setup');
+      await recordTradeSetupOutcome(stored!, 'EXPIRED', currentValue, { underlying, exchange, mode, reason: slotAction.reason });
+      // falls through to fresh generation below
     } else if (stored!.direction === direction) {
       // Bias still agrees with the locked setup — fully sticky. Clear any
       // reversal streak that had started building from an earlier blip,
@@ -2645,6 +2801,17 @@ async function resolveStickyTradeSetup(
     // branch above ever ran for it. Close it out as EXPIRED first so the
     // self-heal doesn't leave a zombie row behind.
     await recordTradeSetupOutcome(stored!, 'EXPIRED', currentExitValue(storedChain, stored!), { underlying, exchange, mode, reason: 'SETUP_INVALIDATED' });
+  }
+
+  // Momentum break: the slot is empty now (nothing held, or it was just
+  // closed above). A claimed trigger runs its own chain first — the safety
+  // gates plus TRIGGER_QUALITY. Minted: that is this poll's setup. Refused:
+  // the refusal is recorded and the consensus chain below runs as before.
+  if (trigger) {
+    const triggered = await resolveMomentumBreakSetup({
+      provider, underlying, exchange, mode, key, today, setupTtl, chain, trigger, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId,
+    });
+    if (triggered) return triggered;
   }
 
   // Everything above only resolves an EXISTING setup, which is safe off-hours
@@ -3100,6 +3267,26 @@ async function resolveStickyTradeSetup(
       underlying, exchange, mode, key, today, setupTtl, chain, fresh, direction, confidence, regime, intelligenceScore,
       voteSnapshot, entryContext, phase1Context, gateDiagnosticsFor, shadowModels,
     });
+  return mintUnderLock({ underlying, exchange, mode, key, today, isPositional, priorDecisionId, mintFresh });
+}
+
+/**
+ * The setup mint lock (BACKGROUND_BIAS): one caller mints, any other returns
+ * the setup that caller minted. Split out of resolveStickyTradeSetup unchanged
+ * so the momentum-break family mints under the very same lock (same key, so
+ * the two families can never double-mint the one shared slot).
+ */
+async function mintUnderLock(args: {
+  underlying: string;
+  exchange: Exchange;
+  mode: TradingMode;
+  key: string;
+  today: string;
+  isPositional: boolean;
+  priorDecisionId: string | null;
+  mintFresh: () => Promise<StoredTradeSetup>;
+}): Promise<TradeSetup> {
+  const { underlying, exchange, mode, key, today, isPositional, priorDecisionId, mintFresh } = args;
   if (!COVERAGE_LAG_FLAGS.BACKGROUND_BIAS) return mintFresh();
 
   const readMintedByOther = async (): Promise<StoredTradeSetup | null> => {
@@ -3139,6 +3326,262 @@ async function resolveStickyTradeSetup(
   return { available: false, reason: 'A setup for this symbol is being generated by another evaluation right now — it will show on the next refresh.' };
 }
 
+// --- Momentum-break family (flag MOMENTUM_BREAK) ---
+
+/**
+ * A trigger bar is acted on once. The first caller to claim it (Redis SET NX,
+ * keyed on the bar) may close an opposite setup and mint; everyone else gets
+ * null and reads the slot as usual. A failed claim is logged and treated as
+ * not claimed — a missed trigger is safer than a double one.
+ */
+async function claimMomentumTrigger(exchange: Exchange, underlying: string, mode: TradingMode, trigger: MomentumBreakSignal): Promise<MomentumBreakSignal | null> {
+  try {
+    const first = await redis.set(`momentum_break_claimed:${exchange}:${underlying}:${mode}:${trigger.barTime}`, '1', 'EX', 60 * 60, 'NX');
+    return first === 'OK' ? trigger : null;
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying, exchange, barTime: trigger.barTime }, 'Momentum break: trigger claim failed — not acting on it');
+    return null;
+  }
+}
+
+/**
+ * The trigger's own chain and mint. Safety gates (risk-off, feed, session /
+ * opening / closing, post-loss cooldown judged on the trigger's QUALITY so the
+ * 80 floor after a loss applies, reliability, concurrency) plus
+ * TRIGGER_QUALITY; the consensus-only gates are not consulted. The option leg
+ * is built by the ordinary buildTradeSetup: target move = distance to the
+ * trigger's target, premium stop = max(15%, |Δ|·stop distance / mid) through
+ * the unprotected slPremiumPct argument, the broken level as the structure
+ * behind, confidence = quality — so its R:R minimums (1.5, or 2.0 on rich IV)
+ * apply unchanged. Returns the minted setup, or null when refused (recorded).
+ */
+async function resolveMomentumBreakSetup(ctx: {
+  provider: MarketDataProvider;
+  underlying: string;
+  exchange: Exchange;
+  mode: TradingMode;
+  key: string;
+  today: string;
+  setupTtl: number;
+  chain: OptionChain;
+  trigger: MomentumBreakSignal;
+  regime: MarketRegime;
+  intelligenceScore: number;
+  voteSnapshot: BiasVoteSnapshot | undefined;
+  entryContext: SetupEntryContext | undefined;
+  priorDecisionId: string | null;
+}): Promise<TradeSetup | null> {
+  const { provider, underlying, exchange, mode, key, today, setupTtl, chain, trigger, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId } = ctx;
+  const direction: BiasDirection = trigger.direction;
+  const quality = trigger.quality;
+  const at = decisionNow();
+  const spot = chain.spotPrice;
+
+  const riskOff = await riskOffReason(exchange, mode);
+  const reliability = riskOff ? null : await checkReliabilityFilters(underlying, exchange, direction, mode);
+  const feedBlock = dataQualityBlock(exchange, underlying);
+  const session = sessionGateReason(exchange, mode);
+  const cooldown = await losingCloseCooldownReason(underlying, exchange, direction, mode, quality);
+  const concurrencyExposure: ExposureSnapshot | null = TRADING_FLAGS.CONCURRENCY_CAP
+    ? await readExposureAtCreation({ key, exchange, underlying, mode, direction, strike: null, side: null, expiry: null, riskAmount: 0 }, today)
+    : null;
+  const concurrency = concurrencyGateReason({ enabled: TRADING_FLAGS.CONCURRENCY_CAP, exposure: concurrencyExposure, max: TRADING_PARAMS.MAX_CONCURRENT_SAME_DIRECTION });
+  const refusal = triggerRefusal({ riskOff, feedBlock, session, cooldown, reliability, concurrency }, trigger, at, spot);
+
+  const triggerContext: SetupEntryContext | undefined = entryContext
+    ? {
+        ...entryContext,
+        setupConfidence: quality,
+        locationBehindLevel: trigger.levelPrice,
+        locationBehindKind: trigger.levelKind,
+        setupClassification: {
+          setupType: 'MOMENTUM_BREAK',
+          setupFamily: 'MOMENTUM',
+          primaryTrigger: `${trigger.levelKind}_BREAK`,
+          allTriggers: ['MOMENTUM_BREAK', trigger.levelKind],
+          detail: { ...trigger },
+        },
+        momentumBreak: storedMomentumBreak(trigger),
+      }
+    : undefined;
+
+  const minutesSinceOpen = minutesSinceSessionOpen(exchange);
+  const gateDiagnosticsFor = async (): Promise<GateDiagnostic[]> => {
+    try {
+      const losingClose = await readLosingCloseState(underlying, exchange, direction, mode);
+      // The safety rows only — this family's chain has no LOW_SETUP_QUALITY or POSITIONING_CONFLICT.
+      const rows = evaluateGateDiagnostics(
+        {
+          direction,
+          mode,
+          confidence: quality,
+          riskOffReason: riskOff,
+          feedBlockReason: feedBlock,
+          sessionRefusal: session,
+          minutesSinceOpen,
+          positioningRefusal: null,
+          positioningVotes: null,
+          losingClose,
+          reliability: { evaluated: riskOff == null, reason: reliability },
+          liveRefusalCode: refusal?.code ?? null,
+          thresholds: {
+            minSetupConfidence: MIN_SETUP_CONFIDENCE,
+            openingSettleMinutes: SETUP_OPENING_SETTLE_MINUTES,
+            openingGuardMinutes: SETUP_OPENING_GUARD_MINUTES,
+            postLossSettleMinutes: POST_LOSS_SETTLE_MINUTES,
+            postLossMinConfidence: POST_LOSS_MIN_CONFIDENCE,
+            maxSameDirectionLossesPerDay: MAX_SAME_DIRECTION_LOSSES_PER_DAY,
+          },
+        },
+        at
+      ).filter((r) => r.gate !== 'LOW_SETUP_QUALITY' && r.gate !== 'POSITIONING_CONFLICT');
+      rows.push(triggerQualityDiagnostic(trigger, refusal, at));
+      rows.push(
+        ...evaluateValidationGateDiagnostics(
+          {
+            mode,
+            exchange,
+            liveRefusalCode: refusal?.code ?? null,
+            closing: { enforced: TRADING_FLAGS.CLOSING_GUARD, minutesToClose: minutesToSessionClose(exchange, at), guardMinutes: TRADING_PARAMS.SETUP_CLOSING_GUARD_MINUTES },
+            location: { enforced: false, score: entryContext?.locationScore ?? null, minScore: TRADING_PARAMS.LOCATION_GATE_MIN_SCORE },
+            room: { enforced: false, availableAtr: null, requiredAtrV2: null, sufficientV2: null, requiredAtrV1: null, sufficientV1: null },
+            concurrency: { enforced: TRADING_FLAGS.CONCURRENCY_CAP, exposure: concurrencyExposure, max: TRADING_PARAMS.MAX_CONCURRENT_SAME_DIRECTION },
+          },
+          at
+        ).filter((r) => r.gate === 'CLOSING_HOUR' || r.gate === 'CONCURRENT_EXPOSURE')
+      );
+      return rows;
+    } catch (err: any) {
+      logger.warn({ error: err.message, underlying }, 'Momentum break: gate diagnostics failed');
+      return [];
+    }
+  };
+
+  const phase1Context = {
+    strategy: entryContext?.strategyLabels ?? null,
+    confidenceDimensions: entryContext
+      ? { voteContributions: entryContext.voteContributions ?? null, directionScore: entryContext.directionScore ?? null, setupQualityScore: entryContext.setupQualityScore ?? null }
+      : null,
+    openingEnvironment: classifyOpeningEnvironment(
+      {
+        minutesSinceOpen,
+        adxValue: entryContext?.adxValue ?? 0,
+        atrZ: entryContext?.atrZ ?? 0,
+        freshBreakoutUp: entryContext?.freshBreakoutUp ?? false,
+        freshBreakoutDown: entryContext?.freshBreakoutDown ?? false,
+      },
+      SETUP_OPENING_GUARD_MINUTES
+    ),
+    minutesSinceLastLoss: await readMinutesSinceLastLoss(underlying, exchange, mode, direction),
+    roomCheckOiAgeSeconds: entryContext?.roomCheckOiAgeSeconds ?? null,
+  };
+  const side: 'CE' | 'PE' = direction === 'BEARISH' ? 'PE' : 'CE';
+  const describe = `Momentum break ${direction}: ${trigger.levelKind} ${trigger.levelPrice} broken on ${trigger.volMult}x volume and a ${trigger.rangeMult}x-ATR range (quality ${quality}); underlying stop ${trigger.stop}, target ${trigger.target} (${trigger.targetKind}).`;
+
+  const recordRefusal = (code: NoTradeCode | null, reason: string, setup: TradeSetup | null) => {
+    logDecision({
+      at,
+      symbol: underlying,
+      exchange,
+      mode,
+      decision: 'SKIP',
+      code: code ?? 'UNKNOWN',
+      reason,
+      regime,
+      bias: direction,
+      setupQuality: quality,
+      locationScore: entryContext?.locationScore ?? null,
+      locationReason: entryContext?.locationReason ?? null,
+      roomAvailableAtr: null,
+      roomRequiredAtr: null,
+      roomSufficient: null,
+    });
+    recordDecisionSnapshot({
+      ...snapshotInstrumentation(exchange, triggerContext, setup),
+      ...phase1Context,
+      freshness: { timestamps: inputTimestampsFrom(chain, findLeg(chain, chain.atmStrike, side)), underlyingPriceAtGeneration: spot },
+      gateDiagnostics: gateDiagnosticsFor,
+      contractValidation: setup?.contractValidation ?? null,
+      symbol: underlying,
+      exchange,
+      mode,
+      expiry: chain.expiry,
+      decision: 'REFUSE',
+      reasonCode: code,
+      reason,
+      regime,
+      bias: direction,
+      confidence: quality,
+      pcr: chain.pcrDetail?.oiPCR ?? null,
+      underlyingPrice: spot,
+      atr: trigger.atr,
+      ...snapshotBlocks(chain, triggerContext, setup, side),
+    });
+  };
+
+  if (refusal) {
+    logger.info({ underlying, exchange, code: refusal.code }, 'Momentum break: trigger refused by its chain');
+    recordRefusal(refusal.code, `${describe} Refused: ${refusal.reason}`, null);
+    return null;
+  }
+
+  const stopDistance = Math.abs(trigger.stop - spot);
+  const targetMove = Math.abs(trigger.target - spot);
+  const sl = triggerSlPremiumPct(chain.strikes, chain.atmStrike, direction, stopDistance);
+  const vix = await lookupIndiaVix(provider, exchange);
+  const ivRank = await ivRankFor(underlying, chain.expiry, computeAtmIv(chain)).catch((err: any) => {
+    logger.warn({ error: err.message, underlying }, 'Momentum break: IV rank unavailable — building without it');
+    return null;
+  });
+  const expectedHoldHours = Math.max(0.5, remainingSessionMinutesFrom(exchange, at) / 60);
+  const builtRaw = buildTradeSetup(
+    chain.strikes,
+    chain.atmStrike,
+    direction,
+    quality,
+    targetMove,
+    sl?.slPremiumPct,
+    vix,
+    chain.dte,
+    chain.lotSize,
+    trigger.atr,
+    {
+      ivRank,
+      hvPct: entryContext?.hvPct ?? null,
+      tickSize: 0.05,
+      expectedHoldHours,
+      flags: { structuralStop: TRADING_FLAGS.STRUCTURAL_STOP, richIvRr: TRADING_FLAGS.RICH_IV_RR },
+      spot,
+      nearestBehindLevel: trigger.levelPrice,
+      structuralStopBufferAtr: TRADING_PARAMS.STRUCTURAL_STOP_BUFFER_ATR,
+      ivVsHv: entryContext?.ivVsHv ?? null,
+      richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
+    }
+  );
+  if (!builtRaw.available) {
+    // Far-dated contracts will often land here on REWARD_RISK_TOO_LOW: the
+    // option cannot pay for a stop where the break is wrong. Recorded, honest.
+    logger.info({ underlying, exchange, code: builtRaw.noTradeCode ?? null }, 'Momentum break: option leg refused by buildTradeSetup');
+    recordRefusal(builtRaw.noTradeCode ?? null, `${describe} ${builtRaw.reason}`, builtRaw);
+    return null;
+  }
+  const fresh: TradeSetup = {
+    ...builtRaw,
+    strategy: MOMENTUM_BREAK_STRATEGY,
+    expiry: chain.expiry,
+    dte: chain.dte,
+    reason: `${describe} ${builtRaw.reason}`,
+  };
+  const shadowModels = computeShadowModels(builtRaw, chain, direction, targetMove, expectedHoldHours, { ivRank, hvPct: entryContext?.hvPct ?? null, underlying });
+  const mintFresh = (): Promise<StoredTradeSetup> =>
+    mintTradeSetup({
+      underlying, exchange, mode, key, today, setupTtl, chain, fresh, direction, confidence: quality, regime, intelligenceScore,
+      voteSnapshot, entryContext: triggerContext, phase1Context, gateDiagnosticsFor, shadowModels,
+      momentumBreak: storedMomentumBreak(trigger),
+    });
+  return mintUnderLock({ underlying, exchange, mode, key, today, isPositional: false, priorDecisionId, mintFresh });
+}
+
 /**
  * Mints one new sticky setup: the `signals` row, the TAKE decision row, the
  * slot write and the Telegram push. Split out of resolveStickyTradeSetup
@@ -3162,6 +3605,8 @@ async function mintTradeSetup(ctx: {
   phase1Context: Pick<DecisionSnapshotInput, 'strategy' | 'confidenceDimensions' | 'openingEnvironment' | 'minutesSinceLastLoss' | 'roomCheckOiAgeSeconds'>;
   gateDiagnosticsFor: () => Promise<GateDiagnostic[]>;
   shadowModels: ReturnType<typeof computeShadowModels>;
+  /** Momentum-break family only: the trigger, carried in the slot for LEVEL_RECLAIMED. */
+  momentumBreak?: StoredMomentumBreak;
 }): Promise<StoredTradeSetup> {
   const {
     underlying, exchange, mode, key, today, setupTtl, chain, fresh, direction, confidence, regime, intelligenceScore,
@@ -3260,6 +3705,7 @@ async function mintTradeSetup(ctx: {
     decisionId: takeDecisionId,
     underlyingAtGeneration: chain.spotPrice,
     logic,
+    ...(ctx.momentumBreak ? { momentumBreak: ctx.momentumBreak } : {}),
   };
   try {
     await redis.set(key, JSON.stringify(toStore), 'EX', setupTtl);
@@ -4234,6 +4680,8 @@ interface SetupEntryContext {
   adx15m?: number | null;
   /** Bars since the volume-confirmed break a held BREAKOUT/BREAKDOWN regime rests on. */
   breakoutPersistBarsAgo?: number | null;
+  /** Momentum-break round: the trigger a MOMENTUM_BREAK setup (or refusal) was built from. */
+  momentumBreak?: StoredMomentumBreak | null;
 }
 
 function regimeAlignment(direction: BiasDirection, regime: MarketRegime): RegimeAlignment {

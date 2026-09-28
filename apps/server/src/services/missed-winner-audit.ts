@@ -41,6 +41,7 @@ import { resolveSpotToken } from './option-chain.js';
 import { classifyOutcome, NEUTRAL_BAND_R, type OutcomeClass } from './outcome-classifier.js';
 import { opportunityVerdict } from './research-contract.js';
 import { exitReasonFromGrade } from './exit-reason.js';
+import { gradeThesis } from './grade-path.js';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 
@@ -154,9 +155,6 @@ async function gradeDecision(provider: MarketDataProvider, row: PendingRow): Pro
     return;
   }
 
-  const stopLevel = entry - direction * stopAtr * atr;
-  const targetLevel = entry + direction * targetAtr * atr;
-
   const decidedAt = new Date(row.time).getTime();
   const candles = await fetchCandlesAfter(provider, row.symbol, row.exchange as Exchange, decidedAt, row.mode);
   if (candles.length === 0) {
@@ -164,49 +162,19 @@ async function gradeDecision(provider: MarketDataProvider, row: PendingRow): Pro
     return;
   }
 
-  let mfe = 0;
-  let mae = 0;
-  let hitTarget = false;
-  let hitStop = false;
-  let settledR: number | null = null;
-  // Bars from the decision to the best excursion, and to the target. Null
-  // where the level was never reached — never zero, which would read as
-  // "reached instantly".
-  let barsToMfe: number | null = null;
-  let barsToTarget: number | null = null;
-  let barIndex = 0;
-
-  for (const c of candles) {
-    barIndex++;
-    const favourable = direction > 0 ? c.high - entry : entry - c.low;
-    const adverse = direction > 0 ? entry - c.low : c.high - entry;
-    if (favourable > mfe) { mfe = favourable; barsToMfe = barIndex; }
-    if (adverse > mae) mae = adverse;
-
-    // Within a single bar there is no way to know which side printed first,
-    // so a bar that spans both levels is scored as the stop. That is the
-    // conservative reading, and it biases this audit AGAINST finding missed
-    // winners — which is the right direction for a measurement whose purpose
-    // is to challenge the filters.
-    const stopped = direction > 0 ? c.low <= stopLevel : c.high >= stopLevel;
-    const targeted = direction > 0 ? c.high >= targetLevel : c.low <= targetLevel;
-    if (stopped) { hitStop = true; settledR = -1; break; }
-    if (targeted) { hitTarget = true; settledR = targetAtr / stopAtr; barsToTarget = barIndex; break; }
-  }
-
-  const mfeAtr = mfe / atr;
-  const maeAtr = mae / atr;
-  const riskPoints = stopAtr * atr;
-  const mfeR = riskPoints > 0 ? mfe / riskPoints : 0;
-
-  if (settledR == null) {
-    // Neither level was reached inside the horizon. The thesis went as far
-    // as it went; score it at its final mark rather than pretending it was
-    // flat, because "did not resolve" is itself an outcome.
-    const last = candles[candles.length - 1];
-    const finalMove = direction > 0 ? last.close - entry : entry - last.close;
-    settledR = riskPoints > 0 ? finalMove / riskPoints : 0;
-  }
+  // The bar loop is gradePath (grade-path.ts), shared with the momentum-break
+  // backtest. Within a single bar there is no way to know which side printed
+  // first, so a bar that spans both levels is scored as the stop — the
+  // conservative reading, which biases this audit AGAINST finding missed
+  // winners. Bars-to-MFE/target are null where never reached, never zero.
+  const { hitStop, hitTarget, settledR, mfeAtr, maeAtr, mfeR, barsToMfe, barsToTarget } = gradeThesis({
+    entry,
+    atr,
+    direction: direction as 1 | -1,
+    stopAtr,
+    targetAtr,
+    candles,
+  });
 
   const outcomeClass = classifyOutcome(row.decision, settledR, mfeR);
   const verdict = opportunityVerdict(outcomeClass);

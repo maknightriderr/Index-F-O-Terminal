@@ -33,8 +33,18 @@ import { RICH_IV_MIN_RISK_REWARD as RICH_IV_MIN_RISK_REWARD_DEFAULT, STRUCTURAL_
  *                                   intraday positioning window, faster intraday
  *                                   regime, MCX positional in the background, and
  *                                   the MCX close-time correction (US DST 23:30)
+ *   2026-09-29.momentum-break.1     the momentum-break trigger family (flag
+ *                                   MOMENTUM_BREAK) sharing the sticky slot, its
+ *                                   regime assist, and the LEVEL_RECLAIMED /
+ *                                   TRIGGER_REVERSAL exits — stamped only while
+ *                                   that flag is on (see logicStamp)
  */
 export const LOGIC_VERSION = '2026-09-29.coverage-lag.1';
+
+// The momentum-break code ships dark (its backtest failed the go-live bar).
+// Stamping every setup with this version while the flag is off would split
+// identical logic across two versions in the before/after reports.
+export const MOMENTUM_BREAK_LOGIC_VERSION = '2026-09-29.momentum-break.1';
 
 export interface TradingFlags {
   /** Fix 1: stop sized from structure and never squeezed to fit R:R. */
@@ -241,6 +251,83 @@ const parsedBackgroundSymbols = parseBackgroundSymbols(process.env.BACKGROUND_BI
 export const BACKGROUND_BIAS_SYMBOLS: readonly BackgroundSymbol[] = Object.freeze(parsedBackgroundSymbols.symbols);
 export const BACKGROUND_BIAS_SYMBOLS_REJECTED: readonly string[] = Object.freeze(parsedBackgroundSymbols.rejected);
 
+// ============================================================
+// MOMENTUM-BREAK ROUND (2026-09-29)
+// ============================================================
+// A separate trigger family (packages/analytics momentum-break): a closed 15m
+// bar breaking a key level on range and volume, stop beyond the level, target
+// the next level. Its rules were chosen on the in-sample two thirds of a year
+// of 15m history and validated ONCE on the last third against a pre-registered
+// bar (npm run backtest-momentum; the report is in the PR). The default below
+// is whatever that out-of-sample result earned — see MOMENTUM_BREAK_DEFAULT.
+// ============================================================
+
+/**
+ * OUT-OF-SAMPLE RESULT: pending — set from the single out-of-sample run.
+ */
+export const MOMENTUM_BREAK_DEFAULT = false;
+
+export interface MomentumBreakParams {
+  /** The variant chosen in-sample. Pre-registered grid: {1.2, 1.5}. */
+  MOMENTUM_BREAK_RANGE_MULT: number;
+  /** The variant chosen in-sample. Pre-registered grid: {1.5, 2.0}. */
+  MOMENTUM_BREAK_VOL_MULT: number;
+  /** 15m history the live detector loads so its same-slot volume median has 10 previous sessions, like the backtest. */
+  MOMENTUM_BREAK_HISTORY_DAYS: number;
+  /** Cache TTL of that longer history; the fresh 15m candles are merged over it on every read. */
+  MOMENTUM_BREAK_HISTORY_TTL_SECONDS: number;
+}
+
+export const MOMENTUM_BREAK_PARAM_DEFAULTS: Readonly<MomentumBreakParams> = {
+  MOMENTUM_BREAK_RANGE_MULT: 1.5,
+  MOMENTUM_BREAK_VOL_MULT: 1.5,
+  MOMENTUM_BREAK_HISTORY_DAYS: 21,
+  MOMENTUM_BREAK_HISTORY_TTL_SECONDS: 300,
+};
+
+/**
+ * Symbols the trigger may run on. The backtest's rule: a symbol needs ≥ 10
+ * out-of-sample trades and a non-negative out-of-sample average. With the
+ * flag defaulting OFF this list only matters if the flag is switched on.
+ */
+export const MOMENTUM_BREAK_SYMBOLS_DEFAULT = '';
+
+export function readMomentumBreakFlag(env: Env = process.env): boolean {
+  return parseFlag(env.MOMENTUM_BREAK, MOMENTUM_BREAK_DEFAULT);
+}
+
+export function readMomentumBreakParams(env: Env = process.env): MomentumBreakParams {
+  const out = { ...MOMENTUM_BREAK_PARAM_DEFAULTS };
+  for (const key of Object.keys(MOMENTUM_BREAK_PARAM_DEFAULTS) as (keyof MomentumBreakParams)[]) {
+    out[key] = parseNumber(env[key], MOMENTUM_BREAK_PARAM_DEFAULTS[key]);
+  }
+  return out;
+}
+
+/** "SYMBOL:EXCHANGE,..." with an explicit empty default (no symbols), unlike BACKGROUND_BIAS_SYMBOLS. */
+export function parseMomentumBreakSymbols(raw: string | undefined): { symbols: BackgroundSymbol[]; rejected: string[] } {
+  const source = raw == null || raw.trim() === '' ? MOMENTUM_BREAK_SYMBOLS_DEFAULT : raw;
+  if (source.trim() === '') return { symbols: [], rejected: [] };
+  return parseBackgroundSymbols(source);
+}
+
+export const MOMENTUM_BREAK: boolean = readMomentumBreakFlag();
+export const MOMENTUM_BREAK_PARAMS: Readonly<MomentumBreakParams> = Object.freeze(readMomentumBreakParams());
+const parsedMomentumSymbols = parseMomentumBreakSymbols(process.env.MOMENTUM_BREAK_SYMBOLS);
+export const MOMENTUM_BREAK_SYMBOLS: readonly BackgroundSymbol[] = Object.freeze(parsedMomentumSymbols.symbols);
+export const MOMENTUM_BREAK_SYMBOLS_REJECTED: readonly string[] = Object.freeze(parsedMomentumSymbols.rejected);
+
+/** Whether the trigger runs for this symbol/mode: flag on, INTRADAY, and on the allow-list. */
+export function momentumBreakEnabledFor(
+  underlying: string,
+  exchange: string,
+  mode: string,
+  enabled: boolean = MOMENTUM_BREAK,
+  symbols: readonly BackgroundSymbol[] = MOMENTUM_BREAK_SYMBOLS
+): boolean {
+  return enabled && mode === 'INTRADAY' && symbols.some((s) => s.symbol === underlying.toUpperCase() && s.exchange === exchange);
+}
+
 export interface LogicStamp {
   logicVersion: string;
   flags: TradingFlags;
@@ -251,6 +338,12 @@ export interface LogicStamp {
     params: CoverageLagParams;
     backgroundSymbols: BackgroundSymbol[];
   };
+  /** The momentum-break round's switch, tunables and allow-list (absent on setups minted before it). */
+  momentumBreak?: {
+    enabled: boolean;
+    params: MomentumBreakParams;
+    symbols: BackgroundSymbol[];
+  };
 }
 
 /** What gets written onto every setup and decision. */
@@ -259,12 +352,16 @@ export function logicStamp(
   params: Readonly<TradingParams> = TRADING_PARAMS,
   lagFlags: Readonly<CoverageLagFlags> = COVERAGE_LAG_FLAGS,
   lagParams: Readonly<CoverageLagParams> = COVERAGE_LAG_PARAMS,
-  backgroundSymbols: readonly BackgroundSymbol[] = BACKGROUND_BIAS_SYMBOLS
+  backgroundSymbols: readonly BackgroundSymbol[] = BACKGROUND_BIAS_SYMBOLS,
+  momentumEnabled: boolean = MOMENTUM_BREAK,
+  momentumParams: Readonly<MomentumBreakParams> = MOMENTUM_BREAK_PARAMS,
+  momentumSymbols: readonly BackgroundSymbol[] = MOMENTUM_BREAK_SYMBOLS
 ): LogicStamp {
   return {
-    logicVersion: LOGIC_VERSION,
+    logicVersion: momentumEnabled ? MOMENTUM_BREAK_LOGIC_VERSION : LOGIC_VERSION,
     flags: { ...flags },
     params: { ...params },
     coverageLag: { flags: { ...lagFlags }, params: { ...lagParams }, backgroundSymbols: backgroundSymbols.map((s) => ({ ...s })) },
+    momentumBreak: { enabled: momentumEnabled, params: { ...momentumParams }, symbols: momentumSymbols.map((s) => ({ ...s })) },
   };
 }

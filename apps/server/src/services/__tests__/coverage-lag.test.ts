@@ -676,7 +676,8 @@ describe('coverage/lag flags and the logic stamp', () => {
     expect(LOGIC_VERSION).toBe('2026-09-29.coverage-lag.1');
     const stamp = logicStamp(TRADING_FLAG_DEFAULTS, TRADING_PARAM_DEFAULTS, COVERAGE_LAG_FLAG_DEFAULTS, COVERAGE_LAG_PARAM_DEFAULTS, [
       { symbol: 'CRUDEOIL', exchange: 'MCX' },
-    ]);
+    ], false);
+    expect(stamp.logicVersion).toBe('2026-09-29.coverage-lag.1');
     expect(stamp.flags).toEqual(TRADING_FLAG_DEFAULTS);
     expect(stamp.params).toEqual(TRADING_PARAM_DEFAULTS);
     expect(stamp.coverageLag).toEqual({
