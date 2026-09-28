@@ -18,7 +18,8 @@
     "db:migrate": "turbo run db:migrate --filter=@fno/server",
     "learning": "npm run learning --workspace=@fno/server --",
     "loss-attribution": "npm run loss-attribution --workspace=@fno/server --",
-    "clean": "turbo run clean && rimraf node_modules"
+    "clean": "turbo run clean && rimraf node_modules",
+    "backtest-momentum": "npm run backtest-momentum --workspace=@fno/server --"
   },
   "devDependencies": {
     "turbo": "^2.4.0",

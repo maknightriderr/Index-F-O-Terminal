@@ -13,7 +13,9 @@
     "clean": "rimraf dist",
     "db:migrate": "tsx src/database/migrate.ts",
     "learning": "tsx src/cli/learning.ts",
-    "loss-attribution": "tsx src/cli/loss-attribution.ts"
+    "loss-attribution": "tsx src/cli/loss-attribution.ts",
+    "backtest-momentum": "tsx src/cli/backtest-momentum.ts",
+    "fetch-history": "tsx src/backtest/fetch-history.ts"
   },
   "dependencies": {
     "@fno/shared": "*",
