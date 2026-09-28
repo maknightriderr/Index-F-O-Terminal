@@ -673,11 +673,11 @@ describe('coverage/lag flags and the logic stamp', () => {
   });
 
   it('the stamp carries the new version and both flag sets; the review set is unchanged', () => {
-    // Bumped by the momentum-break round (the plan requires the new version); the rest of this test is unchanged.
-    expect(LOGIC_VERSION).toBe('2026-09-29.momentum-break.1');
+    expect(LOGIC_VERSION).toBe('2026-09-29.coverage-lag.1');
     const stamp = logicStamp(TRADING_FLAG_DEFAULTS, TRADING_PARAM_DEFAULTS, COVERAGE_LAG_FLAG_DEFAULTS, COVERAGE_LAG_PARAM_DEFAULTS, [
       { symbol: 'CRUDEOIL', exchange: 'MCX' },
-    ]);
+    ], false);
+    expect(stamp.logicVersion).toBe('2026-09-29.coverage-lag.1');
     expect(stamp.flags).toEqual(TRADING_FLAG_DEFAULTS);
     expect(stamp.params).toEqual(TRADING_PARAM_DEFAULTS);
     expect(stamp.coverageLag).toEqual({

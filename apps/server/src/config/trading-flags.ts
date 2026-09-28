@@ -36,9 +36,15 @@ import { RICH_IV_MIN_RISK_REWARD as RICH_IV_MIN_RISK_REWARD_DEFAULT, STRUCTURAL_
  *   2026-09-29.momentum-break.1     the momentum-break trigger family (flag
  *                                   MOMENTUM_BREAK) sharing the sticky slot, its
  *                                   regime assist, and the LEVEL_RECLAIMED /
- *                                   TRIGGER_REVERSAL exits
+ *                                   TRIGGER_REVERSAL exits — stamped only while
+ *                                   that flag is on (see logicStamp)
  */
-export const LOGIC_VERSION = '2026-09-29.momentum-break.1';
+export const LOGIC_VERSION = '2026-09-29.coverage-lag.1';
+
+// The momentum-break code ships dark (its backtest failed the go-live bar).
+// Stamping every setup with this version while the flag is off would split
+// identical logic across two versions in the before/after reports.
+export const MOMENTUM_BREAK_LOGIC_VERSION = '2026-09-29.momentum-break.1';
 
 export interface TradingFlags {
   /** Fix 1: stop sized from structure and never squeezed to fit R:R. */
@@ -352,7 +358,7 @@ export function logicStamp(
   momentumSymbols: readonly BackgroundSymbol[] = MOMENTUM_BREAK_SYMBOLS
 ): LogicStamp {
   return {
-    logicVersion: LOGIC_VERSION,
+    logicVersion: momentumEnabled ? MOMENTUM_BREAK_LOGIC_VERSION : LOGIC_VERSION,
     flags: { ...flags },
     params: { ...params },
     coverageLag: { flags: { ...lagFlags }, params: { ...lagParams }, backgroundSymbols: backgroundSymbols.map((s) => ({ ...s })) },

@@ -220,9 +220,12 @@ describe('6. flag, allow-list and logic stamp', () => {
     expect(momentumBreakEnabledFor('CRUDEOIL', 'MCX', 'INTRADAY', false, syms)).toBe(false);
   });
 
-  it('the stamp carries the new version and the momentum-break set', () => {
-    expect(LOGIC_VERSION).toBe('2026-09-29.momentum-break.1');
+  it('the momentum-break version is stamped only while the flag is on', () => {
+    expect(LOGIC_VERSION).toBe('2026-09-29.coverage-lag.1');
+    const off = logicStamp(TRADING_FLAG_DEFAULTS, TRADING_PARAM_DEFAULTS, COVERAGE_LAG_FLAG_DEFAULTS, COVERAGE_LAG_PARAM_DEFAULTS, [], false, MOMENTUM_BREAK_PARAM_DEFAULTS, []);
+    expect(off.logicVersion).toBe('2026-09-29.coverage-lag.1');
     const stamp = logicStamp(TRADING_FLAG_DEFAULTS, TRADING_PARAM_DEFAULTS, COVERAGE_LAG_FLAG_DEFAULTS, COVERAGE_LAG_PARAM_DEFAULTS, [], true, MOMENTUM_BREAK_PARAM_DEFAULTS, [{ symbol: 'CRUDEOIL', exchange: 'MCX' }]);
+    expect(stamp.logicVersion).toBe('2026-09-29.momentum-break.1');
     expect(stamp.momentumBreak).toEqual({ enabled: true, params: MOMENTUM_BREAK_PARAM_DEFAULTS, symbols: [{ symbol: 'CRUDEOIL', exchange: 'MCX' }] });
   });
 
