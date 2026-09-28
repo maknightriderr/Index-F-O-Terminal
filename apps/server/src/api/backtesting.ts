@@ -4,7 +4,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { logger } from '../lib/logger.js';
-import { getTradeSetupHistory, getWinRateAnalytics } from '../services/backtesting.js';
+import { getTradeSetupHistory, getWinRateAnalytics, LOGIC_VERSION_ALL } from '../services/backtesting.js';
 import type { TradingMode } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { captureCoverage } from '../services/market-state-capture.js';
@@ -428,7 +428,11 @@ export function createBacktestingRoutes(provider: MarketDataProvider): Router {
       const mode: TradingMode | 'ALL' = modeParam === 'INTRADAY' || modeParam === 'POSITIONAL' ? modeParam : 'ALL';
       const sinceParam = Number(req.query.since);
       const since = Number.isFinite(sinceParam) && sinceParam > 0 ? sinceParam : undefined;
-      const data = await getWinRateAnalytics(mode, since);
+      // Validation review: 'all' (default), 'PRE_REVIEW', or an exact LOGIC_VERSION.
+      // The response always carries byLogicVersion, the split view.
+      const logicParam = typeof req.query.logicVersion === 'string' ? req.query.logicVersion.trim().slice(0, 64) : '';
+      const logicVersion = logicParam === '' ? LOGIC_VERSION_ALL : logicParam.toLowerCase() === LOGIC_VERSION_ALL ? LOGIC_VERSION_ALL : logicParam;
+      const data = await getWinRateAnalytics(mode, since, logicVersion);
       res.json({ success: true, data, meta: { timestamp: Date.now(), source: 'LIVE' } });
     } catch (error: any) {
       logger.error({ error: error.message }, 'Win-rate analytics fetch failed');
