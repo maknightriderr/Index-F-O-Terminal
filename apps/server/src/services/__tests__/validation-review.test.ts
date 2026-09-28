@@ -233,16 +233,19 @@ describe('CLOSING_GUARD — per-exchange close, 59/60/61 minutes', () => {
     expect(guard('NSE', ist(d, '14:29'))).toBeNull();
   });
 
-  it('MCX closes 23:30 outside US DST: 59 refuses, 60 and 61 do not', () => {
-    const d = '2026-12-09';
+  // These two cases were reversed before the coverage-lag round: they
+  // asserted the old (wrong) mapping. Real candles on 24-25 Sep 2026 (US DST)
+  // end with the 23:15 bar, so the DST close is 23:30 and the winter close 23:55.
+  it('MCX closes 23:30 during US DST: 59 refuses, 60 and 61 do not', () => {
+    const d = '2026-10-14';
     expect(minutesToSessionClose('MCX', ist(d, '22:31'))).toBe(59);
     expect(guard('MCX', ist(d, '22:31'))?.code).toBe('CLOSING_HOUR');
     expect(guard('MCX', ist(d, '22:30'))).toBeNull();
     expect(guard('MCX', ist(d, '22:29'))).toBeNull();
   });
 
-  it('MCX closes 23:55 during US DST — the same close times remainingSessionFraction uses', () => {
-    const d = '2026-10-14';
+  it('MCX closes 23:55 outside US DST — the same close times remainingSessionFraction uses', () => {
+    const d = '2026-12-09';
     expect(guard('MCX', ist(d, '22:56'))?.code).toBe('CLOSING_HOUR');
     expect(guard('MCX', ist(d, '22:55'))).toBeNull();
     expect(guard('MCX', ist(d, '22:54'))).toBeNull();

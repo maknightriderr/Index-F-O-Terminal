@@ -1626,15 +1626,17 @@ async function computeMarketBias(
 // Fraction of today's remaining trading session, clamped to a small floor
 // so a setup minted in the closing minutes doesn't get an effectively-zero
 // (or negative, once the clock is past close) target. MCX's session runs
-// past midnight-adjacent hours (09:00-23:30) — same open/close-minutes math
-// as NSE/BSE, just a much longer window, so no special-casing needed.
+// to near midnight (09:00-23:30 during US DST, 09:00-23:55 otherwise) —
+// same open/close-minutes math as NSE/BSE, just a much longer window. The
+// close is read for the decision's own date so a replay uses that date's DST.
 const MIN_REMAINING_SESSION_FRACTION = 0.05;
 
 function remainingSessionFraction(exchange: Exchange): number {
   const hours = TRADING_HOURS[exchange];
-  const ist = new Date(decisionDate().toLocaleString('en-US', { timeZone: hours.timezone }));
+  const at = decisionDate();
+  const ist = new Date(at.toLocaleString('en-US', { timeZone: hours.timezone }));
   const [openH, openM] = hours.open.split(':').map(Number);
-  const [closeH, closeM] = getSessionCloseTime(exchange).split(':').map(Number);
+  const [closeH, closeM] = getSessionCloseTime(exchange, at).split(':').map(Number);
   const openMinutes = openH * 60 + openM;
   const closeMinutes = closeH * 60 + closeM;
   const nowMinutes = ist.getHours() * 60 + ist.getMinutes();
@@ -1659,9 +1661,10 @@ const NOISY_WINDOW_VOLUME_MULTIPLIER = 1.5;
 
 function isNoisyIntradayWindow(exchange: Exchange): boolean {
   const hours = TRADING_HOURS[exchange];
-  const ist = new Date(decisionDate().toLocaleString('en-US', { timeZone: hours.timezone }));
+  const at = decisionDate();
+  const ist = new Date(at.toLocaleString('en-US', { timeZone: hours.timezone }));
   const [openH, openM] = hours.open.split(':').map(Number);
-  const [closeH, closeM] = getSessionCloseTime(exchange).split(':').map(Number);
+  const [closeH, closeM] = getSessionCloseTime(exchange, at).split(':').map(Number);
   const openMinutes = openH * 60 + openM;
   const closeMinutes = closeH * 60 + closeM;
   const nowMinutes = ist.getHours() * 60 + ist.getMinutes();
