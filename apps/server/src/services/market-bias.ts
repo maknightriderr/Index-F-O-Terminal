@@ -80,7 +80,24 @@ import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 import { decisionNow, decisionDate, decisionIstDate, assertNoFutureData } from './decision-clock.js';
 import { ivRankFor } from './fno-scanner.js';
-import { recordDecisionSnapshot } from './decision-snapshot.js';
+import { randomUUID } from 'node:crypto';
+import { recordDecisionSnapshot, recordGateDiagnostics, markDecisionStale, markDecisionDead, recordEventualOutcome, recordInvalidationReason } from './decision-snapshot.js';
+// Phase 1 instrumentation. Every one of these observes and records; none of
+// them is read by a gate, and none can change what a setup does.
+import { evaluateGateDiagnostics, oiWallFreshnessDiagnostic, minutesSinceLastLossFromTtls, type GateDiagnostic, type LosingCloseState } from './gate-diagnostics.js';
+import { classifyOpeningEnvironment } from './opening-classifier.js';
+import { assessStaleness, inputTimestampsFrom, staleSignalDiagnostic, type StalenessAssessment } from './signal-freshness.js';
+import { classifyStrategyLabels, type StrategyLabelResult } from './strategy-label.js';
+import { voteContributionsFrom, type VoteContributions } from './confidence-dimensions.js';
+import { exitReasonFromCloseReason } from './exit-reason.js';
+// Phase 2. The three analytics models are SHADOW ONLY: computed from the same
+// chain after the live setup is built and recorded beside it; none of their
+// outputs is passed back into buildTradeSetup or any gate. Exposure and the
+// invalidation label are live but purely observational.
+import { scoreStrikeCandidates, assessExecutionQuality, estimateTargetV2 } from '@fno/analytics';
+import type { ShadowStrikeSelection, ExecutionQualityResult, TargetEstimateResult } from '@fno/analytics';
+import { readExposureAtCreation, toExposureSetup } from './exposure-tracker.js';
+import { invalidationReasonFromCloseReason } from './invalidation-reason.js';
 import { recordStopEvent } from './stop-event.js';
 import { classifySetup, sessionBucket, type SetupClassification } from '@fno/analytics';
 import { captureUnderlyingObservation } from './market-state-capture.js';
@@ -90,7 +107,7 @@ import { trackSymbolForOiSnapshot } from './oi-close-snapshot.js';
 import { riskOffReason } from './risk-circuit-breaker.js';
 import { assessLocation, assessRoom, type StructuralLevel } from './location-quality.js';
 import type { NoTradeCode, TradeDecision } from '@fno/shared';
-import { assessTradeHealth, emptyExcursion, updateExcursion, mfeInAtr, type TradeExcursion, type TradeHealthAssessment } from './trade-health.js';
+import { assessTradeHealth, emptyExcursion, updateExcursion, mfeInAtr, deadTradeMarker, type TradeExcursion, type TradeHealthAssessment } from './trade-health.js';
 import { notifyTradeSetupClosed } from './trade-setup-close-notifier.js';
 import type { TradeCloseReason } from './trade-setup-close-notifier.js';
 import type { OptionChain } from '@fno/shared';
@@ -1460,6 +1477,16 @@ async function computeMarketBias(
   const setupConfidence = direction === 'NEUTRAL' ? confidence : Math.round(confidence * REGIME_CONFIDENCE_FACTOR[alignment]);
   const room = roomToTarget(direction, chain?.spotPrice ?? spot, callLevels, putLevels, pivots);
 
+  // Phase 3 (spec §20) — how old was the OI-wall data roomToTarget() just
+  // filtered candidates by? Diffs the same one-fetch chain timestamp
+  // signal-freshness.ts already reads for every OI-derived input against
+  // decision time. Measured only: roomToTarget's own OI_WALL_MIN_STRENGTH_PCT
+  // filter and its result (`room`, above) are unchanged by this.
+  const roomCheckOiAgeSeconds =
+    chain?.timestamp != null && Number.isFinite(chain.timestamp)
+      ? Math.max(0, Math.round((decisionNow() - chain.timestamp) / 1000))
+      : null;
+
   // Location quality (shadow): where this entry sits among the levels that
   // matter, rather than only which way the read points. Recorded on every
   // setup and refusal so it can be validated on live trades before it is
@@ -1513,6 +1540,16 @@ async function computeMarketBias(
       rsiDivergence && rsiDivergence.signal !== 'NONE' ? { direction: rsiDivergence.signal } : null,
   });
 
+  // Strategy label (Phase 1): the same already-computed readings, named in
+  // the loss-attribution taxonomy. Labelling only — read by no rule.
+  const strategyLabels = classifyStrategyLabels({
+    direction,
+    setupTriggers: setupClassification.allTriggers,
+    premiumDiscountZone: premiumDiscount.zone,
+    candlePattern: candlePattern ? { pattern: candlePattern.pattern, direction: candlePattern.direction } : null,
+    positioning: voteSnapshot.positioning,
+  });
+
   const entryContext: SetupEntryContext = {
     regime,
     regimeAlignment: alignment,
@@ -1538,6 +1575,18 @@ async function computeMarketBias(
     roomLevelSource: room?.source ?? null,
     optionOiBaselineCoverage: Math.round(optionOiBaselineCoverage * 100) / 100,
     setupClassification,
+    // Phase 1 persistence: the numbers below were already computed above
+    // and are recorded as-is. No gate reads them.
+    strategyLabels,
+    voteContributions: voteContributionsFrom(score),
+    directionScore: voteSnapshot.chartNet,
+    setupQualityScore: overall,
+    // Phase 3 persistence — see the fields' own comments above.
+    adxValue,
+    atrZ: atrPctZ,
+    freshBreakoutUp,
+    freshBreakoutDown,
+    roomCheckOiAgeSeconds,
   };
 
   const tradeSetup: TradeSetup = chain
@@ -1843,6 +1892,20 @@ interface StoredTradeSetup extends TradeSetup {
   generatedAt?: number; // epoch ms, for elapsed-time reads
   excursion?: TradeExcursion; // best/worst seen since entry — see trade-health.ts
   health?: { state: string; score: number; wouldExit: boolean; reason: string; at: number }; // shadow only, never closes a position
+  // --- Phase 1 instrumentation (recorded, never read by a gate) ---
+  decisionId?: string; // the TAKE decision_snapshots row that minted this setup — later stale/dead/outcome flags link to it
+  underlyingAtGeneration?: number; // spot when minted — what re-surface staleness is measured against
+  signalFreshness?: SurfacedFreshness; // attached to the RETURNED object on a re-surface only, never persisted
+}
+
+/** Staleness of a re-surfaced sticky setup, as shown on the response. Measured only — see signal-freshness.ts. */
+interface SurfacedFreshness {
+  stale: boolean;
+  evaluated: boolean;
+  moveAtr: number | null;
+  thresholdAtr: number;
+  ageSeconds: number | null;
+  enforced: false;
 }
 
 // A fixed 30%-of-entry SL gives back a lot of a real trending move waiting
@@ -2065,6 +2128,136 @@ async function losingCloseCooldownReason(underlying: string, exchange: Exchange,
   return null;
 }
 
+// --- Phase 1: gate diagnostics and signal staleness (observation only) ---
+
+/**
+ * The same four readings losingCloseCooldownReason() consults, returned raw
+ * so the gate-diagnostics layer can evaluate each of its three codes on its
+ * own. READ-ONLY: it reads the same keys and writes nothing. Null when the
+ * reads fail — the diagnostic then says NOT_EVALUATED instead of guessing.
+ */
+async function readLosingCloseState(underlying: string, exchange: Exchange, direction: BiasDirection, mode: TradingMode): Promise<LosingCloseState | null> {
+  if (direction === 'NEUTRAL') return null;
+  const day = decisionIstDate();
+  try {
+    const [settleTtl, lostToday, cooldownTtl, losses] = await Promise.all([
+      redis.ttl(postLossSettleKey(exchange, mode)),
+      redis.get(postLossDayKey(exchange, mode, day)),
+      redis.ttl(slCooldownKey(exchange, underlying, mode, direction)),
+      redis.get(slLossCountKey(exchange, underlying, mode, direction, day)),
+    ]);
+    return {
+      settleTtlSeconds: settleTtl,
+      lostToday: !!lostToday,
+      sameDirectionLossCount: Number(losses ?? 0),
+      sameSideCooldownTtlSeconds: cooldownTtl,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Phase 3 (spec §16) — minutes since the most recent stop-loss, recovered
+ * from the exact same Redis TTLs losingCloseCooldownReason() above already
+ * reads for the gate check. No new key, no new read pattern: a TTL only
+ * proves elapsed time while it's still alive, so this is honest about what
+ * it cannot recover rather than guessing:
+ *
+ *   0-15 min   any symbol on this exchange+mode — from postLossSettleKey's
+ *              own POST_LOSS_SETTLE_MINUTES TTL.
+ *   15-60 min  THIS symbol+direction's own last loss only (INTRADAY;
+ *              POSITIONAL's cooldown key lives 24h, not a usable "minutes"
+ *              read against a 60-minute frame) — from slCooldownKey's own
+ *              SL_COOLDOWN_SECONDS TTL.
+ *   null       neither TTL is alive: no recent loss, or a loss more than an
+ *              hour old, or a loss on a DIFFERENT symbol/direction between
+ *              those two windows. postLossDayKey confirms a loss happened
+ *              today in that gap but not when, so this returns null rather
+ *              than invent a number — recorded as "not recoverable", a
+ *              different fact from "no loss".
+ *
+ * Reporting only: this never feeds back into the cooldown gate itself.
+ */
+async function readMinutesSinceLastLoss(underlying: string, exchange: Exchange, mode: TradingMode, direction: BiasDirection): Promise<number | null> {
+  if (direction === 'NEUTRAL') return null;
+  try {
+    const [settleTtl, cooldownTtl] = await Promise.all([
+      redis.ttl(postLossSettleKey(exchange, mode)),
+      redis.ttl(slCooldownKey(exchange, underlying, mode, direction)),
+    ]);
+    return minutesSinceLastLossFromTtls(settleTtl, cooldownTtl, mode, POST_LOSS_SETTLE_MINUTES, SL_COOLDOWN_SECONDS);
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying }, 'Minutes-since-last-loss read failed');
+    return null;
+  }
+}
+
+/**
+ * Measures whether a sticky setup being handed back on a later poll has gone
+ * stale against the live underlying. Returns what to show on the response.
+ *
+ * MEASUREMENT ONLY. The setup is not invalidated, not re-priced and not
+ * re-written to Redis; the first stale sighting is recorded against the TAKE
+ * decision that minted it (a stale flag plus a SIGNAL_STALE gate-diagnostic
+ * row), fire-and-forget.
+ */
+function observeStickyStaleness(stored: StoredTradeSetup, storedChain: OptionChain | null, underlying: string): SurfacedFreshness {
+  const underlyingAtGeneration = stored.underlyingAtGeneration ?? stored.excursion?.underlyingEntry ?? null;
+  const atrPoints = stored.entryContext?.atrPoints ?? stored.excursion?.atrAtEntry ?? null;
+  const currentUnderlying = storedChain?.spotPrice ?? null;
+  const assessment = assessStaleness({
+    underlyingAtGeneration,
+    currentUnderlying,
+    atrPoints,
+    generatedAt: stored.generatedAt ?? null,
+    now: decisionNow(),
+  });
+  if (assessment.stale && stored.decisionId) {
+    void flagStaleOnce(stored.decisionId, assessment, { underlyingAtGeneration, currentUnderlying, atrPoints }, underlying);
+  }
+  return {
+    stale: assessment.stale,
+    evaluated: assessment.evaluated,
+    moveAtr: assessment.moveAtr,
+    thresholdAtr: assessment.thresholdAtr,
+    ageSeconds: assessment.ageSeconds,
+    enforced: false,
+  };
+}
+
+async function flagStaleOnce(
+  decisionId: string,
+  assessment: StalenessAssessment,
+  context: { underlyingAtGeneration: number | null; currentUnderlying: number | null; atrPoints: number | null },
+  underlying: string
+): Promise<void> {
+  try {
+    // One record per setup: the first stale sighting, not one per poll.
+    const first = await redis.set(`signal_stale_flagged:${decisionId}`, '1', 'EX', 60 * 60 * 24 * 3, 'NX');
+    if (first !== 'OK') return;
+    logger.info(
+      { shadow: 'SIGNAL_STALE', underlying, decisionId, moveAtr: assessment.moveAtr, thresholdAtr: assessment.thresholdAtr },
+      'Signal staleness: a re-surfaced sticky setup has gone stale (measured only — not invalidated)'
+    );
+    await markDecisionStale(decisionId, assessment);
+    await recordGateDiagnostics(decisionId, [staleSignalDiagnostic(assessment, context, decisionNow())]);
+  } catch (err: any) {
+    logger.warn({ error: err.message, decisionId }, 'Signal staleness: record failed');
+  }
+}
+
+/** A re-surfaced sticky setup, with its measured staleness attached to the response only. */
+function surfaceSticky(setup: StoredTradeSetup, currentValue: number | null, isSpread: boolean, storedChain: OptionChain | null, underlying: string): TradeSetup {
+  let signalFreshness: SurfacedFreshness | undefined;
+  try {
+    signalFreshness = observeStickyStaleness(setup, storedChain, underlying);
+  } catch {
+    signalFreshness = undefined; // instrumentation must never break a re-surface
+  }
+  return withLiveMark(signalFreshness ? { ...setup, signalFreshness } : setup, currentValue, isSpread);
+}
+
 // A target is a resting limit order — it fills AT the target, not at
 // whatever higher print the next poll happened to see after a gap through
 // it (BANKNIFTY's +77% "win" against a +37% target). A stop is the
@@ -2247,18 +2440,18 @@ async function resolveStickyTradeSetup(
       // Bias still agrees with the locked setup — fully sticky. Clear any
       // reversal streak that had started building from an earlier blip,
       // since the reversal didn't hold.
-      if (!stored!.reversalStreak) return withLiveMark(stored!, currentValue, isSpread);
+      if (!stored!.reversalStreak) return surfaceSticky(stored!, currentValue, isSpread, storedChain, underlying);
       const reset: StoredTradeSetup = { ...stored!, reversalStreak: 0, reversalSince: undefined };
       try {
         await redis.set(key, JSON.stringify(reset), 'EX', setupTtl);
       } catch (err: any) {
         logger.warn({ error: err.message, underlying }, 'Sticky trade setup reversal-streak reset failed');
       }
-      return withLiveMark(reset, currentValue, isSpread);
+      return surfaceSticky(reset, currentValue, isSpread, storedChain, underlying);
     } else if (direction === 'NEUTRAL' || confidence < MIN_CONFIDENCE) {
       // Mixed or low-confidence read — not a reversal. Hold the position and
       // leave any streak as it is (see REVERSAL_CONFIRM_POLLS).
-      return withLiveMark(stored!, currentValue, isSpread);
+      return surfaceSticky(stored!, currentValue, isSpread, storedChain, underlying);
     } else {
       // A confident opposite read — confirm it once on refreshed data
       // before exiting, rather than acting on a single read that may share
@@ -2274,7 +2467,7 @@ async function resolveStickyTradeSetup(
         } catch (err: any) {
           logger.warn({ error: err.message, underlying }, 'Sticky trade setup reversal-streak write failed');
         }
-        return withLiveMark(bumped, currentValue, isSpread);
+        return surfaceSticky(bumped, currentValue, isSpread, storedChain, underlying);
       }
       // Reversal confirmed across enough polls — inconclusive, not a loss.
       // Still worth a mark-to-market exit price where we can get one, so
@@ -2319,6 +2512,95 @@ async function resolveStickyTradeSetup(
     (await losingCloseCooldownReason(underlying, exchange, direction, mode, confidence)) ??
     (reliability ? { code: 'RELIABILITY_FILTER' as const, reason: reliability } : null);
   const unreliableReason = refusal?.reason ?? null;
+
+  // --- Gate diagnostics (Phase 1, observation only) ---
+  // Computed AFTER `refusal` is fixed, from the same inputs, and never used
+  // to change it: the live chain above is untouched and still decides alone.
+  // Each gate is evaluated on its own so a record shows every gate that
+  // would have refused, not only the first. The pure parts are captured now;
+  // the post-loss reads run lazily, only for a decision that is recorded.
+  const diagnosticsAt = decisionNow();
+  const diagnosticSnapshot = {
+    sessionRefusal: sessionGateReason(exchange, mode),
+    minutesSinceOpen: minutesSinceSessionOpen(exchange),
+    positioningRefusal: positioningConflictReason(direction, voteSnapshot),
+  };
+  const gateDiagnosticsFor = async (): Promise<GateDiagnostic[]> => {
+    try {
+      const losingClose = await readLosingCloseState(underlying, exchange, direction, mode);
+      const rows = evaluateGateDiagnostics(
+        {
+          direction,
+          mode,
+          confidence,
+          riskOffReason: riskOff,
+          feedBlockReason: feedBlock,
+          sessionRefusal: diagnosticSnapshot.sessionRefusal,
+          minutesSinceOpen: diagnosticSnapshot.minutesSinceOpen,
+          positioningRefusal: diagnosticSnapshot.positioningRefusal,
+          positioningVotes: voteSnapshot?.positioning ?? null,
+          losingClose,
+          // The live chain only runs the reliability check when not RISK_OFF.
+          reliability: { evaluated: riskOff == null, reason: reliability },
+          liveRefusalCode: refusal?.code ?? null,
+          thresholds: {
+            minSetupConfidence: MIN_SETUP_CONFIDENCE,
+            openingSettleMinutes: SETUP_OPENING_SETTLE_MINUTES,
+            openingGuardMinutes: SETUP_OPENING_GUARD_MINUTES,
+            postLossSettleMinutes: POST_LOSS_SETTLE_MINUTES,
+            postLossMinConfidence: POST_LOSS_MIN_CONFIDENCE,
+            maxSameDirectionLossesPerDay: MAX_SAME_DIRECTION_LOSSES_PER_DAY,
+          },
+        },
+        diagnosticsAt
+      );
+      // Phase 3 (spec §20) — not part of the live chain (see gate-diagnostics.ts):
+      // logged so a report can tell whether room-to-target ever ran on stale
+      // OI, never read back and never able to refuse anything.
+      rows.push(oiWallFreshnessDiagnostic(entryContext?.roomCheckOiAgeSeconds ?? null, diagnosticsAt));
+      return rows;
+    } catch (err: any) {
+      logger.warn({ error: err.message, underlying }, 'Gate diagnostics: evaluation failed');
+      return [];
+    }
+  };
+
+  // Phase 3 (spec §15) — labelled here (not in computeMarketBias) because
+  // this is where a decision is actually recorded; entryContext already
+  // carries the raw ADX/atrZ/breakout readings classifyRegime() used.
+  // SETUP_OPENING_GUARD_MINUTES is the live gate's own window — reused, not
+  // re-picked, so this always agrees with what OPENING_HOUR actually guards.
+  const openingEnvironment = classifyOpeningEnvironment(
+    {
+      minutesSinceOpen: diagnosticSnapshot.minutesSinceOpen,
+      adxValue: entryContext?.adxValue ?? 0,
+      atrZ: entryContext?.atrZ ?? 0,
+      freshBreakoutUp: entryContext?.freshBreakoutUp ?? false,
+      freshBreakoutDown: entryContext?.freshBreakoutDown ?? false,
+    },
+    SETUP_OPENING_GUARD_MINUTES
+  );
+
+  // Phase 3 (spec §16) — recovers elapsed minutes from the exact Redis TTLs
+  // losingCloseCooldownReason() above already read for the gate check. See
+  // the function's own comment for what is and is not recoverable.
+  const minutesSinceLastLoss = await readMinutesSinceLastLoss(underlying, exchange, mode, direction);
+
+  const phase1Context = {
+    strategy: entryContext?.strategyLabels ?? null,
+    confidenceDimensions: entryContext
+      ? {
+          voteContributions: entryContext.voteContributions ?? null,
+          directionScore: entryContext.directionScore ?? null,
+          setupQualityScore: entryContext.setupQualityScore ?? null,
+        }
+      : null,
+    // Phase 3 persistence — see each value's own comment above.
+    openingEnvironment,
+    minutesSinceLastLoss,
+    roomCheckOiAgeSeconds: entryContext?.roomCheckOiAgeSeconds ?? null,
+  };
+
   if (refusal != null) {
     logDecision({
       at: decisionNow(),
@@ -2340,10 +2622,17 @@ async function resolveStickyTradeSetup(
     // The refusal, recorded in full. The missed-winner audit grades it later
     // against what the market actually did, which is the only way to tell
     // capital protection from having simply stopped trading.
-    const blocks = snapshotBlocks(chain, entryContext, null, direction === 'BEARISH' ? 'PE' : 'CE');
+    const refusedSide = direction === 'BEARISH' ? 'PE' : 'CE';
+    const blocks = snapshotBlocks(chain, entryContext, null, refusedSide);
     const instrumentation = snapshotInstrumentation(exchange, entryContext, null);
     recordDecisionSnapshot({
       ...instrumentation,
+      ...phase1Context,
+      freshness: {
+        timestamps: inputTimestampsFrom(chain, findLeg(chain, chain.atmStrike, refusedSide)),
+        underlyingPriceAtGeneration: chain.spotPrice,
+      },
+      gateDiagnostics: gateDiagnosticsFor,
       symbol: underlying,
       exchange,
       mode,
@@ -2473,6 +2762,17 @@ async function resolveStickyTradeSetup(
     // contracts this engine trades; the chain leg does not carry its own.
     { ivRank, hvPct: entryContext?.hvPct ?? null, tickSize: 0.05, expectedHoldHours }
   );
+
+  // --- Phase 2 shadow models (observation only) ---
+  // Computed AFTER builtRaw is fixed, from the same chain and inputs, into a
+  // separate object that is only ever handed to the decision snapshot. None of
+  // it flows back into builtRaw/fresh, the sticky setup, or any gate.
+  const shadowModels = computeShadowModels(builtRaw, chain, direction, targetMovePoints, expectedHoldHours, {
+    ivRank,
+    hvPct: entryContext?.hvPct ?? null,
+    underlying,
+  });
+
   // Record WHICH contract the strike/entry/SL/target belong to. A strike
   // alone is ambiguous — the same strike exists in every listed expiry at a
   // different premium — and this is what later tracking prices against.
@@ -2507,6 +2807,42 @@ async function resolveStickyTradeSetup(
     } catch (err: any) {
       logger.warn({ error: err.message, underlying }, 'Sticky trade setup clear failed');
     }
+    // Phase 3 (spec §5) — until now a refusal from buildTradeSetup itself
+    // (poor option quality, cost exceeding the edge, reward:risk too low
+    // after costs, a bad ATM quote, an unrealistic target) returned straight
+    // to the caller with no persisted row — only the gate-level `refusal`
+    // computed above (risk-off, session, confidence, positioning, cooldown,
+    // reliability) got one. That left this whole refusal family queryable
+    // only via whatever sentence the UI happened to show. Recorded exactly
+    // as buildTradeSetup computed it: no new check, nothing here changes
+    // what refuses.
+    const refusedSide: 'CE' | 'PE' = direction === 'BEARISH' ? 'PE' : 'CE';
+    const refusalBlocks = snapshotBlocks(chain, entryContext, fresh, refusedSide);
+    const refusalInstrumentation = snapshotInstrumentation(exchange, entryContext, fresh);
+    recordDecisionSnapshot({
+      ...refusalInstrumentation,
+      ...phase1Context,
+      freshness: {
+        timestamps: inputTimestampsFrom(chain, findLeg(chain, chain.atmStrike, refusedSide)),
+        underlyingPriceAtGeneration: chain.spotPrice,
+      },
+      gateDiagnostics: gateDiagnosticsFor,
+      contractValidation: fresh.contractValidation ?? null,
+      symbol: underlying,
+      exchange,
+      mode,
+      expiry: chain.expiry,
+      decision: 'REFUSE',
+      reasonCode: fresh.noTradeCode ?? null,
+      reason: fresh.reason,
+      regime: entryContext?.regime ?? null,
+      bias: direction,
+      confidence,
+      pcr: chain.pcrDetail?.oiPCR ?? null,
+      underlyingPrice: chain.spotPrice,
+      atr: entryContext?.atrPoints ?? null,
+      ...refusalBlocks,
+    });
     return fresh;
   }
 
@@ -2533,11 +2869,30 @@ async function resolveStickyTradeSetup(
     // What the not-yet-live gates would have said about this same trade.
     shadow: { room: entryContext?.roomSufficient !== false, location: (entryContext?.locationScore ?? 100) >= 40 },
   });
+  // Generated here so the sticky setup can carry it: later stale/dead flags
+  // and the eventual simulated close are written back to this same row.
+  const takeDecisionId = randomUUID();
   {
     const blocks = snapshotBlocks(chain, entryContext, fresh, fresh.available ? fresh.side ?? null : null);
     const instrumentation = snapshotInstrumentation(exchange, entryContext, fresh);
+    const takenLeg = fresh.strike != null && fresh.side ? findLeg(chain, fresh.strike, fresh.side) : null;
     recordDecisionSnapshot({
       ...instrumentation,
+      ...phase1Context,
+      decisionId: takeDecisionId,
+      signalId: signalId ?? null,
+      freshness: {
+        timestamps: inputTimestampsFrom(chain, takenLeg),
+        underlyingPriceAtGeneration: chain.spotPrice,
+      },
+      gateDiagnostics: gateDiagnosticsFor,
+      shadowModels,
+      // Simulated-portfolio accounting over the OTHER live sticky setups.
+      // Read lazily after the row is written; never blocks or alters this setup.
+      exposure: () => {
+        const current = toExposureSetup(key, { ...fresh, direction, day: today }, today);
+        return current ? readExposureAtCreation(current, today) : Promise.resolve(null);
+      },
       symbol: underlying,
       exchange,
       mode,
@@ -2578,6 +2933,8 @@ async function resolveStickyTradeSetup(
     initialStopLoss: fresh.stopLoss,
     voteSnapshot,
     entryContext,
+    decisionId: takeDecisionId,
+    underlyingAtGeneration: chain.spotPrice,
   };
   try {
     await redis.set(key, JSON.stringify(toStore), 'EX', setupTtl);
@@ -2782,6 +3139,16 @@ async function recordTradeSetupOutcome(
   const initialStop = stored.initialStopLoss ?? stored.stopLoss;
   const riskPct =
     !isSpread && stored.entry != null && stored.entry > 0 && initialStop != null ? ((stored.entry - initialStop) / stored.entry) * 100 : null;
+  const rMultiple = returnPercent != null && riskPct != null && riskPct > 0 ? Math.round((returnPercent / riskPct) * 100) / 100 : null;
+
+  // Phase 1: backfill how this SIMULATED position closed onto the TAKE
+  // decision that minted it, in the explicit exit-reason vocabulary, with the
+  // same gross R the notifier below reports. Fire-and-forget; analytics only.
+  void recordEventualOutcome({ decisionId: stored.decisionId, signalId: stored.signalId }, exitReasonFromCloseReason(close.reason), close.reason, rMultiple);
+  // Phase 2: which of the two already-separate close branches fired (premium
+  // stop/target, evaluated first; or the bias-reversal branch). Labels the
+  // close reason that branch already set — no new condition. Analytics only.
+  void recordInvalidationReason({ decisionId: stored.decisionId, signalId: stored.signalId }, invalidationReasonFromCloseReason(close.reason));
 
   notifyTradeSetupClosed({
     ...close,
@@ -2793,7 +3160,7 @@ async function recordTradeSetupOutcome(
     entry: isSpread ? stored.netPremium ?? null : stored.entry ?? null,
     exitPrice: exitValue,
     returnPercent,
-    rMultiple: returnPercent != null && riskPct != null && riskPct > 0 ? Math.round((returnPercent / riskPct) * 100) / 100 : null,
+    rMultiple,
     generatedAt: stored.generatedAt ?? null,
     dedupeId,
   });
@@ -3091,6 +3458,12 @@ export async function checkLockedSetupPriceLevels(
     }
     if (healthChanged) {
       logShadowHealth(underlying, exchange, mode, health, elapsedMinutes, excursion);
+      // Phase 1: persist the first DEAD reading against the TAKE decision
+      // (write-once in SQL). Analytics only — the position stays open.
+      const dead = deadTradeMarker(health, excursion, decisionNow());
+      if (dead && stored.decisionId) {
+        void markDecisionDead(stored.decisionId, dead.deadAt, dead.mfeAtDeadAtr, dead.maeAtDeadAtr);
+      }
     }
   }
 
@@ -3195,6 +3568,69 @@ function snapshotInstrumentation(
     stopAtr: setup?.available ? setup.stopInAtr ?? null : null,
     shadow: anyShadowReading ? { wouldRefuse: reasons.length > 0, reasons } : null,
   };
+}
+
+/**
+ * Phase 2 SHADOW models for one freshly built setup: the strike a candidate
+ * scorer would have picked, the same paper trade entered at the ask, and a
+ * gamma/theta-aware target. Every input is a value the live path already
+ * computed; the output goes to the decision snapshot and nowhere else — it is
+ * never merged into the setup, the sticky cache, or any gate. Never throws:
+ * a failure here is logged and records nothing.
+ */
+function computeShadowModels(
+  setup: TradeSetup,
+  chain: OptionChain,
+  direction: BiasDirection,
+  expectedMovePoints: number,
+  expectedHoldHours: number,
+  ctx: { ivRank: number | null; hvPct: number | null; underlying: string }
+): { strikeSelection: ShadowStrikeSelection | null; execution: ExecutionQualityResult | null; targetV2: TargetEstimateResult | null } | null {
+  if (!setup.available || setup.structureType !== 'NAKED_LONG' || direction === 'NEUTRAL') return null;
+  if (setup.strike == null || !setup.side || setup.entry == null || setup.stopLoss == null || setup.target == null) return null;
+  try {
+    const leg = findLeg(chain, setup.strike, setup.side);
+    const strikeSelection = scoreStrikeCandidates({
+      strikes: chain.strikes,
+      liveStrike: chain.atmStrike,
+      side: setup.side,
+      expiry: chain.expiry,
+      expectedMovePoints,
+      dte: chain.dte,
+      expectedHoldHours,
+      ivRank: ctx.ivRank,
+      hvPct: ctx.hvPct,
+      tickSize: 0.05,
+    });
+    const execution = assessExecutionQuality({
+      bid: leg?.bid,
+      ask: leg?.ask,
+      ltp: leg?.ltp,
+      liveEntry: setup.entry,
+      stopLoss: setup.stopLoss,
+      target: setup.target,
+      lotSize: chain.lotSize,
+    });
+    const targetV2 = leg
+      ? estimateTargetV2({
+          entry: setup.entry,
+          stopLoss: setup.stopLoss,
+          liveTarget: setup.target,
+          delta: leg.delta,
+          gamma: leg.gamma,
+          theta: leg.theta,
+          expectedMovePoints,
+          expectedHoldHours,
+          bid: leg.bid,
+          ask: leg.ask,
+          lotSize: chain.lotSize,
+        })
+      : null;
+    return { strikeSelection, execution, targetV2 };
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying: ctx.underlying }, 'Phase 2 shadow models: evaluation failed — nothing recorded for them');
+    return null;
+  }
 }
 
 function snapshotBlocks(
@@ -3418,6 +3854,23 @@ interface SetupEntryContext {
   roomLevel: number | null;
   roomLevelSource: 'CALL_WALL' | 'PUT_WALL' | 'PIVOT' | null;
   optionOiBaselineCoverage: number;
+  /** Phase 1: strategy taxonomy over already-computed readings. Recorded, read by nothing. */
+  strategyLabels?: StrategyLabelResult | null;
+  /** Phase 1: the ten weighted dimensions behind the intelligence score, as computed. */
+  voteContributions?: VoteContributions | null;
+  /** Phase 1: the chart-vote net the direction was read from. */
+  directionScore?: number | null;
+  /** Phase 1: the pre-regime weighted intelligence score. */
+  setupQualityScore?: number | null;
+  /** Phase 3 (spec §15) — classifyRegime()'s own ADX input, carried through so opening-classifier.ts can reuse it instead of recomputing. */
+  adxValue?: number | null;
+  /** Phase 3 (spec §15) — classifyRegime()'s own atrZ (atrPctZ) input. */
+  atrZ?: number | null;
+  /** Phase 3 (spec §15) — classifyRegime()'s own fresh-breakout flags. */
+  freshBreakoutUp?: boolean;
+  freshBreakoutDown?: boolean;
+  /** Phase 3 (spec §20) — age in seconds of the chain-fetch OI data roomToTarget() filtered candidates by. */
+  roomCheckOiAgeSeconds?: number | null;
 }
 
 function regimeAlignment(direction: BiasDirection, regime: MarketRegime): RegimeAlignment {

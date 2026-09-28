@@ -57,7 +57,7 @@ import type {
   ScannerSetupTier,
   SectorRank,
 } from '@fno/shared';
-import { DEFAULT_RISK_CONFIG, LIQUID_SPREAD_MAX_PCT, isMarketOpen } from '@fno/shared';
+import { DEFAULT_RISK_CONFIG, LIQUID_SPREAD_MAX_PCT, isMarketOpen, classifyDteTier } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { buildMarketBias } from './market-bias.js';
 import { scanFnoUniverse } from './fno-scanner.js';
@@ -458,13 +458,15 @@ function scoreCandidate(
     );
   }
   // DTE: 0-1 DTE is the worst case for a long option (theta/gamma dominate),
-  // a comfortable 5+ days is the best.
+  // a comfortable 5+ days is the best. Tier edges come from the one shared
+  // DTE definition (@fno/shared classifyDteTier).
   const dte = inputs.dte;
+  const dteTier = dte == null ? null : classifyDteTier(dte);
   if (dte == null) {
     ivEnvironmentScore += 2;
-  } else if (dte <= 1) {
+  } else if (dteTier === 'EXPIRY_WINDOW') {
     reasoning.push(`${dte} DTE — expiry-day theta/gamma work directly against a long option, no DTE credit`);
-  } else if (dte <= 3) {
+  } else if (dteTier === 'SHORT') {
     ivEnvironmentScore += 2;
   } else {
     ivEnvironmentScore += 4;

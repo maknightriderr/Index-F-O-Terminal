@@ -7,6 +7,10 @@ export * from './expected-move/index.js';
 export * from './indicators/index.js';
 export * from './trade-setup/index.js';
 export * from './option-quality/index.js';
+// Phase 2 shadow models — computed and recorded beside the live decision, never fed back into it.
+export * from './strike-selection/index.js';
+export * from './execution-quality/index.js';
+export * from './target-estimate/index.js';
 export * from './setup-classifier/index.js';
 export * from './patterns/index.js';
 export * from './candlestick-patterns/index.js';

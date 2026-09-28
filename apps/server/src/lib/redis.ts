@@ -15,6 +15,18 @@ export const redis = new Redis(config.redis.url, {
 redis.on('connect', () => logger.info('Redis connected'));
 redis.on('error', (err: Error) => logger.error({ error: err.message }, 'Redis error'));
 
+/** Every key matching a pattern, via SCAN (never KEYS, which blocks the server). */
+export async function scanKeys(pattern: string): Promise<string[]> {
+  const keys: string[] = [];
+  let cursor = '0';
+  do {
+    const [next, batch] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+    cursor = next;
+    keys.push(...batch);
+  } while (cursor !== '0');
+  return keys;
+}
+
 export async function pingRedis(): Promise<{ healthy: boolean; latencyMs?: number; error?: string }> {
   try {
     const start = Date.now();

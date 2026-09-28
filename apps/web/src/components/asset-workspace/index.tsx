@@ -845,7 +845,7 @@ function TradeSetupCard({ setup }: { setup: TradeSetup }) {
       )}
       {liveMark}
       <p className="text-[10px] text-gray-400 mt-2.5 leading-snug">
-        Heuristic from live data — not investment advice.{lockedNote}
+        PAPER TRADE — heuristic from live data, outcomes are simulated. Not investment advice.{lockedNote}
       </p>
     </IntelCard>
   );
@@ -878,8 +878,11 @@ function LiveMarkRow({ currentValue, unrealizedPnl }: { currentValue: number; un
   const color = unrealizedPnl == null ? 'text-gray-400 light:text-slate-600' : unrealizedPnl > 0 ? 'text-emerald-400' : unrealizedPnl < 0 ? 'text-red-400' : 'text-gray-400 light:text-slate-600';
   const sign = unrealizedPnl != null && unrealizedPnl > 0 ? '+' : '';
   return (
-    <div className="flex items-center justify-between mt-1.5 bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-1.5">
-      <span className="text-[10px] text-gray-400 light:text-slate-600">Live</span>
+    <div
+      className="flex items-center justify-between mt-1.5 bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-1.5"
+      title="Paper trade marked to the live quote. The figure in brackets is SIMULATED P&L — no order was placed."
+    >
+      <span className="text-[10px] text-gray-400 light:text-slate-600">Paper mark · simulated P&amp;L</span>
       <span className="text-xs font-semibold tabular-nums">
         <span className="text-gray-200 light:text-slate-800">{currentValue.toFixed(2)}</span>
         {unrealizedPnl != null && (

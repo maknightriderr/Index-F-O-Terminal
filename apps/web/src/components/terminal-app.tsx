@@ -16,6 +16,7 @@ import { AiAssistantPage } from '@/components/ai-assistant';
 import { InstitutionalFlowPage } from '@/components/institutional-flow';
 import { BacktestingPage } from '@/components/backtesting';
 import { SystemLearningPage } from '@/components/system-learning';
+import { LossAttributionPage } from '@/components/loss-attribution';
 import { AddAssetModal } from '@/components/common/add-asset-modal';
 import { useMarketStore, useUISettingsStore, useSystemHealthStore } from '@/stores';
 import { useMarketWebSocket } from '@/lib/ws';
@@ -49,6 +50,8 @@ export function TerminalApp() {
         return <StrategyScannerPage />;
       case 'backtesting':
         return <BacktestingPage />;
+      case 'loss-attribution':
+        return <LossAttributionPage />;
       case 'institutional-flow':
         return <InstitutionalFlowPage />;
       case 'positions':

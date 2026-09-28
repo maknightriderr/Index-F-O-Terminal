@@ -8,7 +8,7 @@
 // Handles edge cases: near-expiry, deep ITM/OTM, zero DTE.
 // ============================================================
 
-import { RISK_FREE_RATE } from '@fno/shared';
+import { RISK_FREE_RATE, classifyDteTier, type DteTier } from '@fno/shared';
 import type { Greeks, OptionType, OptionChainStrike, DecayAnalysis } from '@fno/shared';
 
 // --- Normal Distribution Helpers ---
@@ -288,6 +288,13 @@ export function calculateGreeksFromPrice(
 
 // --- Time Decay Analysis ---
 
+const DECAY_SPEED_BY_TIER: Record<DteTier, DecayAnalysis['speed']> = {
+  EXPIRY_WINDOW: 'EXTREME',
+  SHORT: 'FAST',
+  WEEK: 'MODERATE',
+  LONGER: 'SLOW',
+};
+
 /**
  * How fast theta is eating premium right now, at the ATM strike (where
  * theta bites hardest). Speed is classified purely from DTE — decay
@@ -305,8 +312,9 @@ export function analyzeTimeDecay(
   const thetaPct = (leg: { theta: number; ltp: number } | null | undefined): number =>
     leg && leg.ltp > 0 ? clampGreek((leg.theta / leg.ltp) * 100, -100, 0) : 0;
 
-  const speed: DecayAnalysis['speed'] =
-    dte <= 1 ? 'EXTREME' : dte <= 3 ? 'FAST' : dte <= 7 ? 'MODERATE' : 'SLOW';
+  // Tier edges come from the one shared DTE definition (@fno/shared
+  // classifyDteTier); the speed labels are unchanged.
+  const speed: DecayAnalysis['speed'] = DECAY_SPEED_BY_TIER[classifyDteTier(dte)];
 
   return {
     atmCallThetaPct: thetaPct(atmEntry?.call),

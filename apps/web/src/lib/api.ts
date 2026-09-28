@@ -307,6 +307,33 @@ class ApiClient {
   ) {
     return this.post<{ ok: boolean; status: string; message: string }>(`/api/learning/review/${eventId}`, body);
   }
+
+  // --- Loss attribution (read-only; every figure is a simulated paper-trade outcome) ---
+
+  private lossAttributionQuery(opts: { scope?: string; since?: string; until?: string }): string {
+    const params = new URLSearchParams();
+    if (opts.scope) params.set('scope', opts.scope);
+    if (opts.since) params.set('since', opts.since);
+    if (opts.until) params.set('until', opts.until);
+    const qs = params.toString();
+    return qs ? `?${qs}` : '';
+  }
+
+  async getLossAttributionReport(opts: { scope?: string; since?: string; until?: string } = {}) {
+    return this.get<unknown>(`/api/loss-attribution/report${this.lossAttributionQuery(opts)}`);
+  }
+
+  async getLossAttributionSplit(opts: { scope?: string; since?: string; until?: string } = {}) {
+    return this.get<unknown>(`/api/loss-attribution/split${this.lossAttributionQuery(opts)}`);
+  }
+
+  async getLossAttributionGates(opts: { since?: string; until?: string } = {}) {
+    return this.get<unknown>(`/api/loss-attribution/gates${this.lossAttributionQuery(opts)}`);
+  }
+
+  async getLossAttributionShadow(opts: { since?: string; until?: string } = {}) {
+    return this.get<unknown>(`/api/loss-attribution/shadow${this.lossAttributionQuery(opts)}`);
+  }
 }
 
 export class ApiError extends Error {

@@ -144,7 +144,9 @@ const EXPIRY_DAY_SL_WIDEN_FACTOR = 1.5;
 // Bid-ask spread as a % of mid premium. Above this on the ATM leg, the quote
 // is too thin to trust an entry/SL/target off of — refuse the setup rather
 // than size a "trade" around a price nobody could actually get filled at.
-const MAX_ATM_SPREAD_PCT = 5;
+// Exported (value unchanged) so the Phase 2 shadow strike scorer applies this
+// same ceiling to alternate strikes rather than inventing a second one.
+export const MAX_ATM_SPREAD_PCT = 5;
 
 // Nothing about entry/SL/target/riskReward above accounts for what it
 // actually costs to trade this — brokerage, STT, and the bid-ask spread
@@ -400,6 +402,10 @@ function buildNakedLong(
       available: false,
       noTradeCode: optionQuality.refusalReason?.includes('Nobody is trading') ? 'LOW_OPTION_LIQUIDITY' : 'POOR_OPTION_QUALITY',
       reason: `${direction} bias at ${confidence}/100, but the contract it would have to be expressed through is not tradeable. ${optionQuality.refusalReason}`,
+      // Phase 3 (spec §5) — the same tradeable/refusalReason this refusal is
+      // built from, carried onto the return object so it can be persisted
+      // instead of surviving only in the free-text `reason` above.
+      contractValidation: { tradeable: false, refusalReason: optionQuality.refusalReason, checks: optionQuality.components },
     };
   }
   const optionQualityRecord: TradeSetupOptionQuality = {
@@ -515,6 +521,10 @@ function buildNakedLong(
     stopInAtr: stopInAtr != null ? round2(stopInAtr) : null,
     targetInAtr: targetInAtr != null ? round2(targetInAtr) : null,
     optionQuality: optionQualityRecord,
+    // Phase 3 (spec §5) — tradeable is always true here (the mechanical
+    // refusal above already returned otherwise); recorded so a taken trade's
+    // contract validation is queryable the same way a refused one's is.
+    contractValidation: { tradeable: true, refusalReason: null, checks: optionQuality.components },
     positionSize: positionSize ?? undefined,
     reason:
       `${direction} bias at ${confidence}/100 confidence — ATM ${side} ${atmStrike} @ ${entry.toFixed(2)}${hasQuote ? ' (bid-ask mid)' : ''}. ` +

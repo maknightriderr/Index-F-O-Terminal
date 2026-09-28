@@ -271,3 +271,28 @@ export function mfeInAtr(excursion: TradeExcursion | undefined): number | null {
   if (!excursion || !excursion.atrAtEntry || !(excursion.atrAtEntry > 0)) return null;
   return excursion.underlyingMfe / excursion.atrAtEntry;
 }
+
+/** Adverse underlying excursion in ATR. */
+export function maeInAtr(excursion: TradeExcursion | undefined): number | null {
+  if (!excursion || !excursion.atrAtEntry || !(excursion.atrAtEntry > 0)) return null;
+  return excursion.underlyingMae / excursion.atrAtEntry;
+}
+
+/**
+ * What to persist when the existing DEAD rule above fires: the instant, and
+ * the underlying excursion in ATR at that instant. Null for any other state.
+ *
+ * Persisted so a report can later ask "of the trades flagged dead, how many
+ * recovered, and what did they end at?" — the evidence the time-stop needs
+ * before it is ever allowed to close anything. Still reporting only: this
+ * returns data and closes nothing.
+ */
+export function deadTradeMarker(
+  health: Pick<TradeHealthAssessment, 'state'>,
+  excursion: TradeExcursion | undefined,
+  at: number
+): { deadAt: number; mfeAtDeadAtr: number | null; maeAtDeadAtr: number | null } | null {
+  if (health.state !== 'DEAD') return null;
+  const round4 = (n: number | null) => (n == null ? null : Math.round(n * 10000) / 10000);
+  return { deadAt: at, mfeAtDeadAtr: round4(mfeInAtr(excursion)), maeAtDeadAtr: round4(maeInAtr(excursion)) };
+}
