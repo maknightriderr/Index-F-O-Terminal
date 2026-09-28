@@ -106,6 +106,18 @@ import { notifyTradeSetup } from './telegram.js';
 import { trackSymbolForOiSnapshot } from './oi-close-snapshot.js';
 import { riskOffReason } from './risk-circuit-breaker.js';
 import { assessLocation, assessRoom, type StructuralLevel } from './location-quality.js';
+import { TRADING_FLAGS, TRADING_PARAMS, logicStamp, type LogicStamp } from '../config/trading-flags.js';
+import {
+  closingGuardReason,
+  concurrencyGateReason,
+  evaluateValidationGateDiagnostics,
+  locationGateReason,
+  minutesToSessionClose,
+  roomGateReason,
+  roomV2,
+} from './validation-gates.js';
+import type { ExposureSnapshot } from './exposure-tracker.js';
+import { stopOvershootPct } from './stop-overshoot.js';
 import type { NoTradeCode, TradeDecision } from '@fno/shared';
 import { assessTradeHealth, emptyExcursion, updateExcursion, mfeInAtr, deadTradeMarker, type TradeExcursion, type TradeHealthAssessment } from './trade-health.js';
 import { notifyTradeSetupClosed } from './trade-setup-close-notifier.js';
@@ -1571,6 +1583,11 @@ async function computeMarketBias(
     locationBehindAtr: location.behindAtr != null ? Math.round(location.behindAtr * 100) / 100 : null,
     locationAheadKind: location.nearestAhead?.kind ?? null,
     locationReason: location.reasons[0] ?? null,
+    // Validation review, fix 1: the level the structural stop is placed
+    // beyond, and the spot the location was read at.
+    locationBehindLevel: location.nearestBehind?.price ?? null,
+    locationBehindKind: location.nearestBehind?.kind ?? null,
+    locationSpot: locationSpot > 0 ? locationSpot : null,
     roomLevel: room ? Math.round(room.level * 100) / 100 : null,
     roomLevelSource: room?.source ?? null,
     optionOiBaselineCoverage: Math.round(optionOiBaselineCoverage * 100) / 100,
@@ -1896,6 +1913,7 @@ interface StoredTradeSetup extends TradeSetup {
   decisionId?: string; // the TAKE decision_snapshots row that minted this setup — later stale/dead/outcome flags link to it
   underlyingAtGeneration?: number; // spot when minted — what re-surface staleness is measured against
   signalFreshness?: SurfacedFreshness; // attached to the RETURNED object on a re-surface only, never persisted
+  logic?: LogicStamp; // validation review: logicVersion + flags this setup was minted under (absent before stamping)
 }
 
 /** Staleness of a re-surfaced sticky setup, as shown on the response. Measured only — see signal-freshness.ts. */
@@ -2012,6 +2030,17 @@ function sessionGateReason(exchange: Exchange, mode: TradingMode): GateRefusal |
         `Across the recorded history the first hour's entries lost 7.5R over 20 trades while everything after it made money.`,
     };
   }
+  // Validation review, fix 5 (flag CLOSING_GUARD): the explicit backstop at
+  // the other end of the session. Intraday only; existing setups untouched.
+  // With the flag off this returns null, exactly as before.
+  const closing = closingGuardReason({
+    enabled: TRADING_FLAGS.CLOSING_GUARD,
+    mode,
+    exchange,
+    minutesToClose: minutesToSessionClose(exchange, decisionNow()),
+    guardMinutes: TRADING_PARAMS.SETUP_CLOSING_GUARD_MINUTES,
+  });
+  if (closing) return closing;
   return null;
 }
 
@@ -2348,7 +2377,10 @@ async function resolveStickyTradeSetup(
       intelligenceScore,
       mode,
       stored.voteSnapshot,
-      stored.entryContext
+      stored.entryContext,
+      // The rules the setup was MINTED under, not the ones running now; null
+      // for a setup minted before stamping existed.
+      stored.logic ?? null
     );
     if (backfilledId) {
       stored = { ...stored, signalId: backfilledId };
@@ -2498,6 +2530,74 @@ async function resolveStickyTradeSetup(
   // reasons about price, because those rules would otherwise be reasoning
   // about a stale or broken quote and recording the result as a judgement.
   const feedBlock = dataQualityBlock(exchange, underlying);
+
+  // chain.expectedMove.points is IV × sqrt(chain.dte / 365) — correct for
+  // "where might price land by THIS OPTION'S expiry" (what the Option Chain
+  // page shows), but an INTRADAY naked long's sticky setup rolls over at
+  // day-end regardless of whether it resolved (see the day !== today check
+  // above) — it realistically has at most the rest of today to hit target
+  // before being forced EXPIRED. Feeding it a target scaled to the full
+  // ~20-30 day chain DTE asks it to cover a multi-week move within a single
+  // session — for CRUDEOIL's ~20-day monthly that's roughly a 4-5x larger
+  // move than sqrt(1/365) implies, which is *why* targets were essentially
+  // never reached (0 WINs across 40 recorded setups). POSITIONAL genuinely
+  // is meant to run toward the chain's full remaining life, so it keeps
+  // using chain.expectedMove.points as-is.
+  //
+  // Even the 1-day figure overstates what's reachable for a setup minted
+  // mid-session — a backtest review found EVERY INTRADAY naked long still
+  // sized off a flat full-day move regardless of when it was generated, so
+  // a 2pm setup was asked to cover the SAME move as one generated at the
+  // 9:15 open with the full 6h15m session ahead of it. Expected move scales
+  // with sqrt(time), so scale the 1-day figure down by sqrt(remaining
+  // session fraction) — a setup with half the session left gets ~71% of
+  // the full-day move as its target, not 100% of it. buildTradeSetup only
+  // ever builds a naked long now (the user is an option buyer, not a
+  // spread trader — see trade-setup/index.ts's file header), so this
+  // applies to every INTRADAY setup, not a fallback case.
+  //
+  // (Computed here, ahead of the refusal chain, only so the corrected room
+  // measure below can see the target actually used. Pure; unchanged.)
+  const targetExpectedMovePoints = isPositional
+    ? chain.expectedMove.points
+    : (() => {
+        const atmIvPct = computeAtmIv(chain);
+        if (atmIvPct <= 0) return chain.expectedMove.points;
+        const oneDayMove = calculateExpectedMove(chain.spotPrice, atmIvPct / 100, 1, underlying).expectedMove;
+        return oneDayMove * Math.sqrt(remainingSessionFraction(exchange));
+      })();
+
+  // Room to target: the move a target may assume is capped at the distance
+  // to the nearest strong OI wall or pivot in the trade's direction. The
+  // target used to be delta × expected move with no regard for what sits in
+  // between, and the further it reached the worse it did: setups projecting
+  // R:R 2.2+ won 0 of 16 (avg -0.37R) vs +0.17R below 1.9. A capped target
+  // that no longer clears the minimum R:R is refused, like any other.
+  const roomPoints = entryContext?.roomToTargetPoints ?? null;
+  const targetCapped = roomPoints != null && roomPoints < targetExpectedMovePoints;
+  const targetMovePoints = targetCapped ? roomPoints : targetExpectedMovePoints;
+
+  // Validation review, fix 2 — the corrected room measure. The old one (kept
+  // below as roomSufficient) divides the UNCAPPED move by ATR and fails ~94%
+  // of the time; V2 uses the target distance actually used. Recorded on every
+  // decision; refuses only under ROOM_GATE (default off — no outcome data yet).
+  const room2 = roomV2({ availableAtr: entryContext?.locationAheadAtr ?? null, targetMovePoints, atrPoints: entryContext?.atrPoints ?? null });
+  if (entryContext) {
+    entryContext.roomRequiredAtrV2 = room2.requiredAtrV2 != null ? Math.round(room2.requiredAtrV2 * 100) / 100 : null;
+    entryContext.roomSufficientV2 = room2.sufficientV2;
+  }
+
+  // Validation review, fix 4 (flag CONCURRENCY_CAP, default OFF): how much of
+  // the live paper book already leans this way. The Redis read happens only
+  // when the flag is on.
+  const concurrencyExposure: ExposureSnapshot | null =
+    TRADING_FLAGS.CONCURRENCY_CAP && direction !== 'NEUTRAL'
+      ? await readExposureAtCreation(
+          { key, exchange, underlying, mode, direction, strike: null, side: null, expiry: null, riskAmount: 0 },
+          today
+        )
+      : null;
+
   const refusal: GateRefusal | null =
     (riskOff ? { code: 'RISK_OFF' as const, reason: riskOff } : null) ??
     (feedBlock ? { code: 'NO_QUOTE' as const, reason: feedBlock } : null) ??
@@ -2508,9 +2608,24 @@ async function resolveStickyTradeSetup(
           reason: `Confidence ${confidence}/100 is below the ${MIN_SETUP_CONFIDENCE} a setup needs. Below that bar the recorded trades lost 6.6R across 34 of them, and 85% of the weakest band expired without touching either level.`,
         }
       : null) ??
+    // Validation review, fix 2 (flags LOCATION_GATE, ROOM_GATE). Null when off.
+    locationGateReason({
+      enabled: TRADING_FLAGS.LOCATION_GATE,
+      locationScore: entryContext?.locationScore ?? null,
+      minScore: TRADING_PARAMS.LOCATION_GATE_MIN_SCORE,
+      locationReason: entryContext?.locationReason ?? null,
+    }) ??
+    roomGateReason({
+      enabled: TRADING_FLAGS.ROOM_GATE,
+      sufficientV2: room2.sufficientV2,
+      availableAtr: entryContext?.locationAheadAtr ?? null,
+      requiredAtrV2: room2.requiredAtrV2,
+    }) ??
     positioningConflictReason(direction, voteSnapshot) ??
     (await losingCloseCooldownReason(underlying, exchange, direction, mode, confidence)) ??
-    (reliability ? { code: 'RELIABILITY_FILTER' as const, reason: reliability } : null);
+    (reliability ? { code: 'RELIABILITY_FILTER' as const, reason: reliability } : null) ??
+    // Validation review, fix 4. Null when CONCURRENCY_CAP is off.
+    concurrencyGateReason({ enabled: TRADING_FLAGS.CONCURRENCY_CAP, exposure: concurrencyExposure, max: TRADING_PARAMS.MAX_CONCURRENT_SAME_DIRECTION });
   const unreliableReason = refusal?.reason ?? null;
 
   // --- Gate diagnostics (Phase 1, observation only) ---
@@ -2524,6 +2639,7 @@ async function resolveStickyTradeSetup(
     sessionRefusal: sessionGateReason(exchange, mode),
     minutesSinceOpen: minutesSinceSessionOpen(exchange),
     positioningRefusal: positioningConflictReason(direction, voteSnapshot),
+    minutesToClose: minutesToSessionClose(exchange, diagnosticsAt),
   };
   const gateDiagnosticsFor = async (): Promise<GateDiagnostic[]> => {
     try {
@@ -2558,6 +2674,29 @@ async function resolveStickyTradeSetup(
       // logged so a report can tell whether room-to-target ever ran on stale
       // OI, never read back and never able to refuse anything.
       rows.push(oiWallFreshnessDiagnostic(entryContext?.roomCheckOiAgeSeconds ?? null, diagnosticsAt));
+      // Validation-review gates: one row each, enforced or not, so an
+      // unenforced gate's would-refuse rate is measured on live decisions.
+      rows.push(
+        ...evaluateValidationGateDiagnostics(
+          {
+            mode,
+            exchange,
+            liveRefusalCode: refusal?.code ?? null,
+            closing: { enforced: TRADING_FLAGS.CLOSING_GUARD, minutesToClose: diagnosticSnapshot.minutesToClose, guardMinutes: TRADING_PARAMS.SETUP_CLOSING_GUARD_MINUTES },
+            location: { enforced: TRADING_FLAGS.LOCATION_GATE, score: entryContext?.locationScore ?? null, minScore: TRADING_PARAMS.LOCATION_GATE_MIN_SCORE },
+            room: {
+              enforced: TRADING_FLAGS.ROOM_GATE,
+              availableAtr: entryContext?.locationAheadAtr ?? null,
+              requiredAtrV2: room2.requiredAtrV2,
+              sufficientV2: room2.sufficientV2,
+              requiredAtrV1: entryContext?.roomRequiredAtr ?? null,
+              sufficientV1: entryContext?.roomSufficient ?? null,
+            },
+            concurrency: { enforced: TRADING_FLAGS.CONCURRENCY_CAP, exposure: concurrencyExposure, max: TRADING_PARAMS.MAX_CONCURRENT_SAME_DIRECTION },
+          },
+          diagnosticsAt
+        )
+      );
       return rows;
     } catch (err: any) {
       logger.warn({ error: err.message, underlying }, 'Gate diagnostics: evaluation failed');
@@ -2665,45 +2804,9 @@ async function resolveStickyTradeSetup(
   const vix = await lookupIndiaVix(provider, exchange);
   const slPremiumPct = isPositional ? POSITIONAL_SL_PREMIUM_PCT : undefined;
 
-  // chain.expectedMove.points is IV × sqrt(chain.dte / 365) — correct for
-  // "where might price land by THIS OPTION'S expiry" (what the Option Chain
-  // page shows), but an INTRADAY naked long's sticky setup rolls over at
-  // day-end regardless of whether it resolved (see the day !== today check
-  // above) — it realistically has at most the rest of today to hit target
-  // before being forced EXPIRED. Feeding it a target scaled to the full
-  // ~20-30 day chain DTE asks it to cover a multi-week move within a single
-  // session — for CRUDEOIL's ~20-day monthly that's roughly a 4-5x larger
-  // move than sqrt(1/365) implies, which is *why* targets were essentially
-  // never reached (0 WINs across 40 recorded setups). POSITIONAL genuinely
-  // is meant to run toward the chain's full remaining life, so it keeps
-  // using chain.expectedMove.points as-is.
+  // targetExpectedMovePoints / targetMovePoints are computed above, ahead of
+  // the refusal chain (unchanged; moved so the V2 room measure can use them).
   //
-  // Even the 1-day figure overstates what's reachable for a setup minted
-  // mid-session — a backtest review found EVERY INTRADAY naked long still
-  // sized off a flat full-day move regardless of when it was generated, so
-  // a 2pm setup was asked to cover the SAME move as one generated at the
-  // 9:15 open with the full 6h15m session ahead of it. Expected move scales
-  // with sqrt(time), so scale the 1-day figure down by sqrt(remaining
-  // session fraction) — a setup with half the session left gets ~71% of
-  // the full-day move as its target, not 100% of it. buildTradeSetup only
-  // ever builds a naked long now (the user is an option buyer, not a
-  // spread trader — see trade-setup/index.ts's file header), so this
-  // applies to every INTRADAY setup, not a fallback case.
-  const targetExpectedMovePoints = isPositional
-    ? chain.expectedMove.points
-    : (() => {
-        const atmIvPct = computeAtmIv(chain);
-        if (atmIvPct <= 0) return chain.expectedMove.points;
-        const oneDayMove = calculateExpectedMove(chain.spotPrice, atmIvPct / 100, 1, underlying).expectedMove;
-        return oneDayMove * Math.sqrt(remainingSessionFraction(exchange));
-      })();
-
-  // Room to target: the move a target may assume is capped at the distance
-  // to the nearest strong OI wall or pivot in the trade's direction. The
-  // target used to be delta × expected move with no regard for what sits in
-  // between, and the further it reached the worse it did: setups projecting
-  // R:R 2.2+ won 0 of 16 (avg -0.37R) vs +0.17R below 1.9. A capped target
-  // that no longer clears the minimum R:R is refused, like any other.
   // Room to run (shadow): the space ahead against the move the target needs.
   // The existing cap already trims the target to the nearest wall or pivot;
   // this records whether there was ever enough room to be worth taking.
@@ -2724,9 +2827,6 @@ async function resolveStickyTradeSetup(
     );
   }
 
-  const roomPoints = entryContext?.roomToTargetPoints ?? null;
-  const targetCapped = roomPoints != null && roomPoints < targetExpectedMovePoints;
-  const targetMovePoints = targetCapped ? roomPoints : targetExpectedMovePoints;
   const roomNote = targetCapped
     ? ` Target move capped at ${roomPoints!.toFixed(0)} pts — the room to the ${formatRoomSource(entryContext!.roomLevelSource)} at ${entryContext!.roomLevel!.toFixed(0)} — instead of the ${targetExpectedMovePoints.toFixed(0)}-pt expected move.`
     : '';
@@ -2760,7 +2860,21 @@ async function resolveStickyTradeSetup(
     entryContext?.atrPoints ?? null,
     // 0.05 is the premium tick on NSE/BSE options and the MCX option
     // contracts this engine trades; the chain leg does not carry its own.
-    { ivRank, hvPct: entryContext?.hvPct ?? null, tickSize: 0.05, expectedHoldHours }
+    {
+      ivRank,
+      hvPct: entryContext?.hvPct ?? null,
+      tickSize: 0.05,
+      expectedHoldHours,
+      // Validation review, fixes 1 and 6. The switches come from the server's
+      // config (trading-flags.ts) so the analytics package stays pure; with
+      // both off the builder ignores every field below.
+      flags: { structuralStop: TRADING_FLAGS.STRUCTURAL_STOP, richIvRr: TRADING_FLAGS.RICH_IV_RR },
+      spot: entryContext?.locationSpot ?? chain.spotPrice,
+      nearestBehindLevel: entryContext?.locationBehindLevel ?? null,
+      structuralStopBufferAtr: TRADING_PARAMS.STRUCTURAL_STOP_BUFFER_ATR,
+      ivVsHv: entryContext?.ivVsHv ?? null,
+      richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
+    }
   );
 
   // --- Phase 2 shadow models (observation only) ---
@@ -2846,7 +2960,10 @@ async function resolveStickyTradeSetup(
     return fresh;
   }
 
-  const signalId = await recordTradeSetupGenerated(underlying, exchange, fresh, direction, confidence, regime, intelligenceScore, mode, voteSnapshot, entryContext);
+  // Which rules and flags minted this setup — carried on the sticky setup and
+  // written to signals.inputs.logic so pre- and post-review trades are never pooled.
+  const logic = logicStamp();
+  const signalId = await recordTradeSetupGenerated(underlying, exchange, fresh, direction, confidence, regime, intelligenceScore, mode, voteSnapshot, entryContext, logic);
 
   logDecision({
     at: decisionNow(),
@@ -2935,6 +3052,7 @@ async function resolveStickyTradeSetup(
     entryContext,
     decisionId: takeDecisionId,
     underlyingAtGeneration: chain.spotPrice,
+    logic,
   };
   try {
     await redis.set(key, JSON.stringify(toStore), 'EX', setupTtl);
@@ -2975,7 +3093,8 @@ async function recordTradeSetupGenerated(
   intelligenceScore: number,
   mode: TradingMode,
   votes?: BiasVoteSnapshot,
-  context?: SetupEntryContext
+  context?: SetupEntryContext,
+  logic: LogicStamp | null = null
 ): Promise<string | undefined> {
   try {
     // mode is persisted here (found missing in a re-audit) so backtesting
@@ -3019,6 +3138,9 @@ async function recordTradeSetupGenerated(
             // move, time into session, room to target) — so these can be
             // measured against outcomes instead of guessed at.
             context: context ?? null,
+            // Validation review: logicVersion + the flag set (and tunables)
+            // this setup was minted under. Null = minted before stamping.
+            logic,
           } as any
         )},
         ${fresh.reason}, ${regime}, ${intelligenceScore}
@@ -3075,6 +3197,10 @@ async function recordTradeSetupOutcome(
           holdMinutes: stored.generatedAt ? Math.round((decisionNow() - stored.generatedAt) / 60000) : null,
           excursion: stored.excursion ? { ...stored.excursion } : null,
           healthAtExit: stored.health ? { ...stored.health } : null,
+          // Validation review, fix 3 — measurement only, no fill change. How far
+          // past the stop a losing exit filled, as a share of entry: the gap-
+          // through part of the −1R average loser, separate from costs.
+          ...(outcome === 'LOSS' ? { stopOvershootPct: stopOvershootPct(stored, exitValue) } : {}),
         })}, fwd_1d_return = ${returnPercent}
         WHERE id = ${stored.signalId}
       `;
@@ -3703,6 +3829,8 @@ function snapshotBlocks(
       behindAtr: entryContext?.locationBehindAtr ?? null,
       aheadKind: entryContext?.locationAheadKind ?? null,
       reason: entryContext?.locationReason ?? null,
+      behindLevel: entryContext?.locationBehindLevel ?? null,
+      behindKind: entryContext?.locationBehindKind ?? null,
     },
     room: {
       availableAtr: entryContext?.roomAvailableAtr ?? null,
@@ -3715,6 +3843,9 @@ function snapshotBlocks(
       levelPoints: entryContext?.roomToTargetPoints ?? null,
       level: entryContext?.roomLevel ?? null,
       levelSource: entryContext?.roomLevelSource ?? null,
+      // Validation review, fix 2: the corrected measure (target actually used).
+      requiredAtrV2: entryContext?.roomRequiredAtrV2 ?? null,
+      sufficientV2: entryContext?.roomSufficientV2 ?? null,
     },
     risk: {
       stopInAtr: setup?.available ? setup.stopInAtr ?? null : null,
@@ -3722,6 +3853,10 @@ function snapshotBlocks(
       estimatedCostPct: setup?.available ? setup.estimatedCostPct ?? null : null,
       riskReward: setup?.available ? setup.riskReward ?? null : null,
       lots: setup?.available ? setup.positionSize?.lots ?? null : null,
+      // Validation review, fixes 1 and 6 (absent when those flags were off).
+      structuralStop: setup?.structuralStop ?? null,
+      stopBeforeStructure: setup?.stopBeforeStructure ?? null,
+      requiredRiskReward: setup?.requiredRiskReward ?? null,
     },
   };
 }
@@ -3841,6 +3976,14 @@ interface SetupEntryContext {
   locationBehindAtr: number | null;
   locationAheadKind: string | null;
   locationReason: string | null;
+  /** Validation review: price and kind of assessLocation's nearestBehind — what the structural stop sits beyond. */
+  locationBehindLevel?: number | null;
+  locationBehindKind?: string | null;
+  /** The underlying price the location was read at. */
+  locationSpot?: number | null;
+  /** Validation review, fix 2: room measured against the target ACTUALLY used (post room-cap), in ATR. */
+  roomRequiredAtrV2?: number | null;
+  roomSufficientV2?: boolean | null;
   /**
    * What the engine detected, named. Written to the decision record and read
    * by nothing — see setup-classifier. Optional so a decision made before

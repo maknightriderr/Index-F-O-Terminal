@@ -19,7 +19,7 @@
 // numbers were derived so it can be checked, not just trusted.
 // ============================================================
 
-import type { OptionChainStrike, OptionType, BiasDirection, TradeSetup, PositionSize, TradeSetupOptionQuality } from '@fno/shared';
+import type { OptionChainStrike, OptionType, BiasDirection, TradeSetup, PositionSize, TradeSetupOptionQuality, TradeSetupStructuralStop } from '@fno/shared';
 import { assessOptionQuality, type OptionQualityInput } from '../option-quality/index.js';
 import { DEFAULT_RISK_CONFIG, TRADING_COST_MODEL } from '@fno/shared';
 
@@ -133,6 +133,17 @@ const VIX_SL_SENSITIVITY = 15; // every this-many points of VIX above baseline a
 // capital actually protected, not a slow bleed to a number barely different
 // from having no stop at all.
 const MAX_SL_PREMIUM_PCT = 0.45;
+
+// ---- Validation review (behind flags; absent flags = the rules above, unchanged) ----
+// Fix 1, structural stop: how far beyond the nearest level behind the entry
+// the stop sits, in the underlying's ATR. UNTESTED DEFAULT — a small buffer so
+// the stop is not placed exactly on the level, not a value fitted to outcomes.
+// The server can override it (STRUCTURAL_STOP_BUFFER_ATR env var).
+export const STRUCTURAL_STOP_BUFFER_ATR = 0.25;
+// Fix 6, rich IV: when IV is RICH against realised volatility the premium is
+// expensive to buy, so the reward:risk bar a setup has to clear is raised to
+// this. The ordinary bar (the 1.5 constant above) is untouched.
+export const RICH_IV_MIN_RISK_REWARD = 2.0;
 
 // A 0-DTE (or 1-DTE) option's premium swings ±50-100% routinely on gamma
 // alone as dealers hedge into the close — a stop sized for a normal T-3/T-5
@@ -438,22 +449,80 @@ function buildNakedLong(
     };
   }
 
-  // Widest stop that still leaves MIN_RISK_REWARD after costs, solving
-  // (grossReward - cost) / (stopWidth + cost) >= MIN_RISK_REWARD.
-  const rrStopWidth = netReward / MIN_RISK_REWARD - roundTripCost;
+  // Fix 6 (flag richIvRr): a RICH-IV premium has to clear a higher bar. With
+  // the flag off, or IV not RICH, this is exactly MIN_RISK_REWARD.
+  const richIvActive = instrument.flags?.richIvRr === true && instrument.ivVsHv === 'RICH';
+  const requiredRr = richIvActive ? instrument.richIvMinRiskReward ?? RICH_IV_MIN_RISK_REWARD : MIN_RISK_REWARD;
+
   const maxStopWidth = entry * effectiveSlPct;
   const minStopWidth = entry * MIN_SL_PREMIUM_PCT;
-  const stopWidth = Math.min(maxStopWidth, rrStopWidth);
+  let stopWidth: number;
+  let structuralRecord: TradeSetupStructuralStop | undefined;
 
-  if (stopWidth < minStopWidth) {
-    const impliedRr = round2(netReward / (minStopWidth + roundTripCost));
-    return {
-      available: false,
-      noTradeCode: 'REWARD_RISK_TOO_LOW',
-      reason:
-        `Reward:risk after costs (${impliedRr.toFixed(2)}) is below the ${MIN_RISK_REWARD} minimum even at the tightest tradeable stop ` +
-        `(${Math.round(MIN_SL_PREMIUM_PCT * 100)}% of premium, ~${costPct}% est. costs). The ${deltaMove.toFixed(2)}-point projected move can't pay for the risk — skip, don't size down.`,
+  if (instrument.flags?.structuralStop !== true) {
+    // Widest stop that still leaves the required R:R after costs, solving
+    // (grossReward - cost) / (stopWidth + cost) >= requiredRr.
+    const rrStopWidth = netReward / requiredRr - roundTripCost;
+    stopWidth = Math.min(maxStopWidth, rrStopWidth);
+
+    if (stopWidth < minStopWidth) {
+      const impliedRr = round2(netReward / (minStopWidth + roundTripCost));
+      return {
+        available: false,
+        noTradeCode: 'REWARD_RISK_TOO_LOW',
+        reason:
+          `Reward:risk after costs (${impliedRr.toFixed(2)}) is below the ${requiredRr} minimum even at the tightest tradeable stop ` +
+          `(${Math.round(MIN_SL_PREMIUM_PCT * 100)}% of premium, ~${costPct}% est. costs). The ${deltaMove.toFixed(2)}-point projected move can't pay for the risk — skip, don't size down.` +
+          (richIvActive ? ` IV is rich against realised volatility, so this setup needs ${requiredRr}:1 rather than ${MIN_RISK_REWARD}:1.` : ''),
+      };
+    }
+  } else {
+    // Fix 1 (flag structuralStop): the stop is where the trade is WRONG, not
+    // whatever width the target can afford. The squeeze above put 54% of
+    // trades at 15-20% stops (PF 0.81) against PF 2.91 at 30%+.
+    //   base       = the mode/VIX/expiry premium stop (unchanged)
+    //   structural = |delta| × (distance to the level behind + buffer × ATR)
+    //   stop       = min(max(base, structural), cap) — structure only WIDENS it
+    // If the target can't pay for that stop, the setup is refused; the stop is
+    // never shrunk to make the ratio work.
+    const absDelta = Math.abs(leg.delta);
+    const spot = instrument.spot ?? null;
+    const level = instrument.nearestBehindLevel ?? null;
+    const bufferAtr = instrument.structuralStopBufferAtr ?? STRUCTURAL_STOP_BUFFER_ATR;
+    const structuralWidth =
+      spot != null && spot > 0 && level != null && Number.isFinite(level) && atrPoints != null && atrPoints > 0 && absDelta > 0
+        ? absDelta * (Math.abs(spot - level) + bufferAtr * atrPoints)
+        : null;
+    // The 45% ceiling. The base stop never exceeds it in practice (VIX and
+    // expiry widening are already capped there); max() only guarantees that a
+    // caller-supplied base above it is never tightened.
+    const capWidth = Math.max(entry * MAX_SL_PREMIUM_PCT, maxStopWidth);
+    stopWidth = Math.min(Math.max(maxStopWidth, structuralWidth ?? 0), capWidth);
+    const stopBeforeStructure = structuralWidth != null && structuralWidth > capWidth;
+    structuralRecord = {
+      baseStopWidth: round2(maxStopWidth),
+      structuralStopWidth: structuralWidth != null ? round2(structuralWidth) : null,
+      capWidth: round2(capWidth),
+      nearestBehindLevel: level,
+      bufferAtr,
+      source: structuralWidth != null && structuralWidth > maxStopWidth ? 'STRUCTURE' : 'BASE',
+      stopBeforeStructure,
     };
+
+    const netRrAtStop = netReward / (stopWidth + roundTripCost);
+    if (stopWidth < minStopWidth || netRrAtStop < requiredRr) {
+      return {
+        available: false,
+        noTradeCode: 'REWARD_RISK_TOO_LOW',
+        reason:
+          `Reward:risk after costs (${round2(netRrAtStop).toFixed(2)}) is below the ${requiredRr} minimum at the structural stop ` +
+          `(${Math.round((stopWidth / entry) * 100)}% of premium${structuralWidth != null && structuralWidth > maxStopWidth ? `, set beyond the level at ${level} plus ${bufferAtr} ATR` : ''}, ~${costPct}% est. costs). ` +
+          `The ${deltaMove.toFixed(2)}-point projected move can't pay for a stop where the trade is actually wrong — skip, the stop is not squeezed to fit.` +
+          (richIvActive ? ` IV is rich against realised volatility, so this setup needs ${requiredRr}:1 rather than ${MIN_RISK_REWARD}:1.` : ''),
+        structuralStop: structuralRecord,
+        stopBeforeStructure,
+      };
+    }
   }
 
   // The premium stop expressed as the underlying move it implies — the number
@@ -526,11 +595,23 @@ function buildNakedLong(
     // contract validation is queryable the same way a refused one's is.
     contractValidation: { tradeable: true, refusalReason: null, checks: optionQuality.components },
     positionSize: positionSize ?? undefined,
+    // Validation-review records — present only when the matching flag is on,
+    // so the flag-off object is byte-identical to the pre-review one.
+    ...(structuralRecord ? { structuralStop: structuralRecord, stopBeforeStructure: structuralRecord.stopBeforeStructure } : {}),
+    ...(instrument.flags?.richIvRr === true ? { requiredRiskReward: requiredRr } : {}),
     reason:
       `${direction} bias at ${confidence}/100 confidence — ATM ${side} ${atmStrike} @ ${entry.toFixed(2)}${hasQuote ? ' (bid-ask mid)' : ''}. ` +
       `Target ${target.toFixed(2)} from delta (${leg.delta.toFixed(2)}) × IV-implied expected move (${expectedMovePoints.toFixed(0)} pts). ` +
-      `SL ${stopLoss.toFixed(2)} — a ${Math.round(effectiveStopPct * 100)}% premium stop, sized so the trade clears ${MIN_RISK_REWARD}:1 reward:risk after costs` +
-      (stopWidth < maxStopWidth ? ` (tighter than the ${Math.round(effectiveSlPct * 100)}% ceiling${vixNote}${expiryNote} this setup would otherwise allow)` : `${vixNote}${expiryNote}`) +
+      (structuralRecord
+        ? `SL ${stopLoss.toFixed(2)} — a ${Math.round(effectiveStopPct * 100)}% premium stop` +
+          (structuralRecord.source === 'STRUCTURE'
+            ? `, widened from the ${Math.round(effectiveSlPct * 100)}% base${vixNote}${expiryNote} to sit ${structuralRecord.bufferAtr} ATR beyond the level at ${structuralRecord.nearestBehindLevel}` +
+              (structuralRecord.stopBeforeStructure ? ` — capped at ${Math.round(MAX_SL_PREMIUM_PCT * 100)}%, so the stop fires BEFORE that structure is reached` : '')
+            : `${vixNote}${expiryNote}`) +
+          `; not squeezed to fit — the target clears ${requiredRr}:1 reward:risk after costs at this stop`
+        : `SL ${stopLoss.toFixed(2)} — a ${Math.round(effectiveStopPct * 100)}% premium stop, sized so the trade clears ${requiredRr}:1 reward:risk after costs` +
+          (stopWidth < maxStopWidth ? ` (tighter than the ${Math.round(effectiveSlPct * 100)}% ceiling${vixNote}${expiryNote} this setup would otherwise allow)` : `${vixNote}${expiryNote}`)) +
+      (richIvActive ? ` (IV is rich against realised volatility, so ${requiredRr}:1 is required rather than ${MIN_RISK_REWARD}:1)` : '') +
       `. R:R ${riskReward.toFixed(2)} gross, ~${riskRewardNet.toFixed(2)} after costs.` +
       (dte != null ? ` DTE ${dte}.` : '') +
       ` The entry/SL/target figures themselves are pre-cost — the round trip is estimated at ~${costPct}% of premium (~${estimatedCost.toFixed(2)} per unit: this contract's bid-ask spread, a slippage allowance, statutory charges, and brokerage for one lot), a broker-dependent estimate, which is why it gates the setup rather than being subtracted from the displayed prices.` +
@@ -568,6 +649,28 @@ export interface SetupInstrumentContext {
   hvPct?: number | null;
   tickSize?: number;
   expectedHoldHours?: number;
+
+  // ---- Validation-review inputs ----
+  // All optional. With no flags (or flags false) every field below is ignored
+  // and the builder behaves exactly as it did before the review. The server
+  // reads the switches from its own config and passes them in, so this
+  // package never reads the environment.
+  flags?: {
+    /** Fix 1: widen the stop to structure, never squeeze it to fit R:R. */
+    structuralStop?: boolean;
+    /** Fix 6: raise the R:R bar to richIvMinRiskReward when ivVsHv is RICH. */
+    richIvRr?: boolean;
+  };
+  /** Underlying price the location read was taken at. */
+  spot?: number | null;
+  /** Price of the nearest structural level BEHIND the entry (assessLocation's nearestBehind). */
+  nearestBehindLevel?: number | null;
+  /** Overrides STRUCTURAL_STOP_BUFFER_ATR. */
+  structuralStopBufferAtr?: number;
+  /** compareIvToHv()'s reading: 'RICH' | 'FAIR' | 'CHEAP'. */
+  ivVsHv?: string | null;
+  /** Overrides RICH_IV_MIN_RISK_REWARD. */
+  richIvMinRiskReward?: number;
 }
 
 export interface SetupProgress {

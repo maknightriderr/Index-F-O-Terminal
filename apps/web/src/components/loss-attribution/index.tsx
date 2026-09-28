@@ -22,13 +22,14 @@ import {
   type ShadowComparison,
 } from '@/lib/use-loss-attribution';
 
-type View = 'questions' | 'exits' | 'dead' | 'split' | 'gates' | 'branch' | 'exposure' | 'shadow';
+type View = 'questions' | 'exits' | 'dead' | 'split' | 'logic' | 'gates' | 'branch' | 'exposure' | 'shadow';
 
 const VIEW_LABELS: Record<View, string> = {
   questions: 'Questions',
   exits: 'Exit Reasons',
   dead: 'Dead Trades',
   split: 'In / Out of Sample',
+  logic: 'By Logic Version',
   gates: 'Gate Diagnostics',
   branch: 'Close Branch',
   exposure: 'Exposure',
@@ -42,6 +43,13 @@ const SCOPE_LABELS: Record<LossAttributionScope, string> = {
 };
 
 const EXIT_KEYS = ['TARGET', 'STOP', 'TIME_EXIT', 'INVALIDATED', 'EXPIRY', 'MANUAL_TEST_EXIT', 'OTHER'] as const;
+
+// The three R measures in this system are different quantities. They are
+// named the same way everywhere so they are never read as one another.
+const R_LABEL_SIM = 'Underlying replay R';
+const R_LABEL_PREMIUM = 'Premium R (gross)';
+const R_TITLE_SIM = 'Underlying replay R (decision_snapshots.outcome_r): the missed-winner audit replays the thesis on the UNDERLYING, in stop-distance units. Populated for every graded decision.';
+const R_TITLE_PREMIUM = 'Premium R (gross) (decision_snapshots.eventual_r): the option-premium R of the live paper close, BEFORE costs. Recorded from Phase 1 onward. Backtesting shows Premium R (net), after costs.';
 
 function fmt(v: number | null | undefined, d = 2): string {
   return v == null ? '—' : v.toFixed(d);
@@ -75,9 +83,9 @@ function GroupTable({ groups, keyLabel = 'Group' }: { groups: AttributionGroup[]
             <th className="text-right px-2 py-1.5 font-medium">n</th>
             <th className="text-left px-2 py-1.5 font-medium">Sample</th>
             <th className="text-right px-2 py-1.5 font-medium">Win %</th>
-            <th className="text-right px-2 py-1.5 font-medium" title="Simulated R on the underlying replay">Avg sim R</th>
-            <th className="text-right px-2 py-1.5 font-medium" title="Simulated R on the underlying replay">Total sim R</th>
-            <th className="text-right px-2 py-1.5 font-medium" title="Gross option-premium R of the paper close (recorded from Phase 1 onward)">Premium R (n)</th>
+            <th className="text-right px-2 py-1.5 font-medium" title={R_TITLE_SIM}>Avg {R_LABEL_SIM}</th>
+            <th className="text-right px-2 py-1.5 font-medium" title={R_TITLE_SIM}>Total {R_LABEL_SIM}</th>
+            <th className="text-right px-2 py-1.5 font-medium" title={R_TITLE_PREMIUM}>{R_LABEL_PREMIUM} (n)</th>
           </tr>
         </thead>
         <tbody>
@@ -245,7 +253,15 @@ function questionById(report: AttributionReport | null, id: string): Attribution
 export function LossAttributionPage() {
   const [scope, setScope] = useState<LossAttributionScope>('TAKE');
   const [view, setView] = useState<View>('questions');
-  const { report, split, gates, shadow, loading, isLive, error, refresh } = useLossAttribution(scope);
+  // Validation review: 'all' by default; the By Logic Version view is the split.
+  const [logicVersion, setLogicVersion] = useState<string>('all');
+  const { report, split, gates, shadow, loading, isLive, error, refresh } = useLossAttribution(scope, logicVersion);
+  const [knownVersions, setKnownVersions] = useState<string[]>([]);
+  React.useEffect(() => {
+    // Remember the versions seen in the unfiltered split so the picker keeps them after filtering.
+    const seen = (report?.byLogicVersion ?? []).map((g) => g.key);
+    if (seen.length > 0) setKnownVersions((prev) => Array.from(new Set([...prev, ...seen])).sort());
+  }, [report]);
 
   return (
     <div className="p-4 space-y-4 min-h-full">
@@ -271,6 +287,22 @@ export function LossAttributionPage() {
               </button>
             ))}
           </div>
+          <label className="flex items-center gap-1 text-[11px] text-gray-400 light:text-slate-600">
+            Logic
+            <select
+              value={logicVersion}
+              onChange={(e) => setLogicVersion(e.target.value)}
+              aria-label="Filter by logic version"
+              className="bg-gray-800/60 light:bg-slate-100 border border-gray-700 light:border-slate-300 rounded-md px-1.5 py-1 text-[11px] text-gray-200 light:text-slate-800"
+            >
+              <option value="all">All versions</option>
+              {knownVersions.map((v) => (
+                <option key={v} value={v}>
+                  {v === 'PRE_REVIEW' ? 'Pre-review (unstamped)' : v}
+                </option>
+              ))}
+            </select>
+          </label>
           <button type="button" onClick={refresh} className="px-2.5 py-1 text-[11px] rounded-md border border-gray-700 light:border-slate-300 text-gray-300 light:text-slate-700 hover:bg-gray-800/40 light:hover:bg-slate-100">
             Refresh
           </button>
@@ -373,6 +405,22 @@ export function LossAttributionPage() {
                 ))}
               </div>
             </div>
+          )}
+
+          {view === 'logic' && report && (
+            <Card
+              title="Outcomes by logic version"
+              subtitle="Each decision is stamped with the rule set and flags it was made under (from migration 026). PRE_REVIEW = recorded before stamping. Read the versions side by side — never pooled."
+            >
+              <GroupTable groups={report.byLogicVersion ?? []} keyLabel="Logic version" />
+              {report.rDefinitions && (
+                <ul className="list-disc pl-4 text-[11px] text-gray-400 light:text-slate-600 space-y-0.5">
+                  <li>{report.rDefinitions.simR}</li>
+                  <li>{report.rDefinitions.premiumR}</li>
+                  <li>{report.rDefinitions.backtestingR}</li>
+                </ul>
+              )}
+            </Card>
           )}
 
           {view === 'branch' && report && (

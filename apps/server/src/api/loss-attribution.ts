@@ -12,7 +12,9 @@
 //   GET /api/loss-attribution/shadow  Phase 2 shadow-vs-live comparison
 //   (the report also carries Phase 2 `invalidation` and `exposure` panels)
 //
-// Query: since=YYYY-MM-DD, until=YYYY-MM-DD, scope=TAKE|REFUSE|ALL
+// Query: since=YYYY-MM-DD, until=YYYY-MM-DD, scope=TAKE|REFUSE|ALL,
+//        logicVersion=all|PRE_REVIEW|<LOGIC_VERSION> (default all; the report
+//        always carries byLogicVersion, the split view)
 // ============================================================
 
 import { Router, type Request, type Response } from 'express';
@@ -34,10 +36,12 @@ function parseQuery(req: Request): AttributionQuery {
   const until = typeof req.query.until === 'string' && DATE.test(req.query.until) ? req.query.until : null;
   const rawScope = typeof req.query.scope === 'string' ? req.query.scope.toUpperCase() : 'TAKE';
   const decision: DecisionScope = rawScope === 'REFUSE' || rawScope === 'ALL' ? rawScope : 'TAKE';
+  const logicVersion = typeof req.query.logicVersion === 'string' && req.query.logicVersion.trim() !== '' ? req.query.logicVersion.trim().slice(0, 64) : 'all';
   return {
     since: since ? new Date(`${since}T00:00:00+05:30`) : null,
     until: until ? new Date(`${until}T00:00:00+05:30`) : null,
     decision,
+    logicVersion,
   };
 }
 
@@ -47,7 +51,7 @@ export function createLossAttributionRoutes(): Router {
   router.get('/report', async (req: Request, res: Response) => {
     try {
       const q = parseQuery(req);
-      res.json({ success: true, data: { scope: q.decision, ...(await lossAttributionReport(q)) } });
+      res.json({ success: true, data: { scope: q.decision, logicVersion: q.logicVersion, ...(await lossAttributionReport(q)) } });
     } catch (err: any) {
       logger.error({ error: err.message }, 'Loss attribution report failed');
       res.status(500).json({ success: false, error: err.message });

@@ -14,7 +14,10 @@
 // already live in Redis (the existing trade_setup:* keys — no new state) and
 // records how much of the paper book already leans the same way. It is
 // written to the decision snapshot and read by the loss-attribution report.
-// It NEVER blocks, gates, sizes down or otherwise alters a setup.
+// This module NEVER blocks, gates, sizes down or otherwise alters a setup.
+// (The validation review's CONCURRENT_EXPOSURE gate — flag CONCURRENCY_CAP,
+// default OFF — reads these counts in market-bias.ts; the decision is made
+// there, in validation-gates.ts, not here.)
 //
 // "Correlated" is deliberately narrow: same direction, different symbol,
 // same configured index family. Not inferred from price history.
@@ -156,6 +159,24 @@ export function toExposureSetup(key: string, stored: StoredSetupLike | null, tod
   };
 }
 
+/** Pairs MGET results with their keys. A missing or unparsable value is skipped, not fatal. Pure. */
+export function exposureSetupsFrom(keys: readonly string[], values: readonly (string | null)[], today: string): ExposureSetup[] {
+  const out: ExposureSetup[] = [];
+  keys.forEach((key, i) => {
+    const raw = values[i];
+    if (!raw) return;
+    let parsed: StoredSetupLike | null = null;
+    try {
+      parsed = JSON.parse(raw) as StoredSetupLike;
+    } catch {
+      return;
+    }
+    const setup = toExposureSetup(key, parsed, today);
+    if (setup) out.push(setup);
+  });
+  return out;
+}
+
 /**
  * Reads every live sticky setup except `excludeKey` and computes the
  * exposure the new setup joins. Never throws: a Redis failure returns null,
@@ -166,14 +187,10 @@ export async function readExposureAtCreation(current: ExposureSetup, today: stri
   try {
     const { redis, scanKeys } = await import('../lib/redis.js');
     const keys = (await scanKeys('trade_setup:*')).filter((k) => k !== current.key);
-    const others: ExposureSetup[] = [];
-    for (const key of keys) {
-      const raw = await redis.get(key);
-      const parsed = raw ? (JSON.parse(raw) as StoredSetupLike) : null;
-      const setup = toExposureSetup(key, parsed, today);
-      if (setup) others.push(setup);
-    }
-    return computeExposure(current, others);
+    // One MGET instead of one GET per key: with CONCURRENCY_CAP on this read
+    // sits in the decision path, not only after the row is written.
+    const values = keys.length > 0 ? await redis.mget(...keys) : [];
+    return computeExposure(current, exposureSetupsFrom(keys, values, today));
   } catch (err: any) {
     // Logged, not swallowed: a missing exposure row must be explainable.
     const { logger } = await import('../lib/logger.js');

@@ -61,7 +61,22 @@ export interface AttributionRow {
   openingEnvironment?: string | null;
   /** Phase 3 (spec §16) — minutes since the most recent recoverable stop-loss (see market-bias.ts's readMinutesSinceLastLoss). Null when not recoverable. */
   minutesSinceLastLoss?: number | null;
+  /** Validation review — decision_snapshots.logic_version. Null = recorded before stamping (migration 026). */
+  logicVersion?: string | null;
 }
+
+/**
+ * The three R definitions in this system, named once so every screen labels
+ * them the same way. They are different quantities and are never mixed.
+ */
+export const R_DEFINITIONS = {
+  simR: 'Underlying replay R — decision_snapshots.outcome_r: the missed-winner audit replay of the thesis on the underlying, in stop-distance units.',
+  premiumR: 'Premium R (gross) — decision_snapshots.eventual_r: the option-premium R of the live paper close, before costs.',
+  backtestingR: 'Premium R (net) — Backtesting: the option-premium R of the paper close after estimated round-trip costs.',
+} as const;
+
+/** How an unstamped (pre-026) decision is grouped in the logic-version split. */
+export const PRE_REVIEW_LOGIC_VERSION = 'PRE_REVIEW';
 
 export type SampleSufficiency = 'INSUFFICIENT' | 'LOW' | 'ADEQUATE';
 
@@ -217,6 +232,10 @@ export interface AttributionReport {
   invalidation: GroupStats[];
   /** Phase 2 — outcomes by concurrent same-direction / correlated exposure at creation. Observational. */
   exposure: { sameDirection: GroupStats[]; correlated: GroupStats[]; note: string };
+  /** Validation review — the same outcomes split by the logic version the decision was made under. */
+  byLogicVersion: GroupStats[];
+  /** Validation review — what simR and premiumR are, verbatim, for labelling. */
+  rDefinitions: typeof R_DEFINITIONS;
 }
 
 const exposureBucket = (v: number | null | undefined) => (v == null ? 'NOT_RECORDED' : v === 0 ? '0 others' : v === 1 ? '1 other' : '2+ others');
@@ -263,6 +282,8 @@ export function buildAttributionReport(rows: readonly AttributionRow[]): Attribu
         'Simulated portfolio accounting only — paper setups, not broker positions. Counts the OTHER live paper setups when each ' +
         'setup was minted. Observational: nothing is blocked or sized on it. Recorded from Phase 2 onward.',
     },
+    byLogicVersion: groupBy(rows, (r) => r.logicVersion ?? PRE_REVIEW_LOGIC_VERSION),
+    rDefinitions: R_DEFINITIONS,
   };
 }
 

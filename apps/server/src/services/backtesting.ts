@@ -22,10 +22,13 @@ import type {
   RiskMetrics,
   TradingMode,
   SpreadLeg,
+  ExpiredCloseBreakdown,
+  LogicVersionBucket,
 } from '@fno/shared';
 import { minutesSinceSessionOpen, ESTIMATED_ROUND_TRIP_COST_PCT } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
+import { summariseIndependentBets } from './independent-bets.js';
 
 const HISTORY_LIMIT = 5000; // generous — trade setups are at most a handful per symbol per day
 
@@ -211,6 +214,9 @@ function toTradeSetupRecord(row: SignalRow): TradeSetupRecord {
     exitPrice: inputs.exitPrice ?? null,
     exitTime: inputs.exitTime ?? null,
     returnPercent: row.fwd_1d_return != null ? Number(row.fwd_1d_return) : null,
+    // Validation review: which rules minted this setup, and how it closed.
+    logicVersion: typeof inputs.logic?.logicVersion === 'string' ? inputs.logic.logicVersion : null,
+    closeReason: typeof inputs.closeReason === 'string' ? inputs.closeReason : inputs.abandoned === true ? 'ABANDONED' : null,
   };
 }
 
@@ -391,12 +397,18 @@ function bucketBy(records: TradeSetupRecord[], keyFn: (r: TradeSetupRecord) => s
 // them into one set of win-rate stats muddies both once Positional trades
 // accumulate. `modeFilter` scopes the whole computation to one mode;
 // omitted (or 'ALL') keeps the original combined view.
-export async function getWinRateAnalytics(modeFilter?: TradingMode | 'ALL', since?: number): Promise<WinRateAnalytics> {
+export async function getWinRateAnalytics(modeFilter?: TradingMode | 'ALL', since?: number, logicVersionFilter: string = LOGIC_VERSION_ALL): Promise<WinRateAnalytics> {
   const history = await getTradeSetupHistory();
   // `since` scopes everything to setups generated under the current logic
   // (see TRADE_LOGIC_UPDATED_AT) — results under old selection rules would
   // otherwise dilute whether a change is working.
-  const everything = since != null ? history.filter((r) => r.generatedAt >= since) : history;
+  const sinceScoped = since != null ? history.filter((r) => r.generatedAt >= since) : history;
+  // Validation review: the logic-version split, computed over the mode/since
+  // scope BEFORE the version filter so the split always shows every version.
+  const splitPool = (!modeFilter || modeFilter === 'ALL' ? sinceScoped : sinceScoped.filter((r) => r.mode === modeFilter)).filter(
+    (r) => !r.generatedOffSession && !r.voided
+  );
+  const everything = sinceScoped.filter((r) => matchesLogicVersion(r, logicVersionFilter));
   const inMode = !modeFilter || modeFilter === 'ALL' ? everything : everything.filter((r) => r.mode === modeFilter);
   // A setup priced off frozen quotes was never tradeable — its "outcome" is
   // an artefact of stale data meeting the next live print, not a result.
@@ -424,7 +436,90 @@ export async function getWinRateAnalytics(modeFilter?: TradingMode | 'ALL', sinc
     positionalCount: live.filter((r) => r.mode === 'POSITIONAL').length,
     offSessionExcludedCount: inMode.filter((r) => r.generatedOffSession).length,
     voidedCount: inMode.filter((r) => r.voided && !r.generatedOffSession).length,
+    expiredBreakdown: expiredBreakdown(all),
+    independentBets: summariseIndependentBets(
+      all
+        .filter((r) => r.outcome != null)
+        .map((r) => ({
+          id: r.id,
+          symbol: r.symbol,
+          direction: r.direction,
+          start: r.generatedAt,
+          end: r.exitTime != null && Number.isFinite(Number(r.exitTime)) ? Number(r.exitTime) : null,
+          netR: toRMultiple(r),
+        }))
+    ),
+    logicVersionFilter,
+    byLogicVersion: logicVersionBuckets(splitPool),
   };
+}
+
+// ============================================================
+// VALIDATION REVIEW — reporting only
+// ============================================================
+
+/** 'all' = no filter; 'PRE_REVIEW' = setups minted before stamping; anything else = that exact LOGIC_VERSION. */
+export const LOGIC_VERSION_ALL = 'all';
+export const LOGIC_VERSION_PRE_REVIEW = 'PRE_REVIEW';
+
+export function logicVersionOf(r: Pick<TradeSetupRecord, 'logicVersion'>): string {
+  return r.logicVersion ?? LOGIC_VERSION_PRE_REVIEW;
+}
+
+export function matchesLogicVersion(r: Pick<TradeSetupRecord, 'logicVersion'>, filter: string): boolean {
+  return filter === LOGIC_VERSION_ALL || logicVersionOf(r) === filter;
+}
+
+/**
+ * EXPIRED closes split by HOW they closed. "Expired" hides very different
+ * exits — the session rolling over, the bias reversing, a stop trailed to
+ * breakeven, a setup invalidated by a data fix — and they deserve different
+ * responses. Amounts are Premium R (net), the same unit as expectancy.
+ */
+export function expiredBreakdown(records: readonly TradeSetupRecord[]): ExpiredCloseBreakdown[] {
+  const groups = new Map<string, TradeSetupRecord[]>();
+  for (const r of records) {
+    if (r.outcome !== 'EXPIRED') continue;
+    const key = r.closeReason ?? 'UNRECORDED';
+    const g = groups.get(key);
+    if (g) g.push(r);
+    else groups.set(key, [r]);
+  }
+  return [...groups.entries()]
+    .map(([closeReason, recs]) => {
+      const rs = recs.map(toRMultiple).filter((x): x is number => x != null);
+      return {
+        closeReason,
+        count: recs.length,
+        profitable: recs.filter((r) => (netReturnPercent(r) ?? 0) > 0).length,
+        unprofitable: recs.filter((r) => netReturnPercent(r) != null && netReturnPercent(r)! < 0).length,
+        avgRMultiple: rs.length > 0 ? Math.round((rs.reduce((a, b) => a + b, 0) / rs.length) * 100) / 100 : null,
+      };
+    })
+    .sort((a, b) => b.count - a.count);
+}
+
+/** Headline figures per logic version, so pre- and post-review trades are read side by side, never pooled. */
+export function logicVersionBuckets(records: readonly TradeSetupRecord[]): LogicVersionBucket[] {
+  const groups = new Map<string, TradeSetupRecord[]>();
+  for (const r of records) {
+    const key = logicVersionOf(r);
+    const g = groups.get(key);
+    if (g) g.push(r);
+    else groups.set(key, [r]);
+  }
+  return [...groups.entries()]
+    .map(([logicVersion, recs]) => {
+      const rs = recs.map(toRMultiple).filter((x): x is number => x != null);
+      return {
+        logicVersion,
+        period: logicVersion,
+        ...bucketStats(recs),
+        profitFactor: computeRiskMetrics(recs).profitFactor,
+        totalRMultiple: rs.length > 0 ? Math.round(rs.reduce((a, b) => a + b, 0) * 100) / 100 : null,
+      };
+    })
+    .sort((a, b) => (a.logicVersion < b.logicVersion ? 1 : -1));
 }
 
 function istDateString(ts: number): string {

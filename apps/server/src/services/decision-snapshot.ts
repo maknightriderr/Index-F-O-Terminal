@@ -41,6 +41,7 @@ import { signalAgeSeconds, validUntil, type InputTimestamps, type StalenessAsses
 import type { StrategyLabelResult } from './strategy-label.js';
 import { provisionalExecutionScore, type VoteContributions } from './confidence-dimensions.js';
 import type { ExitReason } from './exit-reason.js';
+import { logicStamp } from '../config/trading-flags.js';
 
 export interface DecisionSnapshotInput {
   /**
@@ -214,6 +215,11 @@ export function recordDecisionSnapshot(input: DecisionSnapshotInput): string {
   // level refusal where no `setup.available === true` object exists. ---
   const contractValidation = input.contractValidation ?? available?.contractValidation ?? null;
 
+  // --- Validation review: which rules and flags this decision was made under.
+  // Stamped on every decision, TAKE and REFUSE, so pre- and post-review
+  // results are never pooled. NULL on rows written before 026. ---
+  const logic = logicStamp();
+
   void sql`
     INSERT INTO decision_snapshots (
       decision_id, signal_id,
@@ -242,6 +248,7 @@ export function recordDecisionSnapshot(input: DecisionSnapshotInput): string {
       refusal_class,
       contract_tradeable, contract_refusal_reason, contract_validation_checks,
       opening_environment, minutes_since_last_loss, room_check_oi_age_seconds,
+      logic_version, logic_flags,
       underlying, market, futures, option, location, room, risk
     ) VALUES (
       ${decisionId}, ${input.signalId ?? null},
@@ -300,6 +307,7 @@ export function recordDecisionSnapshot(input: DecisionSnapshotInput): string {
       ${contractValidation?.tradeable ?? null}, ${contractValidation?.refusalReason ?? null},
       ${sql.json((contractValidation?.checks ?? {}) as never)},
       ${input.openingEnvironment ?? null}, ${input.minutesSinceLastLoss ?? null}, ${input.roomCheckOiAgeSeconds ?? null},
+      ${logic.logicVersion}, ${sql.json({ flags: logic.flags, params: logic.params } as never)},
       ${sql.json((input.underlying ?? {}) as never)},
       ${sql.json((input.market ?? {}) as never)},
       ${sql.json((input.futures ?? {}) as never)},

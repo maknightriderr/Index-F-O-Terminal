@@ -13,6 +13,7 @@ import {
   buildSplitReport,
   buildOpeningHourReport,
   buildCooldownEffectivenessReport,
+  PRE_REVIEW_LOGIC_VERSION,
   type AttributionReport,
   type AttributionRow,
   type SplitReport,
@@ -29,6 +30,14 @@ export interface AttributionQuery {
   until?: Date | null;
   /** TAKE = paper trades the engine minted (default). REFUSE = hypothetical outcomes of refusals. */
   decision?: DecisionScope;
+  /** Validation review: 'all' (default), 'PRE_REVIEW' (unstamped rows), or an exact logic_version. */
+  logicVersion?: string | null;
+}
+
+/** Normalises the logic-version filter to the text the SQL compares against. */
+function logicFilter(q: AttributionQuery): string {
+  const v = q.logicVersion?.trim();
+  return !v || v.toLowerCase() === 'all' ? 'all' : v;
 }
 
 interface RawRow {
@@ -63,6 +72,7 @@ interface RawRow {
   minutes_from_session_open: string | number | null;
   opening_environment: string | null;
   minutes_since_last_loss: string | number | null;
+  logic_version: string | null;
 }
 
 const num = (v: string | number | null | undefined): number | null => {
@@ -104,12 +114,14 @@ function toRow(r: RawRow): AttributionRow {
     minutesFromSessionOpen: num(r.minutes_from_session_open),
     openingEnvironment: r.opening_environment,
     minutesSinceLastLoss: num(r.minutes_since_last_loss),
+    logicVersion: r.logic_version,
   };
 }
 
 /** Graded decisions in range. UNKNOWN (ungradeable) rows are excluded — they carry no outcome. */
 export async function loadAttributionRows(q: AttributionQuery = {}): Promise<AttributionRow[]> {
   const scope = q.decision ?? 'TAKE';
+  const logic = logicFilter(q);
   const since = q.since ?? new Date(0);
   const until = q.until ?? new Date('2999-01-01T00:00:00Z');
   const rows = await sql<RawRow[]>`
@@ -119,12 +131,14 @@ export async function loadAttributionRows(q: AttributionQuery = {}): Promise<Att
            exit_reason, outcome_mfe_atr, outcome_mae_atr, outcome_r,
            eventual_r, eventual_exit_reason, dead_at,
            invalidation_reason, same_direction_exposure, correlated_exposure,
-           minutes_from_session_open, opening_environment, minutes_since_last_loss
+           minutes_from_session_open, opening_environment, minutes_since_last_loss,
+           logic_version
     FROM decision_snapshots
     WHERE time >= ${since} AND time < ${until}
       AND outcome_evaluated_at IS NOT NULL
       AND COALESCE(outcome_class, '') <> 'UNKNOWN'
       AND (${scope}::text = 'ALL' OR decision = ${scope}::text)
+      AND (${logic}::text = 'all' OR COALESCE(logic_version, ${PRE_REVIEW_LOGIC_VERSION}) = ${logic}::text)
     ORDER BY time ASC
   `;
   return rows.map(toRow);

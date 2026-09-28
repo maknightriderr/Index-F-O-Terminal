@@ -412,6 +412,29 @@ export interface TradeSetup {
 
   /** Suggested quantity sized so a stop-out risks a fixed % of trading capital, not just the SL's % of premium. Naked long only — absent for a spread or an unavailable setup. */
   positionSize?: PositionSize;
+
+  // --- Validation review (present only when the matching flag was on) ---
+  /** How the structural stop was sized (flag STRUCTURAL_STOP). Absent when the flag was off. */
+  structuralStop?: TradeSetupStructuralStop;
+  /** True when structure wanted a stop wider than the 45% cap, so the capped stop fires before the level is reached. */
+  stopBeforeStructure?: boolean;
+  /** The reward:risk this setup had to clear after costs (flag RICH_IV_RR): 1.5 normally, higher when IV was RICH. */
+  requiredRiskReward?: number;
+}
+
+/** Fix 1 of the validation review: the stop widened to structure, never squeezed to fit R:R. */
+export interface TradeSetupStructuralStop {
+  /** entry × the mode/VIX/expiry premium stop — the pre-review ceiling. */
+  baseStopWidth: number;
+  /** |delta| × (|spot − nearestBehindLevel| + bufferAtr × ATR). Null when no level/ATR/spot was known. */
+  structuralStopWidth: number | null;
+  /** entry × MAX_SL_PREMIUM_PCT. */
+  capWidth: number;
+  nearestBehindLevel: number | null;
+  bufferAtr: number;
+  /** STRUCTURE when the structural width won over the base, else BASE. */
+  source: 'STRUCTURE' | 'BASE';
+  stopBeforeStructure: boolean;
 }
 
 /**
@@ -1317,6 +1340,10 @@ export type NoTradeCode =
   | 'REWARD_RISK_TOO_LOW'
   | 'NEUTRAL_BIAS'
   | 'NO_CHAIN'
+  // Validation review: last minutes of the session (flag CLOSING_GUARD) and
+  // too many same-direction/correlated live setups (flag CONCURRENCY_CAP).
+  | 'CLOSING_HOUR'
+  | 'CONCURRENT_EXPOSURE'
   | 'UNKNOWN';
 
 /** A structured account of one entry decision — why it was taken, or why it was not. */
@@ -1483,6 +1510,43 @@ export interface TradeSetupRecord {
   /** Outcome known to be invalid (recorded by a data bug) — kept for the record, excluded from every statistic. */
   voided?: boolean;
   voidReason?: string | null;
+  /** Validation review: the logic version the setup was minted under (signals.inputs.logic). Null = before stamping (the pre-review engine). */
+  logicVersion?: string | null;
+  /** How the position closed (TradeCloseReason, e.g. SESSION_ENDED, BIAS_REVERSED); null when not recorded. */
+  closeReason?: string | null;
+}
+
+/** One EXPIRED close reason and how those closes went (net premium R, after costs). */
+export interface ExpiredCloseBreakdown {
+  /** SESSION_ENDED / BIAS_REVERSED / SETUP_INVALIDATED / BREAKEVEN_STOP / …, ABANDONED for the sweep, UNRECORDED for older rows. */
+  closeReason: string;
+  count: number;
+  profitable: number;
+  unprofitable: number;
+  /** Mean Premium R (net). */
+  avgRMultiple: number | null;
+}
+
+/** Correlation-aware counterpart of the per-setup stats: overlapping same-direction same-family setups count as one bet. */
+export interface IndependentBetsSummary {
+  setups: number;
+  clusters: number;
+  multiSetupClusters: number;
+  largestCluster: number;
+  profitableCloseRatePercent: number | null;
+  profitFactor: number | null;
+  netR: number;
+  avgNetRPerBet: number | null;
+  note: string;
+}
+
+/** Headline figures for the setups minted under one logic version. */
+export interface LogicVersionBucket extends WinRateBucket {
+  /** LOGIC_VERSION, or 'PRE_REVIEW' for rows minted before stamping. */
+  logicVersion: string;
+  profitFactor: number | null;
+  /** Σ Premium R (net). */
+  totalRMultiple: number | null;
 }
 
 export interface WinRateBucket {
@@ -1577,6 +1641,14 @@ export interface WinRateAnalytics {
   offSessionExcludedCount: number;
   /** Setups whose outcome was voided as invalid (see TradeSetupRecord.voided), also excluded from the statistics above. */
   voidedCount?: number;
+  /** Validation review: EXPIRED closes split by how they closed. */
+  expiredBreakdown?: ExpiredCloseBreakdown[];
+  /** Validation review: the same population with correlated overlapping setups counted as one bet. */
+  independentBets?: IndependentBetsSummary;
+  /** Validation review: the logic-version filter this response was scoped to ('all' = unfiltered). */
+  logicVersionFilter?: string;
+  /** Validation review: headline figures per logic version, over the same mode/since scope, so pre- and post-review trades are never pooled. */
+  byLogicVersion?: LogicVersionBucket[];
 }
 
 // --- WebSocket Subscription ---

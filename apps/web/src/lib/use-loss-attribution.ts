@@ -43,6 +43,10 @@ export interface AttributionReport {
   /** Phase 2. Optional so an older backend still renders. */
   invalidation?: AttributionGroup[];
   exposure?: { sameDirection: AttributionGroup[]; correlated: AttributionGroup[]; note: string };
+  /** Validation review: the same outcomes split by logic version. Optional so an older backend still renders. */
+  byLogicVersion?: AttributionGroup[];
+  /** Validation review: what each R measure is. */
+  rDefinitions?: { simR: string; premiumR: string; backtestingR: string };
 }
 
 /** Mirrors apps/server/src/services/shadow-comparison-model.ts. */
@@ -112,7 +116,7 @@ export interface LossAttributionData {
   refresh: () => void;
 }
 
-export function useLossAttribution(scope: LossAttributionScope): LossAttributionData {
+export function useLossAttribution(scope: LossAttributionScope, logicVersion: string = 'all'): LossAttributionData {
   const [state, setState] = useState<Omit<LossAttributionData, 'refresh'>>({
     report: null,
     split: null,
@@ -129,8 +133,8 @@ export function useLossAttribution(scope: LossAttributionScope): LossAttribution
     let cancelled = false;
     const load = () => {
       Promise.all([
-        api.getLossAttributionReport({ scope }),
-        api.getLossAttributionSplit({ scope }),
+        api.getLossAttributionReport({ scope, logicVersion }),
+        api.getLossAttributionSplit({ scope, logicVersion }),
         api.getLossAttributionGates(),
         // A Phase 2 endpoint an older backend lacks: its absence must not
         // blank the Phase 1 panels, so it degrades to null on its own.
@@ -160,7 +164,7 @@ export function useLossAttribution(scope: LossAttributionScope): LossAttribution
       cancelled = true;
       clearInterval(id);
     };
-  }, [scope, nonce]);
+  }, [scope, logicVersion, nonce]);
 
   return { ...state, refresh };
 }
