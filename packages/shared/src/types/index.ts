@@ -1344,6 +1344,9 @@ export type NoTradeCode =
   // too many same-direction/correlated live setups (flag CONCURRENCY_CAP).
   | 'CLOSING_HOUR'
   | 'CONCURRENT_EXPOSURE'
+  // Momentum-break family: no qualifying trigger on the newest closed bar,
+  // or price already back through the level / at the target.
+  | 'TRIGGER_QUALITY'
   | 'UNKNOWN';
 
 /** A structured account of one entry decision — why it was taken, or why it was not. */
@@ -1649,6 +1652,17 @@ export interface WinRateAnalytics {
   logicVersionFilter?: string;
   /** Validation review: headline figures per logic version, over the same mode/since scope, so pre- and post-review trades are never pooled. */
   byLogicVersion?: LogicVersionBucket[];
+  /** Momentum-break round: headline figures per setup family (MOMENTUM_BREAK vs CONSENSUS), same scope as byLogicVersion. */
+  byStrategy?: StrategyBucket[];
+}
+
+/** Headline figures for the setups minted by one family. */
+export interface StrategyBucket extends WinRateBucket {
+  /** 'MOMENTUM_BREAK' or 'CONSENSUS'. */
+  strategy: string;
+  profitFactor: number | null;
+  /** Σ Premium R (net). */
+  totalRMultiple: number | null;
 }
 
 // --- WebSocket Subscription ---

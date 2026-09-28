@@ -115,6 +115,7 @@ function toRow(r: RawRow): AttributionRow {
     openingEnvironment: r.opening_environment,
     minutesSinceLastLoss: num(r.minutes_since_last_loss),
     logicVersion: r.logic_version,
+    setupFamily: r.setup_family,
   };
 }
 

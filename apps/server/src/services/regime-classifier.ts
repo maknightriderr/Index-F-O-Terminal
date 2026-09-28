@@ -74,7 +74,9 @@ export function classifyRegime(
 }
 
 /** Where a decision's regime came from. '1H' = classifyRegime as before. */
-export type RegimeSource = '1H' | '15M_FALLBACK' | 'BREAKOUT_PERSIST';
+// MOMENTUM_BREAK: the momentum-break regime assist (flag MOMENTUM_BREAK) —
+// a qualified trigger holds BREAKOUT/BREAKDOWN for BREAKOUT_PERSIST_BARS.
+export type RegimeSource = '1H' | '15M_FALLBACK' | 'BREAKOUT_PERSIST' | 'MOMENTUM_BREAK';
 
 const LEADING_REGIMES: ReadonlySet<MarketRegime> = new Set<MarketRegime>([
   'EXPIRY_GAMMA',
