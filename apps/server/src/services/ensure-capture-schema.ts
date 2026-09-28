@@ -82,6 +82,9 @@ const FILES = [
   // inserts into these columns and gate_diagnostics gets a widened status
   // CHECK, so this is ensured at boot too.
   '025_contract_validation.sql',
+  // Validation review: logic_version / logic_flags on every decision. The
+  // snapshot writer inserts into these columns, so ensured at boot too.
+  '026_logic_version.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */

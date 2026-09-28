@@ -77,7 +77,23 @@ export type GateName =
   // Not part of the live chain either (spec §20, Phase 3). roomToTarget()'s
   // OI-wall filter has no freshness check today; this diagnostic measures
   // how old the OI data it used was, without changing what it filters.
-  | 'OI_WALL_FRESHNESS';
+  | 'OI_WALL_FRESHNESS'
+  // Validation-review gates (validation-gates.ts). Each is enforced only when
+  // its flag is on; the row is written either way, with `enforced` in its
+  // input values. Kept out of LIVE_CHAIN_GATES so the pre-review chain and its
+  // diagnostics are unchanged — see VALIDATION_GATES below.
+  | 'CLOSING_HOUR'
+  | 'POOR_LOCATION'
+  | 'INSUFFICIENT_ROOM'
+  | 'CONCURRENT_EXPOSURE';
+
+/**
+ * The validation-review gates, in the order the live chain evaluates them:
+ * CLOSING_HOUR inside the session gate, POOR_LOCATION and INSUFFICIENT_ROOM
+ * after LOW_SETUP_QUALITY, CONCURRENT_EXPOSURE last. Rows for them come from
+ * evaluateValidationGateDiagnostics (validation-gates.ts).
+ */
+export const VALIDATION_GATES: readonly GateName[] = ['CLOSING_HOUR', 'POOR_LOCATION', 'INSUFFICIENT_ROOM', 'CONCURRENT_EXPOSURE'] as const;
 
 export type GateStatus = 'PASS' | 'FAIL' | 'NOT_EVALUATED' | 'STALE';
 
@@ -173,6 +189,7 @@ export function gateForRefusalCode(code: string | null | undefined): GateName | 
   // The session gate refuses with MARKET_CLOSED outside hours and
   // OPENING_HOUR inside the settle/guard window; both are the same gate.
   if (code === 'MARKET_CLOSED') return 'OPENING_HOUR';
+  if ((VALIDATION_GATES as readonly string[]).includes(code)) return code as GateName;
   return (LIVE_CHAIN_GATES as readonly string[]).includes(code) ? (code as GateName) : null;
 }
 
@@ -219,10 +236,13 @@ export function evaluateGateDiagnostics(inputs: Readonly<GateEvaluationInputs>, 
     settleMinutes: t.openingSettleMinutes,
     intradayGuardMinutes: inputs.mode === 'INTRADAY' ? t.openingGuardMinutes : null,
   };
+  // The session gate also carries the closing guard (CLOSING_HOUR), which has
+  // its own diagnostic row — it is not an opening-hour failure.
+  const openingRefusal = inputs.sessionRefusal != null && inputs.sessionRefusal.code !== 'CLOSING_HOUR' ? inputs.sessionRefusal : null;
   rows.push(
-    inputs.sessionRefusal != null
-      ? row('OPENING_HOUR', 'FAIL', inputs.sessionRefusal.reason, sessionThreshold, {
-          code: inputs.sessionRefusal.code,
+    openingRefusal != null
+      ? row('OPENING_HOUR', 'FAIL', openingRefusal.reason, sessionThreshold, {
+          code: openingRefusal.code,
           minutesSinceOpen: inputs.minutesSinceOpen,
           mode: inputs.mode,
         })

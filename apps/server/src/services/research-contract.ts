@@ -61,6 +61,10 @@ const REFUSAL_CLASS: Record<string, RefusalClass> = {
   SAME_SYMBOL_SIDE: 'BLOCKED_BY_RISK_CONTROL',
   DIRECTION_LOCKED: 'BLOCKED_BY_RISK_CONTROL',
   OPENING_HOUR: 'BLOCKED_BY_RISK_CONTROL',
+  // Validation review: a time-of-day rule and a quantity limit, neither of
+  // which says anything about the setup itself.
+  CLOSING_HOUR: 'BLOCKED_BY_RISK_CONTROL',
+  CONCURRENT_EXPOSURE: 'BLOCKED_BY_RISK_CONTROL',
 
   // The feed was unusable, so the setup was never actually judged.
   NO_QUOTE: 'BLOCKED_BY_DATA_QUALITY',
