@@ -54,3 +54,6 @@ docker-compose.override.yml
 *.tsbuildinfo
 *.tgz
 .vercel
+
+# Backtest history snapshots (reproducible: apps/server/src/backtest/fetch-history.ts)
+apps/server/backtest-data/
