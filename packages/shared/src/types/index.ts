@@ -347,6 +347,19 @@ export interface TradeSetup {
   optionQuality?: TradeSetupOptionQuality;
 
   /**
+   * Phase 3 (spec §5) — the exact mechanical tradeability result
+   * (assessOptionQuality's tradeable/refusalReason) for the live ATM
+   * contract, set as soon as that assessment runs regardless of whether it
+   * refused the setup. Null before that point (e.g. NEUTRAL_BIAS or a bad
+   * ATM quote refuse before option quality is ever assessed) — a different
+   * fact from "assessed and tradeable", stored as one. No new validation:
+   * this is the same object optionQuality/the POOR_OPTION_QUALITY refusal
+   * above are already built from, just carried through so a refusal is
+   * queryable by reason instead of buried in free-text `reason`.
+   */
+  contractValidation?: { tradeable: boolean; refusalReason: string | null; checks: unknown } | null;
+
+  /**
    * NIFTY's direction, when this setup runs AGAINST it. Absent when the
    * setup agrees with the index (the normal case) or the check doesn't
    * apply (indices themselves, MCX/BSE).

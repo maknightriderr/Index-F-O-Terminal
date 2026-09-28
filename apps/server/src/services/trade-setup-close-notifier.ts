@@ -131,7 +131,11 @@ function buildMessage(n: TradeCloseNotice, esc: (s: string) => string): string {
   const contract = n.side && n.strike != null ? `${n.side} ${n.strike}` : n.strategy ?? 'setup';
   const instrument = n.expiry ? `${contract} · ${formatExpiryDate(n.expiry)} expiry` : contract;
 
-  const lines = [`${icon} ${n.outcome} — ${n.underlying} ${instrument} (${modeLabel} · ${n.exchange})`, REASON_TEXT[n.reason]];
+  const lines = [
+    `${icon} PAPER TRADE ${n.outcome} — ${n.underlying} ${instrument} (${modeLabel} · ${n.exchange})`,
+    REASON_TEXT[n.reason],
+    'Simulated outcome — no order was placed.',
+  ];
   if (n.entry != null) {
     lines.push(`Entry ₹${n.entry.toFixed(2)} → Exit ${n.exitPrice != null ? `₹${n.exitPrice.toFixed(2)}` : 'price unavailable'}`);
   }
@@ -139,7 +143,7 @@ function buildMessage(n: TradeCloseNotice, esc: (s: string) => string): string {
     n.returnPercent != null ? `${n.returnPercent >= 0 ? '+' : ''}${n.returnPercent.toFixed(2)}%` : null,
     n.rMultiple != null ? `${n.rMultiple >= 0 ? '+' : ''}${n.rMultiple.toFixed(2)}R` : null,
   ].filter((p): p is string => p != null);
-  if (perf.length > 0) lines.push(`Return ${perf.join(' · ')}`);
+  if (perf.length > 0) lines.push(`Simulated return ${perf.join(' · ')}`);
   if (n.generatedAt != null) lines.push(`Held ${formatDuration(Date.now() - n.generatedAt)}`);
 
   return lines.map(esc).join('\n');

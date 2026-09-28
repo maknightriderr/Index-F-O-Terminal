@@ -29,6 +29,7 @@ import { createAiAssistantRoutes } from './api/ai-assistant.js';
 import { createInstitutionalFlowRoutes } from './api/institutional-flow.js';
 import { createBacktestingRoutes } from './api/backtesting.js';
 import { createLearningRoutes } from './api/learning.js';
+import { createLossAttributionRoutes } from './api/loss-attribution.js';
 import { startAbandonedSetupSweep } from './services/backtesting.js';
 import { createNewsRoutes } from './api/news.js';
 import { createCorporateActionsRoutes } from './api/corporate-actions.js';
@@ -112,6 +113,7 @@ app.use('/api/market-scanner', createMarketScannerRoutes(provider));
 app.use('/api/strategy-scanner', createStrategyScannerRoutes());
 app.use('/api/fii-dii', createFiiDiiRoutes());
 app.use('/api/learning', createLearningRoutes());
+app.use('/api/loss-attribution', createLossAttributionRoutes());
 
 // --- Health Check ---
 

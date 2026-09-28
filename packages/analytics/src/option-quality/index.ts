@@ -41,7 +41,9 @@
  * that nothing was looking at.
  */
 
-export type OptionQualityGrade = 'GOOD' | 'ACCEPTABLE' | 'POOR' | 'UNTRADEABLE';
+import { classifyDteTier } from '@fno/shared';
+
+export type OptionQualityGrade ='GOOD' | 'ACCEPTABLE' | 'POOR' | 'UNTRADEABLE';
 
 export interface OptionQualityInput {
   /** Premium the setup is sized from (bid-ask mid where available). */
@@ -288,7 +290,7 @@ export function assessOptionQuality(input: OptionQualityInput): OptionQualityAss
   if (caps.length > 0) summaryParts.push(`capped at poor: ${caps.join('; ')}`);
   else if (grade !== 'GOOD' && weakest) summaryParts.push(`weakest on ${weakest.name}: ${weakest.detail}`);
   if (input.greeksSource === 'CALCULATED') summaryParts.push('Greeks solved locally, not broker-published');
-  if (input.moneyness === 'OTM' && input.dte <= 1) {
+  if (input.moneyness === 'OTM' && classifyDteTier(input.dte) === 'EXPIRY_WINDOW') {
     summaryParts.push('OTM on expiry day — premium is almost entirely gamma and goes to zero if the move does not arrive');
   }
 

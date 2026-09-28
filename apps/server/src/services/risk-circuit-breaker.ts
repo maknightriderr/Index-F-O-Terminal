@@ -100,6 +100,12 @@ function istDay(at = Date.now()): string {
   return new Date(at).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 }
 
+// R CONSISTENCY NOTE: despite the name, this R is SIMULATED, not realised —
+// it is the option-premium return (signals.fwd_1d_return, net of estimated
+// costs) over the premium stop %. It is NOT the same number as
+// missed-winner-audit.ts gradeDecision()'s outcome_r, which is simulated on
+// the UNDERLYING in ATR from decision_snapshots. Different inputs, different
+// denominators; do not compare them as equals.
 /** Realised R for one recorded setup, net of costs — the same arithmetic the Backtesting page uses. */
 function realisedR(inputs: any, fwd: string | null): number | null {
   const ret = fwd != null ? Number(fwd) : null;

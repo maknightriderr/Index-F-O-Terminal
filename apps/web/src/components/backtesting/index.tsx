@@ -49,7 +49,7 @@ export function BacktestingPage() {
         <div>
           <h1 className="text-lg font-bold text-gray-100 light:text-slate-900">Backtesting</h1>
           <p className="text-xs text-gray-400 light:text-slate-600 mt-0.5">
-            Win-rate analysis of every trade setup the system has actually generated — captured live, not simulated. Coverage grows with what gets viewed/scanned; there's no way to backfill history.
+            Win-rate analysis of every PAPER TRADE setup the system has generated, recorded live as it happened. Every outcome here is a SIMULATED OUTCOME against the setup&apos;s own stop/target — no order was placed, so no figure on this page is realised account P&amp;L. Coverage grows with what gets viewed/scanned; there&apos;s no way to backfill history.
           </p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
@@ -339,7 +339,7 @@ function OverallSummary({ bucket }: { bucket: WinRateBucket }) {
           className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5"
           title={`Average result per trade in R — multiples of that trade's own risk — after estimated round-trip costs: each setup's own estimate (spread, slippage, charges, brokerage) where recorded, ~${ESTIMATED_ROUND_TRIP_COST_PCT}% of premium for older setups. Positive means the system makes money per unit of risk; negative means it loses. Drawdown, profit factor and streaks are after the same costs.`}
         >
-          Expectancy (R)
+          Simulated Expectancy (R)
         </div>
         <div className={`text-3xl font-bold tabular-nums ${bucket.avgRMultiple == null ? 'text-gray-400' : bucket.avgRMultiple >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
           {bucket.avgRMultiple != null
@@ -424,7 +424,7 @@ function WinRateTable({ buckets, periodLabel }: { buckets: WinRateBucket[]; peri
                 <th className="text-right px-2 py-1.5 font-medium">Open</th>
                 <th className="text-right px-3 py-1.5 font-medium">Win Rate</th>
                 <th className="text-right px-3 py-1.5 font-medium" title="WIN plus any EXPIRED close that was still profitable when it closed">Profitable Close Rate</th>
-                <th className="text-right px-2 py-1.5 font-medium">Avg Return</th>
+                <th className="text-right px-2 py-1.5 font-medium" title="Simulated outcome of paper trades — not account P&L">Avg Simulated Return</th>
               </tr>
             </thead>
             <tbody>
@@ -491,7 +491,7 @@ function SymbolTable({ symbols, onOpen }: { symbols: Array<WinRateBucket & { sym
                 <th className="text-right px-2 py-1.5 font-medium">Setups</th>
                 <th className="text-right px-2 py-1.5 font-medium">W / L</th>
                 <th className="text-right px-3 py-1.5 font-medium">Win Rate</th>
-                <th className="text-right px-2 py-1.5 font-medium">Avg Return</th>
+                <th className="text-right px-2 py-1.5 font-medium" title="Simulated outcome of paper trades — not account P&L">Avg Simulated Return</th>
               </tr>
             </thead>
             <tbody>
@@ -558,8 +558,8 @@ function TradeSetupHistoryTable({
                 <th className="text-right px-2 py-1.5 font-medium">Risk</th>
                 <th className="text-right px-2 py-1.5 font-medium">Reward</th>
                 <th className="text-right px-2 py-1.5 font-medium">R:R</th>
-                <th className="text-center px-2 py-1.5 font-medium">Outcome</th>
-                <th className="text-right px-2 py-1.5 font-medium">Return</th>
+                <th className="text-center px-2 py-1.5 font-medium">Simulated Outcome</th>
+                <th className="text-right px-2 py-1.5 font-medium" title="Simulated return of the paper trade — no order was placed">Simulated Return</th>
               </tr>
             </thead>
             <tbody>

@@ -17,6 +17,7 @@
     "dev:all": "turbo run dev --parallel",
     "db:migrate": "turbo run db:migrate --filter=@fno/server",
     "learning": "npm run learning --workspace=@fno/server --",
+    "loss-attribution": "npm run loss-attribution --workspace=@fno/server --",
     "clean": "turbo run clean && rimraf node_modules"
   },
   "devDependencies": {

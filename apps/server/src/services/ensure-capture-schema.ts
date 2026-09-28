@@ -62,6 +62,26 @@ const FILES = [
   '013_contract_marker_authority.sql',
   '014_system_learning.sql',
   '015_system_learning_fixes.sql',
+  // Phase 1 diagnostics. The decision-snapshot writer inserts into these
+  // columns and the gate_diagnostics table, so they are ensured at boot for
+  // the same reason 006 is.
+  '016_signal_freshness.sql',
+  '017_gate_diagnostics.sql',
+  '018_strategy_labels.sql',
+  '019_exit_reason_dead_trades.sql',
+  '020_confidence_dimensions.sql',
+  // Phase 2: shadow strike/execution/target columns and the live-but-
+  // observational exposure / DTE-bucket / invalidation-reason labels. The
+  // snapshot writer inserts into these, so they are ensured at boot too.
+  '021_shadow_strike_selection.sql',
+  '022_execution_quality_shadow.sql',
+  '023_target_estimate_shadow.sql',
+  '024_exposure_tracking.sql',
+  // Phase 3: contract-validation persistence, opening-environment label,
+  // cooldown-effectiveness minutes, OI-wall freshness. The snapshot writer
+  // inserts into these columns and gate_diagnostics gets a widened status
+  // CHECK, so this is ensured at boot too.
+  '025_contract_validation.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */

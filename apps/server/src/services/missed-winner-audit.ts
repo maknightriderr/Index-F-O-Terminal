@@ -40,6 +40,7 @@ import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveSpotToken } from './option-chain.js';
 import { classifyOutcome, NEUTRAL_BAND_R, type OutcomeClass } from './outcome-classifier.js';
 import { opportunityVerdict } from './research-contract.js';
+import { exitReasonFromGrade } from './exit-reason.js';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 
@@ -127,6 +128,12 @@ async function runAuditPass(provider: MarketDataProvider): Promise<void> {
   if (graded > 0) logger.info({ graded, pending: rows.length }, 'Missed-winner audit: graded decisions');
 }
 
+// R CONSISTENCY NOTE: the outcome_r written here is NOT the same number as
+// risk-circuit-breaker.ts realisedR(). This one is SIMULATED on the
+// UNDERLYING (move / stop distance in ATR, from decision_snapshots); that one
+// is SIMULATED on the OPTION PREMIUM net of costs (fwd_1d_return / premium
+// stop %, from signals.inputs). Different inputs, different denominators —
+// neither is a realised broker P&L, and they must not be compared as equals.
 async function gradeDecision(provider: MarketDataProvider, row: PendingRow): Promise<void> {
   const entry = num(row.underlying_price);
   const atr = num(row.atr);
@@ -203,6 +210,9 @@ async function gradeDecision(provider: MarketDataProvider, row: PendingRow): Pro
 
   const outcomeClass = classifyOutcome(row.decision, settledR, mfeR);
   const verdict = opportunityVerdict(outcomeClass);
+  // The hit_target/hit_stop truth above, named explicitly (see exit-reason.ts).
+  // A simulated exit on the underlying replay — not a fill.
+  const exitReason = exitReasonFromGrade(hitTarget, hitStop);
   // Bars to minutes, using the interval this mode actually replayed on.
   const barMinutes = row.mode === 'POSITIONAL' ? 60 : 15;
 
@@ -218,6 +228,7 @@ async function gradeDecision(provider: MarketDataProvider, row: PendingRow): Pro
       outcome_reached_05r = ${mfeR >= 0.5},
       outcome_reached_1r = ${mfeR >= 1},
       outcome_r = ${round(settledR)},
+      exit_reason = ${exitReason},
       opportunity_verdict = ${verdict},
       outcome_time_to_mfe_min = ${barsToMfe == null ? null : barsToMfe * barMinutes},
       outcome_time_to_target_min = ${barsToTarget == null ? null : barsToTarget * barMinutes},

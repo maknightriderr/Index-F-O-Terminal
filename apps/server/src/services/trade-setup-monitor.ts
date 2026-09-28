@@ -35,7 +35,7 @@
 
 import { FO_SEGMENT, minutesSinceSessionOpen } from '@fno/shared';
 import type { Exchange, Tick, TradingMode } from '@fno/shared';
-import { redis } from '../lib/redis.js';
+import { redis, scanKeys } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
 import { buildMarketBias, checkLockedSetupPriceLevels, lastBiasComputedAt } from './market-bias.js';
 import type { LockedSetupWatch } from './market-bias.js';
@@ -224,15 +224,4 @@ function onTicks(provider: MarketDataProvider, subscriptions: SubscriptionManage
       .catch((err: any) => logger.warn({ error: err.message, underlying: watch.underlying }, 'Trade setup price monitor: tick-triggered check failed'))
       .finally(() => inFlight.delete(id));
   }
-}
-
-async function scanKeys(pattern: string): Promise<string[]> {
-  const keys: string[] = [];
-  let cursor = '0';
-  do {
-    const [next, batch] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
-    cursor = next;
-    keys.push(...batch);
-  } while (cursor !== '0');
-  return keys;
 }
