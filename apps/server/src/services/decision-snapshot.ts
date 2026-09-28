@@ -307,7 +307,7 @@ export function recordDecisionSnapshot(input: DecisionSnapshotInput): string {
       ${contractValidation?.tradeable ?? null}, ${contractValidation?.refusalReason ?? null},
       ${sql.json((contractValidation?.checks ?? {}) as never)},
       ${input.openingEnvironment ?? null}, ${input.minutesSinceLastLoss ?? null}, ${input.roomCheckOiAgeSeconds ?? null},
-      ${logic.logicVersion}, ${sql.json({ flags: logic.flags, params: logic.params } as never)},
+      ${logic.logicVersion}, ${sql.json({ flags: logic.flags, params: logic.params, coverageLag: logic.coverageLag ?? null } as never)},
       ${sql.json((input.underlying ?? {}) as never)},
       ${sql.json((input.market ?? {}) as never)},
       ${sql.json((input.futures ?? {}) as never)},

@@ -34,7 +34,7 @@ export interface ValidationRefusal {
  * Minutes until the exchange's session closes at `at`, or null outside a
  * live session. Uses the same per-exchange close times remainingSessionFraction
  * reads (getSessionCloseTime, via getSessionWindow — which also honours MCX's
- * US-DST 23:55 close and its partial-day holidays).
+ * US-DST 23:30 close, its 23:55 close otherwise, and its partial-day holidays).
  */
 export function minutesToSessionClose(exchange: Exchange, at: number): number | null {
   const date = new Date(at).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });

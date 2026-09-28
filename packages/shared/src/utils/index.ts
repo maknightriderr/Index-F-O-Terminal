@@ -2,7 +2,7 @@
 // SHARED UTILITIES
 // ============================================================
 
-import { TRADING_HOURS, EXCHANGE_HOLIDAYS, MCX_EVENING_SESSION_OPEN, MCX_US_DST_CLOSE } from '../constants/index.js';
+import { TRADING_HOURS, EXCHANGE_HOLIDAYS, MCX_EVENING_SESSION_OPEN, MCX_US_DST_CLOSE, MCX_US_STANDARD_TIME_CLOSE } from '../constants/index.js';
 import type { Exchange, ExchangeHoliday, OptionType } from '../types/index.js';
 
 /**
@@ -195,14 +195,20 @@ function isUsDaylightSavingDate(date: string): boolean {
 
 /**
  * The session's closing time (HH:MM, exchange timezone) on the date of `at`.
- * MCX's evening session follows US trading hours: it runs to 23:55 while
- * the US is on daylight saving time, and to 23:30 otherwise — a fixed
- * 23:30 wrongly treated the last 25 minutes of every summer session as
- * closed.
+ * MCX's evening session follows US trading hours, which sit an hour earlier
+ * in IST while the US is on daylight saving time: it closes at 23:30 during
+ * US DST and at 23:55 otherwise. (Real candles on 24-25 Sep 2026, US DST,
+ * end with the 23:15 bar.) This was previously reversed, which treated
+ * 23:30-23:55 on every summer evening as open — setups could be minted off
+ * frozen quotes, the closing guard started 25 minutes late, and the
+ * remaining-session fraction was overstated.
+ *
+ * Pass the moment being decided (a replayed decision's own time), not the
+ * wall clock, so a replay uses that date's DST.
  */
 export function getSessionCloseTime(exchange: Exchange, at: Date | number = Date.now()): string {
   if (exchange !== 'MCX') return TRADING_HOURS[exchange].close;
-  return isUsDaylightSavingDate(exchangeClock(exchange, at).date) ? MCX_US_DST_CLOSE : TRADING_HOURS.MCX.close;
+  return isUsDaylightSavingDate(exchangeClock(exchange, at).date) ? MCX_US_DST_CLOSE : MCX_US_STANDARD_TIME_CLOSE;
 }
 
 // Every exchange here trades on Asia/Kolkata (TRADING_HOURS[*].timezone),

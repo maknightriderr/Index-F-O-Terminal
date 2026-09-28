@@ -8,6 +8,9 @@
 import type { Exchange, ExchangeHoliday, ExchangeSegment, TradingHours } from '../types/index.js';
 
 // --- Trading Hours ---
+// MCX's close moves with US daylight saving time (23:30 during US DST,
+// 23:55 otherwise). The value below is only the DST close for display;
+// anything that gates on the close must call getSessionCloseTime.
 
 export const TRADING_HOURS: Record<Exchange, TradingHours> = {
   NSE: { open: '09:15', close: '15:30', timezone: 'Asia/Kolkata' },
@@ -18,8 +21,18 @@ export const TRADING_HOURS: Record<Exchange, TradingHours> = {
 /** MCX splits its day into a morning and an evening session here — partial holidays shut one side of this boundary. */
 export const MCX_EVENING_SESSION_OPEN = '17:00';
 
-/** MCX's evening session closes here instead of TRADING_HOURS.MCX.close while the US is on daylight saving time — see getSessionCloseTime. */
-export const MCX_US_DST_CLOSE = '23:55';
+/**
+ * MCX's evening session closes EARLIER while the US is on daylight saving
+ * time — see getSessionCloseTime, the only place either close is chosen.
+ * Verified on real candles: on 24 and 25 Sep 2026 (US DST) the last 15m
+ * CRUDEOIL bar starts at 23:15, so the session ends at 23:30. This used to
+ * read 23:55 — the two closes were the wrong way round.
+ * (TRADING_HOURS.MCX.close carries the same DST value for display only.)
+ */
+export const MCX_US_DST_CLOSE = '23:30';
+
+/** MCX's evening-session close while the US is on standard time (roughly November to March). */
+export const MCX_US_STANDARD_TIME_CLOSE = '23:55';
 
 /**
  * A new trade setup isn't minted in the first minutes of a session — the

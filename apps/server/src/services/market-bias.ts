@@ -54,7 +54,6 @@ import type {
   TradeSetup,
   HistoricalParams,
   TradingMode,
-  GammaExposureRegime,
   OIInterpretation,
   OptionChainLeg,
 } from '@fno/shared';
@@ -81,6 +80,7 @@ import { logger } from '../lib/logger.js';
 import { decisionNow, decisionDate, decisionIstDate, assertNoFutureData } from './decision-clock.js';
 import { ivRankFor } from './fno-scanner.js';
 import { randomUUID } from 'node:crypto';
+import type { DecisionSnapshotInput } from './decision-snapshot.js';
 import { recordDecisionSnapshot, recordGateDiagnostics, markDecisionStale, markDecisionDead, recordEventualOutcome, recordInvalidationReason } from './decision-snapshot.js';
 // Phase 1 instrumentation. Every one of these observes and records; none of
 // them is read by a gate, and none can change what a setup does.
@@ -106,7 +106,20 @@ import { notifyTradeSetup } from './telegram.js';
 import { trackSymbolForOiSnapshot } from './oi-close-snapshot.js';
 import { riskOffReason } from './risk-circuit-breaker.js';
 import { assessLocation, assessRoom, type StructuralLevel } from './location-quality.js';
-import { TRADING_FLAGS, TRADING_PARAMS, logicStamp, type LogicStamp } from '../config/trading-flags.js';
+import { TRADING_FLAGS, TRADING_PARAMS, COVERAGE_LAG_FLAGS, COVERAGE_LAG_PARAMS, logicStamp, type LogicStamp } from '../config/trading-flags.js';
+import { bandVote, type Vote } from './vote-bands.js';
+import {
+  evaluateIntradayPositioning,
+  resolvePositioningVotes,
+  type FuturesSnapshotPoint,
+  type IntradayPositioningRead,
+  type OptionLegSnapshotPoint,
+  type PcrSnapshotPoint,
+  type PositioningBaselines,
+} from './intraday-positioning.js';
+import { classifyRegime, applyFastIntradayRegime, persistedBreakout, type RegimeSource } from './regime-classifier.js';
+import { mintOnce, mintLockKey } from './setup-mint-lock.js';
+import { IV_PRESSURE_MIN_PCT } from './option-chain.js';
 import {
   closingGuardReason,
   concurrencyGateReason,
@@ -185,7 +198,7 @@ export interface MarketBiasResult {
   tradeSetup: TradeSetup;
 }
 
-type Vote = -1 | 0 | 1;
+// Vote and bandVote come from vote-bands.ts (see the imports).
 
 // When each symbol/mode's bias was last computed successfully by anyone (a
 // browser poll, a scanner, the trade-setup monitor) — so the monitor's own
@@ -754,7 +767,11 @@ async function computeMarketBias(
   // contract moving today, with OI actually changing". Its classifier flips
   // at a 0.01% day move — pure noise — so the vote is banded on that move.
   const futuresDayChangePct = currentFuture?.changePercent ?? null;
-  const futuresOiVote: Vote =
+  // The three positioning votes below are the DAY-LEVEL reads (measured from
+  // the previous close). With INTRADAY_POSITIONING on, each is replaced by its
+  // intraday-window vote when that window has enough fresh snapshots — see
+  // resolvePositioningVotes further down.
+  const futuresOiVoteDay: Vote =
     futuresInterpretation === 'NEUTRAL'
       ? 0
       : futuresDayChangePct != null
@@ -762,7 +779,7 @@ async function computeMarketBias(
       : futuresInterpretation === 'LONG_BUILDUP' || futuresInterpretation === 'SHORT_COVERING'
       ? 1
       : -1;
-  const pcrVote: Vote = bandVote(pcr, prevVotes?.pcr, 1.1, 1.05, 0.85, 0.9);
+  const pcrVoteDay: Vote = bandVote(pcr, prevVotes?.pcr, 1.1, 1.05, 0.85, 0.9);
   // Only counts when the EMAs are both stacked AND sloping in that
   // direction — a flat/tangled EMA20 sitting on price (aligned but not
   // sloping) is exactly the chop signature this vote should stay silent on.
@@ -772,7 +789,7 @@ async function computeMarketBias(
   // a vote — same noise-floor philosophy as the PCR bands above.
   const OPTION_OI_FLOW_MIN_SKEW = 0.15;
   const OPTION_OI_FLOW_HOLD_SKEW = 0.08;
-  const optionOiFlowVote: Vote = bandVote(
+  const optionOiFlowVoteDay: Vote = bandVote(
     optionOiFlowNetSkew,
     prevVotes?.optionOiFlow,
     OPTION_OI_FLOW_MIN_SKEW,
@@ -780,6 +797,48 @@ async function computeMarketBias(
     -OPTION_OI_FLOW_MIN_SKEW,
     -OPTION_OI_FLOW_HOLD_SKEW
   );
+
+  // --- Intraday positioning window (flag INTRADAY_POSITIONING, INTRADAY only) ---
+  // The same three reads measured over the last INTRADAY_POSITIONING_WINDOW_MIN
+  // minutes of captured snapshots instead of since yesterday's close, with the
+  // same classifiers and the same entry/hold bands. Each input falls back to
+  // its day-level vote on its own when its window is thin or stale. Flag off
+  // (or POSITIONAL) = no read at all, and the day-level votes stand unchanged.
+  let intradayPositioning: IntradayPositioningRead | null = null;
+  if (COVERAGE_LAG_FLAGS.INTRADAY_POSITIONING && !isPositional) {
+    const now = decisionNow();
+    const rows = await loadIntradayPositioningRows({
+      exchange,
+      underlying,
+      futuresToken: currentFuture?.token ?? null,
+      expiry: chain?.expiry ?? null,
+      now,
+      windowMin: COVERAGE_LAG_PARAMS.INTRADAY_POSITIONING_WINDOW_MIN,
+    });
+    intradayPositioning = evaluateIntradayPositioning(
+      { ...rows, prev: prevVotes },
+      {
+        now,
+        windowMin: COVERAGE_LAG_PARAMS.INTRADAY_POSITIONING_WINDOW_MIN,
+        minSnapshots: COVERAGE_LAG_PARAMS.INTRADAY_POSITIONING_MIN_SNAPSHOTS,
+        maxAgeMin: COVERAGE_LAG_PARAMS.INTRADAY_POSITIONING_MAX_AGE_MIN,
+        futuresBand: { enter: FUTURES_MOVE_ENTER_PCT, hold: FUTURES_MOVE_HOLD_PCT },
+        pcrBand: { enter: COVERAGE_LAG_PARAMS.INTRADAY_PCR_DELTA_ENTER, hold: COVERAGE_LAG_PARAMS.INTRADAY_PCR_DELTA_HOLD },
+        optionFlowBand: { enter: OPTION_OI_FLOW_MIN_SKEW, hold: OPTION_OI_FLOW_HOLD_SKEW },
+        optionPriceNoisePct: IV_PRESSURE_MIN_PCT,
+      }
+    );
+  }
+  const resolvedPositioning = resolvePositioningVotes(
+    { futuresOiVote: futuresOiVoteDay, pcrVote: pcrVoteDay, optionOiFlowVote: optionOiFlowVoteDay, futuresChangeOiPct },
+    intradayPositioning
+  );
+  const futuresOiVote: Vote = resolvedPositioning.futuresOiVote;
+  const pcrVote: Vote = resolvedPositioning.pcrVote;
+  const optionOiFlowVote: Vote = resolvedPositioning.optionOiFlowVote;
+  const positioningBaseline: PositioningBaselines = resolvedPositioning.baselines;
+  // The OI-shift score's magnitude — the window ΔOI% when the futures window was used.
+  const oiShiftChangeOiPct = resolvedPositioning.futuresChangeOiPct;
 
   // Operator/retail activity regime: real positioning data (futures OI
   // buildup, an OI wall actually under price pressure, PCR skew) instead
@@ -1080,7 +1139,34 @@ async function computeMarketBias(
       : clamp(Math.round(agreementShare * evidenceFactor * 100), 15, 95);
 
   // --- Regime: leading breakout/breakdown (fresh, volume-confirmed Bollinger break) takes priority over the lagging ADX-based trend read, overridden by expiry-day gamma when DTE<=1 ---
-  const regime = classifyRegime(adxValue, st1hDirectionConfirmed, atrPctZ, chain?.dte ?? null, chain?.gammaExposure?.regime ?? null, freshBreakoutUp, freshBreakoutDown, operatorActivityBullish, operatorActivityBearish);
+  const baseRegime = classifyRegime(adxValue, st1hDirectionConfirmed, atrPctZ, chain?.dte ?? null, chain?.gammaExposure?.regime ?? null, freshBreakoutUp, freshBreakoutDown, operatorActivityBullish, operatorActivityBearish);
+  // FAST_INTRADAY_REGIME (INTRADAY only): a 15m-ADX trend read when the 1H
+  // ADX found none, and a fresh breakout held while price stays beyond the
+  // Bollinger midline — see regime-classifier.ts. Off (or POSITIONAL) = the
+  // 1H read above, unchanged, and nothing extra is computed.
+  const fastRegimeEnabled = COVERAGE_LAG_FLAGS.FAST_INTRADAY_REGIME && !isPositional;
+  const adx15Series = fastRegimeEnabled ? adx(c15.highs, c15.lows, c15.closes, 14).adx : [];
+  const adx15mValue: number | null = adx15Series.length > 0 ? adx15Series[adx15Series.length - 1] : null;
+  // Same flip handling as the 1H direction: an unconfirmed fresh flip reads as the previous bar's direction.
+  const st15DirectionConfirmed = st15JustFlipped && !volumeConfirms ? st15PrevDirection : st15Direction;
+  const breakoutPersist = fastRegimeEnabled
+    ? persistedBreakout({
+        closes: c15.closes,
+        volumes: c15.volumes,
+        upper: bb15.upper,
+        middle: bb15.middle,
+        lower: bb15.lower,
+        maxBars: COVERAGE_LAG_PARAMS.BREAKOUT_PERSIST_BARS,
+        volumeConfirmThreshold: VOLUME_CONFIRM_THRESHOLD,
+      })
+    : null;
+  const { regime, source: regimeSource } = applyFastIntradayRegime({
+    enabled: fastRegimeEnabled,
+    baseRegime,
+    adx15m: adx15mValue,
+    st15Direction: st15DirectionConfirmed,
+    persisted: breakoutPersist,
+  });
 
   // --- Reasoning (built from the actual computed values, not templated) ---
   // Ordered by priority, not computation order — the frontend card only
@@ -1101,9 +1187,18 @@ async function computeMarketBias(
       `Futures OI, the ${regime === 'OPERATOR_ACCUMULATION' ? 'call' : 'put'} wall under pressure, and PCR skew all agree ${regime === 'OPERATOR_ACCUMULATION' ? 'bullish' : 'bearish'} with a ${fmt(Math.abs(futuresChangeOiPct), 1)}% futures OI change — real positioning, not just price action, is driving this move.`
     );
   }
-  if (regime === 'BREAKOUT' || regime === 'BREAKDOWN') {
+  if ((regime === 'BREAKOUT' || regime === 'BREAKDOWN') && regimeSource === 'BREAKOUT_PERSIST' && breakoutPersist) {
+    reasoning.push(
+      `Volume-confirmed ${regime === 'BREAKOUT' ? 'break above the upper' : 'break below the lower'} Bollinger Band ${breakoutPersist.barsAgo} bar(s) ago, still holding ${regime === 'BREAKOUT' ? 'above' : 'below'} the midline — the ${regime.toLowerCase()} regime is held while it does.`
+    );
+  } else if (regime === 'BREAKOUT' || regime === 'BREAKDOWN') {
     reasoning.push(
       `Volume-confirmed ${regime === 'BREAKOUT' ? 'break above the upper' : 'break below the lower'} Bollinger Band (${fmt(volumeRatio, 2)}x volume) — a leading signal ADX hasn't caught up to yet.`
+    );
+  }
+  if (regimeSource === '15M_FALLBACK' && adx15mValue != null) {
+    reasoning.push(
+      `1H ADX ${fmt(adxValue, 0)} reads no trend yet, but 15m ADX ${fmt(adx15mValue, 0)} with a ${st15DirectionConfirmed === 'UP' ? 'bullish' : 'bearish'} 15m Supertrend shows an intraday trend — regime read from the 15m chart.`
     );
   }
   if (rsiDivergence.signal !== 'NONE') {
@@ -1229,15 +1324,33 @@ async function computeMarketBias(
   // fields elsewhere on this card. With the reasoning list capped at 9 lines
   // on the frontend, a real vote behind the confidence number must not lose
   // its slot to a level that's visible somewhere else on the same screen.
-  if (chain) {
+  // With the intraday window in use for an input, its line describes the
+  // window read (what actually voted); otherwise the day-level line as before.
+  const windowMin = COVERAGE_LAG_PARAMS.INTRADAY_POSITIONING_WINDOW_MIN;
+  const pcrWindow = intradayPositioning?.pcr.vote != null ? intradayPositioning.pcr : null;
+  const futuresWindow = intradayPositioning?.futures.vote != null ? intradayPositioning.futures : null;
+  const flowWindow = intradayPositioning?.optionFlow.vote != null ? intradayPositioning.optionFlow : null;
+  if (chain && pcrWindow && pcrWindow.pcrChange != null) {
+    reasoning.push(
+      `PCR at ${fmt(pcr)}, ${pcrWindow.pcrChange >= 0 ? '+' : ''}${fmt(pcrWindow.pcrChange, 2)} over the last ${windowMin} min — ${pcrVote === 1 ? 'put OI building (bullish)' : pcrVote === -1 ? 'call OI building (bearish)' : 'little change'}`
+    );
+  } else if (chain) {
     reasoning.push(
       `PCR at ${fmt(pcr)} — ${pcr > 1.1 ? 'moderately bullish' : pcr < 0.85 ? 'moderately bearish' : 'neutral'}`
     );
   }
-  if (currentFuture) {
+  if (futuresWindow && futuresWindow.interpretation) {
+    reasoning.push(
+      `${getOIDescription(futuresWindow.interpretation).description} in futures OI over the last ${windowMin} min (price ${fmt(futuresWindow.priceChangePct ?? 0, 2)}%, OI ${fmt(futuresWindow.oiChangePct ?? 0, 2)}%)`
+    );
+  } else if (currentFuture) {
     reasoning.push(`${getOIDescription(futuresInterpretation).description} in futures OI`);
   }
-  if (optionOiFlowDominant && optionOiFlowDominant !== 'NEUTRAL' && optionOiFlowTotalWeight > 0) {
+  if (flowWindow && flowWindow.dominant && flowWindow.dominant !== 'NEUTRAL' && flowWindow.dominantShare != null) {
+    reasoning.push(
+      `${getOIDescription(flowWindow.dominant).description} dominates chain-wide option OI flow over the last ${windowMin} min (${Math.round(flowWindow.dominantShare * 100)}% of the window's net OI movement)`
+    );
+  } else if (!flowWindow && optionOiFlowDominant && optionOiFlowDominant !== 'NEUTRAL' && optionOiFlowTotalWeight > 0) {
     const dominantShare = Math.round((optionOiFlowDominantWeight / optionOiFlowTotalWeight) * 100);
     reasoning.push(
       `${getOIDescription(optionOiFlowDominant).description} dominates chain-wide option OI flow (${dominantShare}% of today's net OI movement)`
@@ -1420,7 +1533,7 @@ async function computeMarketBias(
   // so it could only ever read >=50 regardless of which way the OI moved —
   // an unconditional upward push on `overall` for any symbol with active
   // futures OI, agreeing or not.)
-  const oiShiftMagnitude = Math.min(Math.abs(futuresChangeOiPct), 50) / 50; // 0..1
+  const oiShiftMagnitude = Math.min(Math.abs(oiShiftChangeOiPct), 50) / 50; // 0..1
   const oiShiftsScore = contribution(futuresOiVote * oiShiftMagnitude, directionSign);
 
   // Move relative to its own ATR (volatility-normalized momentum), scored
@@ -1604,6 +1717,13 @@ async function computeMarketBias(
     freshBreakoutUp,
     freshBreakoutDown,
     roomCheckOiAgeSeconds,
+    // Coverage/lag round: what each positioning input and the regime were
+    // actually measured from, so decisions under different baselines are
+    // never pooled blind.
+    positioningBaseline,
+    regimeSource,
+    adx15m: adx15mValue != null ? Math.round(adx15mValue * 100) / 100 : null,
+    breakoutPersistBarsAgo: breakoutPersist?.barsAgo ?? null,
   };
 
   const tradeSetup: TradeSetup = chain
@@ -1626,15 +1746,17 @@ async function computeMarketBias(
 // Fraction of today's remaining trading session, clamped to a small floor
 // so a setup minted in the closing minutes doesn't get an effectively-zero
 // (or negative, once the clock is past close) target. MCX's session runs
-// past midnight-adjacent hours (09:00-23:30) — same open/close-minutes math
-// as NSE/BSE, just a much longer window, so no special-casing needed.
+// to near midnight (09:00-23:30 during US DST, 09:00-23:55 otherwise) —
+// same open/close-minutes math as NSE/BSE, just a much longer window. The
+// close is read for the decision's own date so a replay uses that date's DST.
 const MIN_REMAINING_SESSION_FRACTION = 0.05;
 
 function remainingSessionFraction(exchange: Exchange): number {
   const hours = TRADING_HOURS[exchange];
-  const ist = new Date(decisionDate().toLocaleString('en-US', { timeZone: hours.timezone }));
+  const at = decisionDate();
+  const ist = new Date(at.toLocaleString('en-US', { timeZone: hours.timezone }));
   const [openH, openM] = hours.open.split(':').map(Number);
-  const [closeH, closeM] = getSessionCloseTime(exchange).split(':').map(Number);
+  const [closeH, closeM] = getSessionCloseTime(exchange, at).split(':').map(Number);
   const openMinutes = openH * 60 + openM;
   const closeMinutes = closeH * 60 + closeM;
   const nowMinutes = ist.getHours() * 60 + ist.getMinutes();
@@ -1659,9 +1781,10 @@ const NOISY_WINDOW_VOLUME_MULTIPLIER = 1.5;
 
 function isNoisyIntradayWindow(exchange: Exchange): boolean {
   const hours = TRADING_HOURS[exchange];
-  const ist = new Date(decisionDate().toLocaleString('en-US', { timeZone: hours.timezone }));
+  const at = decisionDate();
+  const ist = new Date(at.toLocaleString('en-US', { timeZone: hours.timezone }));
   const [openH, openM] = hours.open.split(':').map(Number);
-  const [closeH, closeM] = getSessionCloseTime(exchange).split(':').map(Number);
+  const [closeH, closeM] = getSessionCloseTime(exchange, at).split(':').map(Number);
   const openMinutes = openH * 60 + openM;
   const closeMinutes = closeH * 60 + closeM;
   const nowMinutes = ist.getHours() * 60 + ist.getMinutes();
@@ -2326,6 +2449,10 @@ async function resolveStickyTradeSetup(
   } catch (err: any) {
     logger.warn({ error: err.message, underlying }, 'Sticky trade setup read failed — generating fresh');
   }
+  // The setup this caller found in the slot, if any. The mint lock below uses
+  // it to tell "someone else minted while I was computing" from "this is the
+  // setup I have just closed and am replacing".
+  const priorDecisionId = stored?.decisionId ?? null;
 
   // Only an actual locked-in setup (available: true) is sticky — an
   // "unavailable" verdict (neutral bias, low confidence) isn't a position
@@ -2960,6 +3087,86 @@ async function resolveStickyTradeSetup(
     return fresh;
   }
 
+  // --- The setup-creating branch ---
+  // Everything from here to the Telegram push mints a NEW setup: a `signals`
+  // row, a TAKE decision row, the sticky slot write and the notification.
+  // Several callers can reach this point for the same slot at once (a browser
+  // poll, the scanners, the trade-setup monitor, the background evaluator), so
+  // with BACKGROUND_BIAS on it runs under a Redis SET NX mint lock: one caller
+  // mints, any other returns the setup that caller minted — no second row, no
+  // second message. Flag off = the unlocked path exactly as before.
+  const mintFresh = (): Promise<StoredTradeSetup> =>
+    mintTradeSetup({
+      underlying, exchange, mode, key, today, setupTtl, chain, fresh, direction, confidence, regime, intelligenceScore,
+      voteSnapshot, entryContext, phase1Context, gateDiagnosticsFor, shadowModels,
+    });
+  if (!COVERAGE_LAG_FLAGS.BACKGROUND_BIAS) return mintFresh();
+
+  const readMintedByOther = async (): Promise<StoredTradeSetup | null> => {
+    try {
+      const raw = await redis.get(key);
+      if (!raw) return null;
+      const s = JSON.parse(raw) as StoredTradeSetup;
+      return s.available && s.decisionId != null && s.decisionId !== priorDecisionId && (isPositional || s.day === today) ? s : null;
+    } catch (err: any) {
+      logger.warn({ error: err.message, underlying, exchange, mode }, 'Mint lock: slot re-read failed — treating the slot as empty');
+      return null;
+    }
+  };
+  const outcome = await mintOnce<StoredTradeSetup, StoredTradeSetup>({
+    store: {
+      setNx: async (k, v, ttl) => (await redis.set(k, v, 'EX', ttl, 'NX')) === 'OK',
+      get: (k) => redis.get(k),
+      del: (k) => redis.del(k),
+    },
+    lockKey: mintLockKey(exchange, underlying, mode),
+    ttlSeconds: COVERAGE_LAG_PARAMS.SETUP_MINT_LOCK_TTL_SECONDS,
+    waitMs: COVERAGE_LAG_PARAMS.SETUP_MINT_LOCK_WAIT_MS,
+    readExisting: readMintedByOther,
+    mint: mintFresh,
+    onError: (stage, err: any) =>
+      logger.warn(
+        { error: err?.message ?? String(err), stage, underlying, exchange, mode },
+        stage === 'ACQUIRE' ? 'Mint lock: could not take the lock — minting unlocked' : 'Mint lock: release failed — it expires on its TTL'
+      ),
+  });
+  if (outcome.kind === 'MINTED') return outcome.value;
+  if (outcome.kind === 'EXISTING') {
+    logger.info({ underlying, exchange, mode, decisionId: outcome.value.decisionId }, 'Mint lock: another caller minted this setup — returning theirs, not minting again');
+    return outcome.value;
+  }
+  logger.info({ underlying, exchange, mode }, 'Mint lock: another caller is still minting this setup — nothing minted by this poll');
+  return { available: false, reason: 'A setup for this symbol is being generated by another evaluation right now — it will show on the next refresh.' };
+}
+
+/**
+ * Mints one new sticky setup: the `signals` row, the TAKE decision row, the
+ * slot write and the Telegram push. Split out of resolveStickyTradeSetup
+ * (unchanged line for line) so the mint lock can wrap it.
+ */
+async function mintTradeSetup(ctx: {
+  underlying: string;
+  exchange: Exchange;
+  mode: TradingMode;
+  key: string;
+  today: string;
+  setupTtl: number;
+  chain: OptionChain;
+  fresh: TradeSetup;
+  direction: BiasDirection;
+  confidence: number;
+  regime: MarketRegime;
+  intelligenceScore: number;
+  voteSnapshot: BiasVoteSnapshot | undefined;
+  entryContext: SetupEntryContext | undefined;
+  phase1Context: Pick<DecisionSnapshotInput, 'strategy' | 'confidenceDimensions' | 'openingEnvironment' | 'minutesSinceLastLoss' | 'roomCheckOiAgeSeconds'>;
+  gateDiagnosticsFor: () => Promise<GateDiagnostic[]>;
+  shadowModels: ReturnType<typeof computeShadowModels>;
+}): Promise<StoredTradeSetup> {
+  const {
+    underlying, exchange, mode, key, today, setupTtl, chain, fresh, direction, confidence, regime, intelligenceScore,
+    voteSnapshot, entryContext, phase1Context, gateDiagnosticsFor, shadowModels,
+  } = ctx;
   // Which rules and flags minted this setup — carried on the sticky setup and
   // written to signals.inputs.logic so pre- and post-review trades are never pooled.
   const logic = logicStamp();
@@ -3822,6 +4029,11 @@ function snapshotBlocks(
       pcr: chain?.pcrDetail?.oiPCR ?? null,
       maxPain: chain?.maxPain ?? null,
       optionOiBaselineCoverage: entryContext?.optionOiBaselineCoverage ?? null,
+      // Coverage/lag round (JSON inside the existing `market` jsonb column).
+      positioningBaseline: entryContext?.positioningBaseline ?? null,
+      regimeSource: entryContext?.regimeSource ?? null,
+      adx15m: entryContext?.adx15m ?? null,
+      breakoutPersistBarsAgo: entryContext?.breakoutPersistBarsAgo ?? null,
     },
     location: {
       score: entryContext?.locationScore ?? null,
@@ -4014,6 +4226,14 @@ interface SetupEntryContext {
   freshBreakoutDown?: boolean;
   /** Phase 3 (spec §20) — age in seconds of the chain-fetch OI data roomToTarget() filtered candidates by. */
   roomCheckOiAgeSeconds?: number | null;
+  /** Coverage/lag round — per positioning input, the intraday window or the previous close. */
+  positioningBaseline?: PositioningBaselines;
+  /** Coverage/lag round — '1H' (classifyRegime as before), '15M_FALLBACK' or 'BREAKOUT_PERSIST'. */
+  regimeSource?: RegimeSource;
+  /** ADX(14) on the 15m candles when FAST_INTRADAY_REGIME computed it. */
+  adx15m?: number | null;
+  /** Bars since the volume-confirmed break a held BREAKOUT/BREAKDOWN regime rests on. */
+  breakoutPersistBarsAgo?: number | null;
 }
 
 function regimeAlignment(direction: BiasDirection, regime: MarketRegime): RegimeAlignment {
@@ -4089,20 +4309,81 @@ const OPTION_OI_MIN_PREV_CLOSE_COVERAGE = 0.5;
 
 type ThresholdVoteState = Partial<Record<'vwap' | 'rsi' | 'futuresOi' | 'pcr' | 'optionOiFlow' | 'macd' | 'bollinger', Vote>>;
 
-/**
- * A threshold vote with hysteresis. Entering +1 needs `value > enterUp`;
- * once +1 (per `prev`), it holds while `value > holdUp` (holdUp sits inside
- * enterUp). Mirror for -1. Without the hold band a reading hovering at a
- * threshold flipped the vote every poll — and with only a handful of votes
- * per source, one flip was enough to flip the whole direction.
- */
-function bandVote(value: number, prev: Vote | undefined, enterUp: number, holdUp: number, enterDown: number, holdDown: number): Vote {
-  if (!Number.isFinite(value)) return 0;
-  if (prev === 1 && value > holdUp) return 1;
-  if (prev === -1 && value < holdDown) return -1;
-  if (value > enterUp) return 1;
-  if (value < enterDown) return -1;
-  return 0;
+// bandVote (the hysteresis rule itself) lives in vote-bands.ts, shared with
+// the intraday positioning window.
+
+// --- Intraday positioning window: the snapshot rows ---
+// One indexed read per capture table (idx_futures_symbol, idx_pcr_symbol,
+// idx_oi_snapshots_capture), bounded to [now - window, now] so a replay never
+// sees a row from after its decision instant. Cached for the minute, so every
+// caller polling the same symbol inside one poll shares one read. A failed
+// read is logged and returns nothing, which makes every input fall back to
+// its day-level vote — the pre-flag behaviour.
+const INTRADAY_POSITIONING_ROWS_CACHE_TTL_SECONDS = 60;
+
+async function loadIntradayPositioningRows(args: {
+  exchange: Exchange;
+  underlying: string;
+  futuresToken: string | null;
+  expiry: string | null;
+  now: number;
+  windowMin: number;
+}): Promise<{ futures: FuturesSnapshotPoint[]; pcr: PcrSnapshotPoint[]; legs: OptionLegSnapshotPoint[] }> {
+  const empty = { futures: [], pcr: [], legs: [] };
+  const from = new Date(args.now - args.windowMin * 60_000);
+  const to = new Date(args.now);
+  const minuteBucket = Math.floor(args.now / 60_000);
+  const key = `intraday_positioning_rows:${args.exchange}:${args.underlying}:${args.futuresToken ?? '-'}:${args.expiry ?? '-'}:${args.windowMin}:${minuteBucket}`;
+  try {
+    return await cached(key, INTRADAY_POSITIONING_ROWS_CACHE_TTL_SECONDS, async () => {
+      const [futuresRows, pcrRows, legRows] = await Promise.all([
+        args.futuresToken
+          ? sql<{ time: Date; price: string | null; oi: string | null }[]>`
+              SELECT time, COALESCE(futures_price, ltp) AS price, oi
+              FROM futures_snapshots
+              WHERE symbol = ${args.underlying} AND exchange = ${args.exchange} AND token = ${args.futuresToken}
+                AND time >= ${from} AND time <= ${to}
+              ORDER BY time ASC
+            `
+          : Promise.resolve([]),
+        args.expiry
+          ? sql<{ time: Date; oi_pcr: string | null }[]>`
+              SELECT time, oi_pcr
+              FROM pcr_history
+              WHERE symbol = ${args.underlying} AND expiry = ${args.expiry}
+                AND time >= ${from} AND time <= ${to}
+              ORDER BY time ASC
+            `
+          : Promise.resolve([]),
+        args.expiry
+          ? sql<{ time: Date; strike: string; option_type: 'CE' | 'PE'; oi: string | null; ltp: string | null }[]>`
+              SELECT time, strike, option_type, oi, ltp
+              FROM oi_snapshots
+              WHERE symbol = ${args.underlying} AND expiry = ${args.expiry} AND exchange = ${args.exchange}
+                AND time >= ${from} AND time <= ${to}
+              ORDER BY time ASC
+            `
+          : Promise.resolve([]),
+      ]);
+      const ms = (t: Date | string) => new Date(t).getTime();
+      return {
+        futures: futuresRows
+          .map((r) => ({ time: ms(r.time), price: Number(r.price), oi: Number(r.oi) }))
+          .filter((p) => Number.isFinite(p.price) && Number.isFinite(p.oi)),
+        pcr: pcrRows.map((r) => ({ time: ms(r.time), oiPcr: Number(r.oi_pcr) })).filter((p) => Number.isFinite(p.oiPcr)),
+        legs: legRows
+          .filter((r) => r.option_type === 'CE' || r.option_type === 'PE')
+          .map((r) => ({ time: ms(r.time), strike: Number(r.strike), optionType: r.option_type, oi: Number(r.oi), ltp: Number(r.ltp) }))
+          .filter((p) => Number.isFinite(p.strike) && Number.isFinite(p.oi) && Number.isFinite(p.ltp)),
+      };
+    });
+  } catch (err: any) {
+    logger.warn(
+      { error: err.message, underlying: args.underlying, exchange: args.exchange },
+      'Intraday positioning: snapshot read failed — every positioning input uses its day-level vote this poll'
+    );
+    return empty;
+  }
 }
 
 async function readVoteState(key: string): Promise<ThresholdVoteState | null> {
@@ -4203,50 +4484,9 @@ function zScore(value: number, series: number[]): number {
   return std > 0 ? (value - mean) / std : 0;
 }
 
-// DTE<=1 with non-neutral GEX overrides the ADX/Supertrend trend read —
-// dealer hedging flows into an imminent expiry can pin or whipsaw price in
-// ways that have nothing to do with the underlying trend (a "strong" ADX
-// reading into expiry is often just the pin/unwind, not a real trend), so
-// this is checked first, ahead of the ADX bands below.
-const EXPIRY_GAMMA_MAX_DTE = 1;
-
-function classifyRegime(
-  adxValue: number,
-  st1hDirection: 'UP' | 'DOWN',
-  atrZ: number,
-  dte: number | null,
-  gexRegime: GammaExposureRegime | null,
-  freshBreakoutUp: boolean,
-  freshBreakoutDown: boolean,
-  operatorActivityBullish: boolean,
-  operatorActivityBearish: boolean
-): MarketRegime {
-  if (dte != null && dte <= EXPIRY_GAMMA_MAX_DTE && gexRegime != null && gexRegime !== 'NEUTRAL') {
-    return 'EXPIRY_GAMMA';
-  }
-  // Real capital committed right now (futures OI buildup + an OI wall
-  // actually under price pressure + PCR skew, all three agreeing) is a
-  // stronger, more trustworthy leading signal than a pure price break —
-  // a breakout can be a fakeout with no real positioning behind it, but
-  // this requires informed/large participants to have actually acted.
-  // Checked ahead of BREAKOUT/BREAKDOWN for that reason, still below
-  // EXPIRY_GAMMA (a hard mechanical constraint that overrides everything
-  // when dealer hedging can dominate regardless of positioning).
-  if (operatorActivityBullish) return 'OPERATOR_ACCUMULATION';
-  if (operatorActivityBearish) return 'OPERATOR_DISTRIBUTION';
-  // A volume-confirmed break outside the Bollinger Bands on this bar is a
-  // leading signal — it can fire well before ADX (a 14-period smoothed
-  // average) has accumulated enough bars to call the same move a "strong
-  // trend." Checked ahead of the ADX bands below for exactly that reason:
-  // by the time ADX confirms, the leading part of the move is already over.
-  if (freshBreakoutUp) return 'BREAKOUT';
-  if (freshBreakoutDown) return 'BREAKDOWN';
-  if (adxValue >= 25) return st1hDirection === 'UP' ? 'STRONG_BULL_TREND' : 'STRONG_BEAR_TREND';
-  if (adxValue >= 18) return st1hDirection === 'UP' ? 'WEAK_BULL_TREND' : 'WEAK_BEAR_TREND';
-  if (atrZ > 1) return 'HIGH_VOLATILITY';
-  if (atrZ < -1) return 'LOW_VOLATILITY';
-  return 'RANGE_BOUND';
-}
+// classifyRegime (and EXPIRY_GAMMA_MAX_DTE) moved verbatim to
+// regime-classifier.ts, beside the FAST_INTRADAY_REGIME fallback that reuses
+// its ADX bands.
 
 /**
  * Score how strongly a signal (-1..1) confirms the overall direction
