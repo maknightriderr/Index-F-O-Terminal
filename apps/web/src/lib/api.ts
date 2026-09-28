@@ -190,8 +190,10 @@ class ApiClient {
     return this.get<PredictionAccuracyStats>(`/api/institutional-flow/accuracy?symbol=${symbol}`);
   }
 
-  async getWinRateAnalytics(mode: 'ALL' | 'INTRADAY' | 'POSITIONAL' = 'ALL', since?: number) {
-    return this.get<WinRateAnalytics>(`/api/backtesting/win-rate?mode=${mode}${since != null ? `&since=${since}` : ''}`);
+  async getWinRateAnalytics(mode: 'ALL' | 'INTRADAY' | 'POSITIONAL' = 'ALL', since?: number, logicVersion: string = 'all') {
+    return this.get<WinRateAnalytics>(
+      `/api/backtesting/win-rate?mode=${mode}${since != null ? `&since=${since}` : ''}${logicVersion !== 'all' ? `&logicVersion=${encodeURIComponent(logicVersion)}` : ''}`
+    );
   }
 
   async getTradeSetupHistory(limit = 100) {
@@ -310,20 +312,21 @@ class ApiClient {
 
   // --- Loss attribution (read-only; every figure is a simulated paper-trade outcome) ---
 
-  private lossAttributionQuery(opts: { scope?: string; since?: string; until?: string }): string {
+  private lossAttributionQuery(opts: { scope?: string; since?: string; until?: string; logicVersion?: string }): string {
     const params = new URLSearchParams();
     if (opts.scope) params.set('scope', opts.scope);
     if (opts.since) params.set('since', opts.since);
     if (opts.until) params.set('until', opts.until);
+    if (opts.logicVersion && opts.logicVersion !== 'all') params.set('logicVersion', opts.logicVersion);
     const qs = params.toString();
     return qs ? `?${qs}` : '';
   }
 
-  async getLossAttributionReport(opts: { scope?: string; since?: string; until?: string } = {}) {
+  async getLossAttributionReport(opts: { scope?: string; since?: string; until?: string; logicVersion?: string } = {}) {
     return this.get<unknown>(`/api/loss-attribution/report${this.lossAttributionQuery(opts)}`);
   }
 
-  async getLossAttributionSplit(opts: { scope?: string; since?: string; until?: string } = {}) {
+  async getLossAttributionSplit(opts: { scope?: string; since?: string; until?: string; logicVersion?: string } = {}) {
     return this.get<unknown>(`/api/loss-attribution/split${this.lossAttributionQuery(opts)}`);
   }
 

@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { DEFAULT_RISK_CONFIG, ESTIMATED_ROUND_TRIP_COST_PCT, TRADE_LOGIC_UPDATED_AT, formatExpiryDate, formatIndianNumber } from '@fno/shared';
-import type { WinRateBucket, TradeSetupRecord, RiskMetrics } from '@fno/shared';
+import type { WinRateBucket, TradeSetupRecord, RiskMetrics, ExpiredCloseBreakdown, IndependentBetsSummary, LogicVersionBucket } from '@fno/shared';
 import { useBacktesting } from '@/lib/use-backtesting';
 import { useAssetTabsStore } from '@/stores';
 
@@ -32,10 +32,33 @@ type ScopeFilter = 'ALL_TIME' | 'CURRENT_LOGIC';
 const LOGIC_UPDATED_LABEL = new Date(TRADE_LOGIC_UPDATED_AT).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short' });
 const SCOPE_FILTER_LABELS: Record<ScopeFilter, string> = { ALL_TIME: 'All time', CURRENT_LOGIC: `Current logic (since ${LOGIC_UPDATED_LABEL})` };
 
+// The R shown on this page. Loss Attribution shows two others (underlying
+// replay R, and premium R before costs); the label keeps them apart.
+const PREMIUM_R_NET = 'Premium R (net)';
+const PREMIUM_R_NET_TITLE =
+  "Premium R (net): each paper trade's option-premium result as a multiple of its own stop distance, after estimated round-trip costs. Not the same number as Loss Attribution's underlying replay R or its premium R (gross).";
+
+function fmtR(v: number | null | undefined): string {
+  if (v == null) return '—';
+  if (Math.abs(v) < 0.005) return '0.00R';
+  return `${v > 0 ? '+' : ''}${v.toFixed(2)}R`;
+}
+
+function rTone(v: number | null | undefined): string {
+  return v == null ? 'text-gray-400' : v >= 0 ? 'text-emerald-400' : 'text-red-400';
+}
+
+function logicLabel(v: string): string {
+  return v === 'all' ? 'All logic versions' : v === 'PRE_REVIEW' ? 'Pre-review (unstamped)' : v;
+}
+
 export function BacktestingPage() {
   const [modeFilter, setModeFilter] = useState<ModeFilter>('ALL');
   const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('ALL_TIME');
-  const { analytics, history, loading, isLive } = useBacktesting(modeFilter, scopeFilter === 'CURRENT_LOGIC' ? TRADE_LOGIC_UPDATED_AT : undefined);
+  // Validation review: 'all' by default; byLogicVersion below is the split view.
+  const [logicVersion, setLogicVersion] = useState<string>('all');
+  const { analytics, history, loading, isLive } = useBacktesting(modeFilter, scopeFilter === 'CURRENT_LOGIC' ? TRADE_LOGIC_UPDATED_AT : undefined, logicVersion);
+  const logicOptions = Array.from(new Set(['all', ...(analytics?.byLogicVersion ?? []).map((b) => b.logicVersion), logicVersion]));
   const [periodTab, setPeriodTab] = useState<PeriodTab>('daily');
   const [outcomeTab, setOutcomeTab] = useState<OutcomeTab>('ALL');
   const [showAllHistory, setShowAllHistory] = useState(false);
@@ -98,6 +121,19 @@ export function BacktestingPage() {
               </button>
             ))}
           </div>
+          <select
+            value={logicVersion}
+            onChange={(e) => setLogicVersion(e.target.value)}
+            aria-label="Filter by logic version"
+            title="Which rule set the setups were minted under. Pre-review = before the validation-review fixes were stamped."
+            className="bg-gray-800/60 light:bg-slate-200/60 border border-gray-700 light:border-slate-300 rounded-lg px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-gray-300 light:text-slate-700"
+          >
+            {logicOptions.map((v) => (
+              <option key={v} value={v}>
+                {logicLabel(v)}
+              </option>
+            ))}
+          </select>
           <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-[11px] text-gray-400 light:text-slate-600">
             <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
             {isLive ? 'Live' : loading ? 'Loading…' : 'Unreachable'}
@@ -130,9 +166,26 @@ export function BacktestingPage() {
         <>
           <OverallSummary bucket={analytics.overall} />
           <RiskMetricsSummary metrics={analytics.riskMetrics} />
+          {analytics.independentBets && <IndependentBetsCard bets={analytics.independentBets} />}
+
+          {analytics.expiredBreakdown && analytics.expiredBreakdown.length > 0 && (
+            <Collapsible
+              title="Expired Closes by Reason"
+              subtitle="what 'expired' actually was — session end, bias reversal, breakeven stop, invalidation"
+              count={analytics.expiredBreakdown.reduce((s, r) => s + r.count, 0)}
+            >
+              <ExpiredBreakdownTable rows={analytics.expiredBreakdown} />
+            </Collapsible>
+          )}
+
+          {analytics.byLogicVersion && analytics.byLogicVersion.length > 0 && (
+            <Collapsible title="By Logic Version" subtitle="setups split by the rule set they were minted under — never pooled" count={analytics.byLogicVersion.length}>
+              <LogicVersionTable rows={analytics.byLogicVersion} />
+            </Collapsible>
+          )}
 
           <Collapsible
-            title="Win Rate Over Time"
+            title="Results Over Time"
             subtitle="grouped by the day each setup was generated"
             count={analytics[periodTab].length}
           >
@@ -337,9 +390,9 @@ function OverallSummary({ bucket }: { bucket: WinRateBucket }) {
       <Card accent="border-t-emerald-500/50">
         <div
           className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5"
-          title={`Average result per trade in R — multiples of that trade's own risk — after estimated round-trip costs: each setup's own estimate (spread, slippage, charges, brokerage) where recorded, ~${ESTIMATED_ROUND_TRIP_COST_PCT}% of premium for older setups. Positive means the system makes money per unit of risk; negative means it loses. Drawdown, profit factor and streaks are after the same costs.`}
+          title={`Average result per trade in Premium R (net) — multiples of that trade's own risk — after estimated round-trip costs: each setup's own estimate (spread, slippage, charges, brokerage) where recorded, ~${ESTIMATED_ROUND_TRIP_COST_PCT}% of premium for older setups. Positive means the system makes money per unit of risk; negative means it loses. Drawdown, profit factor and streaks are after the same costs.`}
         >
-          Simulated Expectancy (R)
+          Simulated Expectancy · {PREMIUM_R_NET}
         </div>
         <div className={`text-3xl font-bold tabular-nums ${bucket.avgRMultiple == null ? 'text-gray-400' : bucket.avgRMultiple >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
           {bucket.avgRMultiple != null
@@ -422,9 +475,9 @@ function WinRateTable({ buckets, periodLabel }: { buckets: WinRateBucket[]; peri
                 <th className="text-right px-2 py-1.5 font-medium">Losses</th>
                 <th className="text-right px-2 py-1.5 font-medium">Expired</th>
                 <th className="text-right px-2 py-1.5 font-medium">Open</th>
-                <th className="text-right px-3 py-1.5 font-medium">Win Rate</th>
-                <th className="text-right px-3 py-1.5 font-medium" title="WIN plus any EXPIRED close that was still profitable when it closed">Profitable Close Rate</th>
-                <th className="text-right px-2 py-1.5 font-medium" title="Simulated outcome of paper trades — not account P&L">Avg Simulated Return</th>
+                <th className="text-right px-3 py-1.5 font-medium" title="WIN plus any EXPIRED close that was still profitable when it closed, after est. costs">Profitable Close Rate</th>
+                <th className="text-right px-2 py-1.5 font-medium" title={PREMIUM_R_NET_TITLE}>{PREMIUM_R_NET}</th>
+                <th className="text-right px-2 py-1.5 font-medium" title="Simulated outcome of paper trades — not account P&L. Gross premium move, not R.">Avg Premium Move</th>
               </tr>
             </thead>
             <tbody>
@@ -440,19 +493,6 @@ function WinRateTable({ buckets, periodLabel }: { buckets: WinRateBucket[]; peri
                     <div className="flex items-center gap-1.5 justify-end">
                       <div className="w-14 h-1.5 bg-gray-800 light:bg-slate-200 rounded-full overflow-hidden">
                         <div
-                          className={`h-full rounded-full bar-animated ${b.winRatePercent != null && b.winRatePercent >= 50 ? 'bg-emerald-500' : 'bg-red-500'}`}
-                          style={{ width: `${b.winRatePercent ?? 0}%` }}
-                        />
-                      </div>
-                      <span className="font-semibold text-gray-200 light:text-slate-800 tabular-nums w-10 text-right">
-                        {b.winRatePercent != null ? `${b.winRatePercent}%` : '—'}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="px-3 py-2">
-                    <div className="flex items-center gap-1.5 justify-end">
-                      <div className="w-14 h-1.5 bg-gray-800 light:bg-slate-200 rounded-full overflow-hidden">
-                        <div
                           className={`h-full rounded-full bar-animated ${b.profitableCloseRatePercent != null && b.profitableCloseRatePercent >= 50 ? 'bg-violet-500' : 'bg-red-500'}`}
                           style={{ width: `${b.profitableCloseRatePercent ?? 0}%` }}
                         />
@@ -462,6 +502,7 @@ function WinRateTable({ buckets, periodLabel }: { buckets: WinRateBucket[]; peri
                       </span>
                     </div>
                   </td>
+                  <td className={`text-right px-2 py-2 tabular-nums font-semibold ${rTone(b.avgRMultiple)}`}>{fmtR(b.avgRMultiple)}</td>
                   <td className={`text-right px-2 py-2 tabular-nums font-medium ${b.avgReturnPercent == null ? 'text-gray-400' : b.avgReturnPercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                     {b.avgReturnPercent != null ? `${b.avgReturnPercent >= 0 ? '+' : ''}${b.avgReturnPercent}%` : '—'}
                   </td>
@@ -471,6 +512,120 @@ function WinRateTable({ buckets, periodLabel }: { buckets: WinRateBucket[]; peri
           </table>
         </div>
       )}
+    </Card>
+  );
+}
+
+// --- Validation review: independent bets, expired breakdown, logic versions ---
+
+/**
+ * The same closed trades with correlated overlapping setups (same direction,
+ * same index family, open at the same time) counted as ONE bet. Secondary to
+ * the per-setup figures above: it says how many independent observations
+ * those figures actually rest on.
+ */
+function IndependentBetsCard({ bets }: { bets: IndependentBetsSummary }) {
+  if (bets.setups === 0) return null;
+  return (
+    <Card accent="border-t-sky-500/50">
+      <div className="flex items-baseline justify-between flex-wrap gap-2">
+        <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider" title={bets.note}>
+          Independent Bets
+        </div>
+        <div className="text-[10px] text-gray-400 light:text-slate-600">
+          {bets.setups} closed setups → {bets.clusters} independent bets · {bets.multiSetupClusters} correlated cluster{bets.multiSetupClusters === 1 ? '' : 's'} (largest {bets.largestCluster})
+        </div>
+      </div>
+      <div className="grid grid-cols-3 gap-3 mt-2">
+        <div>
+          <div className="text-[10px] text-gray-400 light:text-slate-600">Profitable close rate (per bet)</div>
+          <div className="text-xl font-bold tabular-nums text-gray-100 light:text-slate-900">{bets.profitableCloseRatePercent != null ? `${bets.profitableCloseRatePercent}%` : '—'}</div>
+        </div>
+        <div>
+          <div className="text-[10px] text-gray-400 light:text-slate-600">Profit factor (per bet)</div>
+          <div className="text-xl font-bold tabular-nums text-gray-100 light:text-slate-900">{bets.profitFactor != null ? bets.profitFactor.toFixed(2) : '—'}</div>
+        </div>
+        <div>
+          <div className="text-[10px] text-gray-400 light:text-slate-600" title={PREMIUM_R_NET_TITLE}>
+            {PREMIUM_R_NET} · total / per bet
+          </div>
+          <div className={`text-xl font-bold tabular-nums ${rTone(bets.netR)}`}>
+            {fmtR(bets.netR)} <span className="text-xs font-medium text-gray-400 light:text-slate-600">/ {fmtR(bets.avgNetRPerBet)}</span>
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function ExpiredBreakdownTable({ rows }: { rows: ExpiredCloseBreakdown[] }) {
+  return (
+    <Card>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+              <th className="text-left px-2 py-1.5 font-medium">Close reason</th>
+              <th className="text-right px-2 py-1.5 font-medium">Expired</th>
+              <th className="text-right px-2 py-1.5 font-medium">Profitable</th>
+              <th className="text-right px-2 py-1.5 font-medium">Unprofitable</th>
+              <th className="text-right px-2 py-1.5 font-medium" title={PREMIUM_R_NET_TITLE}>
+                Avg {PREMIUM_R_NET}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.closeReason} className="border-t border-gray-800/40 light:border-slate-200">
+                <td className="px-2 py-2 font-mono text-gray-200 light:text-slate-800">{r.closeReason}</td>
+                <td className="text-right px-2 py-2 tabular-nums text-gray-400 light:text-slate-600">{r.count}</td>
+                <td className="text-right px-2 py-2 tabular-nums text-emerald-400">{r.profitable}</td>
+                <td className="text-right px-2 py-2 tabular-nums text-red-400">{r.unprofitable}</td>
+                <td className={`text-right px-2 py-2 tabular-nums font-semibold ${rTone(r.avgRMultiple)}`}>{fmtR(r.avgRMultiple)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+function LogicVersionTable({ rows }: { rows: LogicVersionBucket[] }) {
+  return (
+    <Card>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+              <th className="text-left px-2 py-1.5 font-medium">Logic version</th>
+              <th className="text-right px-2 py-1.5 font-medium">Setups</th>
+              <th className="text-right px-3 py-1.5 font-medium">Profitable Close Rate</th>
+              <th className="text-right px-2 py-1.5 font-medium" title={PREMIUM_R_NET_TITLE}>
+                Avg {PREMIUM_R_NET}
+              </th>
+              <th className="text-right px-2 py-1.5 font-medium" title={PREMIUM_R_NET_TITLE}>
+                Total {PREMIUM_R_NET}
+              </th>
+              <th className="text-right px-2 py-1.5 font-medium">Profit Factor</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.logicVersion} className="border-t border-gray-800/40 light:border-slate-200">
+                <td className="px-2 py-2 font-mono text-gray-200 light:text-slate-800">{logicLabel(r.logicVersion)}</td>
+                <td className="text-right px-2 py-2 tabular-nums text-gray-400 light:text-slate-600">{r.total}</td>
+                <td className="text-right px-3 py-2 tabular-nums text-gray-200 light:text-slate-800">
+                  {r.profitableCloseRatePercent != null ? `${r.profitableCloseRatePercent}%` : '—'}
+                </td>
+                <td className={`text-right px-2 py-2 tabular-nums font-semibold ${rTone(r.avgRMultiple)}`}>{fmtR(r.avgRMultiple)}</td>
+                <td className={`text-right px-2 py-2 tabular-nums ${rTone(r.totalRMultiple)}`}>{fmtR(r.totalRMultiple)}</td>
+                <td className="text-right px-2 py-2 tabular-nums text-gray-200 light:text-slate-800">{r.profitFactor != null ? r.profitFactor.toFixed(2) : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </Card>
   );
 }
@@ -490,8 +645,9 @@ function SymbolTable({ symbols, onOpen }: { symbols: Array<WinRateBucket & { sym
                 <th className="text-left px-2 py-1.5 font-medium">Symbol</th>
                 <th className="text-right px-2 py-1.5 font-medium">Setups</th>
                 <th className="text-right px-2 py-1.5 font-medium">W / L</th>
-                <th className="text-right px-3 py-1.5 font-medium">Win Rate</th>
-                <th className="text-right px-2 py-1.5 font-medium" title="Simulated outcome of paper trades — not account P&L">Avg Simulated Return</th>
+                <th className="text-right px-3 py-1.5 font-medium" title="WIN plus any EXPIRED close that was still profitable when it closed, after est. costs">Profitable Close Rate</th>
+                <th className="text-right px-2 py-1.5 font-medium" title={PREMIUM_R_NET_TITLE}>{PREMIUM_R_NET}</th>
+                <th className="text-right px-2 py-1.5 font-medium" title="Simulated outcome of paper trades — not account P&L. Gross premium move, not R.">Avg Premium Move</th>
               </tr>
             </thead>
             <tbody>
@@ -504,9 +660,10 @@ function SymbolTable({ symbols, onOpen }: { symbols: Array<WinRateBucket & { sym
                     <span className="text-gray-400 light:text-slate-600"> / </span>
                     <span className="text-red-400">{s.losses}</span>
                   </td>
-                  <td className={`text-right px-3 py-2 tabular-nums font-semibold ${s.winRatePercent == null ? 'text-gray-400' : s.winRatePercent >= 55 ? 'text-emerald-400' : s.winRatePercent >= 40 ? 'text-yellow-400' : 'text-red-400'}`}>
-                    {s.winRatePercent != null ? `${s.winRatePercent}%` : '—'}
+                  <td className={`text-right px-3 py-2 tabular-nums font-semibold ${s.profitableCloseRatePercent == null ? 'text-gray-400' : s.profitableCloseRatePercent >= 55 ? 'text-emerald-400' : s.profitableCloseRatePercent >= 40 ? 'text-yellow-400' : 'text-red-400'}`}>
+                    {s.profitableCloseRatePercent != null ? `${s.profitableCloseRatePercent}%` : '—'}
                   </td>
+                  <td className={`text-right px-2 py-2 tabular-nums font-semibold ${rTone(s.avgRMultiple)}`}>{fmtR(s.avgRMultiple)}</td>
                   <td className={`text-right px-2 py-2 tabular-nums font-medium ${s.avgReturnPercent == null ? 'text-gray-400' : s.avgReturnPercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                     {s.avgReturnPercent != null ? `${s.avgReturnPercent >= 0 ? '+' : ''}${s.avgReturnPercent}%` : '—'}
                   </td>
