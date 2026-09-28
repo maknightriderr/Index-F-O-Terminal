@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { DEFAULT_RISK_CONFIG, ESTIMATED_ROUND_TRIP_COST_PCT, TRADE_LOGIC_UPDATED_AT, formatExpiryDate, formatIndianNumber } from '@fno/shared';
-import type { WinRateBucket, TradeSetupRecord, RiskMetrics, ExpiredCloseBreakdown, IndependentBetsSummary, LogicVersionBucket } from '@fno/shared';
+import type { WinRateBucket, TradeSetupRecord, RiskMetrics, ExpiredCloseBreakdown, IndependentBetsSummary, LogicVersionBucket, StrategyBucket } from '@fno/shared';
 import { useBacktesting } from '@/lib/use-backtesting';
 import { useAssetTabsStore } from '@/stores';
 
@@ -181,6 +181,16 @@ export function BacktestingPage() {
           {analytics.byLogicVersion && analytics.byLogicVersion.length > 0 && (
             <Collapsible title="By Logic Version" subtitle="setups split by the rule set they were minted under — never pooled" count={analytics.byLogicVersion.length}>
               <LogicVersionTable rows={analytics.byLogicVersion} />
+            </Collapsible>
+          )}
+
+          {analytics.byStrategy && analytics.byStrategy.length > 0 && (
+            <Collapsible title="By Strategy" subtitle="momentum-break trigger setups vs consensus setups — never pooled" count={analytics.byStrategy.length}>
+              <LogicVersionTable
+                rows={analytics.byStrategy.map((b) => ({ ...b, logicVersion: b.strategy }))}
+                keyLabel="Strategy"
+                formatKey={(k) => k}
+              />
             </Collapsible>
           )}
 
@@ -591,14 +601,22 @@ function ExpiredBreakdownTable({ rows }: { rows: ExpiredCloseBreakdown[] }) {
   );
 }
 
-function LogicVersionTable({ rows }: { rows: LogicVersionBucket[] }) {
+function LogicVersionTable({
+  rows,
+  keyLabel = 'Logic version',
+  formatKey = logicLabel,
+}: {
+  rows: Array<LogicVersionBucket | (StrategyBucket & { logicVersion: string })>;
+  keyLabel?: string;
+  formatKey?: (key: string) => string;
+}) {
   return (
     <Card>
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead>
             <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
-              <th className="text-left px-2 py-1.5 font-medium">Logic version</th>
+              <th className="text-left px-2 py-1.5 font-medium">{keyLabel}</th>
               <th className="text-right px-2 py-1.5 font-medium">Setups</th>
               <th className="text-right px-3 py-1.5 font-medium">Profitable Close Rate</th>
               <th className="text-right px-2 py-1.5 font-medium" title={PREMIUM_R_NET_TITLE}>
@@ -613,7 +631,7 @@ function LogicVersionTable({ rows }: { rows: LogicVersionBucket[] }) {
           <tbody>
             {rows.map((r) => (
               <tr key={r.logicVersion} className="border-t border-gray-800/40 light:border-slate-200">
-                <td className="px-2 py-2 font-mono text-gray-200 light:text-slate-800">{logicLabel(r.logicVersion)}</td>
+                <td className="px-2 py-2 font-mono text-gray-200 light:text-slate-800">{formatKey(r.logicVersion)}</td>
                 <td className="text-right px-2 py-2 tabular-nums text-gray-400 light:text-slate-600">{r.total}</td>
                 <td className="text-right px-3 py-2 tabular-nums text-gray-200 light:text-slate-800">
                   {r.profitableCloseRatePercent != null ? `${r.profitableCloseRatePercent}%` : '—'}
