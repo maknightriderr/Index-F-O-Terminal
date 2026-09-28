@@ -454,7 +454,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const YEAR_MS = 365.25 * DAY_MS; // yearsToExpiry's own year length
 // Pressure inside this band (% of previous close premium) is noise — model
 // error and bid-ask bounce — and reads as NEUTRAL rather than a side.
-const IV_PRESSURE_MIN_PCT = 2;
+export const IV_PRESSURE_MIN_PCT = 2;
 // Below this previous-close premium the IV solve and the % are dominated by
 // tick size.
 const MIN_MODELLABLE_PREMIUM = 0.5;
