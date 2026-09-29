@@ -88,6 +88,9 @@ const FILES = [
   // Structure engine: setup_lifecycle_events. The lifecycle writer inserts
   // into it on every transition, so it is ensured at boot too.
   '027_setup_lifecycle.sql',
+  // Structure engine candle labels: pattern_label / patterns on
+  // setup_lifecycle_events. The lifecycle writer inserts into them.
+  '028_lifecycle_candle_patterns.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */

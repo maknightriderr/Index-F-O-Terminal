@@ -4,7 +4,8 @@
 // The I/O around structure-live.ts:
 //   - the lifecycle state at structure_setup:{ex}:{u}:{mode} (never the
 //     paper-trade slot);
-//   - one setup_lifecycle_events row per transition (migration 027), each
+//   - one setup_lifecycle_events row per transition (migration 027; the
+//     candle label and patterns, migration 028), each
 //     claimed once with a Redis SET NX so concurrent bias reads (browser,
 //     scanners, background evaluator) never write a transition twice;
 //   - the Telegram alert at CONFIRMED only, deduped per lifecycle id the way
@@ -86,11 +87,12 @@ export function recordLifecycleEvents(events: readonly LifecycleEventRow[]): voi
           INSERT INTO setup_lifecycle_events (
             time, lifecycle_id, symbol, exchange, mode, direction, from_state, to_state, reason,
             pool_kind, pool_price, zone_kind, zone_near, zone_far, entry, stop, t1, t2, score, underlying_price,
-            decision_id, signal_id, logic_version
+            decision_id, signal_id, logic_version, pattern_label, patterns
           ) VALUES (
             ${new Date(e.at)}, ${e.lifecycleId}, ${e.symbol}, ${e.exchange}, ${e.mode}, ${e.direction}, ${e.fromState}, ${e.toState}, ${e.reason},
             ${e.poolKind}, ${e.poolPrice}, ${e.zone?.kind ?? null}, ${e.zone?.near ?? null}, ${e.zone?.far ?? null}, ${e.entry}, ${e.stop}, ${e.t1}, ${e.t2},
-            ${e.score}, ${e.underlyingPrice}, ${e.decisionId ?? null}, ${e.signalId ?? null}, ${logicVersion}
+            ${e.score}, ${e.underlyingPrice}, ${e.decisionId ?? null}, ${e.signalId ?? null}, ${logicVersion},
+            ${e.patterns?.label ?? null}, ${e.patterns ? sql.json({ ...e.patterns, scoreCandle: e.scoreCandle ?? null } as never) : null}
           )
         `;
       } catch (err: any) {
@@ -134,6 +136,8 @@ async function deliverConfirmed(state: LiveState, lc: LiveLifecycle): Promise<vo
           t2: lc.t2,
           rToT1: lc.rToT1,
           score: lc.score,
+          scoreCandle: lc.scoreCandle ?? null,
+          patterns: lc.patterns ?? null,
         } as never)},
         true, NOW()
       )
@@ -153,6 +157,7 @@ export function confirmedMessage(state: LiveState, lc: LiveLifecycle, esc: (s: s
   const lines = [
     `${arrow} STRUCTURE CONFIRMED — ${state.underlying} ${lc.direction} (${state.exchange} · ${tf === '5m' ? '5m entry, 15m pools' : '15m'})`,
     `${lc.pool.kind.replace(/_/g, ' ').toLowerCase()} ${lc.pool.price} swept, displacement printed.`,
+    ...(lc.patterns ? [`Candles: ${lc.patterns.label}${lc.scoreCandle && lc.scoreCandle.applied > 0 ? ` (+${lc.scoreCandle.applied} score)` : ''}.`] : []),
     `Limit ${lc.entry} (${lc.zone?.kind === 'FVG' ? `fair-value gap ${lc.zone.near}–${lc.zone.far}` : 'displacement 50%'}) · stop ${lc.stop} · T1 ${lc.t1 ? `${lc.t1.price} (${lc.t1.kind.replace(/_/g, ' ').toLowerCase()}, ${lc.rToT1}R)` : '—'}${lc.t2 ? ` · T2 ${lc.t2.price}` : ''}`,
     `Score ${lc.score ?? '—'}/100 (describes, never gates). A ${side} paper trade is minted only if the limit fills within ${fillWithin} and every gate passes.`,
     'Paper signal — no order is placed.',

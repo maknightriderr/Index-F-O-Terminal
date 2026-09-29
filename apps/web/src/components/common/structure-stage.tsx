@@ -56,6 +56,28 @@ export function TimeframeTag({ timeframe }: { timeframe?: string | null }) {
 const pretty = (kind: string | undefined | null) => (kind ? kind.replace(/_/g, ' ').toLowerCase() : '—');
 const num = (n: number | null | undefined) => (n == null ? '—' : n.toLocaleString('en-IN', { maximumFractionDigits: 2 }));
 
+/**
+ * The setup's candles, named ("Hammer sweep of PDL → bullish engulfing"),
+ * with the candle points inside the score. Descriptive only: the score never
+ * gates. Renders nothing for WATCH rows and states written before labels.
+ */
+export function PatternLabel({ row }: { row: Pick<StructureLifecycleView, 'patterns' | 'scoreCandle'> }) {
+  if (!row.patterns) return null;
+  const c = row.scoreCandle;
+  const parts = c
+    ? [c.rejection ? `clean rejection +${c.rejection}` : null, c.engulfing ? `engulfing +${c.engulfing}` : null, c.star ? `star +${c.star}` : null].filter(Boolean)
+    : [];
+  const title =
+    'Candle shapes of the sweep and the displacement — descriptive only.' +
+    (c ? ` Score candle points: ${parts.length ? parts.join(', ') : 'none'}${c.applied !== c.rejection + c.engulfing + c.star ? ` (${c.applied} after the Tier-1 cap)` : ''}; the score never gates.` : '');
+  return (
+    <span className="block text-[11px] text-sky-300 light:text-sky-700 mt-0.5" title={title}>
+      {row.patterns.label}
+      {c && c.applied > 0 ? <span className="text-gray-400 light:text-slate-600"> · +{c.applied} score</span> : null}
+    </span>
+  );
+}
+
 /** One-line description of a lifecycle's levels: pool, zone, stop, T1. */
 export function LifecycleLevels({ row }: { row: StructureLifecycleView }) {
   return (

@@ -80,8 +80,10 @@ export const STRUCTURE_STRATEGY: BacktestStrategy<StructureVariant, StructureSet
   evaluate: (loaded, i, variant) => {
     const placed = confirmedAt(loaded, i, variant);
     if (placed.length === 0) return null;
-    // Both directions confirming on one bar is rare; take the higher score.
-    return [...placed].sort((a, b) => (b.score?.total ?? 0) - (a.score?.total ?? 0))[0];
+    // Both directions confirming on one bar is rare; take the higher score —
+    // the score WITHOUT the candle-pattern bonus (baseTotal), so the bonus can
+    // never change which setup is placed.
+    return [...placed].sort((a, b) => (b.score?.baseTotal ?? 0) - (a.score?.baseTotal ?? 0))[0];
   },
   toOrder: (st) => ({
     direction: st.direction,

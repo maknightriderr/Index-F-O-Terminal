@@ -46,6 +46,14 @@
 // the same lifecycle machine (runStructureMachine).
 //
 // The score (0-100) orders and describes setups; it never gates.
+//
+// CANDLE LABELS (candle-labels.ts): each setup carries `patterns` — the sweep
+// candle, the displacement candle and any morning/evening-star combination,
+// named from bars at or before the one being judged. Labels never feed a
+// decision. The score's Tier 1 adds a small capped bonus for them (below);
+// every ordering (the backtest's same-bar tie-break, the live fill pick) reads
+// `baseTotal`, the score without that bonus, so it cannot change which setup
+// is taken.
 // ============================================================
 
 import {
@@ -57,6 +65,9 @@ import {
   type MomentumBar,
   type MomentumSeries,
 } from '../momentum-break/index.js';
+import { classifyStructureCandles, CLEAN_REJECTION_PATTERNS, type StructureCandlePatterns } from './candle-labels.js';
+
+export * from './candle-labels.js';
 
 export type StructureDirection = 'BULLISH' | 'BEARISH';
 
@@ -220,10 +231,32 @@ export interface StructureTransition {
 
 export interface StructureScore {
   total: number;
-  tier1: { poolRank: number; sweepDepth: number; displacement: number; structureShift: number; fvg: number; sum: number };
+  /**
+   * The total without the candle-pattern bonus — exactly the score before the
+   * bonus existed. The only score an ordering may read (same-bar tie-breaks,
+   * the live fill pick), so the bonus never changes which setup is taken.
+   */
+  baseTotal: number;
+  /** `candle` is the bonus as applied (after the Tier-1 cap); `sum` includes it. */
+  tier1: { poolRank: number; sweepDepth: number; displacement: number; structureShift: number; fvg: number; candle: number; sum: number };
+  /** The candle-pattern bonus by component, before the Tier-1 cap (for display). */
+  candle: { rejection: number; engulfing: number; star: number; raw: number; applied: number };
   tier2: { positioning: number; oiWall: number; sum: number };
   tier3: { regime: number; volume: number; sum: number };
 }
+
+/** Tier 1's maximum: pool 15 + sweep depth 10 + displacement 15 + structure shift 10 + FVG 10. */
+export const STRUCTURE_TIER1_MAX = 60;
+
+// Candle-pattern bonus inside Tier 1 (capped at STRUCTURE_TIER1_MAX).
+// UNTESTED DEFAULTS: chosen before any outcome was measured; the score
+// describes and orders for display only, it never gates.
+/** Sweep candle is a clean rejection (hammer, shooting star, pin bar, tweezer). */
+export const CANDLE_BONUS_REJECTION = 4;
+/** Displacement engulfs the previous candle's body. */
+export const CANDLE_BONUS_ENGULFING = 3;
+/** Sweep, small-bodied bar, displacement: a morning / evening star. */
+export const CANDLE_BONUS_STAR = 3;
 
 export interface StructureSetup {
   /** Stable across replays: direction + sweep bar open time. */
@@ -251,6 +284,8 @@ export interface StructureSetup {
   history: StructureTransition[];
   score: StructureScore | null;
   variantId: string;
+  /** The setup's candles, named (sweep from DEVELOPING, displacement once printed). Descriptive only. */
+  patterns: StructureCandlePatterns | null;
 }
 
 export interface StructureEvaluation {
@@ -421,9 +456,14 @@ function internalSwingBefore(bars: MomentumBar[], from: number, d: number, direc
   return null;
 }
 
-/** Tier 1 (0-60) plus the pure half of tier 3 (volume, ±5). Tier 2 and the regime half of tier 3 come from the live caller. */
+/**
+ * Tier 1 (0-60) plus the pure half of tier 3 (volume, ±5). Tier 2 and the
+ * regime half of tier 3 come from the live caller. Tier 1 includes the
+ * candle-pattern bonus (+4 clean rejection, +3 engulfing, +3 star), capped so
+ * Tier 1 never exceeds its maximum. Describes and orders; never gates.
+ */
 export function scoreStructureSetup(
-  setup: Pick<StructureSetup, 'pool' | 'sweep' | 'displacement' | 'zone'>,
+  setup: Pick<StructureSetup, 'pool' | 'sweep' | 'displacement' | 'zone'> & { patterns?: StructureCandlePatterns | null },
   dispMult: number,
   live: { positioning?: 'AGREE' | 'CONTRADICT' | null; oiWallInPath?: boolean | null; regimeAlignment?: 'WITH' | 'AGAINST' | null } = {}
 ): StructureScore {
@@ -433,16 +473,27 @@ export function scoreStructureSetup(
   const displacement = setup.displacement ? Math.round(clamp01(setup.displacement.bodyAtr / dispMult - 1) * 15) : 0;
   const structureShift = setup.displacement?.structureShift ? 10 : 0;
   const fvg = setup.zone?.kind === 'FVG' ? 10 : 0;
-  const t1sum = poolRank + sweepDepth + displacement + structureShift + fvg;
+  const baseT1 = poolRank + sweepDepth + displacement + structureShift + fvg;
+  const p = setup.patterns ?? null;
+  const rejection = p && CLEAN_REJECTION_PATTERNS.includes(p.sweepPattern) ? CANDLE_BONUS_REJECTION : 0;
+  const engulfing = p?.displacementPattern === 'BULLISH_ENGULFING' || p?.displacementPattern === 'BEARISH_ENGULFING' ? CANDLE_BONUS_ENGULFING : 0;
+  const star = p?.combo != null ? CANDLE_BONUS_STAR : 0;
+  const raw = rejection + engulfing + star;
+  const candle = Math.max(0, Math.min(raw, STRUCTURE_TIER1_MAX - baseT1));
+  const t1sum = baseT1 + candle;
   const positioning = live.positioning === 'AGREE' ? 15 : live.positioning === 'CONTRADICT' ? -15 : 0;
   const oiWall = live.oiWallInPath === true ? -10 : live.oiWallInPath === false ? 10 : 0;
   const regime = live.regimeAlignment === 'WITH' ? 10 : live.regimeAlignment === 'AGAINST' ? -10 : 0;
   const vm = setup.displacement?.volMult ?? null;
   const volume = vm == null ? 0 : vm >= 1.5 ? 5 : vm <= 0.7 ? -5 : 0;
-  const total = Math.max(0, Math.min(100, t1sum + positioning + oiWall + regime + volume));
+  const rest = positioning + oiWall + regime + volume;
+  const total = Math.max(0, Math.min(100, t1sum + rest));
+  const baseTotal = Math.max(0, Math.min(100, baseT1 + rest));
   return {
     total,
-    tier1: { poolRank, sweepDepth, displacement, structureShift, fvg, sum: t1sum },
+    baseTotal,
+    tier1: { poolRank, sweepDepth, displacement, structureShift, fvg, candle, sum: t1sum },
+    candle: { rejection, engulfing, star, raw, applied: candle },
     tier2: { positioning, oiWall, sum: positioning + oiWall },
     tier3: { regime, volume, sum: regime + volume },
   };
@@ -654,6 +705,8 @@ function runStructureMachine(ctx: MachineContext): StructureEvaluation {
                 structureShift: swing != null && (bear ? bar.close < swing : bar.close > swing),
                 volMult: base.median != null ? round2(bar.volume / base.median) : null,
               };
+              // Labels only: bars ≤ j (this displacement bar).
+              st.patterns = classifyStructureCandles(bars, st);
             } else if (j - st.sweep.index >= rules.displacementWithinBars) invalidate(m, 'NO_DISPLACEMENT', j);
           }
         } else if (st.stage === 'DEVELOPING' && st.displacement != null) {
@@ -713,7 +766,10 @@ function runStructureMachine(ctx: MachineContext): StructureEvaluation {
         history: [],
         score: null,
         variantId: variant.id,
+        patterns: null,
       };
+      // Labels only: the sweep candle(s), bars ≤ j.
+      setup.patterns = classifyStructureCandles(bars, setup);
       move(setup, 'DEVELOPING', j, `${found.pool.kind} ${round2(found.pool.price)} swept (${found.bars}-bar)`);
       setups.push(setup);
       m.current = setup;

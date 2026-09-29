@@ -55,6 +55,13 @@ function upperWick(c: Candle): number {
 function lowerWick(c: Candle): number {
   return Math.min(c.open, c.close) - c.low;
 }
+
+/**
+ * The candle geometry above, shared with the structure engine's setup labels
+ * (structure-engine/candle-labels.ts) so both name candles with the same
+ * measures. One object, so the barrel export adds no bare `range`/`body`.
+ */
+export const candleGeometry = { body, range, upperWick, lowerWick } as const;
 function isBullish(c: Candle): boolean {
   return c.close > c.open;
 }

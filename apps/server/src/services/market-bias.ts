@@ -20,7 +20,6 @@ import {
   bollingerBands,
   pivotPoints,
   detectRsiDivergence,
-  detectCandlestickPattern,
   detectPattern,
   getOIDescription,
   buildTradeSetup,
@@ -88,6 +87,7 @@ import { evaluateGateDiagnostics, oiWallFreshnessDiagnostic, minutesSinceLastLos
 import { classifyOpeningEnvironment } from './opening-classifier.js';
 import { assessStaleness, inputTimestampsFrom, staleSignalDiagnostic, type StalenessAssessment } from './signal-freshness.js';
 import { classifyStrategyLabels, type StrategyLabelResult } from './strategy-label.js';
+import { closedCandlestickPattern } from './closed-candle-pattern.js';
 import { voteContributionsFrom, type VoteContributions } from './confidence-dimensions.js';
 import { exitReasonFromCloseReason } from './exit-reason.js';
 // Phase 2. The three analytics models are SHADOW ONLY: computed from the same
@@ -687,11 +687,13 @@ async function computeMarketBias(
   const rsi15 = rsi15Series[rsi15Series.length - 1] ?? 50;
   const rsiDivergence = detectRsiDivergence(c15.closes, rsi15Series);
   // Individual-candle reversal shape (Hammer, Engulfing, Morning/Evening
-  // Star, ...) on the most recent 15m bars — a lightweight complement to
-  // the geometric multi-swing patterns already detected elsewhere. Needs a
-  // few bars of trailing context (trend judgment + up to 3-candle
-  // patterns), not just the latest bar in isolation.
-  const candlePattern = detectCandlestickPattern(candles15m.slice(-15));
+  // Star, ...) on the most recent CLOSED short-tier bars — a lightweight
+  // complement to the geometric multi-swing patterns already detected
+  // elsewhere. Needs a few bars of trailing context (trend judgment + up to
+  // 3-candle patterns), not just the latest bar in isolation. Closed bars
+  // only (closedBarsAt, the momentum/structure engines' rule): read on the
+  // forming bar, a pattern could appear and vanish within one bar.
+  const candlePattern = closedCandlestickPattern(candles15m, decisionNow(), (isPositional ? 60 : 15) * 60 * 1000);
 
   // Fair Value Gap (ICT "imbalance"): a 3-candle pattern where an
   // impulsive move leaves a price zone nothing has traded through — price
@@ -1502,7 +1504,7 @@ async function computeMarketBias(
   }
   if (candlePattern) {
     reasoning.push(
-      `${candlePattern.pattern.replace(/_/g, ' ').toLowerCase()} candle (${candlePattern.direction.toLowerCase()}) on the latest 15m bar`
+      `${candlePattern.pattern.replace(/_/g, ' ').toLowerCase()} candle (${candlePattern.direction.toLowerCase()}) on the last closed ${shortLabel} bar`
     );
   }
   if (shortTermPattern) {
@@ -2337,6 +2339,10 @@ interface StoredStructureTrade {
   t2: { kind: string; price: number } | null;
   rToT1: number | null;
   score: number | null;
+  /** The setup's candles, named (recorded only; absent on trades minted before labels). */
+  patterns?: LiveLifecycle['patterns'];
+  /** The candle-pattern points inside `score` (recorded only). */
+  scoreCandle?: LiveLifecycle['scoreCandle'];
   /** Present only for a 5m-entry trade (its SWEEP_RECLAIMED exit reads closed 5m bars). */
   timeframe?: '5m';
 }
@@ -4051,6 +4057,8 @@ async function recordStructureOutcome(
       underlyingPrice: spot,
       decisionId: outcome.decisionId ?? null,
       signalId: outcome.signalId ?? null,
+      patterns: lc.patterns ?? null,
+      scoreCandle: lc.scoreCandle ?? null,
     },
   ]);
 }
@@ -4150,6 +4158,8 @@ async function resolveStructureSetup(ctx: {
     t2: lc.t2,
     rToT1: lc.rToT1,
     score: lc.score,
+    patterns: lc.patterns ?? null,
+    scoreCandle: lc.scoreCandle ?? null,
     ...(fiveMinute ? { timeframe: '5m' as const } : {}),
   };
   const structureContext: SetupEntryContext | undefined = entryContext
@@ -4244,7 +4254,8 @@ async function resolveStructureSetup(ctx: {
   const describe =
     `Structure ${direction}${fiveMinute ? ' (5m entry, 15m pools)' : ''}: ${lc.pool.kind.replace(/_/g, ' ').toLowerCase()} ${lc.pool.price} swept (extreme ${lc.sweepExtreme}), displacement ${lc.displacementBodyAtr ?? '—'} ATR; ` +
     `limit ${lc.entry} (${lc.zone?.kind === 'FVG' ? 'fair-value gap' : 'displacement 50%'}) filled at ${spot}; underlying stop ${lc.stop}, T1 ${lc.t1?.kind} ${lc.t1?.price} (${lc.rToT1}R)` +
-    `${lc.t2 ? `, T2 ${lc.t2.price} (shown only — the whole position closes at T1)` : ''}; score ${lc.score ?? '—'}/100 (describes, never gates).`;
+    `${lc.t2 ? `, T2 ${lc.t2.price} (shown only — the whole position closes at T1)` : ''}; score ${lc.score ?? '—'}/100 (describes, never gates).` +
+    `${lc.patterns ? ` Candles: ${lc.patterns.label}.` : ''}`;
 
   const recordRefusal = async (code: NoTradeCode | null, reason: string, setup: TradeSetup | null) => {
     logDecision({

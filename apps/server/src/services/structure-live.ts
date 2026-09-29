@@ -18,8 +18,8 @@
 // display and record only.
 // ============================================================
 
-import { STRUCTURE_RULES, STRUCTURE_RULES_5M, TERMINAL_STAGES, type LiquidityPool, type StructureEvaluation, type StructureSetup, type StructureStage } from '@fno/analytics';
-import type { Exchange, StructureBlock, StructureLifecycleView, StructurePoolView, StructureTimeframe, TradingMode } from '@fno/shared';
+import { STRUCTURE_RULES, STRUCTURE_RULES_5M, TERMINAL_STAGES, type LiquidityPool, type StructureEvaluation, type StructureScore, type StructureSetup, type StructureStage } from '@fno/analytics';
+import type { Exchange, StructureBlock, StructureCandleScoreView, StructureLifecycleView, StructurePatternsView, StructurePoolView, StructureTimeframe, TradingMode } from '@fno/shared';
 import type { GateDiagnostic } from './gate-diagnostics.js';
 
 export { STRUCTURE_STRATEGY } from './momentum-break-live.js';
@@ -114,6 +114,16 @@ export interface LiveLifecycle {
   t2: { kind: string; price: number } | null;
   rToT1: number | null;
   score: number | null;
+  /**
+   * The score without the candle-pattern bonus — what fillCandidate orders by,
+   * so the bonus never changes which lifecycle is filled. Absent on states
+   * written before labels (score then has no bonus in it).
+   */
+  scoreBase?: number | null;
+  /** The candle-pattern points inside `score` (display). */
+  scoreCandle?: StructureCandleScoreView | null;
+  /** The setup's candles, named (display and records only). */
+  patterns?: StructurePatternsView | null;
   sweepExtreme: number;
   atr: number;
   displacementBodyAtr: number | null;
@@ -167,9 +177,23 @@ export interface LifecycleEventRow {
   underlyingPrice: number | null;
   decisionId?: string | null;
   signalId?: string | null;
+  /** The setup's candles at this transition (null for WATCH rows). Migration 028. */
+  patterns?: StructurePatternsView | null;
+  /** The candle-pattern points inside `score`. Migration 028. */
+  scoreCandle?: StructureCandleScoreView | null;
 }
 
 const poolView = (p: LiquidityPool | null | undefined): StructurePoolView | null => (p ? { kind: p.kind, price: round2(p.price), rank: p.rank } : null);
+
+/** The engine's candle labels as the API/UI and the records carry them. */
+export function patternsView(p: StructureSetup['patterns'] | null | undefined): StructurePatternsView | null {
+  return p ? { sweepPattern: p.sweepPattern, displacementPattern: p.displacementPattern, combo: p.combo, label: p.label } : null;
+}
+
+/** The candle-pattern points inside a score (null before the setup is scored). */
+export function scoreCandleView(s: StructureScore | null | undefined): StructureCandleScoreView | null {
+  return s?.candle ? { rejection: s.candle.rejection, engulfing: s.candle.engulfing, star: s.candle.star, applied: s.candle.applied } : null;
+}
 
 /**
  * Folds this poll's engine read into the Redis state. Pure: returns the next
@@ -221,6 +245,9 @@ export function advanceLiveState(args: {
       t2: setup.t2,
       rToT1: setup.rToT1,
       score: setup.score?.total ?? null,
+      scoreBase: setup.score?.baseTotal ?? null,
+      scoreCandle: scoreCandleView(setup.score),
+      patterns: patternsView(setup.patterns),
       sweepExtreme: round2(setup.sweep.extreme),
       atr: round2(setup.atr),
       displacementBodyAtr: setup.displacement?.bodyAtr ?? null,
@@ -250,6 +277,8 @@ export function advanceLiveState(args: {
         t2: setup.t2?.price ?? null,
         score: setup.score?.total ?? null,
         underlyingPrice: spot,
+        patterns: lc.patterns ?? null,
+        scoreCandle: lc.scoreCandle ?? null,
       });
     }
     lc.recorded = setup.history.length;
@@ -283,6 +312,8 @@ export function advanceLiveState(args: {
       t2: null,
       score: null,
       underlyingPrice: spot,
+      patterns: null,
+      scoreCandle: null,
     });
   }
 
@@ -311,7 +342,8 @@ export function advanceLiveState(args: {
  * have seen the fill on the bar that just closed (stage ENTRY). Either way the
  * price must still be between the stop and T1 — a fill that has already hit
  * the stop or the target is not taken late. Once a lifecycle has a live
- * outcome it is never offered again. Highest score first.
+ * outcome it is never offered again. Highest score first — the score WITHOUT
+ * the candle-pattern bonus (scoreBase), so the bonus never picks the fill.
  */
 export function fillCandidate(state: LiveState, spot: number | null, lastClosedBarTime: number | null): LiveLifecycle | null {
   if (spot == null || !Number.isFinite(spot)) return null;
@@ -323,7 +355,8 @@ export function fillCandidate(state: LiveState, spot: number | null, lastClosedB
     if (!(l.stage === 'CONFIRMED' && touched) && !freshEngineFill) return false;
     return bear ? spot < l.stop && spot > l.t1.price : spot > l.stop && spot < l.t1.price;
   });
-  candidates.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+  const orderScore = (l: LiveLifecycle) => (l.scoreBase !== undefined ? l.scoreBase ?? 0 : l.score ?? 0);
+  candidates.sort((a, b) => orderScore(b) - orderScore(a));
   return candidates[0] ?? null;
 }
 
@@ -391,6 +424,8 @@ export function lifecycleView(state: LiveState, lc: LiveLifecycle): StructureLif
     t2: lc.t2,
     rToT1: lc.rToT1,
     score: lc.score,
+    scoreCandle: lc.scoreCandle ?? null,
+    patterns: lc.patterns ?? null,
     sweepExtreme: lc.sweepExtreme,
     stageAt: lc.stageAt,
     reason: lc.reason,
@@ -450,6 +485,7 @@ export function watchlistRows(state: LiveState): StructureLifecycleView[] {
         t2: null,
         rToT1: null,
         score: null,
+        patterns: null,
         sweepExtreme: null,
         stageAt: state.barTime != null ? state.barTime + STRUCTURE_TF_BAR_MS[state.timeframe ?? '15m'] : state.updatedAt,
         reason: null,
