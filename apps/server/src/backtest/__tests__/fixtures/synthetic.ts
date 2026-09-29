@@ -135,3 +135,33 @@ export function structureSymbol(seed = 3, days = 36): LoadedSymbol {
     lastBar: new Date(bars[bars.length - 1].time).toISOString(),
   };
 }
+
+/**
+ * The structure fixture at 5m: each 15m bar of structureSymbol split into
+ * three 5m bars along its open → extreme → extreme → close path (bearish
+ * bars go via the high first), so the 15m series is exactly the 5m series
+ * aggregated. Loaded as the harness loads a 5m symbol: 5m series, 15m pools.
+ */
+export function structureSymbol5m(seed = 3, days = 36): LoadedSymbol {
+  const l15 = structureSymbol(seed, days);
+  const M5 = 5 * 60 * 1000;
+  const bars: MomentumBar[] = [];
+  for (const b of l15.series.bars) {
+    const up = b.close >= b.open;
+    const [x1, x2] = up ? [b.low, b.high] : [b.high, b.low];
+    const v = Math.round(b.volume / 3);
+    bars.push({ time: b.time, open: b.open, high: Math.max(b.open, x1), low: Math.min(b.open, x1), close: x1, volume: v });
+    bars.push({ time: b.time + M5, open: x1, high: b.high, low: b.low, close: x2, volume: v });
+    bars.push({ time: b.time + 2 * M5, open: x2, high: Math.max(x2, b.close), low: Math.min(x2, b.close), close: b.close, volume: b.volume - 2 * v });
+  }
+  const series = prepareMomentumSeries(bars);
+  return {
+    ...l15,
+    spec: { ...l15.spec, symbol: 'SYNTH_S5' },
+    series,
+    barMs: M5,
+    poolSeries: l15.series,
+    firstBar: new Date(bars[0].time).toISOString(),
+    lastBar: new Date(bars[bars.length - 1].time).toISOString(),
+  };
+}

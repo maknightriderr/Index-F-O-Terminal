@@ -45,7 +45,9 @@ export const THIN_SESSION_FRACTION = 0.5;
 export const ROLL_VOLUME_JUMP = 2.5;
 export const ROLL_GAP_ATR = 3;
 
-const BAR_MS = 15 * 60 * 1000;
+/** The default bar length (15m). A LoadedSymbol may carry its own (5m). */
+export const DEFAULT_BAR_MS = 15 * 60 * 1000;
+const BAR_MS = DEFAULT_BAR_MS;
 
 export interface SymbolSpec {
   symbol: string;
@@ -89,6 +91,17 @@ export interface LoadedSymbol {
   volumeCoverage: number;
   firstBar: string | null;
   lastBar: string | null;
+  /** Bar length of `series` (absent: 15m). */
+  barMs?: number;
+  /** Multi-timeframe strategies: the 15m series the liquidity pools come from. */
+  poolSeries?: MomentumSeries;
+}
+
+export interface LoadOptions {
+  /** Bar length of the snapshot (default 15m). */
+  barMs?: number;
+  /** Appended to each snapshot name, e.g. '.5m' → NIFTY_INDEX.5m.json (default none). */
+  fileSuffix?: string;
 }
 
 /** Index spot + its future's volume, matched on the bar timestamp (the live withBorrowedVolume rule). */
@@ -104,18 +117,20 @@ function toBars(snap: SnapshotFile): MomentumBar[] {
     .sort((a, b) => a.time - b.time);
 }
 
-export function loadSymbol(dir: string, spec: SymbolSpec): LoadedSymbol | null {
-  const priceSnap = readSnapshot(dir, spec.priceFile);
+export function loadSymbol(dir: string, spec: SymbolSpec, opts: LoadOptions = {}): LoadedSymbol | null {
+  const barMs = opts.barMs ?? BAR_MS;
+  const suffix = opts.fileSuffix ?? '';
+  const priceSnap = readSnapshot(dir, spec.priceFile + suffix);
   if (!priceSnap) return null;
   const fetchedAt = Date.parse(priceSnap.fetchedAt);
   let bars = toBars(priceSnap);
   if (spec.volumeFile) {
-    const volSnap = readSnapshot(dir, spec.volumeFile);
+    const volSnap = readSnapshot(dir, spec.volumeFile + suffix);
     if (!volSnap) return null;
     bars = borrowVolume(bars, toBars(volSnap));
   }
   const before = bars.length;
-  bars = bars.filter((b) => b.time + BAR_MS <= fetchedAt);
+  bars = bars.filter((b) => b.time + barMs <= fetchedAt);
   const droppedPartial = before - bars.length;
   const inSession = bars.filter((b) => {
     const date = new Date(b.time + 330 * 60 * 1000).toISOString().slice(0, 10);
@@ -136,6 +151,7 @@ export function loadSymbol(dir: string, spec: SymbolSpec): LoadedSymbol | null {
     volumeCoverage: inSession.length > 0 ? withVol / inSession.length : 0,
     firstBar: inSession[0] ? new Date(inSession[0].time).toISOString() : null,
     lastBar: inSession.length ? new Date(inSession[inSession.length - 1].time).toISOString() : null,
+    ...(opts.barMs != null && opts.barMs !== BAR_MS ? { barMs: opts.barMs } : {}),
   };
 }
 
@@ -205,6 +221,8 @@ export interface BacktestStrategy<V extends { id: string }, S> {
   invalidationExit: string;
   /** Whether the 60-minute opening guard applies (it always does at the decision for MARKET orders). */
   openingGuard(variant: V): boolean;
+  /** LIMIT orders: minutes before the close after which a fill is refused (absent: CLOSING_GUARD_MIN). MARKET orders always use CLOSING_GUARD_MIN. */
+  closingGuardMin?(variant: V): number;
   /** Report slices: title → key of a trade. */
   groupKeys: Record<string, (t: BacktestTrade<S>) => string | number>;
 }
@@ -263,6 +281,8 @@ export function replayStrategy<V extends { id: string }, S>(
 ): ReplayResult<S> {
   const { series, spec } = loaded;
   const { bars } = series;
+  const barMs = loaded.barMs ?? BAR_MS;
+  const limitClosingGuardMin = strategy.closingGuardMin?.(variant) ?? CLOSING_GUARD_MIN;
   const trades: BacktestTrade<S>[] = [];
   const unfilled: UnfilledOrder<S>[] = [];
   let busyUntil = -1;
@@ -274,7 +294,7 @@ export function replayStrategy<V extends { id: string }, S>(
     if (loaded.masked.has(date)) continue;
     const w = getSessionWindow(spec.exchange, date);
     if (!w) continue;
-    const decidedAt = bars[i].time + BAR_MS;
+    const decidedAt = bars[i].time + barMs;
     // MARKET: the guards judge the decision (exactly the shipped momentum loop).
     // LIMIT: they judge the fill, below.
     if (strategy.orderType === 'MARKET') {
@@ -303,7 +323,7 @@ export function replayStrategy<V extends { id: string }, S>(
         ...base,
         exit,
         exitPrice: path.exitPrice ?? bars[exitIdx].close,
-        exitAt: new Date(bars[exitIdx].time + BAR_MS).toISOString(),
+        exitAt: new Date(bars[exitIdx].time + barMs).toISOString(),
         grossR: round3(grossR),
         netR: round3(grossR - COST_R),
       });
@@ -331,7 +351,7 @@ export function replayStrategy<V extends { id: string }, S>(
     // The live session gate refuses the mint at the fill.
     const fillTime = bars[fillIdx].time;
     const blockedOpen = strategy.openingGuard(variant) && fillTime < w.open + OPENING_GUARD_MIN * 60000;
-    const blockedClose = w.close - fillTime <= CLOSING_GUARD_MIN * 60000;
+    const blockedClose = w.close - fillTime <= limitClosingGuardMin * 60000;
     if (blockedOpen || blockedClose) {
       unfilled.push({ ...base, outcome: 'GUARDED' });
       busyUntil = fillIdx;
@@ -370,7 +390,7 @@ export function replayStrategy<V extends { id: string }, S>(
       ...base,
       exit,
       exitPrice,
-      exitAt: new Date(bars[exitIdx].time + BAR_MS).toISOString(),
+      exitAt: new Date(bars[exitIdx].time + barMs).toISOString(),
       grossR: round3(grossR),
       netR: round3(grossR - COST_R),
       fill,
