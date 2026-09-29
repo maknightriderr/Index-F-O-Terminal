@@ -53,6 +53,7 @@ export function exitReasonFromCloseReason(closeReason: string | null | undefined
     case 'BIAS_REVERSED':
     case 'LEVEL_RECLAIMED':
     case 'TRIGGER_REVERSAL':
+    case 'SWEEP_RECLAIMED':
     case 'SETUP_INVALIDATED':
     case 'THESIS_INVALIDATED':
     case 'IV_COLLAPSE':

@@ -45,6 +45,7 @@ export function invalidationReasonFromCloseReason(closeReason: string | null | u
     case 'BIAS_REVERSED':
     case 'LEVEL_RECLAIMED':
     case 'TRIGGER_REVERSAL':
+    case 'SWEEP_RECLAIMED':
       return 'UNDERLYING_STRUCTURAL_INVALIDATION';
     default:
       return null;

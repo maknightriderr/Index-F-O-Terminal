@@ -85,6 +85,9 @@ const FILES = [
   // Validation review: logic_version / logic_flags on every decision. The
   // snapshot writer inserts into these columns, so ensured at boot too.
   '026_logic_version.sql',
+  // Structure engine: setup_lifecycle_events. The lifecycle writer inserts
+  // into it on every transition, so it is ensured at boot too.
+  '027_setup_lifecycle.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */

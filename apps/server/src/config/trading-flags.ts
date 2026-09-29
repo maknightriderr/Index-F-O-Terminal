@@ -46,6 +46,10 @@ import {
  *                                   regime assist, and the LEVEL_RECLAIMED /
  *                                   TRIGGER_REVERSAL exits — stamped only while
  *                                   that flag is on (see logicStamp)
+ *   2026-09-29.structure.1          the structure family (flag STRUCTURE) and
+ *                                   F&O trade validation (FNO_VALIDATION), with
+ *                                   the CONSENSUS_SETUPS switch — stamped while
+ *                                   STRUCTURE is on (see logicStamp)
  */
 export const LOGIC_VERSION = '2026-09-29.coverage-lag.1';
 
@@ -389,6 +393,101 @@ export function readFnoValidationParams(env: Env = process.env): FnoValidationPa
 export const FNO_VALIDATION: boolean = readFnoValidationFlag();
 export const FNO_VALIDATION_PARAMS: Readonly<FnoValidationParams> = Object.freeze(readFnoValidationParams());
 
+// ============================================================
+// STRUCTURE ENGINE ROUND (2026-09-29)
+// ============================================================
+// A third setup family (packages/analytics structure-engine): a Tier-1
+// liquidity pool swept, a displacement the other way, a LIMIT at the
+// displacement's fair-value gap. Lifecycle WATCH → DEVELOPING → CONFIRMED is
+// shown on screen (Redis structure_setup:*, never the paper-trade slot) and
+// only a filled limit (ENTRY) mints a paper trade, through the same mint lock.
+//
+// STRUCTURE ships ON by the user's decision (live now, behind this flag). Its
+// out-of-sample backtest decided CONSENSUS_SETUPS instead: the pre-registered
+// bar (≥ 30 trades, avg net R ≥ +0.10, PF ≥ 1.2) was NOT met — see
+// CONSENSUS_SETUPS_DEFAULT.
+// ============================================================
+
+export const STRUCTURE_LOGIC_VERSION = '2026-09-29.structure.1';
+
+/** User decision: live now, behind the flag. */
+export const STRUCTURE_DEFAULT = true;
+
+/**
+ * OUT-OF-SAMPLE RESULT (npm run backtest-structure, D1.0-NOGUARD chosen
+ * in-sample, run once 2026-06-03 → 2026-09-28): 32 trades, 34.4% win,
+ * avg net R −0.005, PF 0.99, max DD 6.44R — FAILS the pre-registered bar
+ * (avg ≥ +0.10, PF ≥ 1.2). So the consensus engine keeps minting (ON) and
+ * both families run. Had it passed, this would be false: the consensus
+ * engine would still compute bias and votes as context but never mint.
+ */
+export const CONSENSUS_SETUPS_DEFAULT = true;
+
+export interface StructureParams {
+  /** The variant chosen in-sample. Pre-registered grid: {1.0, 1.5}. */
+  STRUCTURE_DISP_MULT: number;
+  /** The variant chosen in-sample: 0 = the 60-minute opening guard does not apply to this family's fills, 1 = it does. */
+  STRUCTURE_OPENING_GUARD: number;
+  /** Lifecycle state TTL in Redis (structure_setup:*). Operational, not a trading threshold. */
+  STRUCTURE_STATE_TTL_SECONDS: number;
+  /** A CONFIRMED transition older than this (minutes) is recorded but not pushed to Telegram — a restart must not send stale alerts. */
+  STRUCTURE_ALERT_MAX_AGE_MIN: number;
+}
+
+export const STRUCTURE_PARAM_DEFAULTS: Readonly<StructureParams> = {
+  STRUCTURE_DISP_MULT: 1.0,
+  STRUCTURE_OPENING_GUARD: 0,
+  STRUCTURE_STATE_TTL_SECONDS: 60 * 60 * 36,
+  STRUCTURE_ALERT_MAX_AGE_MIN: 30,
+};
+
+/** Empty = every symbol the engine evaluates (the user's default). Otherwise "SYMBOL:EXCHANGE,...". */
+export const STRUCTURE_SYMBOLS_DEFAULT = '';
+
+export function readStructureFlag(env: Env = process.env): boolean {
+  return parseFlag(env.STRUCTURE, STRUCTURE_DEFAULT);
+}
+
+export function readConsensusSetupsFlag(env: Env = process.env): boolean {
+  return parseFlag(env.CONSENSUS_SETUPS, CONSENSUS_SETUPS_DEFAULT);
+}
+
+export function readStructureParams(env: Env = process.env): StructureParams {
+  const out = { ...STRUCTURE_PARAM_DEFAULTS };
+  for (const key of Object.keys(STRUCTURE_PARAM_DEFAULTS) as (keyof StructureParams)[]) {
+    out[key] = parseNumber(env[key], STRUCTURE_PARAM_DEFAULTS[key]);
+  }
+  return out;
+}
+
+/** "SYMBOL:EXCHANGE,..."; empty (the default) means all symbols. */
+export function parseStructureSymbols(raw: string | undefined): { all: boolean; symbols: BackgroundSymbol[]; rejected: string[] } {
+  const source = raw == null ? STRUCTURE_SYMBOLS_DEFAULT : raw;
+  if (source.trim() === '') return { all: true, symbols: [], rejected: [] };
+  return { all: false, ...parseBackgroundSymbols(source) };
+}
+
+export const STRUCTURE: boolean = readStructureFlag();
+export const CONSENSUS_SETUPS: boolean = readConsensusSetupsFlag();
+export const STRUCTURE_PARAMS: Readonly<StructureParams> = Object.freeze(readStructureParams());
+const parsedStructureSymbols = parseStructureSymbols(process.env.STRUCTURE_SYMBOLS);
+export const STRUCTURE_SYMBOLS: Readonly<{ all: boolean; symbols: readonly BackgroundSymbol[] }> = Object.freeze({
+  all: parsedStructureSymbols.all,
+  symbols: Object.freeze(parsedStructureSymbols.symbols),
+});
+export const STRUCTURE_SYMBOLS_REJECTED: readonly string[] = Object.freeze(parsedStructureSymbols.rejected);
+
+/** Whether the structure engine runs for this symbol/mode: flag on, INTRADAY, and on the list (empty list = all). */
+export function structureEnabledFor(
+  underlying: string,
+  exchange: string,
+  mode: string,
+  enabled: boolean = STRUCTURE,
+  symbols: Readonly<{ all: boolean; symbols: readonly BackgroundSymbol[] }> = STRUCTURE_SYMBOLS
+): boolean {
+  return enabled && mode === 'INTRADAY' && (symbols.all || symbols.symbols.some((s) => s.symbol === underlying.toUpperCase() && s.exchange === exchange));
+}
+
 export interface LogicStamp {
   logicVersion: string;
   flags: TradingFlags;
@@ -410,6 +509,14 @@ export interface LogicStamp {
     enabled: boolean;
     params: FnoValidationParams;
   };
+  /** The structure round's switches, tunables and symbol list (absent on setups minted before it). */
+  structure?: {
+    enabled: boolean;
+    consensusSetups: boolean;
+    params: StructureParams;
+    allSymbols: boolean;
+    symbols: BackgroundSymbol[];
+  };
 }
 
 /**
@@ -419,6 +526,7 @@ export interface LogicStamp {
  */
 export interface LogicStampExtras {
   fnoValidation?: { enabled: boolean; params: Readonly<FnoValidationParams> };
+  structure?: { enabled: boolean; consensusSetups: boolean; params: Readonly<StructureParams>; symbols: Readonly<{ all: boolean; symbols: readonly BackgroundSymbol[] }> };
 }
 
 /** What gets written onto every setup and decision. */
@@ -433,13 +541,27 @@ export function logicStamp(
   momentumSymbols: readonly BackgroundSymbol[] = MOMENTUM_BREAK_SYMBOLS,
   extras: LogicStampExtras = {}
 ): LogicStamp {
+  // The structure version is stamped only while its flag is on (the same
+  // mechanism as momentum-break), and takes precedence when both are.
+  const logicVersion = extras.structure?.enabled ? STRUCTURE_LOGIC_VERSION : momentumEnabled ? MOMENTUM_BREAK_LOGIC_VERSION : LOGIC_VERSION;
   return {
-    logicVersion: momentumEnabled ? MOMENTUM_BREAK_LOGIC_VERSION : LOGIC_VERSION,
+    logicVersion,
     flags: { ...flags },
     params: { ...params },
     coverageLag: { flags: { ...lagFlags }, params: { ...lagParams }, backgroundSymbols: backgroundSymbols.map((s) => ({ ...s })) },
     momentumBreak: { enabled: momentumEnabled, params: { ...momentumParams }, symbols: momentumSymbols.map((s) => ({ ...s })) },
     ...(extras.fnoValidation ? { fnoValidation: { enabled: extras.fnoValidation.enabled, params: { ...extras.fnoValidation.params } } } : {}),
+    ...(extras.structure
+      ? {
+          structure: {
+            enabled: extras.structure.enabled,
+            consensusSetups: extras.structure.consensusSetups,
+            params: { ...extras.structure.params },
+            allSymbols: extras.structure.symbols.all,
+            symbols: extras.structure.symbols.symbols.map((s) => ({ ...s })),
+          },
+        }
+      : {}),
   };
 }
 
@@ -447,5 +569,6 @@ export function logicStamp(
 export function liveLogicStamp(): LogicStamp {
   return logicStamp(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, {
     fnoValidation: { enabled: FNO_VALIDATION, params: FNO_VALIDATION_PARAMS },
+    structure: { enabled: STRUCTURE, consensusSetups: CONSENSUS_SETUPS, params: STRUCTURE_PARAMS, symbols: STRUCTURE_SYMBOLS },
   });
 }

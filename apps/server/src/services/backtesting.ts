@@ -457,11 +457,12 @@ export async function getWinRateAnalytics(modeFilter?: TradingMode | 'ALL', sinc
 }
 
 /** Momentum-break round: which family minted a setup. Everything that is not a momentum-break trigger is the consensus engine. */
-export function strategyFamilyOfSetup(r: Pick<TradeSetupRecord, 'strategy'>): 'MOMENTUM_BREAK' | 'CONSENSUS' {
+export function strategyFamilyOfSetup(r: Pick<TradeSetupRecord, 'strategy'>): 'MOMENTUM_BREAK' | 'STRUCTURE' | 'CONSENSUS' {
+  if (r.strategy === 'STRUCTURE') return 'STRUCTURE';
   return r.strategy === 'MOMENTUM_BREAK' ? 'MOMENTUM_BREAK' : 'CONSENSUS';
 }
 
-/** Headline figures per setup family (MOMENTUM_BREAK vs CONSENSUS), beside the logic-version split — never pooled. */
+/** Headline figures per setup family (MOMENTUM_BREAK / STRUCTURE / CONSENSUS), beside the logic-version split — never pooled. */
 export function strategyBuckets(records: readonly TradeSetupRecord[]): StrategyBucket[] {
   const groups = new Map<string, TradeSetupRecord[]>();
   for (const r of records) {

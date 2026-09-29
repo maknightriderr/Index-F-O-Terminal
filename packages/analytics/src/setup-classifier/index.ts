@@ -38,6 +38,8 @@ export type SetupFamily =
   // Momentum-break setups (a separate family; classifySetup never assigns it —
   // the server labels a trigger-minted setup directly).
   | 'MOMENTUM'
+  // Structure-engine setups (sweep -> displacement -> FVG retrace; also server-labelled).
+  | 'SWEEP_FVG'
   | 'UNKNOWN';
 
 export type SetupType =
@@ -62,6 +64,7 @@ export type SetupType =
   | 'EMA_TREND_CONTINUATION'
   | 'RSI_DIVERGENCE_REVERSAL'
   | 'MOMENTUM_BREAK'
+  | 'STRUCTURE_SWEEP_FVG'
   | 'UNKNOWN';
 
 /**
@@ -131,6 +134,7 @@ const FAMILY: Record<SetupType, SetupFamily> = {
   ORDER_BLOCK_RETEST: 'MEAN_REVERSION',
   VWAP_RECLAIM: 'MEAN_REVERSION',
   MOMENTUM_BREAK: 'MOMENTUM',
+  STRUCTURE_SWEEP_FVG: 'SWEEP_FVG',
   UNKNOWN: 'UNKNOWN',
 };
 

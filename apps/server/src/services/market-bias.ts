@@ -158,6 +158,27 @@ import {
 import { capExpectedMoveByHv } from '@fno/analytics';
 import type { TradeSetupFnoValidation } from '@fno/shared';
 import { buildWithFnoValidation, fnoValidationDiagnostic } from './fno-validation.js';
+// Structure-engine round (flag STRUCTURE): the lifecycle state machine runs on
+// every INTRADAY poll (pure engine in @fno/analytics, pure live decisions in
+// structure-live.ts, I/O in setup-lifecycle.ts); only a filled limit mints,
+// through the same mint lock and slot as every other family.
+import { evaluateStructureSession, istDateOf, STRUCTURE_RULES, STRUCTURE_VARIANTS, type MomentumBar, type StructureVariant } from '@fno/analytics';
+import type { StructureBlock } from '@fno/shared';
+import { CONSENSUS_SETUPS, STRUCTURE, STRUCTURE_PARAMS, structureEnabledFor } from '../config/trading-flags.js';
+import {
+  STRUCTURE_SEQUENCE_CONFIDENCE,
+  STRUCTURE_SETUP_TYPE,
+  STRUCTURE_STRATEGY,
+  advanceLiveState,
+  fillCandidate,
+  structureBlock,
+  structureSequenceDiagnostic,
+  structureSequenceRefusal,
+  type LiveLifecycle,
+  type LiveState,
+} from './structure-live.js';
+import { notifyStructureConfirmed, readLiveState, recordLifecycleEvents, writeLiveState } from './setup-lifecycle.js';
+import { safetyRefusal } from './momentum-break-live.js';
 
 // Angel One rate-limits historical-candle and Greeks requests far more
 // strictly than quotes (a burst of these returns a flat 403) — cache
@@ -218,6 +239,8 @@ export interface MarketBiasResult {
   bias: MarketBias;
   score: IntelligenceScore;
   tradeSetup: TradeSetup;
+  /** Structure engine (flag STRUCTURE, INTRADAY): the lifecycle for this symbol. Absent when the flag is off. */
+  structure?: StructureBlock;
 }
 
 // Vote and bandVote come from vote-bands.ts (see the imports).
@@ -1285,6 +1308,16 @@ async function computeMarketBias(
   // (INTRADAY only: in POSITIONAL mode `candles15m` holds 1H bars, and trigger trades only live in the INTRADAY slot.)
   const closedNow = isPositional ? [] : toClosedMomentumBars(candles15m, exchange, decisionNow());
   const lastClosedBar = closedNow.length > 0 ? { time: closedNow[closedNow.length - 1].time, close: closedNow[closedNow.length - 1].close } : null;
+
+  // --- Structure engine (flag STRUCTURE, INTRADAY; STRUCTURE_SYMBOLS, default all) ---
+  // Every poll advances this symbol's lifecycle from the same closed 15m bars
+  // (the raw candles15m, index volume already borrowed). State lives in Redis
+  // under structure_setup:*, never in the paper-trade slot; only a filled
+  // limit can mint (resolveStickyTradeSetup's STRUCTURE family). Off = nothing
+  // is read or written and the response carries no structure block.
+  const structureOn = structureEnabledFor(underlying, exchange, mode);
+  const structureState = structureOn ? await advanceStructureLifecycle(underlying, exchange, mode, closedNow, chain?.spotPrice ?? null) : null;
+  const structureRun: StructureRun = { claimed: null, handled: false };
   // Regime assist: a qualified trigger in the last BREAKOUT_PERSIST_BARS bars
   // (not since closed back through its level) reads as BREAKOUT/BREAKDOWN, so
   // the consensus side stops calling a crash a weak bull trend. Expiry-day
@@ -1864,12 +1897,31 @@ async function computeMarketBias(
 
   const tradeSetup: TradeSetup = chain
     ? await resolveStickyTradeSetup(provider, underlying, exchange, chain, direction, setupConfidence, regime, overall, mode, voteSnapshot, entryContext, {
-        trigger: momentumRead?.trigger ?? null,
         lastClosedBar,
+        families: [
+          { family: 'MOMENTUM_BREAK', trigger: momentumRead?.trigger ?? null },
+          ...(structureState ? [{ family: 'STRUCTURE' as const, state: structureState, run: structureRun }] : []),
+        ],
       })
     : { available: false, reason: 'Option chain unavailable for this symbol — cannot size a setup.' };
 
-  const result: MarketBiasResult = { bias, score, tradeSetup };
+  // A fill this poll claimed but the slot never reached (it already held a
+  // same-direction setup): recorded on the lifecycle, never silently dropped.
+  if (structureState && structureRun.claimed && !structureRun.handled) {
+    await recordStructureOutcome(structureState, structureRun.claimed, {
+      outcome: 'REFUSED',
+      code: 'SLOT_OCCUPIED',
+      reason: 'The paper-trade slot already holds a same-direction setup for this symbol — not minted.',
+      at: decisionNow(),
+    }, chain?.spotPrice ?? null);
+  }
+
+  const result: MarketBiasResult = {
+    bias,
+    score,
+    tradeSetup,
+    ...(structureOn ? { structure: structureBlock(structureState, { enabled: STRUCTURE, symbol: underlying, exchange, mode }) } : {}),
+  };
   biasComputedAt.set(`${exchange}:${underlying}:${mode}`, Date.now());
 
   // Persist the successful result as a fallback for future failures
@@ -2177,6 +2229,26 @@ interface StoredTradeSetup extends TradeSetup {
   signalFreshness?: SurfacedFreshness; // attached to the RETURNED object on a re-surface only, never persisted
   logic?: LogicStamp; // validation review: logicVersion + flags this setup was minted under (absent before stamping)
   momentumBreak?: StoredMomentumBreak; // momentum-break family only: the trigger it was minted on (LEVEL_RECLAIMED reads it)
+  structure?: StoredStructureTrade; // structure family only: the lifecycle it was minted on (SWEEP_RECLAIMED reads it)
+}
+
+/** What a structure trade carries in the slot and its Backtesting row. */
+interface StoredStructureTrade {
+  lifecycleId: string;
+  direction: 'BULLISH' | 'BEARISH';
+  poolKind: string;
+  poolPrice: number;
+  sweepExtreme: number;
+  zone: LiveLifecycle['zone'];
+  /** The limit (underlying) and where the live price actually was when it filled. */
+  entry: number;
+  fillSpot: number;
+  fillAt: number;
+  stop: number;
+  t1: { kind: string; price: number };
+  t2: { kind: string; price: number } | null;
+  rToT1: number | null;
+  score: number | null;
 }
 
 /** Staleness of a re-surfaced sticky setup, as shown on the response. Measured only — see signal-freshness.ts. */
@@ -2272,7 +2344,7 @@ interface GateRefusal {
   reason: string;
 }
 
-function sessionGateReason(exchange: Exchange, mode: TradingMode): GateRefusal | null {
+function sessionGateReason(exchange: Exchange, mode: TradingMode, opts: { openingGuard?: boolean } = {}): GateRefusal | null {
   const sinceOpen = minutesSinceSessionOpen(exchange);
   if (sinceOpen == null) {
     const holiday = getExchangeHoliday(exchange);
@@ -2285,7 +2357,9 @@ function sessionGateReason(exchange: Exchange, mode: TradingMode): GateRefusal |
   // The opening hour is where the losses are. Positional entries are day-scale
   // reads and aren't judged on where the first hour's noise put the price, so
   // the guard is intraday only.
-  if (mode === 'INTRADAY' && sinceOpen < SETUP_OPENING_GUARD_MINUTES) {
+  // (The structure family's chosen variant runs without it — opts.openingGuard false;
+  // the settle window above and the closing guard below still apply.)
+  if (mode === 'INTRADAY' && (opts.openingGuard ?? true) && sinceOpen < SETUP_OPENING_GUARD_MINUTES) {
     return {
       code: 'OPENING_HOUR',
       reason:
@@ -2573,7 +2647,7 @@ async function resolveStickyTradeSetup(
   mode: TradingMode = 'INTRADAY',
   voteSnapshot?: BiasVoteSnapshot,
   entryContext?: SetupEntryContext,
-  momentum?: { trigger: MomentumBreakSignal | null; lastClosedBar: { time: number; close: number } | null }
+  triggers?: TriggerFamilies
 ): Promise<TradeSetup> {
   const isPositional = mode === 'POSITIONAL';
   const setupTtl = isPositional ? STICKY_TRADE_SETUP_TTL_SECONDS_POSITIONAL : STICKY_TRADE_SETUP_TTL_SECONDS;
@@ -2669,10 +2743,16 @@ async function resolveStickyTradeSetup(
   // poll's chain happens to be — see chainForStoredSetup.
   const storedChain = stored?.available ? await chainForStoredSetup(provider, underlying, exchange, chain, stored) : chain;
 
-  // Momentum break: a trigger bar acts once — the first caller to claim it
-  // may reverse the slot and mint; every other caller (and every later poll
-  // inside the same 15 minutes) reads the slot as usual.
-  const trigger = momentum?.trigger ? await claimMomentumTrigger(exchange, underlying, mode, momentum.trigger) : null;
+  // Trigger families. Momentum break: a trigger bar acts once — the first
+  // caller to claim it may reverse the slot and mint; every other caller (and
+  // every later poll inside the same 15 minutes) reads the slot as usual.
+  // Structure: a CONFIRMED limit the live price has just filled, claimed the
+  // same way (once per lifecycle).
+  const momentumFamily = triggers?.families.find((f): f is MomentumFamilyInput => f.family === 'MOMENTUM_BREAK');
+  const structureFamily = triggers?.families.find((f): f is StructureFamilyInput => f.family === 'STRUCTURE');
+  const lastClosedBar = triggers?.lastClosedBar ?? null;
+  const trigger = momentumFamily?.trigger ? await claimMomentumTrigger(exchange, underlying, mode, momentumFamily.trigger) : null;
+  const structureFill = structureFamily ? await claimStructureFill(exchange, underlying, mode, structureFamily, chain.spotPrice, lastClosedBar?.time ?? null) : null;
 
   if (storedIsPlausible && (isPositional || stored!.day === today)) {
     const isSpread = stored!.structureType === 'SPREAD';
@@ -2739,7 +2819,14 @@ async function resolveStickyTradeSetup(
     // other way closes whatever the slot holds (TRIGGER_REVERSAL). A
     // consensus setup with no opposing trigger gets the logic below, as before.
     const slotAction: SlotAction =
-      hitSL || hitTarget ? { kind: 'CONSENSUS_FLOW' } : triggerSlotAction({ stored: stored!, trigger, lastClosedBar: momentum?.lastClosedBar ?? null });
+      hitSL || hitTarget
+        ? { kind: 'CONSENSUS_FLOW' }
+        : triggerSlotAction({
+            stored: stored!,
+            trigger,
+            lastClosedBar,
+            others: structureFill ? [{ family: 'STRUCTURE', direction: structureFill.direction }] : [],
+          });
 
     if (hitSL || hitTarget) {
       const outcome = classifyPriceHitOutcome(stored!, isSpread, hitTarget);
@@ -2753,7 +2840,7 @@ async function resolveStickyTradeSetup(
     } else if (slotAction.kind === 'HOLD_TRIGGER') {
       return surfaceSticky(stored!, currentValue, isSpread, storedChain, underlying);
     } else if (slotAction.kind === 'CLOSE') {
-      logger.info({ underlying, exchange, mode, reason: slotAction.reason, held: stored!.strategy ?? 'CONSENSUS', heldDirection: stored!.direction }, 'Momentum break: closing the held setup');
+      logger.info({ underlying, exchange, mode, reason: slotAction.reason, held: stored!.strategy ?? 'CONSENSUS', heldDirection: stored!.direction }, 'Trigger family: closing the held setup');
       await recordTradeSetupOutcome(stored!, 'EXPIRED', currentValue, { underlying, exchange, mode, reason: slotAction.reason });
       // falls through to fresh generation below
     } else if (stored!.direction === direction) {
@@ -2817,6 +2904,44 @@ async function resolveStickyTradeSetup(
       provider, underlying, exchange, mode, key, today, setupTtl, chain, trigger, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId,
     });
     if (triggered) return triggered;
+  }
+
+  // Structure: a claimed fill runs its own chain (safety gates, the
+  // STRUCTURE_SEQUENCE gate, Part A, the option leg). Minted: that is this
+  // poll's setup. Refused: recorded on the lifecycle, and the consensus chain
+  // below runs as before.
+  if (structureFill && structureFamily) {
+    structureFamily.run.handled = true;
+    const filled = await resolveStructureSetup({
+      provider, underlying, exchange, mode, key, today, setupTtl, chain, lc: structureFill, state: structureFamily.state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId,
+    });
+    if (filled) return filled;
+  }
+
+  // CONSENSUS_SETUPS (default ON — the structure engine's out-of-sample result
+  // did not meet the bar to replace it): OFF keeps the consensus read as
+  // context (bias, votes, reasoning) but it never mints. Held setups above are
+  // still managed to their exits either way.
+  if (!CONSENSUS_SETUPS) {
+    logDecision({
+      at: decisionNow(),
+      symbol: underlying,
+      exchange,
+      mode,
+      decision: 'SKIP',
+      code: 'CONSENSUS_OFF',
+      reason: 'CONSENSUS_SETUPS is off — the consensus engine computes bias as context only.',
+      regime: entryContext?.regime ?? null,
+      bias: direction,
+      setupQuality: confidence,
+      positioningBaseline: entryContext?.positioningBaseline ?? null,
+      regimeSource: entryContext?.regimeSource ?? null,
+    });
+    return {
+      available: false,
+      noTradeCode: 'CONSENSUS_OFF',
+      reason: 'Consensus setups are switched off (CONSENSUS_SETUPS) — the bias read is context only; setups come from the structure engine.',
+    };
   }
 
   // Everything above only resolves an EXISTING setup, which is safe off-hours
@@ -3090,6 +3215,8 @@ async function resolveStickyTradeSetup(
       roomAvailableAtr: entryContext?.roomAvailableAtr ?? null,
       roomRequiredAtr: entryContext?.roomRequiredAtr ?? null,
       roomSufficient: entryContext?.roomSufficient ?? null,
+      positioningBaseline: entryContext?.positioningBaseline ?? null,
+      regimeSource: entryContext?.regimeSource ?? null,
     });
     // The refusal, recorded in full. The missed-winner audit grades it later
     // against what the market actually did, which is the only way to tell
@@ -3665,6 +3792,458 @@ async function resolveMomentumBreakSetup(ctx: {
   return mintUnderLock({ underlying, exchange, mode, key, today, isPositional: false, priorDecisionId, mintFresh });
 }
 
+// --- Structure family (flag STRUCTURE) ---
+
+/** resolveStickyTradeSetup's trigger families: the newest closed bar plus one entry per family. */
+interface MomentumFamilyInput {
+  family: 'MOMENTUM_BREAK';
+  trigger: MomentumBreakSignal | null;
+}
+interface StructureFamilyInput {
+  family: 'STRUCTURE';
+  state: LiveState;
+  /** Filled by resolveStickyTradeSetup: the fill it claimed, and whether the structure chain ran for it. */
+  run: StructureRun;
+}
+interface StructureRun {
+  claimed: LiveLifecycle | null;
+  handled: boolean;
+}
+interface TriggerFamilies {
+  lastClosedBar: { time: number; close: number } | null;
+  families: Array<MomentumFamilyInput | StructureFamilyInput>;
+}
+
+/** The live structure variant: the pre-registered one the in-sample run chose (env-overridable). */
+function liveStructureVariant(): StructureVariant {
+  const dispMult = STRUCTURE_PARAMS.STRUCTURE_DISP_MULT;
+  const openingGuard = STRUCTURE_PARAMS.STRUCTURE_OPENING_GUARD >= 1;
+  return (
+    STRUCTURE_VARIANTS.find((v) => v.dispMult === dispMult && v.openingGuard === openingGuard) ?? {
+      id: `custom-D${dispMult}-${openingGuard ? 'GUARD' : 'NOGUARD'}`,
+      dispMult,
+      openingGuard,
+    }
+  );
+}
+
+const STRUCTURE_OUTCOME_TTL_SECONDS = 60 * 60 * 36;
+
+/**
+ * Advances this symbol's structure lifecycle from the closed 15m bars:
+ * engine read → Redis state (structure_setup:*) → lifecycle rows for the
+ * transitions not yet written → Telegram at a fresh CONFIRMED. Null — logged
+ * — when it cannot be read; a missing structure read never blocks the rest.
+ */
+async function advanceStructureLifecycle(
+  underlying: string,
+  exchange: Exchange,
+  mode: TradingMode,
+  bars: MomentumBar[],
+  spot: number | null
+): Promise<LiveState | null> {
+  try {
+    if (bars.length < 2) {
+      logger.warn({ underlying, exchange, bars: bars.length }, 'Structure: not enough closed 15m bars to evaluate');
+      return null;
+    }
+    const series = prepareMomentumSeries(bars);
+    const evaluation = evaluateStructureSession(series, bars.length - 1, liveStructureVariant());
+    const now = decisionNow();
+    const prev = await readLiveState(exchange, underlying, mode);
+    const { state, events } = advanceLiveState({ prev, evaluation, exchange, underlying, mode, day: istDateOf(evaluation.barTime), now, spot });
+    await mergeStructureOutcomes(state);
+    recordLifecycleEvents(events);
+    for (const e of events) {
+      if (e.toState !== 'CONFIRMED') continue;
+      const lc = state.lifecycles.find((l) => l.id === e.lifecycleId);
+      if (lc) {
+        logger.info({ underlying, exchange, lifecycleId: lc.id, entry: lc.entry, stop: lc.stop, t1: lc.t1 }, 'Structure: setup CONFIRMED — limit resting');
+        notifyStructureConfirmed(state, lc, now);
+      }
+    }
+    await writeLiveState(state);
+    return state;
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying, exchange }, 'Structure: lifecycle read failed — no structure setups this poll');
+    return null;
+  }
+}
+
+/** Live outcomes (minted / refused) are kept under their own keys so a concurrent state write can never lose one. */
+async function mergeStructureOutcomes(state: LiveState): Promise<void> {
+  const open = state.lifecycles.filter((l) => l.live == null);
+  if (open.length === 0) return;
+  try {
+    const values = await redis.mget(...open.map((l) => `structure_outcome:${l.id}`));
+    values.forEach((v, k) => {
+      if (!v) return;
+      try {
+        open[k].live = JSON.parse(v);
+      } catch (err: any) {
+        logger.warn({ error: err.message, lifecycleId: open[k].id }, 'Structure: unparseable live outcome ignored');
+      }
+    });
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying: state.underlying }, 'Structure: live outcome read failed');
+  }
+}
+
+/** Records what the live engine did at a fill, on the lifecycle and as a lifecycle row. */
+async function recordStructureOutcome(
+  state: LiveState,
+  lc: LiveLifecycle,
+  outcome: NonNullable<LiveLifecycle['live']>,
+  spot: number | null
+): Promise<void> {
+  lc.live = outcome;
+  try {
+    await redis.set(`structure_outcome:${lc.id}`, JSON.stringify(outcome), 'EX', STRUCTURE_OUTCOME_TTL_SECONDS);
+  } catch (err: any) {
+    logger.warn({ error: err.message, lifecycleId: lc.id }, 'Structure: live outcome write failed');
+  }
+  await writeLiveState(state);
+  recordLifecycleEvents([
+    {
+      lifecycleId: lc.id,
+      symbol: state.underlying,
+      exchange: state.exchange,
+      mode: state.mode,
+      direction: lc.direction,
+      fromState: lc.stage,
+      toState: outcome.outcome === 'MINTED' ? 'ENTRY_MINTED' : 'ENTRY_REFUSED',
+      reason: outcome.code ? `${outcome.code}: ${outcome.reason ?? ''}` : outcome.reason,
+      at: outcome.at,
+      poolKind: lc.pool.kind,
+      poolPrice: lc.pool.price,
+      zone: lc.zone,
+      entry: lc.entry,
+      stop: lc.stop,
+      t1: lc.t1?.price ?? null,
+      t2: lc.t2?.price ?? null,
+      score: lc.score,
+      underlyingPrice: spot,
+      decisionId: outcome.decisionId ?? null,
+      signalId: outcome.signalId ?? null,
+    },
+  ]);
+}
+
+/**
+ * A fill acts once: the first caller to claim a filled lifecycle may reverse
+ * the slot and mint. A failed claim is logged and treated as not claimed.
+ */
+async function claimStructureFill(
+  exchange: Exchange,
+  underlying: string,
+  mode: TradingMode,
+  family: StructureFamilyInput,
+  spot: number,
+  lastClosedBarTime: number | null
+): Promise<LiveLifecycle | null> {
+  const candidate = fillCandidate(family.state, spot, lastClosedBarTime);
+  if (!candidate) return null;
+  try {
+    const first = await redis.set(`structure_claimed:${candidate.id}`, '1', 'EX', 60 * 60 * 24, 'NX');
+    if (first !== 'OK') return null;
+    logger.info({ underlying, exchange, mode, lifecycleId: candidate.id, entry: candidate.entry, spot }, 'Structure: limit filled — running the structure chain');
+    family.run.claimed = candidate;
+    return candidate;
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying, exchange, lifecycleId: candidate.id }, 'Structure: fill claim failed — not acting on it');
+    return null;
+  }
+}
+
+/**
+ * The structure family's chain and mint. Hard gates: the Tier-1 sequence
+ * (completed by the fill), STRUCTURE_SEQUENCE at the fill price (still
+ * between stop and T1, T1 ≥ 1.5R), the safety gates (risk-off, feed,
+ * session/closing — the opening-hour guard per the chosen variant —,
+ * post-loss cooldown, reliability, concurrency) and Part A. The option leg
+ * is built by buildTradeSetup: target move = distance to T1, premium stop =
+ * |Δ| × distance to the structural stop (sweep extreme + 0.1 ATR) through
+ * slPremiumPct. The score is recorded, never gated on.
+ */
+async function resolveStructureSetup(ctx: {
+  provider: MarketDataProvider;
+  underlying: string;
+  exchange: Exchange;
+  mode: TradingMode;
+  key: string;
+  today: string;
+  setupTtl: number;
+  chain: OptionChain;
+  lc: LiveLifecycle;
+  state: LiveState;
+  regime: MarketRegime;
+  intelligenceScore: number;
+  voteSnapshot: BiasVoteSnapshot | undefined;
+  entryContext: SetupEntryContext | undefined;
+  priorDecisionId: string | null;
+}): Promise<TradeSetup | null> {
+  const { provider, underlying, exchange, mode, key, today, setupTtl, chain, lc, state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId } = ctx;
+  const direction: BiasDirection = lc.direction;
+  const confidence = STRUCTURE_SEQUENCE_CONFIDENCE;
+  const at = decisionNow();
+  const spot = chain.spotPrice;
+  const side: 'CE' | 'PE' = direction === 'BEARISH' ? 'PE' : 'CE';
+
+  const riskOff = await riskOffReason(exchange, mode);
+  const reliability = riskOff ? null : await checkReliabilityFilters(underlying, exchange, direction, mode);
+  const feedBlock = dataQualityBlock(exchange, underlying);
+  const session = sessionGateReason(exchange, mode, { openingGuard: STRUCTURE_PARAMS.STRUCTURE_OPENING_GUARD >= 1 });
+  const cooldown = await losingCloseCooldownReason(underlying, exchange, direction, mode, confidence);
+  const concurrencyExposure: ExposureSnapshot | null = TRADING_FLAGS.CONCURRENCY_CAP
+    ? await readExposureAtCreation({ key, exchange, underlying, mode, direction, strike: null, side: null, expiry: null, riskAmount: 0 }, today)
+    : null;
+  const concurrency = concurrencyGateReason({ enabled: TRADING_FLAGS.CONCURRENCY_CAP, exposure: concurrencyExposure, max: TRADING_PARAMS.MAX_CONCURRENT_SAME_DIRECTION });
+  const refusal = safetyRefusal({ riskOff, feedBlock, session, cooldown, reliability, concurrency }) ?? structureSequenceRefusal(lc, spot);
+
+  const stored: StoredStructureTrade = {
+    lifecycleId: lc.id,
+    direction: lc.direction,
+    poolKind: lc.pool.kind,
+    poolPrice: lc.pool.price,
+    sweepExtreme: lc.sweepExtreme,
+    zone: lc.zone,
+    entry: lc.entry!,
+    fillSpot: spot,
+    fillAt: at,
+    stop: lc.stop!,
+    t1: lc.t1!,
+    t2: lc.t2,
+    rToT1: lc.rToT1,
+    score: lc.score,
+  };
+  const structureContext: SetupEntryContext | undefined = entryContext
+    ? {
+        ...entryContext,
+        setupConfidence: confidence,
+        locationBehindLevel: lc.sweepExtreme,
+        locationBehindKind: 'SWEEP_EXTREME',
+        setupClassification: {
+          setupType: STRUCTURE_SETUP_TYPE,
+          setupFamily: 'SWEEP_FVG',
+          primaryTrigger: `${lc.pool.kind}_SWEEP`,
+          allTriggers: ['STRUCTURE', `${lc.pool.kind}_SWEEP`, lc.zone?.kind ?? 'NO_ZONE'],
+          detail: { ...stored, atr: lc.atr, displacementBodyAtr: lc.displacementBodyAtr },
+        },
+        structure: stored,
+      }
+    : undefined;
+
+  const minutesSinceOpen = minutesSinceSessionOpen(exchange);
+  let structureFnoRecord: TradeSetupFnoValidation | null = null;
+  const gateDiagnosticsFor = async (): Promise<GateDiagnostic[]> => {
+    try {
+      const losingClose = await readLosingCloseState(underlying, exchange, direction, mode);
+      // The safety rows only — this family's chain has no LOW_SETUP_QUALITY or POSITIONING_CONFLICT.
+      const rows = evaluateGateDiagnostics(
+        {
+          direction,
+          mode,
+          confidence,
+          riskOffReason: riskOff,
+          feedBlockReason: feedBlock,
+          sessionRefusal: session,
+          minutesSinceOpen,
+          positioningRefusal: null,
+          positioningVotes: null,
+          losingClose,
+          reliability: { evaluated: riskOff == null, reason: reliability },
+          liveRefusalCode: refusal?.code ?? null,
+          thresholds: {
+            minSetupConfidence: MIN_SETUP_CONFIDENCE,
+            openingSettleMinutes: SETUP_OPENING_SETTLE_MINUTES,
+            openingGuardMinutes: SETUP_OPENING_GUARD_MINUTES,
+            postLossSettleMinutes: POST_LOSS_SETTLE_MINUTES,
+            postLossMinConfidence: POST_LOSS_MIN_CONFIDENCE,
+            maxSameDirectionLossesPerDay: MAX_SAME_DIRECTION_LOSSES_PER_DAY,
+          },
+        },
+        at
+      ).filter((r) => r.gate !== 'LOW_SETUP_QUALITY' && r.gate !== 'POSITIONING_CONFLICT');
+      rows.push(structureSequenceDiagnostic(lc, refusal, at));
+      if (FNO_VALIDATION) rows.push(fnoValidationDiagnostic({ enabled: true, record: structureFnoRecord, params: { ...FNO_VALIDATION_PARAMS }, at }));
+      rows.push(
+        ...evaluateValidationGateDiagnostics(
+          {
+            mode,
+            exchange,
+            liveRefusalCode: refusal?.code ?? null,
+            closing: { enforced: TRADING_FLAGS.CLOSING_GUARD, minutesToClose: minutesToSessionClose(exchange, at), guardMinutes: TRADING_PARAMS.SETUP_CLOSING_GUARD_MINUTES },
+            location: { enforced: false, score: entryContext?.locationScore ?? null, minScore: TRADING_PARAMS.LOCATION_GATE_MIN_SCORE },
+            room: { enforced: false, availableAtr: null, requiredAtrV2: null, sufficientV2: null, requiredAtrV1: null, sufficientV1: null },
+            concurrency: { enforced: TRADING_FLAGS.CONCURRENCY_CAP, exposure: concurrencyExposure, max: TRADING_PARAMS.MAX_CONCURRENT_SAME_DIRECTION },
+          },
+          at
+        ).filter((r) => r.gate === 'CLOSING_HOUR' || r.gate === 'CONCURRENT_EXPOSURE')
+      );
+      return rows;
+    } catch (err: any) {
+      logger.warn({ error: err.message, underlying }, 'Structure: gate diagnostics failed');
+      return [];
+    }
+  };
+
+  const phase1Context = {
+    strategy: entryContext?.strategyLabels ?? null,
+    confidenceDimensions: entryContext
+      ? { voteContributions: entryContext.voteContributions ?? null, directionScore: entryContext.directionScore ?? null, setupQualityScore: entryContext.setupQualityScore ?? null }
+      : null,
+    openingEnvironment: classifyOpeningEnvironment(
+      {
+        minutesSinceOpen,
+        adxValue: entryContext?.adxValue ?? 0,
+        atrZ: entryContext?.atrZ ?? 0,
+        freshBreakoutUp: entryContext?.freshBreakoutUp ?? false,
+        freshBreakoutDown: entryContext?.freshBreakoutDown ?? false,
+      },
+      SETUP_OPENING_GUARD_MINUTES
+    ),
+    minutesSinceLastLoss: await readMinutesSinceLastLoss(underlying, exchange, mode, direction),
+    roomCheckOiAgeSeconds: entryContext?.roomCheckOiAgeSeconds ?? null,
+  };
+  const describe =
+    `Structure ${direction}: ${lc.pool.kind.replace(/_/g, ' ').toLowerCase()} ${lc.pool.price} swept (extreme ${lc.sweepExtreme}), displacement ${lc.displacementBodyAtr ?? '—'} ATR; ` +
+    `limit ${lc.entry} (${lc.zone?.kind === 'FVG' ? 'fair-value gap' : 'displacement 50%'}) filled at ${spot}; underlying stop ${lc.stop}, T1 ${lc.t1?.kind} ${lc.t1?.price} (${lc.rToT1}R)` +
+    `${lc.t2 ? `, T2 ${lc.t2.price} (shown only — the whole position closes at T1)` : ''}; score ${lc.score ?? '—'}/100 (describes, never gates).`;
+
+  const recordRefusal = async (code: NoTradeCode | null, reason: string, setup: TradeSetup | null) => {
+    logDecision({
+      at,
+      symbol: underlying,
+      exchange,
+      mode,
+      decision: 'SKIP',
+      code: code ?? 'UNKNOWN',
+      reason,
+      regime,
+      bias: direction,
+      setupQuality: confidence,
+      locationScore: entryContext?.locationScore ?? null,
+      locationReason: entryContext?.locationReason ?? null,
+      roomAvailableAtr: null,
+      roomRequiredAtr: null,
+      roomSufficient: null,
+      positioningBaseline: entryContext?.positioningBaseline ?? null,
+      regimeSource: entryContext?.regimeSource ?? null,
+    });
+    recordDecisionSnapshot({
+      ...snapshotInstrumentation(exchange, structureContext, setup),
+      ...phase1Context,
+      freshness: { timestamps: inputTimestampsFrom(chain, findLeg(chain, chain.atmStrike, side)), underlyingPriceAtGeneration: spot },
+      gateDiagnostics: gateDiagnosticsFor,
+      contractValidation: setup?.contractValidation ?? null,
+      symbol: underlying,
+      exchange,
+      mode,
+      expiry: chain.expiry,
+      decision: 'REFUSE',
+      reasonCode: code,
+      reason,
+      regime,
+      bias: direction,
+      confidence,
+      pcr: chain.pcrDetail?.oiPCR ?? null,
+      underlyingPrice: spot,
+      atr: lc.atr,
+      ...snapshotBlocks(chain, structureContext, setup, side),
+    });
+    await recordStructureOutcome(state, lc, { outcome: 'REFUSED', code: code ?? null, reason, at }, spot);
+  };
+
+  if (refusal) {
+    logger.info({ underlying, exchange, code: refusal.code, lifecycleId: lc.id }, 'Structure: fill refused by its chain');
+    await recordRefusal(refusal.code, `${describe} Refused: ${refusal.reason}`, null);
+    return null;
+  }
+
+  const stopDistance = Math.abs(lc.stop! - spot);
+  const targetMove = Math.abs(lc.t1!.price - spot);
+  const vix = await lookupIndiaVix(provider, exchange);
+  const ivRank = await ivRankFor(underlying, chain.expiry, computeAtmIv(chain)).catch((err: any) => {
+    logger.warn({ error: err.message, underlying }, 'Structure: IV rank unavailable — building without it');
+    return null;
+  });
+  const expectedHoldHours = Math.max(0.5, remainingSessionMinutesFrom(exchange, at) / 60);
+  // Part A applies to this family too; its target is a pool, so no IV cap.
+  const validated = await buildWithFnoValidation({
+    enabled: FNO_VALIDATION,
+    primary: chain,
+    side,
+    params: { deltaMin: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MIN, deltaMax: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MAX, deltaTarget: FNO_VALIDATION_PARAMS.OPTION_DELTA_TARGET },
+    contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: entryContext?.hvPct ?? null, ivCap: null }),
+    fetchNextExpiry: (expiry) => buildOptionChain(provider, underlying, exchange, expiry),
+    onError: (stage, err: any) => logger.warn({ error: err?.message ?? String(err), stage, underlying, exchange }, 'Structure: next-expiry chain unavailable — no fallback contract'),
+    build: (c, strike) => {
+      const sl = triggerSlPremiumPct(c.strikes, strike, direction, stopDistance);
+      return buildTradeSetup(
+        c.strikes,
+        strike,
+        direction,
+        confidence,
+        targetMove,
+        sl?.slPremiumPct,
+        vix,
+        c.dte,
+        c.lotSize,
+        lc.atr,
+        {
+          ivRank,
+          hvPct: entryContext?.hvPct ?? null,
+          tickSize: 0.05,
+          expectedHoldHours,
+          flags: { structuralStop: TRADING_FLAGS.STRUCTURAL_STOP, richIvRr: TRADING_FLAGS.RICH_IV_RR },
+          spot,
+          // The structural stop IS the sweep extreme + the engine's 0.1 ATR buffer.
+          nearestBehindLevel: lc.sweepExtreme,
+          structuralStopBufferAtr: STRUCTURE_RULES.stopBufferAtr,
+          ivVsHv: entryContext?.ivVsHv ?? null,
+          richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
+          ...(FNO_VALIDATION
+            ? { fnoValidation: { enabled: true, maxCostPctOfPremium: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM, minOptionStopAtr: FNO_VALIDATION_PARAMS.MIN_OPTION_STOP_ATR } }
+            : {}),
+        }
+      );
+    },
+  });
+  const builtRaw = validated.setup;
+  const usedChain = validated.chain;
+  structureFnoRecord = validated.fnoValidation;
+  if (!builtRaw.available) {
+    logger.info({ underlying, exchange, code: builtRaw.noTradeCode ?? null, lifecycleId: lc.id }, 'Structure: option leg refused by buildTradeSetup');
+    await recordRefusal(builtRaw.noTradeCode ?? null, `${describe} ${builtRaw.reason}`, builtRaw);
+    return null;
+  }
+  const fresh: TradeSetup = {
+    ...builtRaw,
+    strategy: STRUCTURE_STRATEGY,
+    expiry: usedChain.expiry,
+    dte: usedChain.dte,
+    reason: `${describe} ${builtRaw.reason}`,
+  };
+  const shadowModels = computeShadowModels(builtRaw, usedChain, direction, targetMove, expectedHoldHours, { ivRank, hvPct: entryContext?.hvPct ?? null, underlying });
+  const mintFresh = (): Promise<StoredTradeSetup> =>
+    mintTradeSetup({
+      underlying, exchange, mode, key, today, setupTtl, chain: usedChain, fresh, direction, confidence, regime, intelligenceScore,
+      voteSnapshot, entryContext: structureContext, phase1Context, gateDiagnosticsFor, shadowModels,
+      structure: stored,
+    });
+  const minted = await mintUnderLock({ underlying, exchange, mode, key, today, isPositional: false, priorDecisionId, mintFresh });
+  const ours = minted.available && minted.strategy === STRUCTURE_STRATEGY && (minted as StoredTradeSetup).structure?.lifecycleId === lc.id;
+  await recordStructureOutcome(
+    state,
+    lc,
+    ours
+      ? { outcome: 'MINTED', code: null, reason: `${minted.side} ${minted.strike} @ ${minted.entry}`, at, decisionId: (minted as StoredTradeSetup).decisionId ?? null, signalId: (minted as StoredTradeSetup).signalId ?? null }
+      : { outcome: 'REFUSED', code: 'MINT_LOCK', reason: minted.available ? 'Another evaluation minted a setup into this slot first.' : minted.reason, at },
+    spot
+  );
+  return minted;
+}
+
 /**
  * Mints one new sticky setup: the `signals` row, the TAKE decision row, the
  * slot write and the Telegram push. Split out of resolveStickyTradeSetup
@@ -3690,6 +4269,8 @@ async function mintTradeSetup(ctx: {
   shadowModels: ReturnType<typeof computeShadowModels>;
   /** Momentum-break family only: the trigger, carried in the slot for LEVEL_RECLAIMED. */
   momentumBreak?: StoredMomentumBreak;
+  /** Structure family only: the lifecycle, carried in the slot for SWEEP_RECLAIMED. */
+  structure?: StoredStructureTrade;
 }): Promise<StoredTradeSetup> {
   const {
     underlying, exchange, mode, key, today, setupTtl, chain, fresh, direction, confidence, regime, intelligenceScore,
@@ -3718,6 +4299,8 @@ async function mintTradeSetup(ctx: {
     roomSufficient: entryContext?.roomSufficient ?? null,
     riskReward: fresh.riskReward ?? null,
     estimatedCostPct: fresh.estimatedCostPct ?? null,
+    positioningBaseline: entryContext?.positioningBaseline ?? null,
+    regimeSource: entryContext?.regimeSource ?? null,
     // What the not-yet-live gates would have said about this same trade.
     shadow: { room: entryContext?.roomSufficient !== false, location: (entryContext?.locationScore ?? 100) >= 40 },
   });
@@ -3789,6 +4372,7 @@ async function mintTradeSetup(ctx: {
     underlyingAtGeneration: chain.spotPrice,
     logic,
     ...(ctx.momentumBreak ? { momentumBreak: ctx.momentumBreak } : {}),
+    ...(ctx.structure ? { structure: ctx.structure } : {}),
   };
   try {
     await redis.set(key, JSON.stringify(toStore), 'EX', setupTtl);
@@ -4767,6 +5351,8 @@ interface SetupEntryContext {
   breakoutPersistBarsAgo?: number | null;
   /** Momentum-break round: the trigger a MOMENTUM_BREAK setup (or refusal) was built from. */
   momentumBreak?: StoredMomentumBreak | null;
+  /** Structure round: the lifecycle a STRUCTURE setup (or refusal) was built from. */
+  structure?: StoredStructureTrade | null;
 }
 
 function regimeAlignment(direction: BiasDirection, regime: MarketRegime): RegimeAlignment {
