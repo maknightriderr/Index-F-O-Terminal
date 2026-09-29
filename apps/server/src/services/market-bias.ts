@@ -5040,7 +5040,8 @@ function computeShadowModels(
     const leg = findLeg(chain, setup.strike, setup.side);
     const strikeSelection = scoreStrikeCandidates({
       strikes: chain.strikes,
-      liveStrike: chain.atmStrike,
+      // The strike actually traded: chain.atmStrike with FNO_VALIDATION off, the delta-band strike with it on.
+      liveStrike: setup.strike,
       side: setup.side,
       expiry: chain.expiry,
       expectedMovePoints,

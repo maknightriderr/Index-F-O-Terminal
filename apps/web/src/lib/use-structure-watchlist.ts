@@ -27,8 +27,9 @@ export function useStructureWatchlist(): { rows: StructureLifecycleView[]; enabl
           setIsLive(true);
           setLoading(false);
         })
-        .catch(() => {
+        .catch((err: unknown) => {
           if (cancelled) return;
+          console.warn('Structure watchlist fetch failed', err);
           setIsLive(false);
           setLoading(false);
         });
