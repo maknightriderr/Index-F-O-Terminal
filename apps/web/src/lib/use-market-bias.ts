@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { api } from './api';
-import type { MarketBias, IntelligenceScore, TradeSetup, TradingMode } from '@fno/shared';
+import type { MarketBias, IntelligenceScore, TradeSetup, TradingMode, StructureBlock } from '@fno/shared';
 
 const POLL_INTERVAL_MS = 60000;
 
@@ -63,7 +63,7 @@ export function placeholderScore(symbol: string): IntelligenceScore {
 // simply wasn't reset on prop change — silently showing the PREVIOUS
 // symbol's bias/regime/score mislabeled under the new symbol's header until
 // the first fetch for the new key resolved.
-const biasCache = new Map<string, { bias: MarketBias; score: IntelligenceScore; tradeSetup: TradeSetup }>();
+const biasCache = new Map<string, { bias: MarketBias; score: IntelligenceScore; tradeSetup: TradeSetup; structure?: StructureBlock }>();
 function biasCacheKey(symbol: string, exchange: string, mode: TradingMode): string {
   return `${exchange}:${symbol}:${mode}`;
 }
@@ -82,10 +82,12 @@ export function useMarketBias(
   symbol: string,
   exchange: string,
   mode: TradingMode = 'INTRADAY'
-): { bias: MarketBias; score: IntelligenceScore; tradeSetup: TradeSetup; isLive: boolean } {
+): { bias: MarketBias; score: IntelligenceScore; tradeSetup: TradeSetup; structure: StructureBlock | null; isLive: boolean } {
   const [bias, setBias] = useState<MarketBias>(() => placeholderBias(symbol));
   const [score, setScore] = useState<IntelligenceScore>(() => placeholderScore(symbol));
   const [tradeSetup, setTradeSetup] = useState<TradeSetup>(NO_SETUP);
+  // Structure engine lifecycle for this symbol (absent when the STRUCTURE flag is off).
+  const [structure, setStructure] = useState<StructureBlock | null>(null);
   const [isLive, setIsLive] = useState(false);
   // Track whether we've ever gotten live data for this symbol — if so,
   // failures keep the last live snapshot instead of reverting to mocks.
@@ -103,6 +105,7 @@ export function useMarketBias(
     setBias(cached?.bias ?? placeholderBias(symbol));
     setScore(cached?.score ?? placeholderScore(symbol));
     setTradeSetup(cached?.tradeSetup ?? NO_SETUP);
+    setStructure(cached?.structure ?? null);
     setIsLive(!!cached);
     hasReceivedLive.current = !!cached;
 
@@ -114,6 +117,7 @@ export function useMarketBias(
         setBias(data.bias);
         setScore(data.score);
         setTradeSetup(data.tradeSetup);
+        setStructure(data.structure ?? null);
         setIsLive(true);
         hasReceivedLive.current = true;
       } catch {
@@ -128,6 +132,7 @@ export function useMarketBias(
           setBias(data.bias);
           setScore(data.score);
           setTradeSetup(data.tradeSetup);
+          setStructure(data.structure ?? null);
           setIsLive(true);
           hasReceivedLive.current = true;
         } catch {
@@ -152,5 +157,5 @@ export function useMarketBias(
     };
   }, [symbol, exchange, mode]);
 
-  return { bias, score, tradeSetup, isLive };
+  return { bias, score, tradeSetup, structure, isLive };
 }

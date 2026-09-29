@@ -236,3 +236,20 @@ describe('flags, stamp and schema', () => {
     expect(withF6.length).toBeGreaterThanOrEqual(4);
   });
 });
+
+describe('API and UI surface', () => {
+  it('GET /api/structure/watchlist is registered and read-only (it never evaluates, so it can never mint)', () => {
+    const index = readFileSync(path.join(REPO_ROOT, 'apps/server/src/index.ts'), 'utf-8');
+    expect(index).toContain("app.use('/api/structure', createStructureRoutes());");
+    const route = readFileSync(path.join(REPO_ROOT, 'apps/server/src/api/structure.ts'), 'utf-8');
+    expect(route).toContain("router.get('/watchlist'");
+    expect(route).not.toMatch(/router\.(post|put|patch|delete)/);
+    expect(route).not.toMatch(/buildMarketBias/);
+  });
+  it('the bias response carries the structure block only while the flag is on; the alerts filter lists STRUCTURE_CONFIRMED', () => {
+    const src = readFileSync(path.join(REPO_ROOT, 'apps/server/src/services/market-bias.ts'), 'utf-8');
+    expect(src).toContain('...(structureOn ? { structure: structureBlock(structureState');
+    const alerts = readFileSync(path.join(REPO_ROOT, 'apps/web/src/components/alerts/index.tsx'), 'utf-8');
+    expect(alerts).toContain("{ value: 'STRUCTURE_CONFIRMED', label: 'Structure Confirmed' }");
+  });
+});

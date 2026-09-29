@@ -6,6 +6,8 @@ import { useAssetTabsStore } from '@/stores';
 import { formatIndianNumber } from '@fno/shared';
 import type { ScannedCandidate, ScanPortfolioRisk, ScannerScoreBreakdown } from '@fno/shared';
 import { ScoreBadge } from '@/components/common/badges';
+import { useStructureWatchlist } from '@/lib/use-structure-watchlist';
+import { LifecycleLevels, StageBadge, stageMeaning } from '@/components/common/structure-stage';
 
 const TREND_STYLES: Record<string, { label: string; className: string; dot: string }> = {
   BULLISH: { label: 'Bullish', className: 'text-emerald-400', dot: 'bg-emerald-400' },
@@ -146,6 +148,8 @@ export function MarketScannerPage() {
           </div>
         </div>
       )}
+
+      <DevelopingSetups onOpen={(symbol, exchange) => openTab(symbol, exchange)} />
 
       {data && data.stockSpecificMovers.length > 0 && (
         <div className="space-y-2 pt-2">
@@ -358,6 +362,64 @@ function CandidateCard({
               ))}
             </ul>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Structure engine (flag STRUCTURE): every symbol's running lifecycle —
+ * WATCH, DEVELOPING (swept), CONFIRMED (limit resting), ENTRY/ACTIVE — the
+ * same list pattern as the declined movers above. A lifecycle is not a trade:
+ * only a filled limit that passes every gate becomes a paper trade.
+ */
+function DevelopingSetups({ onOpen }: { onOpen: (symbol: string, exchange: 'NSE' | 'BSE' | 'MCX') => void }) {
+  const { rows, enabled, isLive } = useStructureWatchlist();
+  if (!isLive || !enabled) return null;
+  return (
+    <div className="space-y-2 pt-2">
+      <div>
+        <h2 className="text-xs font-bold text-gray-300 light:text-slate-700 uppercase tracking-wide">Developing setups</h2>
+        <p className="text-[11px] text-gray-400 light:text-slate-600 mt-0.5">
+          Liquidity sweep → displacement → fair-value-gap retrace, per symbol and direction. A setup becomes a paper trade only when its
+          limit fills and every gate passes; the score (0-100) describes it and never gates.
+        </p>
+      </div>
+      {rows.length === 0 ? (
+        <div className="bg-gray-900/40 light:bg-slate-100 border border-gray-800/50 light:border-slate-200 rounded-xl p-4 text-center text-xs text-gray-400 light:text-slate-600">
+          No symbol is near an untaken pool or mid-sequence right now.
+        </div>
+      ) : (
+        <div className="bg-[#12121c] light:bg-white border border-gray-800/50 light:border-slate-200 rounded-xl divide-y divide-gray-800/40 light:divide-slate-200">
+          {rows.map((r) => (
+            <button
+              key={r.id}
+              type="button"
+              onClick={() => onOpen(r.symbol, r.exchange)}
+              title={stageMeaning(r.stage)}
+              className="w-full text-left px-4 py-2.5 flex items-start gap-3 flex-wrap hover:bg-gray-800/30 light:hover:bg-slate-50 focus:outline-none focus-visible:ring-1 focus-visible:ring-cyan-500"
+            >
+              <span className="text-sm font-bold text-gray-100 light:text-slate-900 w-24 shrink-0">{r.symbol}</span>
+              <span className="w-24 shrink-0">
+                <StageBadge stage={r.stage} />
+              </span>
+              <span
+                className={`text-xs font-semibold w-20 shrink-0 ${r.direction === 'BULLISH' ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700'}`}
+              >
+                {r.direction === 'BULLISH' ? '▲ Bullish' : '▼ Bearish'}
+              </span>
+              <span className="flex-1 min-w-[16rem]">
+                <LifecycleLevels row={r} />
+                {r.liveOutcome === 'REFUSED' && r.liveReason && (
+                  <span className="block text-[11px] text-amber-400 light:text-amber-700 mt-0.5">Fill refused: {r.liveReason}</span>
+                )}
+              </span>
+              <span className="text-[11px] text-gray-400 light:text-slate-600 tabular-nums w-16 shrink-0 text-right">
+                {r.score != null ? `score ${r.score}` : ''}
+              </span>
+            </button>
+          ))}
         </div>
       )}
     </div>

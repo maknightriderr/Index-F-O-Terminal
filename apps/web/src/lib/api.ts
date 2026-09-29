@@ -27,6 +27,8 @@ import type {
   MarketScanResult,
   StrategyTrackRecord,
   FiiDiiActivity,
+  StructureBlock,
+  StructureLifecycleView,
 } from '@fno/shared';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
@@ -138,6 +140,11 @@ class ApiClient {
     return this.get<MarketScanResult>('/api/market-scanner');
   }
 
+  /** Structure engine: every symbol's running lifecycle (WATCH → DEVELOPING → CONFIRMED → ENTRY/ACTIVE). Read-only. */
+  async getStructureWatchlist() {
+    return this.get<{ enabled: boolean; day: string; rows: StructureLifecycleView[] }>('/api/structure/watchlist');
+  }
+
   async getStrategyTrackRecord() {
     return this.get<StrategyTrackRecord>('/api/strategy-scanner/track-record');
   }
@@ -227,7 +234,7 @@ class ApiClient {
   }
 
   async getMarketBias(symbol: string, exchange = 'NSE', mode: 'INTRADAY' | 'POSITIONAL' = 'INTRADAY') {
-    return this.get<{ bias: MarketBias; score: IntelligenceScore; tradeSetup: TradeSetup }>(
+    return this.get<{ bias: MarketBias; score: IntelligenceScore; tradeSetup: TradeSetup; structure?: StructureBlock }>(
       `/api/market/bias/${symbol}?exchange=${exchange}&mode=${mode}`
     );
   }
