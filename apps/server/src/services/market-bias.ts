@@ -20,7 +20,6 @@ import {
   bollingerBands,
   pivotPoints,
   detectRsiDivergence,
-  detectCandlestickPattern,
   detectPattern,
   getOIDescription,
   buildTradeSetup,
@@ -88,6 +87,7 @@ import { evaluateGateDiagnostics, oiWallFreshnessDiagnostic, minutesSinceLastLos
 import { classifyOpeningEnvironment } from './opening-classifier.js';
 import { assessStaleness, inputTimestampsFrom, staleSignalDiagnostic, type StalenessAssessment } from './signal-freshness.js';
 import { classifyStrategyLabels, type StrategyLabelResult } from './strategy-label.js';
+import { closedCandlestickPattern } from './closed-candle-pattern.js';
 import { voteContributionsFrom, type VoteContributions } from './confidence-dimensions.js';
 import { exitReasonFromCloseReason } from './exit-reason.js';
 // Phase 2. The three analytics models are SHADOW ONLY: computed from the same
@@ -175,14 +175,16 @@ import {
   type StructureVariant,
 } from '@fno/analytics';
 import type { StructureBlock } from '@fno/shared';
-import { CONSENSUS_SETUPS, STRUCTURE, STRUCTURE_ENTRY_TF, STRUCTURE_PARAMS, structureEnabledFor } from '../config/trading-flags.js';
+import { CONSENSUS_SETUPS, STRUCTURE, STRUCTURE_ENTRY_MODE, STRUCTURE_ENTRY_TF, STRUCTURE_PARAMS, structureEnabledFor } from '../config/trading-flags.js';
 import {
   STRUCTURE_SEQUENCE_CONFIDENCE,
   STRUCTURE_SETUP_TYPE,
   STRUCTURE_STRATEGY,
   advanceLiveState,
   fillCandidate,
+  rejectionCloseCandidate,
   structureBlock,
+  structureRulesFor,
   structureSequenceDiagnostic,
   structureSequenceRefusal,
   structureSessionOpts,
@@ -687,11 +689,13 @@ async function computeMarketBias(
   const rsi15 = rsi15Series[rsi15Series.length - 1] ?? 50;
   const rsiDivergence = detectRsiDivergence(c15.closes, rsi15Series);
   // Individual-candle reversal shape (Hammer, Engulfing, Morning/Evening
-  // Star, ...) on the most recent 15m bars — a lightweight complement to
-  // the geometric multi-swing patterns already detected elsewhere. Needs a
-  // few bars of trailing context (trend judgment + up to 3-candle
-  // patterns), not just the latest bar in isolation.
-  const candlePattern = detectCandlestickPattern(candles15m.slice(-15));
+  // Star, ...) on the most recent CLOSED short-tier bars — a lightweight
+  // complement to the geometric multi-swing patterns already detected
+  // elsewhere. Needs a few bars of trailing context (trend judgment + up to
+  // 3-candle patterns), not just the latest bar in isolation. Closed bars
+  // only (closedBarsAt, the momentum/structure engines' rule): read on the
+  // forming bar, a pattern could appear and vanish within one bar.
+  const candlePattern = closedCandlestickPattern(candles15m, decisionNow(), (isPositional ? 60 : 15) * 60 * 1000);
 
   // Fair Value Gap (ICT "imbalance"): a 3-candle pattern where an
   // impulsive move leaves a price zone nothing has traded through — price
@@ -1371,7 +1375,16 @@ async function computeMarketBias(
   const momentumRead = momentumEnabled ? await readMomentumBreak(provider, underlying, exchange, candles15m) : null;
   // (INTRADAY only: in POSITIONAL mode `candles15m` holds 1H bars, and trigger trades only live in the INTRADAY slot.)
   const closedNow = isPositional ? [] : toClosedMomentumBars(candles15m, exchange, decisionNow());
-  const lastClosedBar = closedNow.length > 0 ? { time: closedNow[closedNow.length - 1].time, close: closedNow[closedNow.length - 1].close } : null;
+  const lastClosedBar =
+    closedNow.length > 0
+      ? {
+          time: closedNow[closedNow.length - 1].time,
+          close: closedNow[closedNow.length - 1].close,
+          open: closedNow[closedNow.length - 1].open,
+          high: closedNow[closedNow.length - 1].high,
+          low: closedNow[closedNow.length - 1].low,
+        }
+      : null;
 
   // --- Structure engine (flag STRUCTURE, INTRADAY; STRUCTURE_SYMBOLS, default all) ---
   // Every poll advances this symbol's lifecycle from the same closed 15m bars
@@ -1400,10 +1413,17 @@ async function computeMarketBias(
         ? await advanceStructureLifecycle(underlying, exchange, mode, closedNow, chain?.spotPrice ?? null, { timeframe: '5m', bars5: structureClosed5m })
         : null
       : await advanceStructureLifecycle(underlying, exchange, mode, closedNow, chain?.spotPrice ?? null);
-  // The structure family's own newest closed bar (5m in 5m mode): the engine-fill check and SWEEP_RECLAIMED read it.
+  // The structure family's own newest closed bar (5m in 5m mode): the engine-fill check, SWEEP_RECLAIMED and REJECTION_CLOSE read it.
   const structureLastBar =
     structureTimeframe === '5m' && structureClosed5m && structureClosed5m.length > 0
-      ? { time: structureClosed5m[structureClosed5m.length - 1].time, close: structureClosed5m[structureClosed5m.length - 1].close, barMs: STRUCTURE_TF_BAR_MS['5m'] }
+      ? {
+          time: structureClosed5m[structureClosed5m.length - 1].time,
+          close: structureClosed5m[structureClosed5m.length - 1].close,
+          open: structureClosed5m[structureClosed5m.length - 1].open,
+          high: structureClosed5m[structureClosed5m.length - 1].high,
+          low: structureClosed5m[structureClosed5m.length - 1].low,
+          barMs: STRUCTURE_TF_BAR_MS['5m'],
+        }
       : null;
   const structureRun: StructureRun = { claimed: null, handled: false };
   // Regime assist: a qualified trigger in the last BREAKOUT_PERSIST_BARS bars
@@ -1502,7 +1522,7 @@ async function computeMarketBias(
   }
   if (candlePattern) {
     reasoning.push(
-      `${candlePattern.pattern.replace(/_/g, ' ').toLowerCase()} candle (${candlePattern.direction.toLowerCase()}) on the latest 15m bar`
+      `${candlePattern.pattern.replace(/_/g, ' ').toLowerCase()} candle (${candlePattern.direction.toLowerCase()}) on the last closed ${shortLabel} bar`
     );
   }
   if (shortTermPattern) {
@@ -2337,6 +2357,12 @@ interface StoredStructureTrade {
   t2: { kind: string; price: number } | null;
   rToT1: number | null;
   score: number | null;
+  /** The setup's candles, named (recorded only; absent on trades minted before labels). */
+  patterns?: LiveLifecycle['patterns'];
+  /** The candle-pattern points inside `score` (recorded only). */
+  scoreCandle?: LiveLifecycle['scoreCandle'];
+  /** STRUCTURE_ENTRY_MODE = 'REJECTION_CLOSE' only: the rejection candle's own pattern (recorded only). */
+  rejectionPattern?: LiveLifecycle['rejectionPattern'] | null;
   /** Present only for a 5m-entry trade (its SWEEP_RECLAIMED exit reads closed 5m bars). */
   timeframe?: '5m';
 }
@@ -2844,7 +2870,7 @@ async function resolveStickyTradeSetup(
   const structureFamily = triggers?.families.find((f): f is StructureFamilyInput => f.family === 'STRUCTURE');
   const lastClosedBar = triggers?.lastClosedBar ?? null;
   const trigger = momentumFamily?.trigger ? await claimMomentumTrigger(exchange, underlying, mode, momentumFamily.trigger) : null;
-  const structureFill = structureFamily ? await claimStructureFill(exchange, underlying, mode, structureFamily, chain.spotPrice, (structureFamily.lastClosedBar ?? lastClosedBar)?.time ?? null) : null;
+  const structureFill = structureFamily ? await claimStructureFill(exchange, underlying, mode, structureFamily, chain.spotPrice, structureFamily.lastClosedBar ?? lastClosedBar) : null;
 
   if (storedIsPlausible && (isPositional || stored!.day === today)) {
     const isSpread = stored!.structureType === 'SPREAD';
@@ -3896,7 +3922,7 @@ interface StructureFamilyInput {
   family: 'STRUCTURE';
   state: LiveState;
   /** 5m mode only: the newest closed 5m bar (absent: the triggers' 15m bar is the structure bar). */
-  lastClosedBar?: { time: number; close: number; barMs: number };
+  lastClosedBar?: { time: number; close: number; open: number; high: number; low: number; barMs: number };
   /** Filled by resolveStickyTradeSetup: the fill it claimed, and whether the structure chain ran for it. */
   run: StructureRun;
 }
@@ -3905,7 +3931,7 @@ interface StructureRun {
   handled: boolean;
 }
 interface TriggerFamilies {
-  lastClosedBar: { time: number; close: number } | null;
+  lastClosedBar: { time: number; close: number; open?: number; high?: number; low?: number } | null;
   families: Array<MomentumFamilyInput | StructureFamilyInput>;
 }
 
@@ -3975,7 +4001,7 @@ async function advanceStructureLifecycle(
     }
     const now = decisionNow();
     const prev = await readLiveState(exchange, underlying, mode);
-    const { state, events, reset } = advanceLiveState({ prev, evaluation, exchange, underlying, mode, day: istDateOf(evaluation.barTime), now, spot, timeframe });
+    const { state, events, reset } = advanceLiveState({ prev, evaluation, exchange, underlying, mode, day: istDateOf(evaluation.barTime), now, spot, timeframe, entryMode: STRUCTURE_ENTRY_MODE });
     if (reset) logger.info({ underlying, exchange, mode, from: reset.from, to: reset.to }, "Structure: entry timeframe changed — today's lifecycles for this symbol start over");
     if (fiveMinute) state.poolAtr = poolAtr != null ? round2(poolAtr) : null;
     await mergeStructureOutcomes(state);
@@ -4051,6 +4077,8 @@ async function recordStructureOutcome(
       underlyingPrice: spot,
       decisionId: outcome.decisionId ?? null,
       signalId: outcome.signalId ?? null,
+      patterns: lc.patterns ?? null,
+      scoreCandle: lc.scoreCandle ?? null,
     },
   ]);
 }
@@ -4058,6 +4086,16 @@ async function recordStructureOutcome(
 /**
  * A fill acts once: the first caller to claim a filled lifecycle may reverse
  * the slot and mint. A failed claim is logged and treated as not claimed.
+ *
+ * STRUCTURE_ENTRY_MODE = 'REJECTION_CLOSE': the candidate (if any) comes from
+ * rejectionCloseCandidate reading the newest CLOSED bar, never from the live
+ * spot tick; its fill price is that bar's own close (rejectionFillPrice),
+ * read by resolveStructureSetup instead of the live spot. A bar that closes
+ * beyond the sweep extreme (INVALIDATED) or reaches T1 first (MISSED) is
+ * recorded as REFUSED right here — the same STRUCTURE_SEQUENCE code the
+ * TOUCH sequence gate uses — so the lifecycle stops being offered and the
+ * "waiting for rejection candle" text clears. TOUCH (default): unchanged —
+ * fillCandidate reacts to the live spot between bar closes.
  */
 async function claimStructureFill(
   exchange: Exchange,
@@ -4065,9 +4103,27 @@ async function claimStructureFill(
   mode: TradingMode,
   family: StructureFamilyInput,
   spot: number,
-  lastClosedBarTime: number | null
+  closedBar: { time: number; close: number; open?: number; high?: number; low?: number } | null
 ): Promise<LiveLifecycle | null> {
-  const candidate = fillCandidate(family.state, spot, lastClosedBarTime);
+  let candidate: LiveLifecycle | null;
+  if (STRUCTURE_ENTRY_MODE === 'REJECTION_CLOSE') {
+    const timeframe = family.state.timeframe ?? '15m';
+    const outcome =
+      closedBar?.open != null && closedBar?.high != null && closedBar?.low != null
+        ? rejectionCloseCandidate(family.state, { time: closedBar.time, open: closedBar.open, high: closedBar.high, low: closedBar.low, close: closedBar.close }, structureRulesFor(timeframe).fillWithinBars, STRUCTURE_TF_BAR_MS[timeframe])
+        : null;
+    if (outcome && outcome.kind !== 'FILL') {
+      const reason =
+        outcome.kind === 'INVALIDATED'
+          ? 'Closed beyond the sweep extreme before a rejection close (REJECTION_CLOSE).'
+          : 'T1 reached before a rejection close (REJECTION_CLOSE) — MISSED.';
+      await recordStructureOutcome(family.state, outcome.lc, { outcome: 'REFUSED', code: 'STRUCTURE_SEQUENCE', reason, at: closedBar!.time }, null);
+      return null;
+    }
+    candidate = outcome ? { ...outcome.lc, rejectionFillPrice: outcome.entry, rejectionPattern: outcome.pattern } : null;
+  } else {
+    candidate = fillCandidate(family.state, spot, closedBar?.time ?? null);
+  }
   if (!candidate) return null;
   try {
     const first = await redis.set(`structure_claimed:${candidate.id}`, '1', 'EX', 60 * 60 * 24, 'NX');
@@ -4112,7 +4168,10 @@ async function resolveStructureSetup(ctx: {
   const direction: BiasDirection = lc.direction;
   const confidence = STRUCTURE_SEQUENCE_CONFIDENCE;
   const at = decisionNow();
-  const spot = chain.spotPrice;
+  // REJECTION_CLOSE: the real fill is the confirming bar's own close, set by
+  // claimStructureFill — not necessarily the live spot at the time this poll
+  // runs. TOUCH (default): the live spot IS the fill.
+  const spot = lc.rejectionFillPrice ?? chain.spotPrice;
   const side: 'CE' | 'PE' = direction === 'BEARISH' ? 'PE' : 'CE';
   // 5m mode: lc.atr is the 5m ATR. The option leg keeps the 15m ATR as
   // atrPoints (target, structural stop — at the engine's own stop) and gets
@@ -4150,6 +4209,9 @@ async function resolveStructureSetup(ctx: {
     t2: lc.t2,
     rToT1: lc.rToT1,
     score: lc.score,
+    patterns: lc.patterns ?? null,
+    scoreCandle: lc.scoreCandle ?? null,
+    rejectionPattern: lc.rejectionPattern ?? null,
     ...(fiveMinute ? { timeframe: '5m' as const } : {}),
   };
   const structureContext: SetupEntryContext | undefined = entryContext
@@ -4244,7 +4306,9 @@ async function resolveStructureSetup(ctx: {
   const describe =
     `Structure ${direction}${fiveMinute ? ' (5m entry, 15m pools)' : ''}: ${lc.pool.kind.replace(/_/g, ' ').toLowerCase()} ${lc.pool.price} swept (extreme ${lc.sweepExtreme}), displacement ${lc.displacementBodyAtr ?? '—'} ATR; ` +
     `limit ${lc.entry} (${lc.zone?.kind === 'FVG' ? 'fair-value gap' : 'displacement 50%'}) filled at ${spot}; underlying stop ${lc.stop}, T1 ${lc.t1?.kind} ${lc.t1?.price} (${lc.rToT1}R)` +
-    `${lc.t2 ? `, T2 ${lc.t2.price} (shown only — the whole position closes at T1)` : ''}; score ${lc.score ?? '—'}/100 (describes, never gates).`;
+    `${lc.t2 ? `, T2 ${lc.t2.price} (shown only — the whole position closes at T1)` : ''}; score ${lc.score ?? '—'}/100 (describes, never gates).` +
+    `${lc.patterns ? ` Candles: ${lc.patterns.label}.` : ''}` +
+    `${lc.rejectionPattern ? ` Entry confirmed by ${lc.rejectionPattern.label.toLowerCase()} (REJECTION_CLOSE).` : ''}`;
 
   const recordRefusal = async (code: NoTradeCode | null, reason: string, setup: TradeSetup | null) => {
     logDecision({

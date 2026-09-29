@@ -26,7 +26,7 @@ import { MarketBiasCard, MarketRegimeCard, IntelligenceScoreCard, SupportResista
 import { NewsPanel } from '@/components/common/news-panel';
 import { EventCalendarPanel } from '@/components/common/event-calendar-panel';
 import { PayoffDiagram } from '@/components/common/payoff-diagram';
-import { LifecycleLevels, StageBadge, stageMeaning, TimeframeTag } from '@/components/common/structure-stage';
+import { LifecycleLevels, LifecycleReason, PatternLabel, StageBadge, stageMeaning, TimeframeTag } from '@/components/common/structure-stage';
 
 const STRIKE_RANGE_OPTIONS = [5, 10, 15, 20];
 const REFRESH_INTERVAL_MS = 15000;
@@ -774,6 +774,8 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
                   {r.score != null && <span className="text-[10px] text-gray-400 light:text-slate-600 ml-auto">score {r.score}</span>}
                 </div>
                 <LifecycleLevels row={r} />
+                <PatternLabel row={r} />
+                <LifecycleReason row={r} />
                 {r.liveOutcome === 'REFUSED' && r.liveReason && <div className="text-[10px] text-amber-400 light:text-amber-700 mt-0.5">Fill refused: {r.liveReason}</div>}
               </div>
             ))}
@@ -836,6 +838,11 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
   }
 
   const isCall = setup.side === 'CE';
+  // A structure paper trade: the lifecycle it was minted from (newest first), for its candle label.
+  const mintedFrom =
+    setup.strategy === 'STRUCTURE' && structure?.enabled
+      ? structure.lifecycles.find((l) => l.liveOutcome === 'MINTED' && l.direction === (isCall ? 'BULLISH' : 'BEARISH')) ?? null
+      : null;
   return (
     <IntelCard title="Trade Setup" accent="emerald">
       <div className="flex items-center justify-between mb-2.5">
@@ -849,6 +856,11 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
         )}
         <span className="text-[10px] text-gray-400 light:text-slate-600 font-medium">R:R {setup.riskReward!.toFixed(2)}</span>
       </div>
+      {mintedFrom?.patterns && (
+        <div className="-mt-1.5 mb-2">
+          <PatternLabel row={mintedFrom} />
+        </div>
+      )}
       <ContractExpiryLine setup={setup} />
       <div className="grid grid-cols-3 gap-1.5">
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">

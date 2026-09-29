@@ -18,8 +18,8 @@
 // display and record only.
 // ============================================================
 
-import { STRUCTURE_RULES, STRUCTURE_RULES_5M, TERMINAL_STAGES, type LiquidityPool, type StructureEvaluation, type StructureSetup, type StructureStage } from '@fno/analytics';
-import type { Exchange, StructureBlock, StructureLifecycleView, StructurePoolView, StructureTimeframe, TradingMode } from '@fno/shared';
+import { rejectionCloseFill, STRUCTURE_RULES, STRUCTURE_RULES_5M, TERMINAL_STAGES, type LiquidityPool, type StructureEvaluation, type StructureScore, type StructureSetup, type StructureStage } from '@fno/analytics';
+import type { Exchange, StructureBlock, StructureCandleScoreView, StructureLifecycleView, StructurePatternsView, StructurePoolView, StructureTimeframe, TradingMode } from '@fno/shared';
 import type { GateDiagnostic } from './gate-diagnostics.js';
 
 export { STRUCTURE_STRATEGY } from './momentum-break-live.js';
@@ -114,6 +114,16 @@ export interface LiveLifecycle {
   t2: { kind: string; price: number } | null;
   rToT1: number | null;
   score: number | null;
+  /**
+   * The score without the candle-pattern bonus — what fillCandidate orders by,
+   * so the bonus never changes which lifecycle is filled. Absent on states
+   * written before labels (score then has no bonus in it).
+   */
+  scoreBase?: number | null;
+  /** The candle-pattern points inside `score` (display). */
+  scoreCandle?: StructureCandleScoreView | null;
+  /** The setup's candles, named (display and records only). */
+  patterns?: StructurePatternsView | null;
   sweepExtreme: number;
   atr: number;
   displacementBodyAtr: number | null;
@@ -121,6 +131,26 @@ export interface LiveLifecycle {
   reason: string | null;
   /** Index of the engine's fill bar (its open time), when the engine saw one. */
   engineFillBarTime: number | null;
+  /**
+   * When this setup first reached CONFIRMED (the transition's own `at`), from
+   * setup.history — which the engine only ever appends to, so this is stable
+   * across polls no matter how far the engine's own (touch-based) internal
+   * simulation has since moved the stage. STRUCTURE_ENTRY_MODE =
+   * 'REJECTION_CLOSE' anchors its fill window here, NOT on `stage`/`stageAt`,
+   * so a bar that merely touches the zone (advancing the engine's own shadow
+   * ENTRY/ACTIVE/CLOSED simulation) can never stop REJECTION_CLOSE from still
+   * recognising a later bar's real rejection close. Null before CONFIRMED.
+   */
+  confirmedAt: number | null;
+  /**
+   * STRUCTURE_ENTRY_MODE = 'REJECTION_CLOSE' only: set by rejectionCloseCandidate
+   * on the lifecycle it is about to claim — the confirming bar's own close (the
+   * real fill price, which is NOT necessarily the live spot at claim time) and
+   * the rejection candle's pattern label. Transient (set just before the claim,
+   * read once by resolveStructureSetup); not persisted beyond that poll's use.
+   */
+  rejectionFillPrice?: number;
+  rejectionPattern?: { shape: string; label: string };
   /** The live outcome at the fill. */
   live: { outcome: 'MINTED' | 'REFUSED'; reason: string | null; code: string | null; at: number; decisionId?: string | null; signalId?: string | null } | null;
 }
@@ -167,9 +197,23 @@ export interface LifecycleEventRow {
   underlyingPrice: number | null;
   decisionId?: string | null;
   signalId?: string | null;
+  /** The setup's candles at this transition (null for WATCH rows). Migration 028. */
+  patterns?: StructurePatternsView | null;
+  /** The candle-pattern points inside `score`. Migration 028. */
+  scoreCandle?: StructureCandleScoreView | null;
 }
 
 const poolView = (p: LiquidityPool | null | undefined): StructurePoolView | null => (p ? { kind: p.kind, price: round2(p.price), rank: p.rank } : null);
+
+/** The engine's candle labels as the API/UI and the records carry them. */
+export function patternsView(p: StructureSetup['patterns'] | null | undefined): StructurePatternsView | null {
+  return p ? { sweepPattern: p.sweepPattern, displacementPattern: p.displacementPattern, combo: p.combo, label: p.label } : null;
+}
+
+/** The candle-pattern points inside a score (null before the setup is scored). */
+export function scoreCandleView(s: StructureScore | null | undefined): StructureCandleScoreView | null {
+  return s?.candle ? { rejection: s.candle.rejection, engulfing: s.candle.engulfing, star: s.candle.star, applied: s.candle.applied } : null;
+}
 
 /**
  * Folds this poll's engine read into the Redis state. Pure: returns the next
@@ -191,6 +235,8 @@ export function advanceLiveState(args: {
   spot: number | null;
   /** Absent = 15m. */
   timeframe?: StructureTimeframe;
+  /** STRUCTURE_ENTRY_MODE, for the CONFIRMED display text only (absent = 'TOUCH', unchanged). */
+  entryMode?: 'TOUCH' | 'REJECTION_CLOSE';
 }): { state: LiveState; events: LifecycleEventRow[]; reset: { from: StructureTimeframe; to: StructureTimeframe } | null } {
   const { evaluation, exchange, underlying, mode, day, now, spot } = args;
   const timeframe = args.timeframe ?? '15m';
@@ -221,11 +267,26 @@ export function advanceLiveState(args: {
       t2: setup.t2,
       rToT1: setup.rToT1,
       score: setup.score?.total ?? null,
+      scoreBase: setup.score?.baseTotal ?? null,
+      scoreCandle: scoreCandleView(setup.score),
+      patterns: patternsView(setup.patterns),
       sweepExtreme: round2(setup.sweep.extreme),
       atr: round2(setup.atr),
       displacementBodyAtr: setup.displacement?.bodyAtr ?? null,
       stageAt: last?.at ?? now,
-      reason: last?.reason ?? null,
+      // Stable once set — setup.history only ever grows, so this keeps the
+      // true CONFIRMED time no matter how far the engine's own (touch-based)
+      // shadow simulation has since moved `stage`.
+      confirmedAt: setup.history.find((h) => h.stage === 'CONFIRMED')?.at ?? null,
+      // CONFIRMED itself carries no engine reason; under REJECTION_CLOSE this
+      // is the only fill mode — TOUCH's engine fill is instantaneous enough
+      // that CONFIRMED is rarely observed resting, but REJECTION_CLOSE can sit
+      // there for several bars while the zone hasn't been rejected yet. Shown
+      // until a live outcome is recorded, regardless of the engine's own
+      // shadow stage (see confirmedAt above and rejectionCloseCandidate).
+      reason:
+        last?.reason ??
+        (args.entryMode === 'REJECTION_CLOSE' && setup.history.some((h) => h.stage === 'CONFIRMED') && (old?.live ?? null) == null ? 'waiting for rejection candle at zone' : null),
       engineFillBarTime: setup.fill?.barTime ?? null,
       live: old?.live ?? null,
     };
@@ -250,6 +311,8 @@ export function advanceLiveState(args: {
         t2: setup.t2?.price ?? null,
         score: setup.score?.total ?? null,
         underlyingPrice: spot,
+        patterns: lc.patterns ?? null,
+        scoreCandle: lc.scoreCandle ?? null,
       });
     }
     lc.recorded = setup.history.length;
@@ -283,6 +346,8 @@ export function advanceLiveState(args: {
       t2: null,
       score: null,
       underlyingPrice: spot,
+      patterns: null,
+      scoreCandle: null,
     });
   }
 
@@ -311,7 +376,8 @@ export function advanceLiveState(args: {
  * have seen the fill on the bar that just closed (stage ENTRY). Either way the
  * price must still be between the stop and T1 — a fill that has already hit
  * the stop or the target is not taken late. Once a lifecycle has a live
- * outcome it is never offered again. Highest score first.
+ * outcome it is never offered again. Highest score first — the score WITHOUT
+ * the candle-pattern bonus (scoreBase), so the bonus never picks the fill.
  */
 export function fillCandidate(state: LiveState, spot: number | null, lastClosedBarTime: number | null): LiveLifecycle | null {
   if (spot == null || !Number.isFinite(spot)) return null;
@@ -323,8 +389,75 @@ export function fillCandidate(state: LiveState, spot: number | null, lastClosedB
     if (!(l.stage === 'CONFIRMED' && touched) && !freshEngineFill) return false;
     return bear ? spot < l.stop && spot > l.t1.price : spot > l.stop && spot < l.t1.price;
   });
-  candidates.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+  const orderScore = (l: LiveLifecycle) => (l.scoreBase !== undefined ? l.scoreBase ?? 0 : l.score ?? 0);
+  candidates.sort((a, b) => orderScore(b) - orderScore(a));
   return candidates[0] ?? null;
+}
+
+/** A single closed bar's OHLC, as the caller reads it off its own closed-candle series. */
+export interface ClosedBarOHLC {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
+/** A REJECTION_CLOSE fill, with the entry price (the bar's own close) and the candle's pattern label. */
+export interface RejectionCloseFillResult {
+  kind: 'FILL';
+  lc: LiveLifecycle;
+  entry: number;
+  pattern: { shape: string; label: string };
+}
+/** A close beyond the sweep extreme before ever rejecting the zone — the same invalidation TOUCH mode already has, "as now". */
+export interface RejectionCloseInvalidated {
+  kind: 'INVALIDATED';
+  lc: LiveLifecycle;
+}
+/** T1 reached before any bar gave a rejection close. */
+export interface RejectionCloseMissed {
+  kind: 'MISSED';
+  lc: LiveLifecycle;
+}
+export type RejectionCloseOutcome = RejectionCloseFillResult | RejectionCloseInvalidated | RejectionCloseMissed;
+
+/**
+ * STRUCTURE_ENTRY_MODE = 'REJECTION_CLOSE' equivalent of fillCandidate: what
+ * the newest CLOSED entry-timeframe bar decided for a CONFIRMED lifecycle,
+ * per the pre-registered rule (@fno/analytics rejectionCloseFill) — NOT a
+ * live-tick touch. Priority per bar, matching the backtest harness's
+ * CLOSE_CONFIRM scan exactly: a rejection-close FILL first, else a close
+ * beyond the sweep extreme (INVALIDATED), else T1 already reached (MISSED).
+ *
+ * Anchored on `confirmedAt` (stable — setup.history only ever grows), NOT on
+ * `stage`/`stageAt`: the engine's own internal (touch-based) shadow
+ * simulation moves `stage` away from CONFIRMED the instant ANY bar merely
+ * touches the zone, which is not a rejection close. Gating on `stage` would
+ * silently stop REJECTION_CLOSE from ever seeing the later bar that actually
+ * rejects the zone. Like the backtest harness, this never reads the engine's
+ * own fill/exit; only this function's answer can mint, invalidate or miss a
+ * lifecycle under this mode. Highest score first (scoreBase, without the
+ * candle-pattern bonus), like fillCandidate.
+ */
+export function rejectionCloseCandidate(state: LiveState, lastClosedBar: ClosedBarOHLC | null, fillWithinBars: number, barMs: number): RejectionCloseOutcome | null {
+  if (!lastClosedBar) return null;
+  const barCloseAt = lastClosedBar.time + barMs;
+  const candidates = state.lifecycles.filter((l) => {
+    if (l.live != null || l.entry == null || l.stop == null || l.t1 == null || !l.zone || l.confirmedAt == null) return false;
+    if (barCloseAt <= l.confirmedAt) return false; // only bars that closed strictly after CONFIRMED
+    return barCloseAt - l.confirmedAt <= fillWithinBars * barMs;
+  });
+  const orderScore = (l: LiveLifecycle) => (l.scoreBase !== undefined ? l.scoreBase ?? 0 : l.score ?? 0);
+  candidates.sort((a, b) => orderScore(b) - orderScore(a));
+  for (const l of candidates) {
+    const hit = rejectionCloseFill(lastClosedBar, l.zone!, l.direction);
+    if (hit) return { kind: 'FILL', lc: l, entry: hit.entry, pattern: { shape: hit.shape, label: hit.label } };
+    const bear = l.direction === 'BEARISH';
+    if (bear ? lastClosedBar.close > l.sweepExtreme : lastClosedBar.close < l.sweepExtreme) return { kind: 'INVALIDATED', lc: l };
+    if (bear ? lastClosedBar.low <= l.t1!.price : lastClosedBar.high >= l.t1!.price) return { kind: 'MISSED', lc: l };
+  }
+  return null;
 }
 
 /**
@@ -391,6 +524,8 @@ export function lifecycleView(state: LiveState, lc: LiveLifecycle): StructureLif
     t2: lc.t2,
     rToT1: lc.rToT1,
     score: lc.score,
+    scoreCandle: lc.scoreCandle ?? null,
+    patterns: lc.patterns ?? null,
     sweepExtreme: lc.sweepExtreme,
     stageAt: lc.stageAt,
     reason: lc.reason,
@@ -450,6 +585,7 @@ export function watchlistRows(state: LiveState): StructureLifecycleView[] {
         t2: null,
         rToT1: null,
         score: null,
+        patterns: null,
         sweepExtreme: null,
         stageAt: state.barTime != null ? state.barTime + STRUCTURE_TF_BAR_MS[state.timeframe ?? '15m'] : state.updatedAt,
         reason: null,

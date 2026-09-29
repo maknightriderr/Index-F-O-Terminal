@@ -20,6 +20,7 @@
 import {
   evaluateStructureSession,
   evaluateStructureSessionMTF,
+  rejectionCloseFill,
   STRUCTURE_5M_VARIANTS,
   STRUCTURE_RULES,
   STRUCTURE_RULES_5M,
@@ -27,7 +28,7 @@ import {
   type StructureSetup,
   type StructureVariant,
 } from '@fno/analytics';
-import { CLOSING_GUARD_MIN, type BacktestStrategy, type BacktestTrade, type LoadedSymbol } from './harness.js';
+import { CLOSING_GUARD_MIN, type BacktestOrder, type BacktestStrategy, type BacktestTrade, type LoadedSymbol } from './harness.js';
 
 export type StructureTrade = BacktestTrade<StructureSetup>;
 
@@ -80,8 +81,10 @@ export const STRUCTURE_STRATEGY: BacktestStrategy<StructureVariant, StructureSet
   evaluate: (loaded, i, variant) => {
     const placed = confirmedAt(loaded, i, variant);
     if (placed.length === 0) return null;
-    // Both directions confirming on one bar is rare; take the higher score.
-    return [...placed].sort((a, b) => (b.score?.total ?? 0) - (a.score?.total ?? 0))[0];
+    // Both directions confirming on one bar is rare; take the higher score —
+    // the score WITHOUT the candle-pattern bonus (baseTotal), so the bonus can
+    // never change which setup is placed.
+    return [...placed].sort((a, b) => (b.score?.baseTotal ?? 0) - (a.score?.baseTotal ?? 0))[0];
   },
   toOrder: (st) => ({
     direction: st.direction,
@@ -102,6 +105,37 @@ export const STRUCTURE_STRATEGY: BacktestStrategy<StructureVariant, StructureSet
     'By displacement size': (t) => displacementBucket(t.signal.displacement?.bodyAtr),
     'By zone': (t) => t.signal.zone?.kind ?? 'n/a',
     'By exit': (t) => t.exit,
+  },
+};
+
+/**
+ * The REJECTION_CLOSE entry mode on the 15m live config: same setups
+ * (identical evaluate/CONFIRMED logic — the mode only changes HOW a CONFIRMED
+ * setup is entered), a CLOSE_CONFIRM order instead of a LIMIT. Backtest.
+ * Part 2 pre-registered rule; see @fno/analytics rejection-close.ts.
+ */
+export const STRUCTURE_STRATEGY_REJECTION_CLOSE: BacktestStrategy<StructureVariant, StructureSetup> = {
+  ...STRUCTURE_STRATEGY,
+  name: 'STRUCTURE_REJECTION_CLOSE',
+  orderType: 'CLOSE_CONFIRM',
+  toOrder: (st) => ({
+    direction: st.direction,
+    type: 'CLOSE_CONFIRM',
+    entry: st.entry!, // the zone's near edge — reference only, for the entry-shift report
+    stop: st.stop!,
+    target: st.t1!.price,
+    fillWithinBars: STRUCTURE_RULES.fillWithinBars,
+    zoneFar: st.zone!.far,
+    zoneKind: st.zone!.kind,
+  }),
+  testCloseConfirm: (bar, order: BacktestOrder) => {
+    const hit = rejectionCloseFill(bar, { near: order.entry, far: order.zoneFar!, kind: order.zoneKind as 'FVG' | 'DISP_50' }, order.direction);
+    return hit ? { entry: hit.entry, meta: { pattern: hit.label, shape: hit.shape } } : null;
+  },
+  closeConfirmMinRR: () => STRUCTURE_RULES.minT1R,
+  groupKeys: {
+    ...STRUCTURE_STRATEGY.groupKeys,
+    'By rejection pattern': (t) => String((t.entryMeta as { shape?: string } | undefined)?.shape ?? 'n/a'),
   },
 };
 

@@ -1803,6 +1803,26 @@ export interface StructurePoolView {
   rank: number;
 }
 
+/** The setup's candles, named (structure-engine/candle-labels.ts). Descriptive only — never gates. */
+export interface StructurePatternsView {
+  /** HAMMER | SHOOTING_STAR | PIN_BAR | REJECTION | TWEEZER_BOTTOM | TWEEZER_TOP | TWO_BAR_SWEEP */
+  sweepPattern: string;
+  /** BULLISH_ENGULFING | BEARISH_ENGULFING | MOMENTUM_CANDLE; null until the displacement prints. */
+  displacementPattern: string | null;
+  /** MORNING_STAR | EVENING_STAR */
+  combo: string | null;
+  /** e.g. "Hammer sweep of PDL → bullish engulfing". */
+  label: string;
+}
+
+/** The candle-pattern part of the score's Tier 1 (points; `applied` is after the Tier-1 cap). */
+export interface StructureCandleScoreView {
+  rejection: number;
+  engulfing: number;
+  star: number;
+  applied: number;
+}
+
 export interface StructureLifecycleView {
   /** Stable per symbol: exchange:symbol:direction:sweep bar time. */
   id: string;
@@ -1826,6 +1846,10 @@ export interface StructureLifecycleView {
   rToT1: number | null;
   /** 0-100, describes and orders; never gates. */
   score: number | null;
+  /** The candle-pattern points inside `score` (absent on states written before labels). */
+  scoreCandle?: StructureCandleScoreView | null;
+  /** The setup's candles, named (absent on states written before labels; null for WATCH rows). */
+  patterns?: StructurePatternsView | null;
   sweepExtreme: number | null;
   /** When the current stage was reached (epoch ms, the bar close that caused it). */
   stageAt: number;
