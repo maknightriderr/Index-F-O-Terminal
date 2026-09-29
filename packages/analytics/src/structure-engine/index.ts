@@ -38,6 +38,13 @@
 //   - Session end is NOT known to the engine (that would need the next bar):
 //     the backtest harness and the live slot apply it.
 //
+// MULTI-TIMEFRAME (evaluateStructureSessionMTF): pools stay on 15m bars; the
+// sweep, displacement, zone, stop and fill run on CLOSED 5m bars with the
+// rules restated in time (STRUCTURE_RULES_5M). A 15m bar contributes pools
+// only once it has closed by the 5m bar's close; 5m bars since the last
+// closed 15m bar mark pools taken. The 15m function is unchanged — both run
+// the same lifecycle machine (runStructureMachine).
+//
 // The score (0-100) orders and describes setups; it never gates.
 // ============================================================
 
@@ -120,7 +127,24 @@ export const STRUCTURE_RULES = {
   internalSwingLookback: 1,
 } as const;
 
-export type StructureRules = typeof STRUCTURE_RULES;
+export type StructureRules = { readonly [K in keyof typeof STRUCTURE_RULES]: number };
+
+/**
+ * The same rule on 5m event bars (evaluateStructureSessionMTF), restated in
+ * TIME and pre-registered, not tuned: displacement within 30 minutes (6 × 5m),
+ * the limit fills within 120 minutes (24 × 5m — the same clock time as
+ * 8 × 15m), internal swing on a 5-bar 5m fractal. Everything else — pool
+ * rules (still on 15m bars), ATR fractions, 1.5R, LATE at 1R — is unchanged.
+ */
+export const STRUCTURE_RULES_5M: StructureRules = {
+  ...STRUCTURE_RULES,
+  displacementWithinBars: 6,
+  fillWithinBars: 24,
+  internalSwingLookback: 2,
+};
+
+export const STRUCTURE_BAR_MS_15M = 15 * 60 * 1000;
+export const STRUCTURE_BAR_MS_5M = 5 * 60 * 1000;
 
 export interface StructureVariant {
   id: string;
@@ -128,6 +152,8 @@ export interface StructureVariant {
   dispMult: number;
   /** The live 60-minute opening guard applies to this family's fills. */
   openingGuard: boolean;
+  /** Minutes before the session close after which a fill is refused (absent: the harness default, 60). */
+  closingGuardMin?: number;
 }
 
 /**
@@ -140,6 +166,30 @@ export const STRUCTURE_VARIANTS: readonly StructureVariant[] = [
   { id: 'D1.0-NOGUARD', dispMult: 1.0, openingGuard: false },
   { id: 'D1.5-GUARD', dispMult: 1.5, openingGuard: true },
   { id: 'D1.5-NOGUARD', dispMult: 1.5, openingGuard: false },
+] as const;
+
+/**
+ * Pre-registered for the 5m entry timeframe (15m pools, 5m events):
+ * DISP_MULT ∈ {1.0, 1.5} × closing guard ∈ {60, 15} minutes. The opening
+ * guard is fixed OFF, the structure engine's existing choice. One is chosen
+ * on in-sample average net R (ties: the earlier-registered) and run once out
+ * of sample.
+ */
+export const STRUCTURE_5M_VARIANTS: readonly StructureVariant[] = [
+  { id: '5m-D1.0-C60', dispMult: 1.0, openingGuard: false, closingGuardMin: 60 },
+  { id: '5m-D1.0-C15', dispMult: 1.0, openingGuard: false, closingGuardMin: 15 },
+  { id: '5m-D1.5-C60', dispMult: 1.5, openingGuard: false, closingGuardMin: 60 },
+  { id: '5m-D1.5-C15', dispMult: 1.5, openingGuard: false, closingGuardMin: 15 },
+] as const;
+
+/**
+ * Pre-registered for the 15m engine's closing guard: the live config (D1.0,
+ * no opening guard) with the cutoff at 60 or 15 minutes. Chosen on the 15m
+ * IN-SAMPLE period only (average net R; ties keep 60, the incumbent).
+ */
+export const STRUCTURE_15M_CLOSING_VARIANTS: readonly StructureVariant[] = [
+  { id: '15m-D1.0-C60', dispMult: 1.0, openingGuard: false, closingGuardMin: 60 },
+  { id: '15m-D1.0-C15', dispMult: 1.0, openingGuard: false, closingGuardMin: 15 },
 ] as const;
 
 export type StructureStage =
@@ -235,7 +285,10 @@ export function buildLiquidityPools(
   rules: StructureRules = STRUCTURE_RULES
 ): LiquidityPool[] {
   const { bars } = series;
-  const start = series.sessionStarts[s];
+  // s may be one past the last session: "today" has no bar in the series yet
+  // (the MTF engine before today's first 15m bar closes). It then starts at
+  // the series end, so only the previous-day and fractal pools exist.
+  const start = series.sessionStarts[s] ?? bars.length;
   const e = Math.min(end, bars.length);
   const raw: LiquidityPool[] = [];
   const takenAbove = (price: number, from: number) => {
@@ -418,14 +471,6 @@ export function evaluateStructureSession(
     return { index: i, barTime: NaN, atr: null, pools: [], watch: { BULLISH: null, BEARISH: null }, setups: [] };
   }
   const s = series.sessionIdx[i];
-  const start = series.sessionStarts[s];
-  const setups: StructureSetup[] = [];
-  const machines: Record<StructureDirection, Machine> = { BEARISH: { current: null }, BULLISH: { current: null } };
-  const closeAt = (j: number) => bars[j].time + BAR_MS;
-  const move = (st: StructureSetup, stage: StructureStage, j: number, reason?: string) => {
-    st.stage = stage;
-    st.history.push({ stage, barIndex: j, at: closeAt(j), ...(reason ? { reason } : {}) });
-  };
   // Pools from bars < e (with the ATR at e), built once per e.
   const poolCache = new Map<number, { atr: number; pools: LiquidityPool[] } | null>();
   const poolsAt = (e: number) => {
@@ -434,6 +479,146 @@ export function evaluateStructureSession(
       poolCache.set(e, atr != null ? { atr, pools: buildLiquidityPools(series, s, e, atr, rules) } : null);
     }
     return poolCache.get(e)!;
+  };
+  return runStructureMachine({ series, i, variant, rules, barMs: BAR_MS, poolsAt, watchAtr: momentumAtrAt(series, i, MOMENTUM_BREAK_RULES) });
+}
+
+// ---------------- multi-timeframe: 15m pools, 5m events ----------------
+
+/** How many bars of `series` have CLOSED by `cutoff` (epoch ms). Bars are sorted, so this is a prefix. */
+export function closedBarCount(series: MomentumSeries, cutoff: number, barMs: number): number {
+  const { bars } = series;
+  let lo = 0;
+  let hi = bars.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (bars[mid].time + barMs <= cutoff) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/**
+ * The liquidity pools a 5m bar e is judged against, from information that
+ * existed by the close of 5m bar e − 1 (the 15m engine's "pools from bars <
+ * e"): the 15m bars that had CLOSED by then (a 15m bar still forming never
+ * contributes a pool), plus — because a 15m bar's high/low is not known until
+ * it closes — a scan of the 5m bars since the last closed 15m bar, which
+ * marks a pool taken the moment a 5m bar trades through it. Merge and
+ * equal-high/low tolerance use the 15m ATR.
+ */
+export function buildMtfPools(
+  pool15: MomentumSeries,
+  event5: MomentumSeries,
+  e: number,
+  rules: StructureRules = STRUCTURE_RULES_5M,
+  barMs: { pool: number; event: number } = { pool: STRUCTURE_BAR_MS_15M, event: STRUCTURE_BAR_MS_5M },
+  cache?: Map<string, { atr15: number; pools: LiquidityPool[] } | null>
+): { atr15: number; pools: LiquidityPool[] } | null {
+  const ev = event5.bars;
+  if (e <= 0 || e > ev.length) return null;
+  const cutoff = ev[e - 1].time + barMs.event;
+  // The session bar e belongs to (e = length: the last bar's session, for WATCH).
+  const date = event5.sessionDates[event5.sessionIdx[Math.min(e, ev.length - 1)]];
+  const n15 = closedBarCount(pool15, cutoff, barMs.pool);
+  const key = `${date}:${n15}`;
+  let base = cache?.get(key);
+  if (base === undefined) {
+    const sub = truncateSeries(pool15, n15);
+    const last = sub.sessionStarts.length - 1;
+    const s15 = last >= 0 && sub.sessionDates[last] === date ? last : sub.sessionStarts.length;
+    const atr15 = momentumAtrAt(sub, n15, MOMENTUM_BREAK_RULES);
+    base = atr15 != null ? { atr15, pools: buildLiquidityPools(sub, s15, n15, atr15, rules) } : null;
+    cache?.set(key, base);
+  }
+  if (!base) return null;
+  const lastClose15 = n15 > 0 ? pool15.bars[n15 - 1].time + barMs.pool : -Infinity;
+  let hi = -Infinity;
+  let lo = Infinity;
+  for (let k = e - 1; k >= 0 && ev[k].time >= lastClose15; k--) {
+    hi = Math.max(hi, ev[k].high);
+    lo = Math.min(lo, ev[k].low);
+  }
+  return { atr15: base.atr15, pools: base.pools.filter((p) => (p.side === 'HIGH' ? !(hi > p.price) : !(lo < p.price))) };
+}
+
+/**
+ * The structure engine on two timeframes. Liquidity pools come from the 15m
+ * series (and its previous-day and session levels) — the meaningful levels;
+ * the reaction runs on the 5m series: the sweep's close-back (depth ≥ 0.1 ×
+ * the 5m ATR), the displacement (body ≥ DISP_MULT × the 5m ATR), the FVG zone
+ * (≥ 0.1 × the 5m ATR), the stop buffer and the limit fill. T1/T2 are the 15m
+ * pools resting before the sweep and still untaken. Rules are
+ * STRUCTURE_RULES_5M (restated in time).
+ *
+ * LOOK-AHEAD CONTRACT: the 5m series is sliced to [0, i5]; a 15m bar is used
+ * only once it has CLOSED by the close of the 5m bar being judged
+ * (closedBarCount), so appending future 5m or 15m bars never changes the
+ * state at i5. WATCH proximity is judged in the 15m ATR (it is about pools);
+ * the evaluation's `atr` is the 5m ATR.
+ */
+export function evaluateStructureSessionMTF(
+  pool15: MomentumSeries,
+  event5In: MomentumSeries,
+  i5: number,
+  variant: StructureVariant,
+  rules: StructureRules = STRUCTURE_RULES_5M,
+  barMs: { pool: number; event: number } = { pool: STRUCTURE_BAR_MS_15M, event: STRUCTURE_BAR_MS_5M }
+): StructureEvaluation {
+  const series = truncateSeries(event5In, i5 + 1);
+  if (i5 < 0 || i5 >= series.bars.length) {
+    return { index: i5, barTime: NaN, atr: null, pools: [], watch: { BULLISH: null, BEARISH: null }, setups: [] };
+  }
+  const baseCache = new Map<string, { atr15: number; pools: LiquidityPool[] } | null>();
+  const poolCache = new Map<number, { atr: number; pools: LiquidityPool[]; atr15: number } | null>();
+  const poolsAt = (e: number) => {
+    if (!poolCache.has(e)) {
+      const atr = momentumAtrAt(series, e, MOMENTUM_BREAK_RULES);
+      const built = atr != null ? buildMtfPools(pool15, series, e, rules, barMs, baseCache) : null;
+      poolCache.set(e, atr != null && built ? { atr, pools: built.pools, atr15: built.atr15 } : null);
+    }
+    return poolCache.get(e)!;
+  };
+  // WATCH after bar i5: pools from everything closed by i5's close, judged in the 15m ATR.
+  const after = buildMtfPools(pool15, series, i5 + 1, rules, barMs, baseCache);
+  return runStructureMachine({
+    series,
+    i: i5,
+    variant,
+    rules,
+    barMs: barMs.event,
+    poolsAt: (e) => (e === i5 + 1 ? (after ? { atr: after.atr15, pools: after.pools } : null) : poolsAt(e)),
+    watchAtr: after?.atr15 ?? null,
+  });
+}
+
+// ---------------- the lifecycle machine (both timeframes) ----------------
+
+interface MachineContext {
+  /** The event series, already truncated to [0, i]. */
+  series: MomentumSeries;
+  i: number;
+  variant: StructureVariant;
+  rules: StructureRules;
+  /** Event bar length (a transition happens at its bar's close). */
+  barMs: number;
+  /** Pools the event bar e is judged against, with the event-series ATR at e (null without either). */
+  poolsAt: (e: number) => { atr: number; pools: LiquidityPool[] } | null;
+  /** The ATR the WATCH proximity is judged in at i. */
+  watchAtr: number | null;
+}
+
+function runStructureMachine(ctx: MachineContext): StructureEvaluation {
+  const { series, i, variant, rules, barMs, poolsAt } = ctx;
+  const { bars } = series;
+  const s = series.sessionIdx[i];
+  const start = series.sessionStarts[s];
+  const setups: StructureSetup[] = [];
+  const machines: Record<StructureDirection, Machine> = { BEARISH: { current: null }, BULLISH: { current: null } };
+  const closeAt = (j: number) => bars[j].time + barMs;
+  const move = (st: StructureSetup, stage: StructureStage, j: number, reason?: string) => {
+    st.stage = stage;
+    st.history.push({ stage, barIndex: j, at: closeAt(j), ...(reason ? { reason } : {}) });
   };
   const invalidate = (m: Machine, reason: InvalidReason, j: number) => {
     const st = m.current!;
@@ -603,13 +788,14 @@ export function evaluateStructureSession(
 
   // WATCH at i: the nearest untaken sweep-side pool within 0.5 ATR, for an idle direction.
   const atrI = momentumAtrAt(series, i, MOMENTUM_BREAK_RULES);
+  const watchAtr = ctx.watchAtr;
   const pools = poolsAt(i + 1)?.pools ?? [];
   const close = bars[i].close;
   const watchFor = (direction: StructureDirection): LiquidityPool | null => {
-    if (atrI == null || machines[direction].current != null) return null;
+    if (watchAtr == null || machines[direction].current != null) return null;
     const side = direction === 'BEARISH' ? 'HIGH' : 'LOW';
     const near = pools
-      .filter((p) => p.side === side && (side === 'HIGH' ? p.price >= close : p.price <= close) && Math.abs(p.price - close) <= rules.watchWithinAtr * atrI)
+      .filter((p) => p.side === side && (side === 'HIGH' ? p.price >= close : p.price <= close) && Math.abs(p.price - close) <= rules.watchWithinAtr * watchAtr)
       .sort((a, b) => a.rank - b.rank || Math.abs(a.price - close) - Math.abs(b.price - close));
     return near[0] ?? null;
   };
