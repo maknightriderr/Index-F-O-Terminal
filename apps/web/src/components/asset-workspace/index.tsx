@@ -26,7 +26,7 @@ import { MarketBiasCard, MarketRegimeCard, IntelligenceScoreCard, SupportResista
 import { NewsPanel } from '@/components/common/news-panel';
 import { EventCalendarPanel } from '@/components/common/event-calendar-panel';
 import { PayoffDiagram } from '@/components/common/payoff-diagram';
-import { LifecycleLevels, StageBadge, stageMeaning } from '@/components/common/structure-stage';
+import { LifecycleLevels, StageBadge, stageMeaning, TimeframeTag } from '@/components/common/structure-stage';
 
 const STRIKE_RANGE_OPTIONS = [5, 10, 15, 20];
 const REFRESH_INTERVAL_MS = 15000;
@@ -764,9 +764,10 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
         {running.length > 0 && (
           <div className="space-y-1.5 mb-2">
             {running.map((r) => (
-              <div key={r.id} className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5" title={stageMeaning(r.stage)}>
+              <div key={r.id} className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5" title={stageMeaning(r.stage, r.timeframe)}>
                 <div className="flex items-center gap-2 mb-0.5">
                   <StageBadge stage={r.stage} />
+                  <TimeframeTag timeframe={r.timeframe} />
                   <span className={`text-[11px] font-semibold ${r.direction === 'BULLISH' ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700'}`}>
                     {r.direction === 'BULLISH' ? '▲ Bullish structure' : '▼ Bearish structure'}
                   </span>
@@ -841,6 +842,11 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
         <span className={`text-xs font-bold px-2 py-1 rounded-md ${isCall ? 'bg-emerald-500/15 text-emerald-400 shadow-[0_0_10px_-2px_rgba(16,185,129,0.4)]' : 'bg-red-500/15 text-red-400 shadow-[0_0_10px_-2px_rgba(239,68,68,0.4)]'}`}>
           {setup.side} {formatIndianNumber(setup.strike!, 0)}
         </span>
+        {setup.strategy === 'STRUCTURE' && structure?.enabled && (
+          <span className="flex items-center gap-1 text-[10px] text-gray-400 light:text-slate-600">
+            Structure <TimeframeTag timeframe={structure.timeframe} />
+          </span>
+        )}
         <span className="text-[10px] text-gray-400 light:text-slate-600 font-medium">R:R {setup.riskReward!.toFixed(2)}</span>
       </div>
       <ContractExpiryLine setup={setup} />
@@ -944,5 +950,6 @@ function watchRow(block: StructureBlock, dir: 'BULLISH' | 'BEARISH'): StructureL
     sweepExtreme: null,
     stageAt: block.barTime ?? 0,
     reason: null,
+    timeframe: block.timeframe,
   };
 }

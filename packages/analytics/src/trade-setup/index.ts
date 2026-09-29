@@ -517,9 +517,13 @@ function buildNakedLong(
     };
   }
   // The underlying move below which the stop sits inside ordinary noise, in premium terms.
-  const noiseStopWidth = fno && atrPoints != null && atrPoints > 0 && absDeltaLeg > 0 ? minOptionStopAtr * atrPoints * absDeltaLeg : null;
+  // Noise is measured on the ENTRY timeframe: a 5m structure setup passes its
+  // 5m ATR as noiseAtrPoints; everything else passes nothing and this is
+  // atrPoints, exactly as before. Rule 4 is the only reader.
+  const noiseAtr = instrument.fnoValidation?.noiseAtrPoints ?? atrPoints;
+  const noiseStopWidth = fno && noiseAtr != null && noiseAtr > 0 && absDeltaLeg > 0 ? minOptionStopAtr * noiseAtr * absDeltaLeg : null;
   const stopInsideNoise = (stopWidth: number): TradeSetup => {
-    const stopAtr = round2(stopWidth / absDeltaLeg / atrPoints!);
+    const stopAtr = round2(stopWidth / absDeltaLeg / noiseAtr!);
     const reason =
       `The premium stop on the ${strikeLabel} ${side} ${atmStrike} (${round2(stopWidth).toFixed(2)} of ${entry.toFixed(2)}) is only a ${stopAtr}-ATR move in the underlying ` +
       `at delta ${leg.delta.toFixed(2)} — inside the ${minOptionStopAtr}-ATR noise floor, and it cannot be widened that far within the ${Math.round(MAX_SL_PREMIUM_PCT * 100)}% cap and the required reward:risk. Refused.`;
@@ -795,6 +799,13 @@ export interface SetupInstrumentContext {
     maxCostPctOfPremium?: number;
     /** Overrides MIN_OPTION_STOP_ATR. */
     minOptionStopAtr?: number;
+    /**
+     * The ATR (points) rule 4's noise floor is measured in — the entry
+     * timeframe's. Absent = atrPoints (unchanged). Only a 5m structure setup
+     * passes it (its 5m ATR); target, structural stop and every other ATR
+     * read keep atrPoints.
+     */
+    noiseAtrPoints?: number | null;
   };
 }
 

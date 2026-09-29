@@ -409,9 +409,35 @@ export const FNO_VALIDATION_PARAMS: Readonly<FnoValidationParams> = Object.freez
 // ============================================================
 
 export const STRUCTURE_LOGIC_VERSION = '2026-09-29.structure.1';
+/** Stamped instead of STRUCTURE_LOGIC_VERSION while STRUCTURE_ENTRY_TF = '5m' (15m pools, 5m sweep/displacement/zone/fill). */
+export const STRUCTURE_5M_LOGIC_VERSION = '2026-09-29.structure.2';
 
 /** User decision: live now, behind the flag. */
 export const STRUCTURE_DEFAULT = true;
+
+// ---- Entry timeframe (structure round 2, 2026-09-30) ----
+// Liquidity pools stay on 15m bars; with '5m' the sweep close-back,
+// displacement, FVG zone, stop and limit fill run on closed 5m bars
+// (evaluateStructureSessionMTF, STRUCTURE_RULES_5M). The default is set by
+// the PRE-REGISTERED head-to-head (npm run backtest-structure-5m): 5m goes
+// live only if, on the same out-of-sample dates, its avg net R AND PF both
+// beat the live 15m config's, with ≥ 20 trades.
+//
+// RESULT (5m OOS 2026-07-31 → 2026-09-28, 5m-D1.5-C60 chosen in-sample, run
+// once): 5m 19 trades, avg net R −0.270, PF 0.64; 15m D1.0-NOGUARD on the same
+// dates 23 trades, avg net R −0.046, PF 0.94 — 5m loses on all three checks,
+// so it ships OFF: '15m'. 5m still detects the same sweeps ~7 minutes earlier
+// on average (median 5); it does not trade them better.
+export type StructureEntryTimeframe = '15m' | '5m';
+export const STRUCTURE_ENTRY_TF_DEFAULT: StructureEntryTimeframe = '15m';
+
+/** '5m' or '15m' (case-insensitive); anything else — logged at boot via STRUCTURE_ENTRY_TF_REJECTED — is the default. */
+export function parseStructureEntryTimeframe(raw: string | undefined): { value: StructureEntryTimeframe; rejected: string | null } {
+  if (raw == null || raw.trim() === '') return { value: STRUCTURE_ENTRY_TF_DEFAULT, rejected: null };
+  const v = raw.trim().toLowerCase();
+  if (v === '5m' || v === '15m') return { value: v, rejected: null };
+  return { value: STRUCTURE_ENTRY_TF_DEFAULT, rejected: raw };
+}
 
 /**
  * OUT-OF-SAMPLE RESULT (npm run backtest-structure, D1.0-NOGUARD chosen
@@ -432,6 +458,23 @@ export interface StructureParams {
   STRUCTURE_STATE_TTL_SECONDS: number;
   /** A CONFIRMED transition older than this (minutes) is recorded but not pushed to Telegram — a restart must not send stale alerts. */
   STRUCTURE_ALERT_MAX_AGE_MIN: number;
+  /**
+   * The structure engine's own closing guard: no fill is minted with fewer
+   * than this many minutes to the close (the consensus engine keeps
+   * SETUP_CLOSING_GUARD_MINUTES = 60, its targets being time-scaled).
+   * Pre-registered choice between 60 and 15, made by the backtest for the
+   * live timeframe: 15m in-sample 2025-09-29 → 2026-06-02, D1.0 no opening
+   * guard — C60 avg net R −0.138 (71 trades) vs C15 −0.166 (76) → 60. (The
+   * chosen 5m variant also carries 60.) Applies only while CLOSING_GUARD is on.
+   */
+  STRUCTURE_CLOSING_GUARD_MIN: number;
+  /**
+   * DISP_MULT used only while STRUCTURE_ENTRY_TF = '5m': the 5m backtest's
+   * in-sample choice (5m-D1.5-C60 — the variant that was run out of sample),
+   * so switching the timeframe runs the tested 5m config. The 15m engine
+   * keeps STRUCTURE_DISP_MULT.
+   */
+  STRUCTURE_5M_DISP_MULT: number;
 }
 
 export const STRUCTURE_PARAM_DEFAULTS: Readonly<StructureParams> = {
@@ -439,6 +482,8 @@ export const STRUCTURE_PARAM_DEFAULTS: Readonly<StructureParams> = {
   STRUCTURE_OPENING_GUARD: 0,
   STRUCTURE_STATE_TTL_SECONDS: 60 * 60 * 36,
   STRUCTURE_ALERT_MAX_AGE_MIN: 30,
+  STRUCTURE_CLOSING_GUARD_MIN: 60,
+  STRUCTURE_5M_DISP_MULT: 1.5,
 };
 
 /** Empty = every symbol the engine evaluates (the user's default). Otherwise "SYMBOL:EXCHANGE,...". */
@@ -476,6 +521,10 @@ export const STRUCTURE_SYMBOLS: Readonly<{ all: boolean; symbols: readonly Backg
   symbols: Object.freeze(parsedStructureSymbols.symbols),
 });
 export const STRUCTURE_SYMBOLS_REJECTED: readonly string[] = Object.freeze(parsedStructureSymbols.rejected);
+const parsedStructureEntryTf = parseStructureEntryTimeframe(process.env.STRUCTURE_ENTRY_TF);
+export const STRUCTURE_ENTRY_TF: StructureEntryTimeframe = parsedStructureEntryTf.value;
+/** A STRUCTURE_ENTRY_TF value that was not '5m'/'15m' (null when valid or unset) — logged at boot. */
+export const STRUCTURE_ENTRY_TF_REJECTED: string | null = parsedStructureEntryTf.rejected;
 
 /** Whether the structure engine runs for this symbol/mode: flag on, INTRADAY, and on the list (empty list = all). */
 export function structureEnabledFor(
@@ -516,6 +565,8 @@ export interface LogicStamp {
     params: StructureParams;
     allSymbols: boolean;
     symbols: BackgroundSymbol[];
+    /** STRUCTURE_ENTRY_TF (absent on setups minted before it: 15m). */
+    entryTimeframe?: StructureEntryTimeframe;
   };
 }
 
@@ -526,7 +577,14 @@ export interface LogicStamp {
  */
 export interface LogicStampExtras {
   fnoValidation?: { enabled: boolean; params: Readonly<FnoValidationParams> };
-  structure?: { enabled: boolean; consensusSetups: boolean; params: Readonly<StructureParams>; symbols: Readonly<{ all: boolean; symbols: readonly BackgroundSymbol[] }> };
+  structure?: {
+    enabled: boolean;
+    consensusSetups: boolean;
+    params: Readonly<StructureParams>;
+    symbols: Readonly<{ all: boolean; symbols: readonly BackgroundSymbol[] }>;
+    /** Absent = '15m' (the stamp then reads exactly as before). */
+    entryTimeframe?: StructureEntryTimeframe;
+  };
 }
 
 /** What gets written onto every setup and decision. */
@@ -543,7 +601,14 @@ export function logicStamp(
 ): LogicStamp {
   // The structure version is stamped only while its flag is on (the same
   // mechanism as momentum-break), and takes precedence when both are.
-  const logicVersion = extras.structure?.enabled ? STRUCTURE_LOGIC_VERSION : momentumEnabled ? MOMENTUM_BREAK_LOGIC_VERSION : LOGIC_VERSION;
+  // 5m entries are a different rule set, so they carry their own version.
+  const logicVersion = extras.structure?.enabled
+    ? extras.structure.entryTimeframe === '5m'
+      ? STRUCTURE_5M_LOGIC_VERSION
+      : STRUCTURE_LOGIC_VERSION
+    : momentumEnabled
+      ? MOMENTUM_BREAK_LOGIC_VERSION
+      : LOGIC_VERSION;
   return {
     logicVersion,
     flags: { ...flags },
@@ -559,6 +624,7 @@ export function logicStamp(
             params: { ...extras.structure.params },
             allSymbols: extras.structure.symbols.all,
             symbols: extras.structure.symbols.symbols.map((s) => ({ ...s })),
+            ...(extras.structure.entryTimeframe ? { entryTimeframe: extras.structure.entryTimeframe } : {}),
           },
         }
       : {}),
@@ -569,6 +635,6 @@ export function logicStamp(
 export function liveLogicStamp(): LogicStamp {
   return logicStamp(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, {
     fnoValidation: { enabled: FNO_VALIDATION, params: FNO_VALIDATION_PARAMS },
-    structure: { enabled: STRUCTURE, consensusSetups: CONSENSUS_SETUPS, params: STRUCTURE_PARAMS, symbols: STRUCTURE_SYMBOLS },
+    structure: { enabled: STRUCTURE, consensusSetups: CONSENSUS_SETUPS, params: STRUCTURE_PARAMS, symbols: STRUCTURE_SYMBOLS, entryTimeframe: STRUCTURE_ENTRY_TF },
   });
 }

@@ -1792,6 +1792,9 @@ export interface TradeSetupOptionQuality {
 
 // --- Structure engine (flag STRUCTURE) — the live lifecycle, as the API and UI see it ---
 
+/** The bars the structure engine's reaction (sweep, displacement, zone, fill) runs on; pools are always 15m. */
+export type StructureTimeframe = '15m' | '5m';
+
 export type StructureStageName = 'WATCH' | 'DEVELOPING' | 'CONFIRMED' | 'ENTRY' | 'ACTIVE' | 'CLOSED' | 'INVALIDATED' | 'LATE' | 'MISSED' | 'LOW_RR';
 
 export interface StructurePoolView {
@@ -1807,8 +1810,10 @@ export interface StructureLifecycleView {
   exchange: Exchange;
   mode: TradingMode;
   direction: 'BULLISH' | 'BEARISH';
-  /** The engine's stage on closed 15m bars. */
+  /** The engine's stage on closed bars of the entry timeframe. */
   stage: StructureStageName;
+  /** Entry timeframe the lifecycle ran on (absent on states written before it: 15m). */
+  timeframe?: StructureTimeframe;
   /** What the live engine did at the fill: minted a paper trade, or refused it (with why). Null before a fill. */
   liveOutcome: 'MINTED' | 'REFUSED' | null;
   liveReason: string | null;
@@ -1833,9 +1838,11 @@ export interface StructureBlock {
   symbol: string;
   exchange: Exchange;
   mode: TradingMode;
-  /** Newest closed 15m bar the engine read (its open time), and the ATR it used. */
+  /** Newest closed bar the engine read (its open time, on the entry timeframe), and that timeframe's ATR. */
   barTime: number | null;
   atr: number | null;
+  /** Entry timeframe (STRUCTURE_ENTRY_TF): '15m', or '5m' — 15m pools with the reaction on 5m bars. */
+  timeframe?: StructureTimeframe;
   /** Per direction: the running lifecycle, else null. */
   current: { BULLISH: StructureLifecycleView | null; BEARISH: StructureLifecycleView | null };
   /** Per direction: the untaken pool price is within 0.5 ATR of, when nothing is running. */

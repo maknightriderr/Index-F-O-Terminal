@@ -19,7 +19,7 @@ import { logger } from '../lib/logger.js';
 import { sendTelegramMessage, isTelegramConfigured } from '../lib/telegram.js';
 import type { AlertChannel, Exchange, TradingMode } from '@fno/shared';
 import { STRUCTURE_PARAMS, liveLogicStamp } from '../config/trading-flags.js';
-import { isAlertFresh, structureStateKey, type LifecycleEventRow, type LiveLifecycle, type LiveState } from './structure-live.js';
+import { isAlertFresh, structureRulesFor, structureStateKey, type LifecycleEventRow, type LiveLifecycle, type LiveState } from './structure-live.js';
 
 const EVENT_DEDUPE_TTL_SECONDS = 3 * 24 * 60 * 60;
 const ALERT_DEDUPE_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -124,6 +124,7 @@ async function deliverConfirmed(state: LiveState, lc: LiveLifecycle): Promise<vo
           lifecycleId: lc.id,
           exchange: state.exchange,
           mode: state.mode,
+          timeframe: lc.timeframe ?? state.timeframe ?? '15m',
           direction: lc.direction,
           pool: lc.pool,
           zone: lc.zone,
@@ -147,11 +148,13 @@ async function deliverConfirmed(state: LiveState, lc: LiveLifecycle): Promise<vo
 export function confirmedMessage(state: LiveState, lc: LiveLifecycle, esc: (s: string) => string): string {
   const arrow = lc.direction === 'BULLISH' ? '🟢' : '🔴';
   const side = lc.direction === 'BULLISH' ? 'CE' : 'PE';
+  const tf = lc.timeframe ?? state.timeframe ?? '15m';
+  const fillWithin = tf === '5m' ? `${structureRulesFor(tf).fillWithinBars} five-minute bars (120 min)` : `${structureRulesFor(tf).fillWithinBars} bars`;
   const lines = [
-    `${arrow} STRUCTURE CONFIRMED — ${state.underlying} ${lc.direction} (${state.exchange})`,
+    `${arrow} STRUCTURE CONFIRMED — ${state.underlying} ${lc.direction} (${state.exchange} · ${tf === '5m' ? '5m entry, 15m pools' : '15m'})`,
     `${lc.pool.kind.replace(/_/g, ' ').toLowerCase()} ${lc.pool.price} swept, displacement printed.`,
     `Limit ${lc.entry} (${lc.zone?.kind === 'FVG' ? `fair-value gap ${lc.zone.near}–${lc.zone.far}` : 'displacement 50%'}) · stop ${lc.stop} · T1 ${lc.t1 ? `${lc.t1.price} (${lc.t1.kind.replace(/_/g, ' ').toLowerCase()}, ${lc.rToT1}R)` : '—'}${lc.t2 ? ` · T2 ${lc.t2.price}` : ''}`,
-    `Score ${lc.score ?? '—'}/100 (describes, never gates). A ${side} paper trade is minted only if the limit fills within 8 bars and every gate passes.`,
+    `Score ${lc.score ?? '—'}/100 (describes, never gates). A ${side} paper trade is minted only if the limit fills within ${fillWithin} and every gate passes.`,
     'Paper signal — no order is placed.',
   ];
   return lines.map(esc).join('\n');

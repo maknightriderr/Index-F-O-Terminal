@@ -16,6 +16,7 @@
     "loss-attribution": "tsx src/cli/loss-attribution.ts",
     "backtest-momentum": "tsx src/cli/backtest-momentum.ts",
     "backtest-structure": "tsx src/cli/backtest-structure.ts",
+    "backtest-structure-5m": "tsx src/cli/backtest-structure-5m.ts",
     "fetch-history": "tsx src/backtest/fetch-history.ts"
   },
   "dependencies": {

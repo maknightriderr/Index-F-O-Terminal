@@ -11,7 +11,9 @@
 //     once at boot;
 //   - the historical candles a bias read needs (loadBiasCandles, the same
 //     cache keys and TTLs), for the Dashboard's instruments and for any
-//     symbol/mode someone requested a bias for in the last 30 minutes.
+//     symbol/mode someone requested a bias for in the last 30 minutes;
+//   - in STRUCTURE_ENTRY_TF = '5m' mode only, the structure engine's 5m
+//     candles (loadStructureCandles5m) for structure-enabled INTRADAY symbols.
 // It never computes a bias: a bias read mints trade setups and advances
 // the vote hold state, so running one on a timer would change trading
 // behaviour, not just speed. Work is sequential and runs in the normal
@@ -25,7 +27,8 @@ import type { MarketDataProvider } from '../providers/interface.js';
 import { redis } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
 import { refreshFnoScan } from './fno-scanner.js';
-import { loadBiasCandles } from './market-bias.js';
+import { loadBiasCandles, loadStructureCandles5m } from './market-bias.js';
+import { STRUCTURE_ENTRY_TF, structureEnabledFor } from '../config/trading-flags.js';
 
 const TICK_MS = 30_000;
 const INITIAL_DELAY_MS = 45_000;
@@ -117,6 +120,14 @@ async function warm(provider: MarketDataProvider, boot: boolean): Promise<void> 
       await loadBiasCandles(provider, t.symbol, t.exchange, t.mode === 'POSITIONAL');
     } catch (err: any) {
       logger.warn({ error: err.message, symbol: t.symbol, mode: t.mode }, 'Cache warmer: candle warm failed');
+    }
+    // 5m structure candles: only in STRUCTURE_ENTRY_TF = '5m' mode, only for structure-enabled INTRADAY symbols.
+    if (STRUCTURE_ENTRY_TF === '5m' && structureEnabledFor(t.symbol, t.exchange, t.mode)) {
+      try {
+        await loadStructureCandles5m(provider, t.symbol, t.exchange);
+      } catch (err: any) {
+        logger.warn({ error: err.message, symbol: t.symbol }, 'Cache warmer: 5m structure candle warm failed');
+      }
     }
   }
 }

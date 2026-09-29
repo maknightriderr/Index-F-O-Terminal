@@ -19,18 +19,25 @@
 
 import {
   evaluateStructureSession,
+  evaluateStructureSessionMTF,
+  STRUCTURE_5M_VARIANTS,
   STRUCTURE_RULES,
+  STRUCTURE_RULES_5M,
   STRUCTURE_VARIANTS,
   type StructureSetup,
   type StructureVariant,
 } from '@fno/analytics';
-import type { BacktestStrategy, BacktestTrade, LoadedSymbol } from './harness.js';
+import { CLOSING_GUARD_MIN, type BacktestStrategy, type BacktestTrade, type LoadedSymbol } from './harness.js';
 
 export type StructureTrade = BacktestTrade<StructureSetup>;
 
 const sessionCache = new WeakMap<LoadedSymbol, Map<string, StructureSetup[]>>();
 
-/** Every setup of session ordinal s (engine replay at the session's last bar). */
+/**
+ * Every setup of session ordinal s (engine replay at the session's last bar).
+ * A symbol loaded with a poolSeries (15m) over a 5m series replays the
+ * multi-timeframe engine; otherwise the 15m engine, exactly as shipped.
+ */
 export function sessionSetups(loaded: LoadedSymbol, s: number, variant: StructureVariant): StructureSetup[] {
   let byKey = sessionCache.get(loaded);
   if (!byKey) {
@@ -42,7 +49,12 @@ export function sessionSetups(loaded: LoadedSymbol, s: number, variant: Structur
   if (hit) return hit;
   const { series } = loaded;
   const last = (s + 1 < series.sessionStarts.length ? series.sessionStarts[s + 1] : series.bars.length) - 1;
-  const setups = last >= series.sessionStarts[s] ? evaluateStructureSession(series, last, variant).setups : [];
+  const setups =
+    last < series.sessionStarts[s]
+      ? []
+      : loaded.poolSeries
+        ? evaluateStructureSessionMTF(loaded.poolSeries, series, last, variant).setups
+        : evaluateStructureSession(series, last, variant).setups;
   byKey.set(key, setups);
   return setups;
 }
@@ -82,6 +94,7 @@ export const STRUCTURE_STRATEGY: BacktestStrategy<StructureVariant, StructureSet
   invalidateOnClose: (st) => (b) => (st.direction === 'BEARISH' ? b.close > st.sweep.extreme : b.close < st.sweep.extreme),
   invalidationExit: 'SWEEP_RECLAIMED',
   openingGuard: (v) => v.openingGuard,
+  closingGuardMin: (v) => v.closingGuardMin ?? CLOSING_GUARD_MIN,
   groupKeys: {
     'By pool type': (t) => t.signal.pool.kind,
     'By fill hour (IST)': (t) => String(t.fill?.hour ?? t.hour).padStart(2, '0'),
@@ -90,6 +103,23 @@ export const STRUCTURE_STRATEGY: BacktestStrategy<StructureVariant, StructureSet
     'By zone': (t) => t.signal.zone?.kind ?? 'n/a',
     'By exit': (t) => t.exit,
   },
+};
+
+/**
+ * The 5m entry timeframe: 15m pools, 5m sweep/displacement/zone/fill
+ * (evaluateStructureSessionMTF). Symbols must be loaded as 5m series with
+ * the 15m series as poolSeries. The LIMIT rests for 24 × 5m (120 minutes, the
+ * same clock time as 8 × 15m); the closing guard is the variant's.
+ */
+export const STRUCTURE_5M_STRATEGY: BacktestStrategy<StructureVariant, StructureSetup> = {
+  ...STRUCTURE_STRATEGY,
+  name: 'STRUCTURE_5M',
+  variants: STRUCTURE_5M_VARIANTS,
+  evaluate: (loaded, i, variant) => {
+    if (!loaded.poolSeries) throw new Error(`STRUCTURE_5M needs a 15m poolSeries for ${loaded.spec.symbol}`);
+    return STRUCTURE_STRATEGY.evaluate(loaded, i, variant);
+  },
+  toOrder: (st) => ({ ...STRUCTURE_STRATEGY.toOrder(st), fillWithinBars: STRUCTURE_RULES_5M.fillWithinBars }),
 };
 
 /** Stopped out before ever reaching +0.5R — the plan's false-positive definition. */

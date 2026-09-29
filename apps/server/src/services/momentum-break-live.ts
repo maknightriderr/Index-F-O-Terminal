@@ -83,9 +83,10 @@ export function storedMomentumBreak(signal: MomentumBreakSignal): StoredMomentum
 /**
  * Broker candles → the detector's bars: parsed, ascending, inside the
  * exchange session window, and CLOSED at `now` (the newest bar is still
- * forming and is never judged).
+ * forming and is never judged). `barMs` is the candle interval (default 15m;
+ * the structure engine passes 5m in STRUCTURE_ENTRY_TF = 5m mode).
  */
-export function toClosedMomentumBars(candles: readonly OHLCV[], exchange: Exchange, now: number): MomentumBar[] {
+export function toClosedMomentumBars(candles: readonly OHLCV[], exchange: Exchange, now: number, barMs: number = BAR_MS): MomentumBar[] {
   const windows = new Map<string, ReturnType<typeof getSessionWindow>>();
   const bars = candles
     .map((c) => ({ time: Date.parse(c.timestamp), open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume ?? 0 }))
@@ -98,7 +99,7 @@ export function toClosedMomentumBars(candles: readonly OHLCV[], exchange: Exchan
       const w = windows.get(date);
       return w != null && b.time >= w.open && b.time < w.close;
     });
-  return closedBarsAt(bars, now, BAR_MS);
+  return closedBarsAt(bars, now, barMs);
 }
 
 /**
@@ -244,6 +245,8 @@ export interface SlotStructureView {
   sweepExtreme: number;
   /** When the limit filled (epoch ms). Only bars closing after it can reclaim. */
   fillAt: number;
+  /** Entry timeframe it was minted on (absent: 15m). A 5m trade is reclaimed by a closed 5m bar. */
+  timeframe?: '15m' | '5m';
 }
 
 export interface SlotView {
@@ -283,6 +286,8 @@ export function triggerSlotAction(args: {
   lastClosedBar: { time: number; close: number } | null;
   /** Fresh triggers from the other families this poll (structure fills). Absent = momentum only, exactly as before. */
   others?: readonly FamilyTrigger[];
+  /** The structure family's newest closed 5m bar (5m mode only): a 5m structure trade's SWEEP_RECLAIMED reads it. */
+  structureBar?: { time: number; close: number; barMs: number } | null;
 }): SlotAction {
   const { stored, trigger, lastClosedBar } = args;
   const mb = stored.strategy === MOMENTUM_BREAK_STRATEGY && stored.momentumBreak != null ? stored.momentumBreak : null;
@@ -290,7 +295,9 @@ export function triggerSlotAction(args: {
     return { kind: 'CLOSE', reason: 'LEVEL_RECLAIMED' };
   }
   const st = stored.strategy === STRUCTURE_STRATEGY && stored.structure != null ? stored.structure : null;
-  if (st && lastClosedBar && lastClosedBar.time + BAR_MS > st.fillAt && isSweepReclaimed(st.direction, st.sweepExtreme, lastClosedBar.close)) {
+  // A 5m structure trade exits on 5m closes (as it was backtested) when the 5m bar is at hand; otherwise the 15m bar, as before.
+  const sBar = st && st.timeframe === '5m' && args.structureBar ? args.structureBar : lastClosedBar ? { ...lastClosedBar, barMs: BAR_MS } : null;
+  if (st && sBar && sBar.time + sBar.barMs > st.fillAt && isSweepReclaimed(st.direction, st.sweepExtreme, sBar.close)) {
     return { kind: 'CLOSE', reason: 'SWEEP_RECLAIMED' };
   }
   const opposite = [...(trigger ? [trigger.direction] : []), ...(args.others ?? []).map((o) => o.direction)].some((d) => d !== stored.direction);
@@ -300,7 +307,7 @@ export function triggerSlotAction(args: {
   return mb || st ? { kind: 'HOLD_TRIGGER' } : { kind: 'CONSENSUS_FLOW' };
 }
 
-/** A structure trade is wrong once a 15m bar closes back beyond the sweep extreme. */
+/** A structure trade is wrong once a bar of its timeframe closes back beyond the sweep extreme. */
 export function isSweepReclaimed(direction: 'BULLISH' | 'BEARISH', sweepExtreme: number, close: number): boolean {
   return direction === 'BEARISH' ? close > sweepExtreme : close < sweepExtreme;
 }
