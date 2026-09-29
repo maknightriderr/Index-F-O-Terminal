@@ -68,6 +68,7 @@ import {
 import { classifyStructureCandles, CLEAN_REJECTION_PATTERNS, type StructureCandlePatterns } from './candle-labels.js';
 
 export * from './candle-labels.js';
+export * from './rejection-close.js';
 
 export type StructureDirection = 'BULLISH' | 'BEARISH';
 

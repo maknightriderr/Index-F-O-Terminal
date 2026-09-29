@@ -113,6 +113,16 @@ function classifyOneBarSweep(c: Candle, bullish: boolean): SweepCandlePattern {
   return 'REJECTION';
 }
 
+/**
+ * The single-bar sweep-candle shapes (HAMMER / SHOOTING_STAR / PIN_BAR /
+ * REJECTION), exposed for reuse outside sweep classification — e.g. the
+ * REJECTION_CLOSE entry rule (structure-engine/rejection-close.ts) names the
+ * candle that confirms entry the same way a sweep candle is named.
+ */
+export function classifyCandleShape(c: Candle, bullish: boolean): SweepCandlePattern {
+  return classifyOneBarSweep(c, bullish);
+}
+
 function classifyDisplacement(d: Candle, prev: Candle | undefined, bullish: boolean): DisplacementCandlePattern {
   if (prev) {
     const dLo = Math.min(d.open, d.close);

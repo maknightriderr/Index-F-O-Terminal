@@ -526,6 +526,41 @@ export const STRUCTURE_ENTRY_TF: StructureEntryTimeframe = parsedStructureEntryT
 /** A STRUCTURE_ENTRY_TF value that was not '5m'/'15m' (null when valid or unset) — logged at boot. */
 export const STRUCTURE_ENTRY_TF_REJECTED: string | null = parsedStructureEntryTf.rejected;
 
+// ---- Entry mode (structure round 3, 2026-09-30) ----
+// TOUCH (current behaviour): the live fill happens the instant price touches
+// the zone — fillCandidate reacts to the live spot between bar closes, or to
+// the engine's own bar-close touch. REJECTION_CLOSE: after CONFIRMED, wait for
+// a CLOSED entry-timeframe candle that traded into the zone and closed back
+// beyond its near edge, in the outer half of its own range (structure-engine
+// rejection-close.ts, PRE-REGISTERED — see its header — do not tune after
+// seeing results). Entry is that candle's close; the stop is unchanged.
+//
+// PRE-REGISTERED GO-LIVE RULE for the default: REJECTION_CLOSE ships as the
+// default only if, on the OUT-OF-SAMPLE third of the same 12 months backtest
+// used for the live 15m config (D1.0, no opening guard, closing guard 60), its
+// avg net R AND its profit factor both beat TOUCH's, with ≥ 20 trades. It has
+// exactly one variant (no grid), so it is run once, out of sample, alongside
+// the already-seen TOUCH OOS result.
+//
+// RESULT: see the PR body / structure-entry-mode-report for the numbers this
+// round produced, and STRUCTURE_ENTRY_MODE_DEFAULT below for what they decided.
+export type StructureEntryMode = 'TOUCH' | 'REJECTION_CLOSE';
+export const STRUCTURE_ENTRY_MODE_DEFAULT: StructureEntryMode = 'TOUCH';
+
+/** 'touch'/'rejection_close' (case-insensitive); anything else — logged at boot via STRUCTURE_ENTRY_MODE_REJECTED — is the default. */
+export function parseStructureEntryMode(raw: string | undefined): { value: StructureEntryMode; rejected: string | null } {
+  if (raw == null || raw.trim() === '') return { value: STRUCTURE_ENTRY_MODE_DEFAULT, rejected: null };
+  const v = raw.trim().toLowerCase();
+  if (v === 'touch') return { value: 'TOUCH', rejected: null };
+  if (v === 'rejection_close') return { value: 'REJECTION_CLOSE', rejected: null };
+  return { value: STRUCTURE_ENTRY_MODE_DEFAULT, rejected: raw };
+}
+
+const parsedStructureEntryMode = parseStructureEntryMode(process.env.STRUCTURE_ENTRY_MODE);
+export const STRUCTURE_ENTRY_MODE: StructureEntryMode = parsedStructureEntryMode.value;
+/** A STRUCTURE_ENTRY_MODE value that was neither 'touch' nor 'rejection_close' (null when valid or unset) — logged at boot. */
+export const STRUCTURE_ENTRY_MODE_REJECTED: string | null = parsedStructureEntryMode.rejected;
+
 /** Whether the structure engine runs for this symbol/mode: flag on, INTRADAY, and on the list (empty list = all). */
 export function structureEnabledFor(
   underlying: string,
@@ -567,6 +602,8 @@ export interface LogicStamp {
     symbols: BackgroundSymbol[];
     /** STRUCTURE_ENTRY_TF (absent on setups minted before it: 15m). */
     entryTimeframe?: StructureEntryTimeframe;
+    /** STRUCTURE_ENTRY_MODE (absent on setups minted before it: TOUCH). */
+    entryMode?: StructureEntryMode;
   };
 }
 
@@ -584,6 +621,8 @@ export interface LogicStampExtras {
     symbols: Readonly<{ all: boolean; symbols: readonly BackgroundSymbol[] }>;
     /** Absent = '15m' (the stamp then reads exactly as before). */
     entryTimeframe?: StructureEntryTimeframe;
+    /** Absent = 'TOUCH' (the stamp then reads exactly as before). */
+    entryMode?: StructureEntryMode;
   };
 }
 
@@ -625,6 +664,7 @@ export function logicStamp(
             allSymbols: extras.structure.symbols.all,
             symbols: extras.structure.symbols.symbols.map((s) => ({ ...s })),
             ...(extras.structure.entryTimeframe ? { entryTimeframe: extras.structure.entryTimeframe } : {}),
+            ...(extras.structure.entryMode ? { entryMode: extras.structure.entryMode } : {}),
           },
         }
       : {}),
@@ -635,6 +675,6 @@ export function logicStamp(
 export function liveLogicStamp(): LogicStamp {
   return logicStamp(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, {
     fnoValidation: { enabled: FNO_VALIDATION, params: FNO_VALIDATION_PARAMS },
-    structure: { enabled: STRUCTURE, consensusSetups: CONSENSUS_SETUPS, params: STRUCTURE_PARAMS, symbols: STRUCTURE_SYMBOLS, entryTimeframe: STRUCTURE_ENTRY_TF },
+    structure: { enabled: STRUCTURE, consensusSetups: CONSENSUS_SETUPS, params: STRUCTURE_PARAMS, symbols: STRUCTURE_SYMBOLS, entryTimeframe: STRUCTURE_ENTRY_TF, entryMode: STRUCTURE_ENTRY_MODE },
   });
 }

@@ -198,19 +198,29 @@ export function sessionMasks(series: MomentumSeries, futuresPrice: boolean): Pic
 
 export interface BacktestOrder {
   direction: 'BULLISH' | 'BEARISH';
-  /** MARKET fills at the decision bar's close; LIMIT rests at `entry`. */
-  type: 'MARKET' | 'LIMIT';
+  /**
+   * MARKET fills at the decision bar's close; LIMIT rests at `entry`, filled
+   * the instant a bar's range touches it. CLOSE_CONFIRM (the REJECTION_CLOSE
+   * entry mode) rests on no fixed price: `entry` is a reference only (the
+   * zone's near edge, for reporting); the strategy's `testCloseConfirm` says
+   * which bar (if any) counts as the confirming close, and the fill price is
+   * THAT bar's close.
+   */
+  type: 'MARKET' | 'LIMIT' | 'CLOSE_CONFIRM';
   entry: number;
   stop: number;
   target: number;
-  /** LIMIT only: the order may fill in bars i+1 … i+fillWithinBars. */
+  /** LIMIT / CLOSE_CONFIRM only: the order may fill in bars i+1 … i+fillWithinBars. */
   fillWithinBars?: number;
+  /** CLOSE_CONFIRM only: opaque fields the strategy's own testCloseConfirm reads (e.g. the zone's far edge and kind). */
+  zoneFar?: number;
+  zoneKind?: string;
 }
 
 export interface BacktestStrategy<V extends { id: string }, S> {
   name: string;
   /** Every order this strategy places is of this type. */
-  orderType: 'MARKET' | 'LIMIT';
+  orderType: 'MARKET' | 'LIMIT' | 'CLOSE_CONFIRM';
   variants: readonly V[];
   /** A signal decided on closed bar i. Must read bars ≤ i only. */
   evaluate(loaded: LoadedSymbol, i: number, variant: V): S | null;
@@ -223,6 +233,17 @@ export interface BacktestStrategy<V extends { id: string }, S> {
   openingGuard(variant: V): boolean;
   /** LIMIT orders: minutes before the close after which a fill is refused (absent: CLOSING_GUARD_MIN). MARKET orders always use CLOSING_GUARD_MIN. */
   closingGuardMin?(variant: V): number;
+  /**
+   * CLOSE_CONFIRM only: does this bar count as the confirming close? Null if
+   * not — the harness then checks invalidation and target-reached itself, in
+   * that order, before moving to the next bar (the same touched-vs-reached
+   * priority the LIMIT scan already uses). `meta` is attached to the trade
+   * (BacktestTrade.entryMeta) for reporting — e.g. the rejection candle's
+   * pattern label.
+   */
+  testCloseConfirm?(bar: { open: number; high: number; low: number; close: number }, order: BacktestOrder): { entry: number; meta?: Record<string, unknown> } | null;
+  /** CLOSE_CONFIRM only: R:R re-checked at the discovered entry; below it, LOW_RR (not traded). Absent = no re-check. */
+  closeConfirmMinRR?(variant: V): number;
   /** Report slices: title → key of a trade. */
   groupKeys: Record<string, (t: BacktestTrade<S>) => string | number>;
 }
@@ -242,20 +263,23 @@ export interface BacktestTrade<S = unknown> {
   exitAt: string;
   grossR: number;
   netR: number;
-  /** LIMIT orders only: when and where it filled, and excursions from the fill (R). */
+  /** LIMIT / CLOSE_CONFIRM orders only: when and where it filled, and excursions from the fill (R). */
   fill?: { at: string; price: number; barsWaited: number; hour: number };
   mfeR?: number;
   maeR?: number;
+  /** CLOSE_CONFIRM only: what testCloseConfirm attached at the fill (e.g. the rejection candle's pattern). */
+  entryMeta?: Record<string, unknown>;
 }
 
-/** A LIMIT order that never became a trade, and why. */
+/** A LIMIT / CLOSE_CONFIRM order that never became a trade, and why. */
 export interface UnfilledOrder<S = unknown> {
   symbol: string;
   date: string;
   decidedAt: string;
   hour: number;
   signal: S;
-  outcome: 'NO_FILL' | 'MISSED' | 'GUARDED' | 'SESSION_END';
+  /** INVALIDATED and LOW_RR are CLOSE_CONFIRM-only outcomes. */
+  outcome: 'NO_FILL' | 'MISSED' | 'GUARDED' | 'SESSION_END' | 'INVALIDATED' | 'LOW_RR';
 }
 
 export interface ReplayWindow {
@@ -331,73 +355,155 @@ export function replayStrategy<V extends { id: string }, S>(
       continue;
     }
 
-    // ---- LIMIT ----
-    const lastScan = Math.min(i + (order.fillWithinBars ?? 1), sessionEnd);
-    let fillIdx: number | null = null;
-    let outcome: UnfilledOrder['outcome'] | null = null;
-    let k = i + 1;
-    for (; k <= lastScan; k++) {
-      const touched = dir > 0 ? bars[k].low <= order.entry : bars[k].high >= order.entry;
-      if (touched) { fillIdx = k; break; }
-      const reached = dir > 0 ? bars[k].high >= order.target : bars[k].low <= order.target;
-      if (reached) { outcome = 'MISSED'; break; }
-    }
-    if (fillIdx == null) {
-      const endedBy = outcome ?? (lastScan === sessionEnd && lastScan < i + (order.fillWithinBars ?? 1) ? 'SESSION_END' : 'NO_FILL');
-      unfilled.push({ ...base, outcome: endedBy });
-      busyUntil = Math.min(k, lastScan);
+    if (order.type === 'LIMIT') {
+      // ---- LIMIT ----
+      const lastScan = Math.min(i + (order.fillWithinBars ?? 1), sessionEnd);
+      let fillIdx: number | null = null;
+      let outcome: UnfilledOrder['outcome'] | null = null;
+      let k = i + 1;
+      for (; k <= lastScan; k++) {
+        const touched = dir > 0 ? bars[k].low <= order.entry : bars[k].high >= order.entry;
+        if (touched) { fillIdx = k; break; }
+        const reached = dir > 0 ? bars[k].high >= order.target : bars[k].low <= order.target;
+        if (reached) { outcome = 'MISSED'; break; }
+      }
+      if (fillIdx == null) {
+        const endedBy = outcome ?? (lastScan === sessionEnd && lastScan < i + (order.fillWithinBars ?? 1) ? 'SESSION_END' : 'NO_FILL');
+        unfilled.push({ ...base, outcome: endedBy });
+        busyUntil = Math.min(k, lastScan);
+        continue;
+      }
+      // The live session gate refuses the mint at the fill.
+      const fillTime = bars[fillIdx].time;
+      const blockedOpen = strategy.openingGuard(variant) && fillTime < w.open + OPENING_GUARD_MIN * 60000;
+      const blockedClose = w.close - fillTime <= limitClosingGuardMin * 60000;
+      if (blockedOpen || blockedClose) {
+        unfilled.push({ ...base, outcome: 'GUARDED' });
+        busyUntil = fillIdx;
+        continue;
+      }
+      const risk = Math.abs(order.entry - order.stop);
+      const fb = bars[fillIdx];
+      const fill = { at: new Date(fillTime).toISOString(), price: order.entry, barsWaited: fillIdx - i, hour: Number(istSlotOf(fillTime).slice(0, 2)) };
+      const fbAdverse = dir > 0 ? order.entry - fb.low : fb.high - order.entry;
+      const fbFavour = dir > 0 ? fb.close - order.entry : order.entry - fb.close;
+      let exitIdx: number;
+      let exit: ExitKind;
+      let exitPrice: number;
+      let grossR: number;
+      let mfe = Math.max(0, fbFavour);
+      let mae = Math.max(0, fbAdverse);
+      if (dir > 0 ? fb.low <= order.stop : fb.high >= order.stop) {
+        exitIdx = fillIdx; exit = 'STOP'; exitPrice = order.stop; grossR = -1;
+      } else if (invalidate(fb)) {
+        exitIdx = fillIdx; exit = strategy.invalidationExit; exitPrice = fb.close; grossR = risk > 0 ? (dir * (fb.close - order.entry)) / risk : 0;
+      } else {
+        const after = bars.slice(fillIdx + 1, sessionEnd + 1);
+        if (after.length === 0) {
+          exitIdx = fillIdx; exit = 'SESSION_END'; exitPrice = fb.close; grossR = risk > 0 ? (dir * (fb.close - order.entry)) / risk : 0;
+        } else {
+          const path = gradePath(after, dir, order.entry, order.stop, order.target, { invalidateOnClose: (b) => invalidate(b) });
+          exitIdx = path.exitIndex != null ? fillIdx + 1 + path.exitIndex : sessionEnd;
+          exit = path.hitStop ? 'STOP' : path.hitTarget ? 'TARGET' : path.invalidated ? strategy.invalidationExit : 'SESSION_END';
+          exitPrice = path.exitPrice ?? bars[exitIdx].close;
+          grossR = path.settledR;
+          mfe = Math.max(mfe, path.mfe);
+          mae = Math.max(mae, path.mae);
+        }
+      }
+      trades.push({
+        ...base,
+        exit,
+        exitPrice,
+        exitAt: new Date(bars[exitIdx].time + barMs).toISOString(),
+        grossR: round3(grossR),
+        netR: round3(grossR - COST_R),
+        fill,
+        mfeR: risk > 0 ? round3(mfe / risk) : 0,
+        maeR: risk > 0 ? round3(Math.min(mae, risk) / risk) : 0,
+      });
+      busyUntil = exitIdx;
       continue;
     }
-    // The live session gate refuses the mint at the fill.
-    const fillTime = bars[fillIdx].time;
-    const blockedOpen = strategy.openingGuard(variant) && fillTime < w.open + OPENING_GUARD_MIN * 60000;
-    const blockedClose = w.close - fillTime <= limitClosingGuardMin * 60000;
-    if (blockedOpen || blockedClose) {
-      unfilled.push({ ...base, outcome: 'GUARDED' });
-      busyUntil = fillIdx;
-      continue;
-    }
-    const risk = Math.abs(order.entry - order.stop);
-    const fb = bars[fillIdx];
-    const fill = { at: new Date(fillTime).toISOString(), price: order.entry, barsWaited: fillIdx - i, hour: Number(istSlotOf(fillTime).slice(0, 2)) };
-    const fbAdverse = dir > 0 ? order.entry - fb.low : fb.high - order.entry;
-    const fbFavour = dir > 0 ? fb.close - order.entry : order.entry - fb.close;
-    let exitIdx: number;
-    let exit: ExitKind;
-    let exitPrice: number;
-    let grossR: number;
-    let mfe = Math.max(0, fbFavour);
-    let mae = Math.max(0, fbAdverse);
-    if (dir > 0 ? fb.low <= order.stop : fb.high >= order.stop) {
-      exitIdx = fillIdx; exit = 'STOP'; exitPrice = order.stop; grossR = -1;
-    } else if (invalidate(fb)) {
-      exitIdx = fillIdx; exit = strategy.invalidationExit; exitPrice = fb.close; grossR = risk > 0 ? (dir * (fb.close - order.entry)) / risk : 0;
-    } else {
+
+    // ---- CLOSE_CONFIRM (REJECTION_CLOSE entry mode) ----
+    // Per bar, in priority order (the same touched-vs-reached priority the
+    // LIMIT scan uses): does this bar confirm the entry (testCloseConfirm)?
+    // Else has the strategy's own invalidation fired (a close beyond the
+    // sweep extreme)? Else has the target already been reached (MISSED — a
+    // rejection close never came before price ran to T1)? Entry is that
+    // confirming bar's OWN close — nothing is left in that bar afterwards, so
+    // (unlike LIMIT) grading starts at the next bar, not the fill bar itself.
+    {
+      const lastScan = Math.min(i + (order.fillWithinBars ?? 1), sessionEnd);
+      let fillIdx: number | null = null;
+      let entryPrice: number | null = null;
+      let meta: Record<string, unknown> | undefined;
+      let outcome: UnfilledOrder['outcome'] | null = null;
+      let k = i + 1;
+      for (; k <= lastScan; k++) {
+        const bar = bars[k];
+        const hit = strategy.testCloseConfirm?.(bar, order);
+        if (hit) { fillIdx = k; entryPrice = hit.entry; meta = hit.meta; break; }
+        if (invalidate(bar)) { outcome = 'INVALIDATED'; break; }
+        const reached = dir > 0 ? bar.high >= order.target : bar.low <= order.target;
+        if (reached) { outcome = 'MISSED'; break; }
+      }
+      if (fillIdx == null || entryPrice == null) {
+        const endedBy = outcome ?? (lastScan === sessionEnd && lastScan < i + (order.fillWithinBars ?? 1) ? 'SESSION_END' : 'NO_FILL');
+        unfilled.push({ ...base, outcome: endedBy });
+        busyUntil = Math.min(k, lastScan);
+        continue;
+      }
+      const risk = Math.abs(entryPrice - order.stop);
+      const reward = Math.abs(order.target - entryPrice);
+      const minRR = strategy.closeConfirmMinRR?.(variant) ?? 0;
+      if (minRR > 0 && (!(risk > 0) || reward / risk < minRR)) {
+        unfilled.push({ ...base, outcome: 'LOW_RR' });
+        busyUntil = fillIdx;
+        continue;
+      }
+      const fillTime = bars[fillIdx].time;
+      const blockedOpen = strategy.openingGuard(variant) && fillTime < w.open + OPENING_GUARD_MIN * 60000;
+      const blockedClose = w.close - fillTime <= limitClosingGuardMin * 60000;
+      if (blockedOpen || blockedClose) {
+        unfilled.push({ ...base, outcome: 'GUARDED' });
+        busyUntil = fillIdx;
+        continue;
+      }
+      const fill = { at: new Date(fillTime).toISOString(), price: entryPrice, barsWaited: fillIdx - i, hour: Number(istSlotOf(fillTime).slice(0, 2)) };
+      let exitIdx: number;
+      let exit: ExitKind;
+      let exitPrice: number;
+      let grossR: number;
+      let mfe = 0;
+      let mae = 0;
       const after = bars.slice(fillIdx + 1, sessionEnd + 1);
       if (after.length === 0) {
-        exitIdx = fillIdx; exit = 'SESSION_END'; exitPrice = fb.close; grossR = risk > 0 ? (dir * (fb.close - order.entry)) / risk : 0;
+        exitIdx = fillIdx; exit = 'SESSION_END'; exitPrice = entryPrice; grossR = 0;
       } else {
-        const path = gradePath(after, dir, order.entry, order.stop, order.target, { invalidateOnClose: (b) => invalidate(b) });
+        const path = gradePath(after, dir, entryPrice, order.stop, order.target, { invalidateOnClose: (b) => invalidate(b) });
         exitIdx = path.exitIndex != null ? fillIdx + 1 + path.exitIndex : sessionEnd;
         exit = path.hitStop ? 'STOP' : path.hitTarget ? 'TARGET' : path.invalidated ? strategy.invalidationExit : 'SESSION_END';
         exitPrice = path.exitPrice ?? bars[exitIdx].close;
         grossR = path.settledR;
-        mfe = Math.max(mfe, path.mfe);
-        mae = Math.max(mae, path.mae);
+        mfe = path.mfe;
+        mae = path.mae;
       }
+      trades.push({
+        ...base,
+        exit,
+        exitPrice,
+        exitAt: new Date(bars[exitIdx].time + barMs).toISOString(),
+        grossR: round3(grossR),
+        netR: round3(grossR - COST_R),
+        fill,
+        mfeR: risk > 0 ? round3(mfe / risk) : 0,
+        maeR: risk > 0 ? round3(Math.min(mae, risk) / risk) : 0,
+        ...(meta ? { entryMeta: meta } : {}),
+      });
+      busyUntil = exitIdx;
     }
-    trades.push({
-      ...base,
-      exit,
-      exitPrice,
-      exitAt: new Date(bars[exitIdx].time + barMs).toISOString(),
-      grossR: round3(grossR),
-      netR: round3(grossR - COST_R),
-      fill,
-      mfeR: risk > 0 ? round3(mfe / risk) : 0,
-      maeR: risk > 0 ? round3(Math.min(mae, risk) / risk) : 0,
-    });
-    busyUntil = exitIdx;
   }
   return { trades, unfilled };
 }
