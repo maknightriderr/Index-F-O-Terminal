@@ -18,12 +18,67 @@
 // display and record only.
 // ============================================================
 
-import { STRUCTURE_RULES, TERMINAL_STAGES, type LiquidityPool, type StructureEvaluation, type StructureSetup, type StructureStage } from '@fno/analytics';
-import type { Exchange, StructureBlock, StructureLifecycleView, StructurePoolView, TradingMode } from '@fno/shared';
+import { STRUCTURE_RULES, STRUCTURE_RULES_5M, TERMINAL_STAGES, type LiquidityPool, type StructureEvaluation, type StructureSetup, type StructureStage } from '@fno/analytics';
+import type { Exchange, StructureBlock, StructureLifecycleView, StructurePoolView, StructureTimeframe, TradingMode } from '@fno/shared';
 import type { GateDiagnostic } from './gate-diagnostics.js';
 
 export { STRUCTURE_STRATEGY } from './momentum-break-live.js';
+export type { StructureTimeframe };
 export const STRUCTURE_SETUP_TYPE = 'STRUCTURE_SWEEP_FVG';
+
+// ---- entry timeframe (STRUCTURE_ENTRY_TF) ----
+
+/** Bar length of each entry timeframe. Pools are always read from 15m bars. */
+export const STRUCTURE_TF_BAR_MS: Record<StructureTimeframe, number> = { '15m': 15 * 60 * 1000, '5m': 5 * 60 * 1000 };
+
+/** The engine rules for a timeframe (5m: restated in time — STRUCTURE_RULES_5M). */
+export function structureRulesFor(timeframe: StructureTimeframe) {
+  return timeframe === '5m' ? STRUCTURE_RULES_5M : STRUCTURE_RULES;
+}
+
+/**
+ * 5m candle cache (loaded only while STRUCTURE_ENTRY_TF = '5m', for
+ * structure-enabled INTRADAY symbols). Price and the index's borrowed
+ * futures volume share ONE TTL: a volume series outliving the price series
+ * would pair a fresh bar with stale (zero) volume.
+ */
+export const STRUCTURE_5M_PRICE_TTL_SECONDS = 60;
+export const STRUCTURE_5M_VOLUME_TTL_SECONDS = STRUCTURE_5M_PRICE_TTL_SECONDS;
+/** Calendar days of 5m history: ATR needs 100 bars, the slot-volume baseline ≥ 5 previous sessions. */
+export const STRUCTURE_5M_HISTORY_DAYS = 10;
+
+/** The 5m cache keys, beside the 15m ones (hist:{ex}:{token}:15m, hist:{ex}:FO:{fut}:15m). */
+export function structure5mCacheKeys(exchange: Exchange, historicalToken: string, volumeFutureToken?: string | null): { price: string; volume: string | null } {
+  return {
+    price: `hist:${exchange}:${historicalToken}:5m`,
+    volume: volumeFutureToken ? `hist:${exchange}:FO:${volumeFutureToken}:5m` : null,
+  };
+}
+
+/**
+ * Real broker requests the 5m loader made, over a sliding minute. `record`
+ * returns the rate once a minute (to be logged) and null otherwise, so the
+ * log shows the measured load without a line per request.
+ */
+export class RequestRateMeter {
+  private times: number[] = [];
+  private total = 0;
+  private lastReportAt = -Infinity;
+  constructor(private readonly reportEveryMs = 60_000) {}
+  record(now: number, n = 1): { perMinute: number; total: number } | null {
+    for (let k = 0; k < n; k++) this.times.push(now);
+    this.total += n;
+    this.times = this.times.filter((t) => now - t < 60_000);
+    if (now - this.lastReportAt < this.reportEveryMs) return null;
+    this.lastReportAt = now;
+    return { perMinute: this.times.length, total: this.total };
+  }
+}
+
+/** The structure family's session gate: its variant's opening guard and its own closing guard (STRUCTURE_CLOSING_GUARD_MIN). */
+export function structureSessionOpts(params: Readonly<{ STRUCTURE_OPENING_GUARD: number; STRUCTURE_CLOSING_GUARD_MIN: number }>): { openingGuard: boolean; closingGuardMinutes: number } {
+  return { openingGuard: params.STRUCTURE_OPENING_GUARD >= 1, closingGuardMinutes: params.STRUCTURE_CLOSING_GUARD_MIN };
+}
 /**
  * The confidence a structure setup is minted and cooldown-checked at. The
  * sequence is binary — sweep, displacement and a filled zone either happened
@@ -32,14 +87,14 @@ export const STRUCTURE_SETUP_TYPE = 'STRUCTURE_SWEEP_FVG';
  * beside the real score.
  */
 export const STRUCTURE_SEQUENCE_CONFIDENCE = 100;
-const BAR_MS = 15 * 60 * 1000;
 
 export function structureStateKey(exchange: Exchange, underlying: string, mode: TradingMode): string {
   return `structure_setup:${exchange}:${underlying}:${mode}`;
 }
 
-export function lifecycleIdOf(exchange: Exchange, underlying: string, setup: Pick<StructureSetup, 'id'>): string {
-  return `${exchange}:${underlying}:${setup.id}`;
+/** 15m ids are unchanged; 5m ids carry a "5m:" segment so no Redis claim/outcome key is ever shared across timeframes. */
+export function lifecycleIdOf(exchange: Exchange, underlying: string, setup: Pick<StructureSetup, 'id'>, timeframe: StructureTimeframe = '15m'): string {
+  return timeframe === '5m' ? `${exchange}:${underlying}:5m:${setup.id}` : `${exchange}:${underlying}:${setup.id}`;
 }
 
 /** One lifecycle as kept in Redis. */
@@ -47,6 +102,8 @@ export interface LiveLifecycle {
   id: string;
   direction: 'BULLISH' | 'BEARISH';
   stage: StructureStage;
+  /** The entry timeframe the lifecycle ran on (absent on states written before it: 15m). */
+  timeframe?: StructureTimeframe;
   /** Transitions of the engine's history already written to setup_lifecycle_events. */
   recorded: number;
   pool: StructurePoolView;
@@ -74,6 +131,10 @@ export interface LiveState {
   mode: TradingMode;
   /** IST session date the lifecycles belong to. */
   day: string;
+  /** Entry timeframe (absent on states written before it: 15m). A change resets the day's lifecycles. */
+  timeframe?: StructureTimeframe;
+  /** 5m mode only: the 15m ATR from the closed 15m bars — the option leg's atrPoints (atr is the 5m ATR). */
+  poolAtr?: number | null;
   barTime: number | null;
   atr: number | null;
   updatedAt: number;
@@ -115,6 +176,9 @@ const poolView = (p: LiquidityPool | null | undefined): StructurePoolView | null
  * state and every transition not yet recorded (engine transitions, plus one
  * WATCH row per direction and pool per day). A new session date starts from
  * an empty state; a lifecycle's live outcome (minted / refused) is kept.
+ * A change of entry timeframe on the same day also starts from empty (the
+ * old timeframe's lifecycles are not this engine's): `reset` says so, for
+ * the caller to log.
  */
 export function advanceLiveState(args: {
   prev: LiveState | null;
@@ -125,21 +189,29 @@ export function advanceLiveState(args: {
   day: string;
   now: number;
   spot: number | null;
-}): { state: LiveState; events: LifecycleEventRow[] } {
+  /** Absent = 15m. */
+  timeframe?: StructureTimeframe;
+}): { state: LiveState; events: LifecycleEventRow[]; reset: { from: StructureTimeframe; to: StructureTimeframe } | null } {
   const { evaluation, exchange, underlying, mode, day, now, spot } = args;
-  const prev = args.prev && args.prev.day === day ? args.prev : null;
+  const timeframe = args.timeframe ?? '15m';
+  const barMs = STRUCTURE_TF_BAR_MS[timeframe];
+  const sameDay = args.prev != null && args.prev.day === day;
+  const prevTimeframe = args.prev?.timeframe ?? '15m';
+  const switched = sameDay && prevTimeframe !== timeframe;
+  const prev = sameDay && !switched ? args.prev : null;
   const byId = new Map((prev?.lifecycles ?? []).map((l) => [l.id, l]));
   const events: LifecycleEventRow[] = [];
   const lifecycles: LiveLifecycle[] = [];
 
   for (const setup of evaluation.setups) {
-    const id = lifecycleIdOf(exchange, underlying, setup);
+    const id = lifecycleIdOf(exchange, underlying, setup, timeframe);
     const old = byId.get(id);
     const last = setup.history[setup.history.length - 1];
     const lc: LiveLifecycle = {
       id,
       direction: setup.direction,
       stage: setup.stage,
+      timeframe,
       recorded: old?.recorded ?? 0,
       pool: poolView(setup.pool)!,
       zone: setup.zone,
@@ -193,7 +265,7 @@ export function advanceLiveState(args: {
     if (watchSeen.includes(key)) continue;
     watchSeen.push(key);
     events.push({
-      lifecycleId: `${exchange}:${underlying}:WATCH:${key}`,
+      lifecycleId: timeframe === '5m' ? `${exchange}:${underlying}:5m:WATCH:${key}` : `${exchange}:${underlying}:WATCH:${key}`,
       symbol: underlying,
       exchange,
       mode,
@@ -201,7 +273,7 @@ export function advanceLiveState(args: {
       fromState: null,
       toState: 'WATCH',
       reason: `price within ${STRUCTURE_RULES.watchWithinAtr} ATR of ${w.kind} ${w.price}`,
-      at: evaluation.barTime + BAR_MS,
+      at: evaluation.barTime + barMs,
       poolKind: w.kind,
       poolPrice: w.price,
       zone: null,
@@ -220,6 +292,7 @@ export function advanceLiveState(args: {
       underlying,
       mode,
       day,
+      timeframe,
       barTime: Number.isFinite(evaluation.barTime) ? evaluation.barTime : null,
       atr: evaluation.atr,
       updatedAt: now,
@@ -228,6 +301,7 @@ export function advanceLiveState(args: {
       lifecycles,
     },
     events,
+    reset: switched ? { from: prevTimeframe, to: timeframe } : null,
   };
 }
 
@@ -277,7 +351,10 @@ export function structureSequenceDiagnostic(lc: LiveLifecycle, refusal: { code: 
     gate: 'STRUCTURE_SEQUENCE',
     status: own ? 'FAIL' : 'PASS',
     reason: own?.reason ?? null,
-    threshold: { minT1R: STRUCTURE_RULES.minT1R, fillWithinBars: STRUCTURE_RULES.fillWithinBars, family: 'STRUCTURE' },
+    threshold:
+      lc.timeframe === '5m'
+        ? { minT1R: STRUCTURE_RULES_5M.minT1R, fillWithinBars: STRUCTURE_RULES_5M.fillWithinBars, family: 'STRUCTURE', timeframe: '5m' }
+        : { minT1R: STRUCTURE_RULES.minT1R, fillWithinBars: STRUCTURE_RULES.fillWithinBars, family: 'STRUCTURE' },
     input_values: {
       lifecycleId: lc.id,
       direction: lc.direction,
@@ -303,6 +380,7 @@ export function lifecycleView(state: LiveState, lc: LiveLifecycle): StructureLif
     mode: state.mode,
     direction: lc.direction,
     stage: lc.stage,
+    timeframe: lc.timeframe ?? state.timeframe ?? '15m',
     liveOutcome: lc.live?.outcome ?? null,
     liveReason: lc.live?.reason ?? null,
     pool: lc.pool,
@@ -320,9 +398,12 @@ export function lifecycleView(state: LiveState, lc: LiveLifecycle): StructureLif
 }
 
 /** The structure block on the bias response. */
-export function structureBlock(state: LiveState | null, meta: { enabled: boolean; symbol: string; exchange: Exchange; mode: TradingMode }): StructureBlock {
+export function structureBlock(
+  state: LiveState | null,
+  meta: { enabled: boolean; symbol: string; exchange: Exchange; mode: TradingMode; timeframe?: StructureTimeframe }
+): StructureBlock {
   if (!state) {
-    return { enabled: meta.enabled, symbol: meta.symbol, exchange: meta.exchange, mode: meta.mode, barTime: null, atr: null, current: { BULLISH: null, BEARISH: null }, watch: { BULLISH: null, BEARISH: null }, lifecycles: [] };
+    return { enabled: meta.enabled, symbol: meta.symbol, exchange: meta.exchange, mode: meta.mode, barTime: null, atr: null, timeframe: meta.timeframe ?? '15m', current: { BULLISH: null, BEARISH: null }, watch: { BULLISH: null, BEARISH: null }, lifecycles: [] };
   }
   const views = state.lifecycles.map((l) => lifecycleView(state, l));
   const running = (dir: 'BULLISH' | 'BEARISH') => {
@@ -336,6 +417,7 @@ export function structureBlock(state: LiveState | null, meta: { enabled: boolean
     mode: state.mode,
     barTime: state.barTime,
     atr: state.atr,
+    timeframe: state.timeframe ?? '15m',
     current: { BULLISH: running('BULLISH'), BEARISH: running('BEARISH') },
     watch: state.watch,
     lifecycles: [...views].reverse(),
@@ -357,6 +439,7 @@ export function watchlistRows(state: LiveState): StructureLifecycleView[] {
         mode: state.mode,
         direction: dir,
         stage: 'WATCH',
+        timeframe: state.timeframe ?? '15m',
         liveOutcome: null,
         liveReason: null,
         pool: block.watch[dir],
@@ -368,7 +451,7 @@ export function watchlistRows(state: LiveState): StructureLifecycleView[] {
         rToT1: null,
         score: null,
         sweepExtreme: null,
-        stageAt: state.barTime != null ? state.barTime + BAR_MS : state.updatedAt,
+        stageAt: state.barTime != null ? state.barTime + STRUCTURE_TF_BAR_MS[state.timeframe ?? '15m'] : state.updatedAt,
         reason: null,
       });
     }

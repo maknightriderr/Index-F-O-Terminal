@@ -7,7 +7,7 @@ import { formatIndianNumber } from '@fno/shared';
 import type { ScannedCandidate, ScanPortfolioRisk, ScannerScoreBreakdown } from '@fno/shared';
 import { ScoreBadge } from '@/components/common/badges';
 import { useStructureWatchlist } from '@/lib/use-structure-watchlist';
-import { LifecycleLevels, StageBadge, stageMeaning } from '@/components/common/structure-stage';
+import { LifecycleLevels, StageBadge, stageMeaning, TimeframeTag } from '@/components/common/structure-stage';
 
 const TREND_STYLES: Record<string, { label: string; className: string; dot: string }> = {
   BULLISH: { label: 'Bullish', className: 'text-emerald-400', dot: 'bg-emerald-400' },
@@ -397,12 +397,13 @@ function DevelopingSetups({ onOpen }: { onOpen: (symbol: string, exchange: 'NSE'
               key={r.id}
               type="button"
               onClick={() => onOpen(r.symbol, r.exchange)}
-              title={stageMeaning(r.stage)}
+              title={stageMeaning(r.stage, r.timeframe)}
               className="w-full text-left px-4 py-2.5 flex items-start gap-3 flex-wrap hover:bg-gray-800/30 light:hover:bg-slate-50 focus:outline-none focus-visible:ring-1 focus-visible:ring-cyan-500"
             >
               <span className="text-sm font-bold text-gray-100 light:text-slate-900 w-24 shrink-0">{r.symbol}</span>
-              <span className="w-24 shrink-0">
+              <span className="w-32 shrink-0 flex items-center gap-1">
                 <StageBadge stage={r.stage} />
+                <TimeframeTag timeframe={r.timeframe} />
               </span>
               <span
                 className={`text-xs font-semibold w-20 shrink-0 ${r.direction === 'BULLISH' ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700'}`}

@@ -162,9 +162,20 @@ import { buildWithFnoValidation, fnoValidationDiagnostic } from './fno-validatio
 // every INTRADAY poll (pure engine in @fno/analytics, pure live decisions in
 // structure-live.ts, I/O in setup-lifecycle.ts); only a filled limit mints,
 // through the same mint lock and slot as every other family.
-import { evaluateStructureSession, istDateOf, STRUCTURE_RULES, STRUCTURE_VARIANTS, type MomentumBar, type StructureVariant } from '@fno/analytics';
+import {
+  evaluateStructureSession,
+  evaluateStructureSessionMTF,
+  istDateOf,
+  momentumAtrAt,
+  STRUCTURE_5M_VARIANTS,
+  STRUCTURE_RULES,
+  STRUCTURE_VARIANTS,
+  type MomentumBar,
+  type StructureEvaluation,
+  type StructureVariant,
+} from '@fno/analytics';
 import type { StructureBlock } from '@fno/shared';
-import { CONSENSUS_SETUPS, STRUCTURE, STRUCTURE_PARAMS, structureEnabledFor } from '../config/trading-flags.js';
+import { CONSENSUS_SETUPS, STRUCTURE, STRUCTURE_ENTRY_TF, STRUCTURE_PARAMS, structureEnabledFor } from '../config/trading-flags.js';
 import {
   STRUCTURE_SEQUENCE_CONFIDENCE,
   STRUCTURE_SETUP_TYPE,
@@ -174,8 +185,16 @@ import {
   structureBlock,
   structureSequenceDiagnostic,
   structureSequenceRefusal,
+  structureSessionOpts,
+  structure5mCacheKeys,
+  RequestRateMeter,
+  STRUCTURE_5M_HISTORY_DAYS,
+  STRUCTURE_5M_PRICE_TTL_SECONDS,
+  STRUCTURE_5M_VOLUME_TTL_SECONDS,
+  STRUCTURE_TF_BAR_MS,
   type LiveLifecycle,
   type LiveState,
+  type StructureTimeframe,
 } from './structure-live.js';
 import { notifyStructureConfirmed, readLiveState, recordLifecycleEvents, writeLiveState } from './setup-lifecycle.js';
 import { safetyRefusal } from './momentum-break-live.js';
@@ -511,6 +530,51 @@ async function loadMomentumHistory(provider: MarketDataProvider, underlying: str
     }
   }
   assertNoFutureData(`${underlying} FIFTEEN_MINUTE ${days}d`, candles.map((c) => Date.parse(c.timestamp)));
+  return candles;
+}
+
+/** Real broker requests made by loadStructureCandles5m, logged once a minute. */
+const structure5mRequestRate = new RequestRateMeter();
+
+/**
+ * The structure engine's 5m candles (STRUCTURE_ENTRY_TF = '5m' only, and
+ * only for structure-enabled INTRADAY symbols — the caller checks both).
+ * A sibling of loadBiasCandles: the same token rule (MCX reads its nearest
+ * future), the same retry, the same 1.2s stagger after a real broker call,
+ * and the same request lane (the caller's AsyncLocalStorage priority). Index
+ * volume is borrowed bar for bar from the nearest future's 5m series. Price
+ * and volume are cached under hist:{ex}:{token}:5m / hist:{ex}:FO:{fut}:5m
+ * with ONE TTL (60s). Exported for the cache warmer.
+ */
+export async function loadStructureCandles5m(provider: MarketDataProvider, underlying: string, exchange: Exchange): Promise<OHLCV[]> {
+  const spotToken = await resolveSpotToken(provider, underlying, exchange);
+  const token = exchange === 'MCX' ? (await resolveNearestFuturesContract(provider, underlying, exchange))?.token ?? spotToken : spotToken;
+  const now = decisionDate();
+  const fromDate = formatAngelDateTime(new Date(now.getTime() - STRUCTURE_5M_HISTORY_DAYS * 24 * 60 * 60 * 1000));
+  const toDate = formatAngelDateTime(now);
+  const nonEmpty = (c: OHLCV[]) => c.length > 0;
+  let fetched = 0;
+  const fetch5m = (params: { segment?: 'FO'; token: string }) => {
+    fetched++;
+    return fetchHistoricalWithRetry(provider, { exchange, ...params, interval: 'FIVE_MINUTE', fromDate, toDate });
+  };
+  let candles = await cached(structure5mCacheKeys(exchange, token).price, STRUCTURE_5M_PRICE_TTL_SECONDS, () => fetch5m({ token }), nonEmpty);
+  if (exchange !== 'MCX' && !hasRecentVolume(candles)) {
+    const future = await resolveNearestFuturesContract(provider, underlying, exchange).catch((err: any) => {
+      logger.warn({ error: err.message, underlying, exchange }, 'Structure 5m: nearest future unresolved — 5m bars have no volume');
+      return undefined;
+    });
+    if (future) {
+      if (fetched > 0) await sleep(1200);
+      const futureCandles = await cached(structure5mCacheKeys(exchange, token, future.token).volume!, STRUCTURE_5M_VOLUME_TTL_SECONDS, () => fetch5m({ segment: 'FO', token: future.token }), nonEmpty);
+      if (hasRecentVolume(futureCandles)) candles = withBorrowedVolume(candles, futureCandles);
+    }
+  }
+  if (fetched > 0) {
+    const rate = structure5mRequestRate.record(Date.now(), fetched);
+    if (rate) logger.info({ perMinute: rate.perMinute, sinceBoot: rate.total, underlying, exchange }, 'Structure 5m: historical request rate (broker calls in the last minute)');
+  }
+  assertNoFutureData(`${underlying} FIVE_MINUTE`, candles.map((c) => Date.parse(c.timestamp)));
   return candles;
 }
 
@@ -1315,8 +1379,32 @@ async function computeMarketBias(
   // under structure_setup:*, never in the paper-trade slot; only a filled
   // limit can mint (resolveStickyTradeSetup's STRUCTURE family). Off = nothing
   // is read or written and the response carries no structure block.
+  // STRUCTURE_ENTRY_TF = '5m' (default '15m', the pre-registered head-to-head
+  // result): pools still come from these 15m bars; the sweep, displacement,
+  // zone and fill run on closed 5m bars, loaded only here (structure-enabled
+  // INTRADAY symbols) and only in that mode.
   const structureOn = structureEnabledFor(underlying, exchange, mode);
-  const structureState = structureOn ? await advanceStructureLifecycle(underlying, exchange, mode, closedNow, chain?.spotPrice ?? null) : null;
+  const structureTimeframe: StructureTimeframe = STRUCTURE_ENTRY_TF;
+  let structureClosed5m: MomentumBar[] | null = null;
+  if (structureOn && structureTimeframe === '5m') {
+    try {
+      structureClosed5m = toClosedMomentumBars(await loadStructureCandles5m(provider, underlying, exchange), exchange, decisionNow(), STRUCTURE_TF_BAR_MS['5m']);
+    } catch (err: any) {
+      logger.warn({ error: err.message, underlying, exchange }, 'Structure 5m: candle load failed — no structure read this poll');
+    }
+  }
+  const structureState = !structureOn
+    ? null
+    : structureTimeframe === '5m'
+      ? structureClosed5m
+        ? await advanceStructureLifecycle(underlying, exchange, mode, closedNow, chain?.spotPrice ?? null, { timeframe: '5m', bars5: structureClosed5m })
+        : null
+      : await advanceStructureLifecycle(underlying, exchange, mode, closedNow, chain?.spotPrice ?? null);
+  // The structure family's own newest closed bar (5m in 5m mode): the engine-fill check and SWEEP_RECLAIMED read it.
+  const structureLastBar =
+    structureTimeframe === '5m' && structureClosed5m && structureClosed5m.length > 0
+      ? { time: structureClosed5m[structureClosed5m.length - 1].time, close: structureClosed5m[structureClosed5m.length - 1].close, barMs: STRUCTURE_TF_BAR_MS['5m'] }
+      : null;
   const structureRun: StructureRun = { claimed: null, handled: false };
   // Regime assist: a qualified trigger in the last BREAKOUT_PERSIST_BARS bars
   // (not since closed back through its level) reads as BREAKOUT/BREAKDOWN, so
@@ -1900,7 +1988,7 @@ async function computeMarketBias(
         lastClosedBar,
         families: [
           { family: 'MOMENTUM_BREAK', trigger: momentumRead?.trigger ?? null },
-          ...(structureState ? [{ family: 'STRUCTURE' as const, state: structureState, run: structureRun }] : []),
+          ...(structureState ? [{ family: 'STRUCTURE' as const, state: structureState, run: structureRun, ...(structureLastBar ? { lastClosedBar: structureLastBar } : {}) }] : []),
         ],
       })
     : { available: false, reason: 'Option chain unavailable for this symbol — cannot size a setup.' };
@@ -1920,7 +2008,7 @@ async function computeMarketBias(
     bias,
     score,
     tradeSetup,
-    ...(structureOn ? { structure: structureBlock(structureState, { enabled: STRUCTURE, symbol: underlying, exchange, mode }) } : {}),
+    ...(structureOn ? { structure: structureBlock(structureState, { enabled: STRUCTURE, symbol: underlying, exchange, mode, timeframe: structureTimeframe }) } : {}),
   };
   biasComputedAt.set(`${exchange}:${underlying}:${mode}`, Date.now());
 
@@ -2249,6 +2337,8 @@ interface StoredStructureTrade {
   t2: { kind: string; price: number } | null;
   rToT1: number | null;
   score: number | null;
+  /** Present only for a 5m-entry trade (its SWEEP_RECLAIMED exit reads closed 5m bars). */
+  timeframe?: '5m';
 }
 
 /** Staleness of a re-surfaced sticky setup, as shown on the response. Measured only — see signal-freshness.ts. */
@@ -2344,7 +2434,7 @@ interface GateRefusal {
   reason: string;
 }
 
-function sessionGateReason(exchange: Exchange, mode: TradingMode, opts: { openingGuard?: boolean } = {}): GateRefusal | null {
+function sessionGateReason(exchange: Exchange, mode: TradingMode, opts: { openingGuard?: boolean; closingGuardMinutes?: number } = {}): GateRefusal | null {
   const sinceOpen = minutesSinceSessionOpen(exchange);
   if (sinceOpen == null) {
     const holiday = getExchangeHoliday(exchange);
@@ -2369,13 +2459,15 @@ function sessionGateReason(exchange: Exchange, mode: TradingMode, opts: { openin
   }
   // Validation review, fix 5 (flag CLOSING_GUARD): the explicit backstop at
   // the other end of the session. Intraday only; existing setups untouched.
-  // With the flag off this returns null, exactly as before.
+  // With the flag off this returns null, exactly as before. The cutoff is per
+  // engine: consensus (and momentum) SETUP_CLOSING_GUARD_MINUTES, structure
+  // STRUCTURE_CLOSING_GUARD_MIN (opts.closingGuardMinutes).
   const closing = closingGuardReason({
     enabled: TRADING_FLAGS.CLOSING_GUARD,
     mode,
     exchange,
     minutesToClose: minutesToSessionClose(exchange, decisionNow()),
-    guardMinutes: TRADING_PARAMS.SETUP_CLOSING_GUARD_MINUTES,
+    guardMinutes: opts.closingGuardMinutes ?? TRADING_PARAMS.SETUP_CLOSING_GUARD_MINUTES,
   });
   if (closing) return closing;
   return null;
@@ -2752,7 +2844,7 @@ async function resolveStickyTradeSetup(
   const structureFamily = triggers?.families.find((f): f is StructureFamilyInput => f.family === 'STRUCTURE');
   const lastClosedBar = triggers?.lastClosedBar ?? null;
   const trigger = momentumFamily?.trigger ? await claimMomentumTrigger(exchange, underlying, mode, momentumFamily.trigger) : null;
-  const structureFill = structureFamily ? await claimStructureFill(exchange, underlying, mode, structureFamily, chain.spotPrice, lastClosedBar?.time ?? null) : null;
+  const structureFill = structureFamily ? await claimStructureFill(exchange, underlying, mode, structureFamily, chain.spotPrice, (structureFamily.lastClosedBar ?? lastClosedBar)?.time ?? null) : null;
 
   if (storedIsPlausible && (isPositional || stored!.day === today)) {
     const isSpread = stored!.structureType === 'SPREAD';
@@ -2826,6 +2918,7 @@ async function resolveStickyTradeSetup(
             trigger,
             lastClosedBar,
             others: structureFill ? [{ family: 'STRUCTURE', direction: structureFill.direction }] : [],
+            structureBar: structureFamily?.lastClosedBar ?? null,
           });
 
     if (hitSL || hitTarget) {
@@ -3802,6 +3895,8 @@ interface MomentumFamilyInput {
 interface StructureFamilyInput {
   family: 'STRUCTURE';
   state: LiveState;
+  /** 5m mode only: the newest closed 5m bar (absent: the triggers' 15m bar is the structure bar). */
+  lastClosedBar?: { time: number; close: number; barMs: number };
   /** Filled by resolveStickyTradeSetup: the fill it claimed, and whether the structure chain ran for it. */
   run: StructureRun;
 }
@@ -3815,7 +3910,20 @@ interface TriggerFamilies {
 }
 
 /** The live structure variant: the pre-registered one the in-sample run chose (env-overridable). */
-function liveStructureVariant(): StructureVariant {
+function liveStructureVariant(timeframe: StructureTimeframe = '15m'): StructureVariant {
+  if (timeframe === '5m') {
+    // The 5m backtest's in-sample choice (STRUCTURE_5M_DISP_MULT) with the structure closing guard.
+    const dispMult5 = STRUCTURE_PARAMS.STRUCTURE_5M_DISP_MULT;
+    const closingGuardMin = STRUCTURE_PARAMS.STRUCTURE_CLOSING_GUARD_MIN;
+    return (
+      STRUCTURE_5M_VARIANTS.find((v) => v.dispMult === dispMult5 && v.closingGuardMin === closingGuardMin) ?? {
+        id: `custom-5m-D${dispMult5}-C${closingGuardMin}`,
+        dispMult: dispMult5,
+        openingGuard: STRUCTURE_PARAMS.STRUCTURE_OPENING_GUARD >= 1,
+        closingGuardMin,
+      }
+    );
+  }
   const dispMult = STRUCTURE_PARAMS.STRUCTURE_DISP_MULT;
   const openingGuard = STRUCTURE_PARAMS.STRUCTURE_OPENING_GUARD >= 1;
   return (
@@ -3830,7 +3938,8 @@ function liveStructureVariant(): StructureVariant {
 const STRUCTURE_OUTCOME_TTL_SECONDS = 60 * 60 * 36;
 
 /**
- * Advances this symbol's structure lifecycle from the closed 15m bars:
+ * Advances this symbol's structure lifecycle from the closed 15m bars (or,
+ * in 5m mode, 15m pools with the closed 5m bars as events):
  * engine read → Redis state (structure_setup:*) → lifecycle rows for the
  * transitions not yet written → Telegram at a fresh CONFIRMED. Null — logged
  * — when it cannot be read; a missing structure read never blocks the rest.
@@ -3840,18 +3949,35 @@ async function advanceStructureLifecycle(
   exchange: Exchange,
   mode: TradingMode,
   bars: MomentumBar[],
-  spot: number | null
+  spot: number | null,
+  fiveMinute?: { timeframe: '5m'; bars5: MomentumBar[] }
 ): Promise<LiveState | null> {
   try {
-    if (bars.length < 2) {
-      logger.warn({ underlying, exchange, bars: bars.length }, 'Structure: not enough closed 15m bars to evaluate');
-      return null;
+    const timeframe: StructureTimeframe = fiveMinute ? '5m' : '15m';
+    let evaluation: StructureEvaluation;
+    let poolAtr: number | null = null;
+    if (fiveMinute) {
+      if (bars.length < 2 || fiveMinute.bars5.length < 2) {
+        logger.warn({ underlying, exchange, bars15: bars.length, bars5: fiveMinute.bars5.length }, 'Structure 5m: not enough closed 15m/5m bars to evaluate');
+        return null;
+      }
+      const series15 = prepareMomentumSeries(bars);
+      evaluation = evaluateStructureSessionMTF(series15, prepareMomentumSeries(fiveMinute.bars5), fiveMinute.bars5.length - 1, liveStructureVariant('5m'));
+      // The 15m ATR: the option leg's atrPoints (target, structural stop) in 5m mode; the 5m ATR is only rule 4's noise floor.
+      poolAtr = momentumAtrAt(series15, bars.length);
+    } else {
+      if (bars.length < 2) {
+        logger.warn({ underlying, exchange, bars: bars.length }, 'Structure: not enough closed 15m bars to evaluate');
+        return null;
+      }
+      const series = prepareMomentumSeries(bars);
+      evaluation = evaluateStructureSession(series, bars.length - 1, liveStructureVariant());
     }
-    const series = prepareMomentumSeries(bars);
-    const evaluation = evaluateStructureSession(series, bars.length - 1, liveStructureVariant());
     const now = decisionNow();
     const prev = await readLiveState(exchange, underlying, mode);
-    const { state, events } = advanceLiveState({ prev, evaluation, exchange, underlying, mode, day: istDateOf(evaluation.barTime), now, spot });
+    const { state, events, reset } = advanceLiveState({ prev, evaluation, exchange, underlying, mode, day: istDateOf(evaluation.barTime), now, spot, timeframe });
+    if (reset) logger.info({ underlying, exchange, mode, from: reset.from, to: reset.to }, "Structure: entry timeframe changed — today's lifecycles for this symbol start over");
+    if (fiveMinute) state.poolAtr = poolAtr != null ? round2(poolAtr) : null;
     await mergeStructureOutcomes(state);
     recordLifecycleEvents(events);
     for (const e of events) {
@@ -3988,11 +4114,20 @@ async function resolveStructureSetup(ctx: {
   const at = decisionNow();
   const spot = chain.spotPrice;
   const side: 'CE' | 'PE' = direction === 'BEARISH' ? 'PE' : 'CE';
+  // 5m mode: lc.atr is the 5m ATR. The option leg keeps the 15m ATR as
+  // atrPoints (target, structural stop — at the engine's own stop) and gets
+  // the 5m ATR only as rule 4's noise floor (noiseAtrPoints).
+  const fiveMinute = lc.timeframe === '5m';
+  let optionAtr: number = lc.atr;
+  if (fiveMinute) {
+    if (state.poolAtr != null && state.poolAtr > 0) optionAtr = state.poolAtr;
+    else logger.warn({ underlying, exchange, lifecycleId: lc.id }, 'Structure 5m: no 15m ATR on the state — the option leg uses the 5m ATR');
+  }
 
   const riskOff = await riskOffReason(exchange, mode);
   const reliability = riskOff ? null : await checkReliabilityFilters(underlying, exchange, direction, mode);
   const feedBlock = dataQualityBlock(exchange, underlying);
-  const session = sessionGateReason(exchange, mode, { openingGuard: STRUCTURE_PARAMS.STRUCTURE_OPENING_GUARD >= 1 });
+  const session = sessionGateReason(exchange, mode, structureSessionOpts(STRUCTURE_PARAMS));
   const cooldown = await losingCloseCooldownReason(underlying, exchange, direction, mode, confidence);
   const concurrencyExposure: ExposureSnapshot | null = TRADING_FLAGS.CONCURRENCY_CAP
     ? await readExposureAtCreation({ key, exchange, underlying, mode, direction, strike: null, side: null, expiry: null, riskAmount: 0 }, today)
@@ -4015,6 +4150,7 @@ async function resolveStructureSetup(ctx: {
     t2: lc.t2,
     rToT1: lc.rToT1,
     score: lc.score,
+    ...(fiveMinute ? { timeframe: '5m' as const } : {}),
   };
   const structureContext: SetupEntryContext | undefined = entryContext
     ? {
@@ -4072,7 +4208,7 @@ async function resolveStructureSetup(ctx: {
             mode,
             exchange,
             liveRefusalCode: refusal?.code ?? null,
-            closing: { enforced: TRADING_FLAGS.CLOSING_GUARD, minutesToClose: minutesToSessionClose(exchange, at), guardMinutes: TRADING_PARAMS.SETUP_CLOSING_GUARD_MINUTES },
+            closing: { enforced: TRADING_FLAGS.CLOSING_GUARD, minutesToClose: minutesToSessionClose(exchange, at), guardMinutes: structureSessionOpts(STRUCTURE_PARAMS).closingGuardMinutes },
             location: { enforced: false, score: entryContext?.locationScore ?? null, minScore: TRADING_PARAMS.LOCATION_GATE_MIN_SCORE },
             room: { enforced: false, availableAtr: null, requiredAtrV2: null, sufficientV2: null, requiredAtrV1: null, sufficientV1: null },
             concurrency: { enforced: TRADING_FLAGS.CONCURRENCY_CAP, exposure: concurrencyExposure, max: TRADING_PARAMS.MAX_CONCURRENT_SAME_DIRECTION },
@@ -4106,7 +4242,7 @@ async function resolveStructureSetup(ctx: {
     roomCheckOiAgeSeconds: entryContext?.roomCheckOiAgeSeconds ?? null,
   };
   const describe =
-    `Structure ${direction}: ${lc.pool.kind.replace(/_/g, ' ').toLowerCase()} ${lc.pool.price} swept (extreme ${lc.sweepExtreme}), displacement ${lc.displacementBodyAtr ?? '—'} ATR; ` +
+    `Structure ${direction}${fiveMinute ? ' (5m entry, 15m pools)' : ''}: ${lc.pool.kind.replace(/_/g, ' ').toLowerCase()} ${lc.pool.price} swept (extreme ${lc.sweepExtreme}), displacement ${lc.displacementBodyAtr ?? '—'} ATR; ` +
     `limit ${lc.entry} (${lc.zone?.kind === 'FVG' ? 'fair-value gap' : 'displacement 50%'}) filled at ${spot}; underlying stop ${lc.stop}, T1 ${lc.t1?.kind} ${lc.t1?.price} (${lc.rToT1}R)` +
     `${lc.t2 ? `, T2 ${lc.t2.price} (shown only — the whole position closes at T1)` : ''}; score ${lc.score ?? '—'}/100 (describes, never gates).`;
 
@@ -4189,7 +4325,7 @@ async function resolveStructureSetup(ctx: {
         vix,
         c.dte,
         c.lotSize,
-        lc.atr,
+        optionAtr,
         {
           ivRank,
           hvPct: entryContext?.hvPct ?? null,
@@ -4198,12 +4334,20 @@ async function resolveStructureSetup(ctx: {
           flags: { structuralStop: TRADING_FLAGS.STRUCTURAL_STOP, richIvRr: TRADING_FLAGS.RICH_IV_RR },
           spot,
           // The structural stop IS the sweep extreme + the engine's 0.1 ATR buffer.
-          nearestBehindLevel: lc.sweepExtreme,
-          structuralStopBufferAtr: STRUCTURE_RULES.stopBufferAtr,
+          // (5m: that buffer is 0.1 × the 5m ATR, already inside lc.stop, so the level is the stop itself.)
+          nearestBehindLevel: fiveMinute ? lc.stop! : lc.sweepExtreme,
+          structuralStopBufferAtr: fiveMinute ? 0 : STRUCTURE_RULES.stopBufferAtr,
           ivVsHv: entryContext?.ivVsHv ?? null,
           richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
           ...(FNO_VALIDATION
-            ? { fnoValidation: { enabled: true, maxCostPctOfPremium: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM, minOptionStopAtr: FNO_VALIDATION_PARAMS.MIN_OPTION_STOP_ATR } }
+            ? {
+                fnoValidation: {
+                  enabled: true,
+                  maxCostPctOfPremium: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM,
+                  minOptionStopAtr: FNO_VALIDATION_PARAMS.MIN_OPTION_STOP_ATR,
+                  ...(fiveMinute ? { noiseAtrPoints: lc.atr } : {}),
+                },
+              }
             : {}),
         }
       );

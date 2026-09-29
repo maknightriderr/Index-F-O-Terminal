@@ -48,6 +48,11 @@ export function minutesToSessionClose(exchange: Exchange, at: number): number | 
  * Existing setups are untouched (this is only consulted when minting), and so
  * is CLOSING_WINDOW_MINUTES' volume rule. Evidence is thin — NSE entries with
  * under two hours left: 5 trades, 0 wins — which is why it is a flag.
+ *
+ * `guardMinutes` is per engine: the consensus engine passes
+ * SETUP_CLOSING_GUARD_MINUTES (60, its targets are time-scaled); the structure
+ * engine passes STRUCTURE_CLOSING_GUARD_MIN (chosen by its backtest). The NSE
+ * evidence sentence is only cited on NSE/BSE — it was never measured on MCX.
  */
 export function closingGuardReason(args: {
   enabled: boolean;
@@ -58,11 +63,13 @@ export function closingGuardReason(args: {
 }): ValidationRefusal | null {
   if (!args.enabled || args.mode !== 'INTRADAY' || args.minutesToClose == null) return null;
   if (args.minutesToClose >= args.guardMinutes) return null;
+  const head = `Only ${Math.floor(args.minutesToClose)} minutes left before ${args.exchange} closes, and new intraday setups stop ${args.guardMinutes} minutes before the close. `;
   return {
     code: 'CLOSING_HOUR',
     reason:
-      `Only ${Math.floor(args.minutesToClose)} minutes left before ${args.exchange} closes, and new intraday setups stop ${args.guardMinutes} minutes before the close. ` +
-      `A late entry has too little session left to reach its target (thin evidence: NSE entries with under two hours left went 0 for 5).`,
+      args.exchange === 'NSE' || args.exchange === 'BSE'
+        ? head + `A late entry has too little session left to reach its target (thin evidence: NSE entries with under two hours left went 0 for 5).`
+        : head + `Past the ${args.guardMinutes}-minute cutoff a late entry has too little session left to reach its target.`,
   };
 }
 

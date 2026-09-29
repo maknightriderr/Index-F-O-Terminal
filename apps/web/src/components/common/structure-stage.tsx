@@ -23,13 +23,34 @@ const STAGE_MEANING: Record<string, string> = {
   ACTIVE: 'The trade is on; it ends at the stop, T1, a sweep reclaim or the session end.',
 };
 
+// With 5m entries (STRUCTURE_ENTRY_TF = '5m') pools stay on 15m bars; the
+// sweep, displacement, zone and fill run on 5m bars, with the windows in time.
+const STAGE_MEANING_5M: Record<string, string> = {
+  ...STAGE_MEANING,
+  DEVELOPING: 'The pool (15m) was swept on a 5m bar; waiting for a displacement the other way (30 min).',
+  CONFIRMED: 'Displacement printed on 5m; a limit rests at the zone for 120 min.',
+};
+
 export function StageBadge({ stage }: { stage: string }) {
   const s = STAGE_STYLES[stage] ?? { label: stage, className: 'bg-gray-500/15 text-gray-400' };
   return <span className={`text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded ${s.className}`}>{s.label}</span>;
 }
 
-export function stageMeaning(stage: string): string {
-  return STAGE_MEANING[stage] ?? '';
+export function stageMeaning(stage: string, timeframe?: string | null): string {
+  return (timeframe === '5m' ? STAGE_MEANING_5M : STAGE_MEANING)[stage] ?? '';
+}
+
+/** The entry timeframe a lifecycle runs on: "15m", or "5m entry" (15m pools, 5m reaction). */
+export function TimeframeTag({ timeframe }: { timeframe?: string | null }) {
+  const five = timeframe === '5m';
+  return (
+    <span
+      className={`text-[10px] font-semibold px-1.5 py-0.5 rounded tabular-nums ${five ? 'bg-violet-500/15 text-violet-300 light:text-violet-700' : 'bg-gray-500/10 text-gray-400 light:text-slate-600'}`}
+      title={five ? 'Pools from 15m bars; sweep, displacement, zone and fill on 5m bars' : 'Pools and the reaction on 15m bars'}
+    >
+      {five ? '5m entry' : '15m'}
+    </span>
+  );
 }
 
 const pretty = (kind: string | undefined | null) => (kind ? kind.replace(/_/g, ' ').toLowerCase() : '—');
