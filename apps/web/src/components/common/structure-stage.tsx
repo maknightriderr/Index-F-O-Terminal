@@ -78,6 +78,17 @@ export function PatternLabel({ row }: { row: Pick<StructureLifecycleView, 'patte
   );
 }
 
+/**
+ * The engine's own note on why the lifecycle is where it is — e.g. under
+ * STRUCTURE_ENTRY_MODE = REJECTION_CLOSE, a CONFIRMED lifecycle carries
+ * "waiting for rejection candle at zone" until a closed candle actually
+ * rejects the zone (see rejection-close.ts). Renders nothing when absent.
+ */
+export function LifecycleReason({ row }: { row: Pick<StructureLifecycleView, 'reason'> }) {
+  if (!row.reason) return null;
+  return <span className="block text-[11px] text-amber-300 light:text-amber-700 mt-0.5 italic">{row.reason}</span>;
+}
+
 /** One-line description of a lifecycle's levels: pool, zone, stop, T1. */
 export function LifecycleLevels({ row }: { row: StructureLifecycleView }) {
   return (

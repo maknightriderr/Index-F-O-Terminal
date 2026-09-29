@@ -542,8 +542,11 @@ export const STRUCTURE_ENTRY_TF_REJECTED: string | null = parsedStructureEntryTf
 // exactly one variant (no grid), so it is run once, out of sample, alongside
 // the already-seen TOUCH OOS result.
 //
-// RESULT: see the PR body / structure-entry-mode-report for the numbers this
-// round produced, and STRUCTURE_ENTRY_MODE_DEFAULT below for what they decided.
+// RESULT (npm run backtest-structure-entry-mode; live 15m config D1.0-NOGUARD,
+// closing guard 60, out-of-sample 2026-06-03 -> 2026-09-28, run once): 17
+// trades, avg net R -0.044, PF 0.93 vs TOUCH's already-seen 32 trades, avg net
+// R -0.005, PF 0.99 on the same dates — REJECTION_CLOSE fails all three
+// checks (avg net R, PF, >= 20 trades), so it ships OFF: 'TOUCH'.
 export type StructureEntryMode = 'TOUCH' | 'REJECTION_CLOSE';
 export const STRUCTURE_ENTRY_MODE_DEFAULT: StructureEntryMode = 'TOUCH';
 

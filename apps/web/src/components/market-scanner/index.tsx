@@ -7,7 +7,7 @@ import { formatIndianNumber } from '@fno/shared';
 import type { ScannedCandidate, ScanPortfolioRisk, ScannerScoreBreakdown } from '@fno/shared';
 import { ScoreBadge } from '@/components/common/badges';
 import { useStructureWatchlist } from '@/lib/use-structure-watchlist';
-import { LifecycleLevels, PatternLabel, StageBadge, stageMeaning, TimeframeTag } from '@/components/common/structure-stage';
+import { LifecycleLevels, LifecycleReason, PatternLabel, StageBadge, stageMeaning, TimeframeTag } from '@/components/common/structure-stage';
 
 const TREND_STYLES: Record<string, { label: string; className: string; dot: string }> = {
   BULLISH: { label: 'Bullish', className: 'text-emerald-400', dot: 'bg-emerald-400' },
@@ -413,6 +413,7 @@ function DevelopingSetups({ onOpen }: { onOpen: (symbol: string, exchange: 'NSE'
               <span className="flex-1 min-w-[16rem]">
                 <LifecycleLevels row={r} />
                 <PatternLabel row={r} />
+                <LifecycleReason row={r} />
                 {r.liveOutcome === 'REFUSED' && r.liveReason && (
                   <span className="block text-[11px] text-amber-400 light:text-amber-700 mt-0.5">Fill refused: {r.liveReason}</span>
                 )}

@@ -26,7 +26,7 @@ import { MarketBiasCard, MarketRegimeCard, IntelligenceScoreCard, SupportResista
 import { NewsPanel } from '@/components/common/news-panel';
 import { EventCalendarPanel } from '@/components/common/event-calendar-panel';
 import { PayoffDiagram } from '@/components/common/payoff-diagram';
-import { LifecycleLevels, PatternLabel, StageBadge, stageMeaning, TimeframeTag } from '@/components/common/structure-stage';
+import { LifecycleLevels, LifecycleReason, PatternLabel, StageBadge, stageMeaning, TimeframeTag } from '@/components/common/structure-stage';
 
 const STRIKE_RANGE_OPTIONS = [5, 10, 15, 20];
 const REFRESH_INTERVAL_MS = 15000;
@@ -775,6 +775,7 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
                 </div>
                 <LifecycleLevels row={r} />
                 <PatternLabel row={r} />
+                <LifecycleReason row={r} />
                 {r.liveOutcome === 'REFUSED' && r.liveReason && <div className="text-[10px] text-amber-400 light:text-amber-700 mt-0.5">Fill refused: {r.liveReason}</div>}
               </div>
             ))}

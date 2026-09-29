@@ -140,3 +140,23 @@ describe('the candle-pattern score bonus never changes an engine decision', () =
     expect(backtestSrc).toMatch(/b\.score\?\.baseTotal.*a\.score\?\.baseTotal|sort\(\(a, b\) => \(b\.score\?\.baseTotal/);
   });
 });
+
+describe('migration 028 (lifecycle candle labels)', () => {
+  it('is idempotent, registered for boot, and only adds nullable columns', () => {
+    const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../..');
+    const sqlText = readFileSync(path.join(REPO_ROOT, 'database/init/028_lifecycle_candle_patterns.sql'), 'utf-8');
+    const statements = sqlText
+      .split('\n')
+      .filter((l) => !l.trim().startsWith('--'))
+      .join('\n')
+      .split(';')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    expect(statements.length).toBeGreaterThan(0);
+    for (const st of statements) expect(st).toMatch(/ADD COLUMN IF NOT EXISTS/);
+    expect(sqlText).toContain('pattern_label TEXT');
+    expect(sqlText).toContain('patterns JSONB');
+    const ensure = readFileSync(path.join(REPO_ROOT, 'apps/server/src/services/ensure-capture-schema.ts'), 'utf-8');
+    expect(ensure).toContain("'028_lifecycle_candle_patterns.sql'");
+  });
+});
