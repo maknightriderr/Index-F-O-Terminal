@@ -284,7 +284,11 @@ export function minutesSinceSessionOpen(exchange: Exchange, at: Date | number = 
     else close = hhmmToMinutes(MCX_EVENING_SESSION_OPEN);
   }
 
-  if (minutes < open || minutes > close) return null;
+  // The close is exclusive: at 15:30:00 (MCX 23:30/23:55) the session is over.
+  // `minutes > close` kept the whole close minute open, while the closing guard
+  // (minutesToSessionClose, millisecond precision) already treated it as closed,
+  // so for 59s neither gate refused an intraday setup priced off post-close quotes.
+  if (minutes < open || minutes >= close) return null;
   return minutes - open;
 }
 
