@@ -63,13 +63,15 @@ export interface AttributionRow {
   minutesSinceLastLoss?: number | null;
   /** Validation review — decision_snapshots.logic_version. Null = recorded before stamping (migration 026). */
   logicVersion?: string | null;
-  /** Momentum-break round — decision_snapshots.setup_family ('MOMENTUM' for a momentum-break decision). */
+  /** Momentum-break round — decision_snapshots.setup_family ('MOMENTUM' for a momentum-break decision, 'SWEEP_FVG' for a structure one). */
   setupFamily?: string | null;
 }
 
-/** Which setup family a decision belongs to: the momentum-break trigger, or the consensus engine (everything else, including pre-round rows). */
-export function strategyFamilyOf(r: Pick<AttributionRow, 'setupFamily'>): 'MOMENTUM_BREAK' | 'CONSENSUS' {
-  return r.setupFamily === 'MOMENTUM' ? 'MOMENTUM_BREAK' : 'CONSENSUS';
+/** Which setup family a decision belongs to: the momentum-break trigger, the structure engine, or the consensus engine (everything else, including pre-round rows). */
+export function strategyFamilyOf(r: Pick<AttributionRow, 'setupFamily'>): 'MOMENTUM_BREAK' | 'STRUCTURE' | 'CONSENSUS' {
+  if (r.setupFamily === 'MOMENTUM') return 'MOMENTUM_BREAK';
+  if (r.setupFamily === 'SWEEP_FVG') return 'STRUCTURE';
+  return 'CONSENSUS';
 }
 
 /**
@@ -241,7 +243,7 @@ export interface AttributionReport {
   exposure: { sameDirection: GroupStats[]; correlated: GroupStats[]; note: string };
   /** Validation review — the same outcomes split by the logic version the decision was made under. */
   byLogicVersion: GroupStats[];
-  /** Momentum-break round — the same outcomes split by setup family (MOMENTUM_BREAK vs CONSENSUS), never pooled. */
+  /** Momentum-break round — the same outcomes split by setup family (MOMENTUM_BREAK / STRUCTURE / CONSENSUS), never pooled. */
   byStrategy: GroupStats[];
   /** Validation review — what simR and premiumR are, verbatim, for labelling. */
   rDefinitions: typeof R_DEFINITIONS;

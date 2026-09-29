@@ -420,6 +420,51 @@ export interface TradeSetup {
   stopBeforeStructure?: boolean;
   /** The reward:risk this setup had to clear after costs (flag RICH_IV_RR): 1.5 normally, higher when IV was RICH. */
   requiredRiskReward?: number;
+  /** F&O trade validation (flag FNO_VALIDATION): strike by delta, IV-capped target, cost ceiling, stop outside noise, expiry fallback. Absent when the flag was off. */
+  fnoValidation?: TradeSetupFnoValidation;
+}
+
+/** Part A — F&O trade validation. Every field is what the rule saw, so a refusal or a pass can be audited. */
+export interface TradeSetupFnoValidation {
+  /** Rule 1: the strike chosen by |delta| band rather than by rounding spot. */
+  strikeSelection: {
+    method: 'DELTA_BAND';
+    band: [number, number];
+    selectedStrike: number | null;
+    /** The chain's rounded ATM strike, for comparison. */
+    atmStrike: number;
+    delta: number | null;
+    moneyness: 'ITM' | 'ATM' | 'OTM' | null;
+    candidatesEvaluated: number;
+    eligible: number;
+  } | null;
+  /** Rule 2: IV used for the target's expected move = min(ATM IV, HV × mult). Null when the family's target is structural, not IV-based. */
+  ivCap: {
+    atmIvPct: number | null;
+    hvPct: number | null;
+    mult: number;
+    ivUsedPct: number | null;
+    capped: boolean;
+    uncappedMovePoints: number;
+    cappedMovePoints: number;
+  } | null;
+  /** Rule 3: round-trip cost as % of entry premium, and the ceiling. Null when the builder refused before costing. */
+  costPct: number | null;
+  maxCostPct: number;
+  /** Rule 4: the premium stop's underlying equivalent (stopWidth / |delta|) in 15m ATR. Null when no ATR was available. */
+  stopUnderlyingAtr: number | null;
+  minStopAtr: number;
+  /** True when the stop was widened (never past the 45% cap) to sit outside the noise floor. */
+  stopWidenedForNoise: boolean;
+  /** Rule 5: the 0-DTE contract failed and the next expiry's chain was used (or tried). */
+  expiryFallback: boolean;
+  /** The expiry first evaluated, and why it failed when a fallback happened. */
+  primaryExpiry: string | null;
+  primaryRefusalCode: string | null;
+  /** The expiry the setup was finally built (or refused) on. */
+  finalExpiry: string | null;
+  /** The F&O rule that refused, or null when the contract passed. */
+  refusalCode: 'OPTION_DELTA_OUT_OF_BAND' | 'COST_TOO_HIGH' | 'STOP_INSIDE_NOISE' | null;
 }
 
 /** Fix 1 of the validation review: the stop widened to structure, never squeezed to fit R:R. */
@@ -949,7 +994,9 @@ export type SignalType =
   | 'VIX_SPIKE'
   | 'PCR_EXTREME'
   | 'INSTITUTIONAL_ACTIVITY'
-  | 'NEXT_DAY_BIAS';
+  | 'NEXT_DAY_BIAS'
+  // Structure engine: a setup reached CONFIRMED (zone, stop and T1 defined; the limit is resting).
+  | 'STRUCTURE_CONFIRMED';
 
 export interface Signal {
   id: string;
@@ -1347,6 +1394,15 @@ export type NoTradeCode =
   // Momentum-break family: no qualifying trigger on the newest closed bar,
   // or price already back through the level / at the target.
   | 'TRIGGER_QUALITY'
+  // F&O trade validation (flag FNO_VALIDATION): no strike in the delta band,
+  // round-trip cost above the ceiling, or a stop inside the underlying's noise.
+  | 'OPTION_DELTA_OUT_OF_BAND'
+  | 'COST_TOO_HIGH'
+  | 'STOP_INSIDE_NOISE'
+  // Structure engine (flag STRUCTURE): no filled sweep → displacement → zone sequence.
+  | 'STRUCTURE_SEQUENCE'
+  // CONSENSUS_SETUPS off: the consensus engine computes bias but does not mint.
+  | 'CONSENSUS_OFF'
   | 'UNKNOWN';
 
 /** A structured account of one entry decision — why it was taken, or why it was not. */
@@ -1370,6 +1426,9 @@ export interface TradeDecision {
   estimatedCostPct?: number | null;
   /** Shadow verdicts: what the not-yet-live gates would have done. */
   shadow?: { room?: boolean; location?: boolean };
+  /** Validation finding F6: what each positioning input was measured against (INTRADAY_60M vs PREV_CLOSE), and where the regime came from. */
+  positioningBaseline?: object | null;
+  regimeSource?: string | null;
 }
 
 export interface NextDayEvidence {
@@ -1658,7 +1717,7 @@ export interface WinRateAnalytics {
 
 /** Headline figures for the setups minted by one family. */
 export interface StrategyBucket extends WinRateBucket {
-  /** 'MOMENTUM_BREAK' or 'CONSENSUS'. */
+  /** 'MOMENTUM_BREAK', 'STRUCTURE' or 'CONSENSUS'. */
   strategy: string;
   profitFactor: number | null;
   /** Σ Premium R (net). */
@@ -1729,4 +1788,58 @@ export interface TradeSetupOptionQuality {
   thetaEfficiency: number | null;
   components: { name: string; score: number; detail: string }[];
   summary: string;
+}
+
+// --- Structure engine (flag STRUCTURE) — the live lifecycle, as the API and UI see it ---
+
+export type StructureStageName = 'WATCH' | 'DEVELOPING' | 'CONFIRMED' | 'ENTRY' | 'ACTIVE' | 'CLOSED' | 'INVALIDATED' | 'LATE' | 'MISSED' | 'LOW_RR';
+
+export interface StructurePoolView {
+  kind: string;
+  price: number;
+  rank: number;
+}
+
+export interface StructureLifecycleView {
+  /** Stable per symbol: exchange:symbol:direction:sweep bar time. */
+  id: string;
+  symbol: string;
+  exchange: Exchange;
+  mode: TradingMode;
+  direction: 'BULLISH' | 'BEARISH';
+  /** The engine's stage on closed 15m bars. */
+  stage: StructureStageName;
+  /** What the live engine did at the fill: minted a paper trade, or refused it (with why). Null before a fill. */
+  liveOutcome: 'MINTED' | 'REFUSED' | null;
+  liveReason: string | null;
+  pool: StructurePoolView | null;
+  zone: { kind: 'FVG' | 'DISP_50'; near: number; far: number } | null;
+  entry: number | null;
+  stop: number | null;
+  t1: { kind: string; price: number } | null;
+  t2: { kind: string; price: number } | null;
+  rToT1: number | null;
+  /** 0-100, describes and orders; never gates. */
+  score: number | null;
+  sweepExtreme: number | null;
+  /** When the current stage was reached (epoch ms, the bar close that caused it). */
+  stageAt: number;
+  /** The last transition's reason (e.g. NO_FILL, "PREV_DAY_HIGH 102 swept"). */
+  reason: string | null;
+}
+
+export interface StructureBlock {
+  enabled: boolean;
+  symbol: string;
+  exchange: Exchange;
+  mode: TradingMode;
+  /** Newest closed 15m bar the engine read (its open time), and the ATR it used. */
+  barTime: number | null;
+  atr: number | null;
+  /** Per direction: the running lifecycle, else null. */
+  current: { BULLISH: StructureLifecycleView | null; BEARISH: StructureLifecycleView | null };
+  /** Per direction: the untaken pool price is within 0.5 ATR of, when nothing is running. */
+  watch: { BULLISH: StructurePoolView | null; BEARISH: StructurePoolView | null };
+  /** Today's lifecycles, newest first. */
+  lifecycles: StructureLifecycleView[];
 }

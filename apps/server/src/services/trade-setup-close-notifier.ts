@@ -41,6 +41,8 @@ export type TradeCloseReason =
   // and a setup closed because a trigger fired the other way.
   | 'LEVEL_RECLAIMED'
   | 'TRIGGER_REVERSAL'
+  // Structure round: a 15m bar closed back beyond the sweep extreme.
+  | 'SWEEP_RECLAIMED'
   | 'UNKNOWN';
 
 const REASON_TEXT: Record<TradeCloseReason, string> = {
@@ -59,7 +61,8 @@ const REASON_TEXT: Record<TradeCloseReason, string> = {
   MANUAL_EXIT: 'Closed manually',
   SYSTEM_ERROR: 'Closed after a system error',
   LEVEL_RECLAIMED: 'Closed — a 15m bar closed back through the level the momentum break was taken on',
-  TRIGGER_REVERSAL: 'Closed — a momentum-break trigger fired the other way',
+  TRIGGER_REVERSAL: 'Closed — a trigger (momentum break or structure fill) fired the other way',
+  SWEEP_RECLAIMED: 'Closed — a 15m bar closed back beyond the extreme of the liquidity sweep the structure setup was taken on',
   UNKNOWN: 'Closed — reason not recorded',
 };
 

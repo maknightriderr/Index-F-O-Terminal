@@ -29,6 +29,7 @@ const TYPE_OPTIONS: Array<{ value: TypeFilter; label: string }> = [
   { value: 'IV_SPIKE', label: 'IV Spike' },
   { value: 'IV_CRUSH', label: 'IV Crush' },
   { value: 'TRADE_SETUP_CLOSED', label: 'Trade Setup' },
+  { value: 'STRUCTURE_CONFIRMED', label: 'Structure Confirmed' },
   { value: 'VIX_SPIKE', label: 'VIX Spike' },
   { value: 'PCR_EXTREME', label: 'PCR Extreme' },
   { value: 'INSTITUTIONAL_ACTIVITY', label: 'Institutional' },

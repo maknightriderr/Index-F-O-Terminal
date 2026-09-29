@@ -54,6 +54,12 @@ const REFUSAL_CLASS: Record<string, RefusalClass> = {
   POOR_OPTION_QUALITY: 'REFUSED',
   LOW_OPTION_LIQUIDITY: 'REFUSED',
   WIDE_SPREAD: 'REFUSED',
+  // F&O trade validation (flag FNO_VALIDATION): the contract itself was judged and found wanting.
+  OPTION_DELTA_OUT_OF_BAND: 'REFUSED',
+  COST_TOO_HIGH: 'REFUSED',
+  STOP_INSIDE_NOISE: 'REFUSED',
+  // Structure engine: the sweep → displacement → fill sequence (or its R:R to T1) no longer held at the fill.
+  STRUCTURE_SEQUENCE: 'REFUSED',
 
   // A safety rule intervened. Nothing here is a statement about the setup.
   RISK_OFF: 'BLOCKED_BY_RISK_CONTROL',
@@ -72,6 +78,8 @@ const REFUSAL_CLASS: Record<string, RefusalClass> = {
   // There was nothing to judge.
   MARKET_CLOSED: 'NOT_ELIGIBLE',
   NO_CHAIN: 'NOT_ELIGIBLE',
+  // CONSENSUS_SETUPS off: that family does not mint at all.
+  CONSENSUS_OFF: 'NOT_ELIGIBLE',
 
   UNKNOWN: 'UNKNOWN',
 };

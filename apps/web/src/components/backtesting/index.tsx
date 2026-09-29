@@ -185,7 +185,7 @@ export function BacktestingPage() {
           )}
 
           {analytics.byStrategy && analytics.byStrategy.length > 0 && (
-            <Collapsible title="By Strategy" subtitle="momentum-break trigger setups vs consensus setups — never pooled" count={analytics.byStrategy.length}>
+            <Collapsible title="By Strategy" subtitle="momentum-break, structure and consensus setups — never pooled" count={analytics.byStrategy.length}>
               <LogicVersionTable
                 rows={analytics.byStrategy.map((b) => ({ ...b, logicVersion: b.strategy }))}
                 keyLabel="Strategy"

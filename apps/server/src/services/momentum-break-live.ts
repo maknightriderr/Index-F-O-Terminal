@@ -15,15 +15,20 @@
 //     slPremiumPct argument: max(0.15, |Δ|·stop distance / mid);
 //   - what to do with the one shared sticky slot.
 //
-// Families share the slot `trade_setup:{ex}:{u}:{mode}`:
+// Families share the slot `trade_setup:{ex}:{u}:{mode}`. The trigger
+// families are MOMENTUM_BREAK and (structure round) STRUCTURE:
 //   empty                                  → mint the trigger
-//   same-direction setup (either family)   → nothing
+//   same-direction setup (any family)      → nothing
 //   opposite-direction setup               → close it TRIGGER_REVERSAL, then mint
 //   a held trigger trade                   → exempt from the consensus
 //                                            BIAS_REVERSED exit; it closes on
-//                                            stop, target, session end or
-//                                            LEVEL_RECLAIMED (a closed 15m bar
-//                                            back through the broken level)
+//                                            stop, target, session end, or its
+//                                            family's own close-based exit:
+//                                            LEVEL_RECLAIMED (momentum — a closed
+//                                            15m bar back through the broken
+//                                            level) or SWEEP_RECLAIMED (structure
+//                                            — a closed bar back beyond the
+//                                            sweep extreme)
 // ============================================================
 
 import {
@@ -37,6 +42,10 @@ import { getSessionWindow, type Exchange, type NoTradeCode, type OHLCV, type Opt
 import type { GateDiagnostic } from './gate-diagnostics.js';
 
 export const MOMENTUM_BREAK_STRATEGY = 'MOMENTUM_BREAK';
+/** The structure family's strategy name on the setup (structure-live.ts owns the rest of it). */
+export const STRUCTURE_STRATEGY = 'STRUCTURE';
+/** The families that act on a trigger rather than on the consensus read. */
+export const TRIGGER_STRATEGIES: readonly string[] = [MOMENTUM_BREAK_STRATEGY, STRUCTURE_STRATEGY];
 /** The protected MIN_SL_PREMIUM_PCT, restated for the trigger's premium-stop floor (not a new number). */
 const TRIGGER_MIN_SL_PREMIUM_PCT = 0.15;
 const BAR_MS = 15 * 60 * 1000;
@@ -227,16 +236,35 @@ export function triggerQualityDiagnostic(
 export type SlotAction =
   | { kind: 'CONSENSUS_FLOW' }
   | { kind: 'HOLD_TRIGGER' }
-  | { kind: 'CLOSE'; reason: 'LEVEL_RECLAIMED' | 'TRIGGER_REVERSAL' };
+  | { kind: 'CLOSE'; reason: 'LEVEL_RECLAIMED' | 'SWEEP_RECLAIMED' | 'TRIGGER_REVERSAL' };
+
+/** What a structure trade carries in the slot, so SWEEP_RECLAIMED can be judged on later polls. */
+export interface SlotStructureView {
+  direction: 'BULLISH' | 'BEARISH';
+  sweepExtreme: number;
+  /** When the limit filled (epoch ms). Only bars closing after it can reclaim. */
+  fillAt: number;
+}
 
 export interface SlotView {
   direction: string;
   strategy?: string | null;
   momentumBreak?: StoredMomentumBreak | null;
+  structure?: SlotStructureView | null;
 }
 
+/** A trigger trade: a MOMENTUM_BREAK or STRUCTURE setup carrying its own trigger record. */
 export function isTriggerTrade(stored: SlotView): boolean {
-  return stored.strategy === MOMENTUM_BREAK_STRATEGY && stored.momentumBreak != null;
+  return (
+    (stored.strategy === MOMENTUM_BREAK_STRATEGY && stored.momentumBreak != null) ||
+    (stored.strategy === STRUCTURE_STRATEGY && stored.structure != null)
+  );
+}
+
+/** A fresh trigger from any family this poll: only its direction matters to the slot. */
+export interface FamilyTrigger {
+  family: 'MOMENTUM_BREAK' | 'STRUCTURE';
+  direction: 'BULLISH' | 'BEARISH';
 }
 
 /**
@@ -253,14 +281,26 @@ export function triggerSlotAction(args: {
   trigger: MomentumBreakSignal | null;
   /** Newest closed 15m bar, when the caller has one. */
   lastClosedBar: { time: number; close: number } | null;
+  /** Fresh triggers from the other families this poll (structure fills). Absent = momentum only, exactly as before. */
+  others?: readonly FamilyTrigger[];
 }): SlotAction {
   const { stored, trigger, lastClosedBar } = args;
-  const mb = isTriggerTrade(stored) ? stored.momentumBreak! : null;
+  const mb = stored.strategy === MOMENTUM_BREAK_STRATEGY && stored.momentumBreak != null ? stored.momentumBreak : null;
   if (mb && lastClosedBar && lastClosedBar.time > mb.barTime && isLevelReclaimed(mb.direction, mb.levelPrice, lastClosedBar.close)) {
     return { kind: 'CLOSE', reason: 'LEVEL_RECLAIMED' };
   }
-  if (trigger && trigger.direction !== stored.direction && (stored.direction === 'BULLISH' || stored.direction === 'BEARISH')) {
+  const st = stored.strategy === STRUCTURE_STRATEGY && stored.structure != null ? stored.structure : null;
+  if (st && lastClosedBar && lastClosedBar.time + BAR_MS > st.fillAt && isSweepReclaimed(st.direction, st.sweepExtreme, lastClosedBar.close)) {
+    return { kind: 'CLOSE', reason: 'SWEEP_RECLAIMED' };
+  }
+  const opposite = [...(trigger ? [trigger.direction] : []), ...(args.others ?? []).map((o) => o.direction)].some((d) => d !== stored.direction);
+  if (opposite && (stored.direction === 'BULLISH' || stored.direction === 'BEARISH')) {
     return { kind: 'CLOSE', reason: 'TRIGGER_REVERSAL' };
   }
-  return mb ? { kind: 'HOLD_TRIGGER' } : { kind: 'CONSENSUS_FLOW' };
+  return mb || st ? { kind: 'HOLD_TRIGGER' } : { kind: 'CONSENSUS_FLOW' };
+}
+
+/** A structure trade is wrong once a 15m bar closes back beyond the sweep extreme. */
+export function isSweepReclaimed(direction: 'BULLISH' | 'BEARISH', sweepExtreme: number, close: number): boolean {
+  return direction === 'BEARISH' ? close > sweepExtreme : close < sweepExtreme;
 }

@@ -88,7 +88,13 @@ export type GateName =
   | 'CONCURRENT_EXPOSURE'
   // Momentum-break family only (momentum-break-live.ts): the trigger rule
   // itself. Not part of the consensus chain, so not in LIVE_CHAIN_GATES.
-  | 'TRIGGER_QUALITY';
+  | 'TRIGGER_QUALITY'
+  // F&O trade validation (fno-validation.ts, flag FNO_VALIDATION): strike by
+  // delta, cost ceiling, stop outside noise, expiry fallback. Applies to every
+  // family, after the family's own gates; not part of LIVE_CHAIN_GATES.
+  | 'FNO_VALIDATION'
+  // Structure engine only (structure-live.ts): the sweep -> displacement -> fill sequence.
+  | 'STRUCTURE_SEQUENCE';
 
 /**
  * The validation-review gates, in the order the live chain evaluates them:
@@ -193,6 +199,8 @@ export function gateForRefusalCode(code: string | null | undefined): GateName | 
   // OPENING_HOUR inside the settle/guard window; both are the same gate.
   if (code === 'MARKET_CLOSED') return 'OPENING_HOUR';
   if (code === 'TRIGGER_QUALITY') return 'TRIGGER_QUALITY';
+  if (code === 'OPTION_DELTA_OUT_OF_BAND' || code === 'COST_TOO_HIGH' || code === 'STOP_INSIDE_NOISE') return 'FNO_VALIDATION';
+  if (code === 'STRUCTURE_SEQUENCE') return 'STRUCTURE_SEQUENCE';
   if ((VALIDATION_GATES as readonly string[]).includes(code)) return code as GateName;
   return (LIVE_CHAIN_GATES as readonly string[]).includes(code) ? (code as GateName) : null;
 }

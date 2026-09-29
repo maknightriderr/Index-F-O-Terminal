@@ -19,7 +19,7 @@
 // numbers were derived so it can be checked, not just trusted.
 // ============================================================
 
-import type { OptionChainStrike, OptionType, BiasDirection, TradeSetup, PositionSize, TradeSetupOptionQuality, TradeSetupStructuralStop } from '@fno/shared';
+import type { OptionChainStrike, OptionType, BiasDirection, TradeSetup, PositionSize, TradeSetupOptionQuality, TradeSetupStructuralStop, TradeSetupFnoValidation } from '@fno/shared';
 import { assessOptionQuality, type OptionQualityInput } from '../option-quality/index.js';
 import { DEFAULT_RISK_CONFIG, TRADING_COST_MODEL } from '@fno/shared';
 
@@ -144,6 +144,44 @@ export const STRUCTURAL_STOP_BUFFER_ATR = 0.25;
 // expensive to buy, so the reward:risk bar a setup has to clear is raised to
 // this. The ordinary bar (the 1.5 constant above) is untouched.
 export const RICH_IV_MIN_RISK_REWARD = 2.0;
+
+// ---- F&O trade validation (Part A, flag FNO_VALIDATION; absent = the rules above, unchanged) ----
+// The 29 Sep BSE 3100 PE losses: a ₹7 "ATM" put at delta -0.19, 9.4% round-
+// trip cost, IV 98-138% against HV 27% inflating the target to 3.2x, and a
+// stop 0.94 ATR away. Nothing refused any of it. Each number below is an
+// UNTESTED DEFAULT chosen from that diagnosis and ordinary option-buying
+// practice, not fitted to outcomes; the server overrides each from its env.
+/** Rule 1: the traded strike's |delta| must sit in this band (closest to OPTION_DELTA_TARGET wins). UNTESTED DEFAULT. */
+export const OPTION_DELTA_BAND_MIN = 0.35;
+/** UNTESTED DEFAULT. */
+export const OPTION_DELTA_BAND_MAX = 0.65;
+/** UNTESTED DEFAULT. */
+export const OPTION_DELTA_TARGET = 0.5;
+/** Rule 2: the IV a target's expected move may use is at most HV × this. UNTESTED DEFAULT. */
+export const IV_TARGET_CAP_MULT = 1.5;
+/** Rule 3: round-trip cost ceiling, % of entry premium. UNTESTED DEFAULT. */
+export const MAX_COST_PCT_OF_PREMIUM = 5;
+/** Rule 4: the premium stop's underlying equivalent must be at least this many 15m ATR. UNTESTED DEFAULT. */
+export const MIN_OPTION_STOP_ATR = 1.0;
+
+/**
+ * Rule 2, pure: scales an IV-derived expected move down so the IV behind it is
+ * at most `hvPct × mult`. The move is linear in IV (IV × spot × √t), so the
+ * scale is ivUsed / atmIv. Missing IV or HV leaves the move as it is.
+ */
+export function capExpectedMoveByHv(
+  movePoints: number,
+  atmIvPct: number | null,
+  hvPct: number | null,
+  mult: number = IV_TARGET_CAP_MULT
+): { points: number; ivUsedPct: number | null; capped: boolean } {
+  if (atmIvPct == null || !(atmIvPct > 0) || hvPct == null || !(hvPct > 0) || !(mult > 0)) {
+    return { points: movePoints, ivUsedPct: atmIvPct != null && atmIvPct > 0 ? atmIvPct : null, capped: false };
+  }
+  const ceiling = hvPct * mult;
+  if (atmIvPct <= ceiling) return { points: movePoints, ivUsedPct: atmIvPct, capped: false };
+  return { points: movePoints * (ceiling / atmIvPct), ivUsedPct: ceiling, capped: true };
+}
 
 // A 0-DTE (or 1-DTE) option's premium swings ±50-100% routinely on gamma
 // alone as dealers hedge into the close — a stop sized for a normal T-3/T-5
@@ -337,11 +375,15 @@ function buildNakedLong(
   const hasQuote = leg.bid > 0 && leg.ask > 0;
   const mid = hasQuote ? (leg.bid + leg.ask) / 2 : leg.ltp;
   const atmSpreadPct = hasQuote ? ((leg.ask - leg.bid) / mid) * 100 : null;
+  // F&O validation (flag FNO_VALIDATION): the strike was chosen by delta, so
+  // the reason names its real moneyness instead of calling it "ATM".
+  const fno = instrument.fnoValidation?.enabled === true;
+  const strikeLabel = fno ? leg.moneyness : 'ATM';
   if (atmSpreadPct != null && atmSpreadPct > MAX_ATM_SPREAD_PCT) {
     return {
       available: false,
       noTradeCode: 'WIDE_SPREAD',
-      reason: `ATM ${side} ${atmStrike} bid-ask spread (${atmSpreadPct.toFixed(1)}% of mid) is too wide to trade — likely illiquid this tick.`,
+      reason: `${strikeLabel} ${side} ${atmStrike} bid-ask spread (${atmSpreadPct.toFixed(1)}% of mid) is too wide to trade — likely illiquid this tick.`,
     };
   }
 
@@ -440,6 +482,57 @@ function buildNakedLong(
   const cost = estimateRoundTripCost(entry, leg.bid, leg.ask, lotSize);
   const roundTripCost = cost.perUnit;
   const costPct = round2(cost.pct);
+
+  // F&O validation, rules 3 and 4 (flag FNO_VALIDATION). The record is filled
+  // here with what the builder can see; the caller adds strike selection, the
+  // IV cap and the expiry fallback.
+  const absDeltaLeg = Math.abs(leg.delta);
+  const maxCostPct = instrument.fnoValidation?.maxCostPctOfPremium ?? MAX_COST_PCT_OF_PREMIUM;
+  const minOptionStopAtr = instrument.fnoValidation?.minOptionStopAtr ?? MIN_OPTION_STOP_ATR;
+  const fnoRecord = (over: Partial<TradeSetupFnoValidation>): TradeSetupFnoValidation => ({
+    strikeSelection: null,
+    ivCap: null,
+    costPct,
+    maxCostPct,
+    stopUnderlyingAtr: null,
+    minStopAtr: minOptionStopAtr,
+    stopWidenedForNoise: false,
+    expiryFallback: false,
+    primaryExpiry: null,
+    primaryRefusalCode: null,
+    finalExpiry: null,
+    refusalCode: null,
+    ...over,
+  });
+  if (fno && cost.pct > maxCostPct) {
+    const reason =
+      `The ${strikeLabel} ${side} ${atmStrike} at ${entry.toFixed(2)} costs ~${costPct}% of its premium to trade round trip (spread, slippage, charges, brokerage) — ` +
+      `above the ${maxCostPct}% ceiling, so the costs alone take a large share of any move. Refused, not sized down.`;
+    return {
+      available: false,
+      noTradeCode: 'COST_TOO_HIGH',
+      reason,
+      contractValidation: { tradeable: false, refusalReason: reason, checks: optionQuality.components },
+      fnoValidation: fnoRecord({ refusalCode: 'COST_TOO_HIGH' }),
+    };
+  }
+  // The underlying move below which the stop sits inside ordinary noise, in premium terms.
+  const noiseStopWidth = fno && atrPoints != null && atrPoints > 0 && absDeltaLeg > 0 ? minOptionStopAtr * atrPoints * absDeltaLeg : null;
+  const stopInsideNoise = (stopWidth: number): TradeSetup => {
+    const stopAtr = round2(stopWidth / absDeltaLeg / atrPoints!);
+    const reason =
+      `The premium stop on the ${strikeLabel} ${side} ${atmStrike} (${round2(stopWidth).toFixed(2)} of ${entry.toFixed(2)}) is only a ${stopAtr}-ATR move in the underlying ` +
+      `at delta ${leg.delta.toFixed(2)} — inside the ${minOptionStopAtr}-ATR noise floor, and it cannot be widened that far within the ${Math.round(MAX_SL_PREMIUM_PCT * 100)}% cap and the required reward:risk. Refused.`;
+    return {
+      available: false,
+      noTradeCode: 'STOP_INSIDE_NOISE',
+      reason,
+      contractValidation: { tradeable: false, refusalReason: reason, checks: optionQuality.components },
+      fnoValidation: fnoRecord({ refusalCode: 'STOP_INSIDE_NOISE', stopUnderlyingAtr: stopAtr }),
+    };
+  };
+  let stopWidenedForNoise = false;
+
   const netReward = grossReward - roundTripCost;
   if (netReward <= 0) {
     return {
@@ -476,6 +569,14 @@ function buildNakedLong(
           (richIvActive ? ` IV is rich against realised volatility, so this setup needs ${requiredRr}:1 rather than ${MIN_RISK_REWARD}:1.` : ''),
       };
     }
+    // F&O validation rule 4: widen to the noise floor only as far as both the
+    // 45% cap and the R:R-affordable width allow; otherwise refuse.
+    if (noiseStopWidth != null && stopWidth < noiseStopWidth) {
+      const ceiling = Math.min(Math.max(entry * MAX_SL_PREMIUM_PCT, maxStopWidth), rrStopWidth);
+      if (noiseStopWidth > ceiling) return stopInsideNoise(stopWidth);
+      stopWidth = noiseStopWidth;
+      stopWidenedForNoise = true;
+    }
   } else {
     // Fix 1 (flag structuralStop): the stop is where the trade is WRONG, not
     // whatever width the target can afford. The squeeze above put 54% of
@@ -498,6 +599,12 @@ function buildNakedLong(
     // caller-supplied base above it is never tightened.
     const capWidth = Math.max(entry * MAX_SL_PREMIUM_PCT, maxStopWidth);
     stopWidth = Math.min(Math.max(maxStopWidth, structuralWidth ?? 0), capWidth);
+    // F&O validation rule 4: the stop may widen to the noise floor, never past the cap.
+    if (noiseStopWidth != null && stopWidth < noiseStopWidth) {
+      if (noiseStopWidth > capWidth) return stopInsideNoise(stopWidth);
+      stopWidth = noiseStopWidth;
+      stopWidenedForNoise = true;
+    }
     const stopBeforeStructure = structuralWidth != null && structuralWidth > capWidth;
     structuralRecord = {
       baseStopWidth: round2(maxStopWidth),
@@ -599,8 +706,11 @@ function buildNakedLong(
     // so the flag-off object is byte-identical to the pre-review one.
     ...(structuralRecord ? { structuralStop: structuralRecord, stopBeforeStructure: structuralRecord.stopBeforeStructure } : {}),
     ...(instrument.flags?.richIvRr === true ? { requiredRiskReward: requiredRr } : {}),
+    ...(fno ? { fnoValidation: fnoRecord({ stopUnderlyingAtr: stopInAtr != null ? round2(stopInAtr) : null, stopWidenedForNoise }) } : {}),
     reason:
-      `${direction} bias at ${confidence}/100 confidence — ATM ${side} ${atmStrike} @ ${entry.toFixed(2)}${hasQuote ? ' (bid-ask mid)' : ''}. ` +
+      `${direction} bias at ${confidence}/100 confidence — ${strikeLabel} ${side} ${atmStrike} @ ${entry.toFixed(2)}${hasQuote ? ' (bid-ask mid)' : ''}. ` +
+      (fno ? `Strike chosen by delta (${leg.delta.toFixed(2)}), round trip ~${costPct}% of premium. ` : '') +
+      (stopWidenedForNoise ? `Stop widened to sit ${minOptionStopAtr} ATR of the underlying away (outside noise), within the ${Math.round(MAX_SL_PREMIUM_PCT * 100)}% cap. ` : '') +
       `Target ${target.toFixed(2)} from delta (${leg.delta.toFixed(2)}) × IV-implied expected move (${expectedMovePoints.toFixed(0)} pts). ` +
       (structuralRecord
         ? `SL ${stopLoss.toFixed(2)} — a ${Math.round(effectiveStopPct * 100)}% premium stop` +
@@ -671,6 +781,21 @@ export interface SetupInstrumentContext {
   ivVsHv?: string | null;
   /** Overrides RICH_IV_MIN_RISK_REWARD. */
   richIvMinRiskReward?: number;
+
+  /**
+   * Part A — F&O trade validation (flag FNO_VALIDATION). Absent or
+   * `enabled: false` = the builder behaves exactly as before. When on, the
+   * builder enforces the cost ceiling and the stop-outside-noise rule and
+   * names the strike's real moneyness; strike choice by delta, the IV cap on
+   * the target and the expiry fallback are the caller's (they need the chain).
+   */
+  fnoValidation?: {
+    enabled: boolean;
+    /** Overrides MAX_COST_PCT_OF_PREMIUM. */
+    maxCostPctOfPremium?: number;
+    /** Overrides MIN_OPTION_STOP_ATR. */
+    minOptionStopAtr?: number;
+  };
 }
 
 export interface SetupProgress {

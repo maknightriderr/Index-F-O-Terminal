@@ -18,12 +18,15 @@ import type {
   OiTrapAnalysis,
   DecayAnalysis,
   TradeSetup,
+  StructureBlock,
+  StructureLifecycleView,
 } from '@fno/shared';
 import { OIBadge } from '@/components/common/badges';
 import { MarketBiasCard, MarketRegimeCard, IntelligenceScoreCard, SupportResistanceCard } from '@/components/common/market-intelligence-cards';
 import { NewsPanel } from '@/components/common/news-panel';
 import { EventCalendarPanel } from '@/components/common/event-calendar-panel';
 import { PayoffDiagram } from '@/components/common/payoff-diagram';
+import { LifecycleLevels, StageBadge, stageMeaning } from '@/components/common/structure-stage';
 
 const STRIKE_RANGE_OPTIONS = [5, 10, 15, 20];
 const REFRESH_INTERVAL_MS = 15000;
@@ -54,7 +57,7 @@ export function AssetWorkspace() {
   // Hooks can't be called conditionally, so this runs even before the
   // "no asset selected" early return below — harmless, just polls NIFTY
   // until an asset is actually picked.
-  const { bias, score, tradeSetup, isLive: biasLive } = useMarketBias(selectedSymbol || 'NIFTY', selectedExchange || 'NSE', biasMode);
+  const { bias, score, tradeSetup, structure, isLive: biasLive } = useMarketBias(selectedSymbol || 'NIFTY', selectedExchange || 'NSE', biasMode);
   const { actions: corporateActions } = useCorporateActionsForSymbol(selectedSymbol || 'NIFTY', selectedExchange || 'NSE');
   const [chain, setChain] = useState<OptionChain | null>(null);
   const [futures, setFutures] = useState<FuturesChainResponse | null>(null);
@@ -300,7 +303,7 @@ export function AssetWorkspace() {
                 <OiTrapCard trap={chain.oiTrap} />
                 <PositionMomentumCard momentum={chain.positionMomentum} />
                 <DecayCard decay={chain.decay} />
-                <TradeSetupCard setup={tradeSetup} />
+                <TradeSetupCard setup={tradeSetup} structure={structure} />
               </div>
               <OiShiftCard strikes={chain.strikes} />
             </div>
@@ -747,10 +750,34 @@ function DecayCard({ decay }: { decay: DecayAnalysis }) {
   );
 }
 
-function TradeSetupCard({ setup }: { setup: TradeSetup }) {
+function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: StructureBlock | null }) {
   if (!setup.available) {
+    // No paper trade: show where the structure engine is for this symbol
+    // (its lifecycle stage per direction) above the refusal sentence.
+    const running = structure?.enabled
+      ? (['BEARISH', 'BULLISH'] as const)
+          .map((dir) => structure.current[dir] ?? (structure.watch[dir] ? watchRow(structure, dir) : null))
+          .filter((r): r is StructureLifecycleView => r != null)
+      : [];
     return (
       <IntelCard title="Trade Setup" accent="emerald">
+        {running.length > 0 && (
+          <div className="space-y-1.5 mb-2">
+            {running.map((r) => (
+              <div key={r.id} className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5" title={stageMeaning(r.stage)}>
+                <div className="flex items-center gap-2 mb-0.5">
+                  <StageBadge stage={r.stage} />
+                  <span className={`text-[11px] font-semibold ${r.direction === 'BULLISH' ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700'}`}>
+                    {r.direction === 'BULLISH' ? '▲ Bullish structure' : '▼ Bearish structure'}
+                  </span>
+                  {r.score != null && <span className="text-[10px] text-gray-400 light:text-slate-600 ml-auto">score {r.score}</span>}
+                </div>
+                <LifecycleLevels row={r} />
+                {r.liveOutcome === 'REFUSED' && r.liveReason && <div className="text-[10px] text-amber-400 light:text-amber-700 mt-0.5">Fill refused: {r.liveReason}</div>}
+              </div>
+            ))}
+          </div>
+        )}
         <p className="text-[11px] text-gray-400 light:text-slate-600 leading-snug">{setup.reason}</p>
       </IntelCard>
     );
@@ -893,4 +920,29 @@ function LiveMarkRow({ currentValue, unrealizedPnl }: { currentValue: number; un
       </span>
     </div>
   );
+}
+
+/** A WATCH row for the Trade Setup card when only a nearby pool is known. */
+function watchRow(block: StructureBlock, dir: 'BULLISH' | 'BEARISH'): StructureLifecycleView {
+  return {
+    id: `${block.exchange}:${block.symbol}:WATCH:${dir}`,
+    symbol: block.symbol,
+    exchange: block.exchange,
+    mode: block.mode,
+    direction: dir,
+    stage: 'WATCH',
+    liveOutcome: null,
+    liveReason: null,
+    pool: block.watch[dir],
+    zone: null,
+    entry: null,
+    stop: null,
+    t1: null,
+    t2: null,
+    rToT1: null,
+    score: null,
+    sweepExtreme: null,
+    stageAt: block.barTime ?? 0,
+    reason: null,
+  };
 }

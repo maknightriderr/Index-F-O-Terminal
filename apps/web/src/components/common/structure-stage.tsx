@@ -1,0 +1,59 @@
+'use client';
+
+import React from 'react';
+import type { StructureLifecycleView } from '@fno/shared';
+
+// Structure engine lifecycle: WATCH → DEVELOPING → CONFIRMED → ENTRY → ACTIVE.
+// Shared by the scanner's "Developing setups" list and the asset workspace's
+// Trade Setup card.
+
+const STAGE_STYLES: Record<string, { label: string; className: string }> = {
+  WATCH: { label: 'Watch', className: 'bg-gray-500/15 text-gray-300 light:text-slate-700' },
+  DEVELOPING: { label: 'Developing', className: 'bg-amber-500/15 text-amber-400 light:text-amber-700' },
+  CONFIRMED: { label: 'Confirmed', className: 'bg-cyan-500/15 text-cyan-400 light:text-cyan-700' },
+  ENTRY: { label: 'Entry', className: 'bg-emerald-500/15 text-emerald-400 light:text-emerald-700' },
+  ACTIVE: { label: 'Active', className: 'bg-emerald-500/15 text-emerald-400 light:text-emerald-700' },
+};
+
+const STAGE_MEANING: Record<string, string> = {
+  WATCH: 'Price is within 0.5 ATR of an untaken liquidity pool.',
+  DEVELOPING: 'The pool was swept; waiting for a displacement the other way (3 bars).',
+  CONFIRMED: 'Displacement printed; a limit rests at the zone for 8 bars.',
+  ENTRY: 'The limit filled.',
+  ACTIVE: 'The trade is on; it ends at the stop, T1, a sweep reclaim or the session end.',
+};
+
+export function StageBadge({ stage }: { stage: string }) {
+  const s = STAGE_STYLES[stage] ?? { label: stage, className: 'bg-gray-500/15 text-gray-400' };
+  return <span className={`text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded ${s.className}`}>{s.label}</span>;
+}
+
+export function stageMeaning(stage: string): string {
+  return STAGE_MEANING[stage] ?? '';
+}
+
+const pretty = (kind: string | undefined | null) => (kind ? kind.replace(/_/g, ' ').toLowerCase() : '—');
+const num = (n: number | null | undefined) => (n == null ? '—' : n.toLocaleString('en-IN', { maximumFractionDigits: 2 }));
+
+/** One-line description of a lifecycle's levels: pool, zone, stop, T1. */
+export function LifecycleLevels({ row }: { row: StructureLifecycleView }) {
+  return (
+    <span className="text-[11px] text-gray-400 light:text-slate-600 tabular-nums">
+      {pretty(row.pool?.kind)} {num(row.pool?.price)}
+      {row.zone && (
+        <>
+          {' · zone '}
+          {row.zone.kind === 'FVG' ? `${num(row.zone.near)}–${num(row.zone.far)}` : `${num(row.zone.near)} (50%)`}
+        </>
+      )}
+      {row.stop != null && <> · stop {num(row.stop)}</>}
+      {row.t1 && (
+        <>
+          {' · T1 '}
+          {num(row.t1.price)} ({pretty(row.t1.kind)}
+          {row.rToT1 != null ? `, ${row.rToT1}R` : ''})
+        </>
+      )}
+    </span>
+  );
+}

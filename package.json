@@ -19,7 +19,8 @@
     "learning": "npm run learning --workspace=@fno/server --",
     "loss-attribution": "npm run loss-attribution --workspace=@fno/server --",
     "clean": "turbo run clean && rimraf node_modules",
-    "backtest-momentum": "npm run backtest-momentum --workspace=@fno/server --"
+    "backtest-momentum": "npm run backtest-momentum --workspace=@fno/server --",
+    "backtest-structure": "npm run backtest-structure --workspace=@fno/server --"
   },
   "devDependencies": {
     "turbo": "^2.4.0",

@@ -15,6 +15,7 @@
     "learning": "tsx src/cli/learning.ts",
     "loss-attribution": "tsx src/cli/loss-attribution.ts",
     "backtest-momentum": "tsx src/cli/backtest-momentum.ts",
+    "backtest-structure": "tsx src/cli/backtest-structure.ts",
     "fetch-history": "tsx src/backtest/fetch-history.ts"
   },
   "dependencies": {
