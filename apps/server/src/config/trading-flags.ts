@@ -21,6 +21,14 @@
 // ============================================================
 
 import { RICH_IV_MIN_RISK_REWARD as RICH_IV_MIN_RISK_REWARD_DEFAULT, STRUCTURAL_STOP_BUFFER_ATR as STRUCTURAL_STOP_BUFFER_ATR_DEFAULT } from '@fno/analytics';
+import {
+  OPTION_DELTA_BAND_MIN as OPTION_DELTA_BAND_MIN_DEFAULT,
+  OPTION_DELTA_BAND_MAX as OPTION_DELTA_BAND_MAX_DEFAULT,
+  OPTION_DELTA_TARGET as OPTION_DELTA_TARGET_DEFAULT,
+  IV_TARGET_CAP_MULT as IV_TARGET_CAP_MULT_DEFAULT,
+  MAX_COST_PCT_OF_PREMIUM as MAX_COST_PCT_OF_PREMIUM_DEFAULT,
+  MIN_OPTION_STOP_ATR as MIN_OPTION_STOP_ATR_DEFAULT,
+} from '@fno/analytics';
 
 /**
  * Bumped whenever the rules that decide a setup change. Rows written before
@@ -328,6 +336,59 @@ export function momentumBreakEnabledFor(
   return enabled && mode === 'INTRADAY' && symbols.some((s) => s.symbol === underlying.toUpperCase() && s.exchange === exchange);
 }
 
+// ============================================================
+// F&O TRADE VALIDATION (Part A, 2026-09-29)
+// ============================================================
+// Applies to every setup family. The 29 Sep BSE 3100 PE losses were a ₹7
+// "ATM" put at delta -0.19, a 9.4% round trip, an IV of 98-138% against HV
+// 27% producing a fake 3.2x target, and a stop 0.94 ATR away — nothing
+// refused any of it. With the flag on: strike by |delta| band, the target's
+// IV capped at HV × mult, a round-trip cost ceiling, a stop outside the
+// underlying's noise, and a next-expiry fallback for a failing 0-DTE contract.
+// Flag off = byte-identical old behaviour (the golden snapshots hold that).
+// ============================================================
+
+export const FNO_VALIDATION_DEFAULT = true;
+
+export interface FnoValidationParams {
+  /** UNTESTED DEFAULT. Lower bound of the traded strike's |delta|. */
+  OPTION_DELTA_BAND_MIN: number;
+  /** UNTESTED DEFAULT. Upper bound of the traded strike's |delta|. */
+  OPTION_DELTA_BAND_MAX: number;
+  /** UNTESTED DEFAULT. The |delta| the chosen strike is closest to. */
+  OPTION_DELTA_TARGET: number;
+  /** UNTESTED DEFAULT. The target's expected move uses IV ≤ HV × this. */
+  IV_TARGET_CAP_MULT: number;
+  /** UNTESTED DEFAULT. Round-trip cost ceiling, % of entry premium. */
+  MAX_COST_PCT_OF_PREMIUM: number;
+  /** UNTESTED DEFAULT. Minimum underlying equivalent of the premium stop, in 15m ATR. */
+  MIN_OPTION_STOP_ATR: number;
+}
+
+export const FNO_VALIDATION_PARAM_DEFAULTS: Readonly<FnoValidationParams> = {
+  OPTION_DELTA_BAND_MIN: OPTION_DELTA_BAND_MIN_DEFAULT,
+  OPTION_DELTA_BAND_MAX: OPTION_DELTA_BAND_MAX_DEFAULT,
+  OPTION_DELTA_TARGET: OPTION_DELTA_TARGET_DEFAULT,
+  IV_TARGET_CAP_MULT: IV_TARGET_CAP_MULT_DEFAULT,
+  MAX_COST_PCT_OF_PREMIUM: MAX_COST_PCT_OF_PREMIUM_DEFAULT,
+  MIN_OPTION_STOP_ATR: MIN_OPTION_STOP_ATR_DEFAULT,
+};
+
+export function readFnoValidationFlag(env: Env = process.env): boolean {
+  return parseFlag(env.FNO_VALIDATION, FNO_VALIDATION_DEFAULT);
+}
+
+export function readFnoValidationParams(env: Env = process.env): FnoValidationParams {
+  const out = { ...FNO_VALIDATION_PARAM_DEFAULTS };
+  for (const key of Object.keys(FNO_VALIDATION_PARAM_DEFAULTS) as (keyof FnoValidationParams)[]) {
+    out[key] = parseNumber(env[key], FNO_VALIDATION_PARAM_DEFAULTS[key]);
+  }
+  return out;
+}
+
+export const FNO_VALIDATION: boolean = readFnoValidationFlag();
+export const FNO_VALIDATION_PARAMS: Readonly<FnoValidationParams> = Object.freeze(readFnoValidationParams());
+
 export interface LogicStamp {
   logicVersion: string;
   flags: TradingFlags;
@@ -344,6 +405,20 @@ export interface LogicStamp {
     params: MomentumBreakParams;
     symbols: BackgroundSymbol[];
   };
+  /** Part A's switch and tunables (absent on setups minted before it). */
+  fnoValidation?: {
+    enabled: boolean;
+    params: FnoValidationParams;
+  };
+}
+
+/**
+ * The rounds after momentum-break, passed as one trailing object so the
+ * positional signature above (and every test that pins it) is unchanged.
+ * Omitted = not recorded, and the version is decided exactly as before.
+ */
+export interface LogicStampExtras {
+  fnoValidation?: { enabled: boolean; params: Readonly<FnoValidationParams> };
 }
 
 /** What gets written onto every setup and decision. */
@@ -355,7 +430,8 @@ export function logicStamp(
   backgroundSymbols: readonly BackgroundSymbol[] = BACKGROUND_BIAS_SYMBOLS,
   momentumEnabled: boolean = MOMENTUM_BREAK,
   momentumParams: Readonly<MomentumBreakParams> = MOMENTUM_BREAK_PARAMS,
-  momentumSymbols: readonly BackgroundSymbol[] = MOMENTUM_BREAK_SYMBOLS
+  momentumSymbols: readonly BackgroundSymbol[] = MOMENTUM_BREAK_SYMBOLS,
+  extras: LogicStampExtras = {}
 ): LogicStamp {
   return {
     logicVersion: momentumEnabled ? MOMENTUM_BREAK_LOGIC_VERSION : LOGIC_VERSION,
@@ -363,5 +439,13 @@ export function logicStamp(
     params: { ...params },
     coverageLag: { flags: { ...lagFlags }, params: { ...lagParams }, backgroundSymbols: backgroundSymbols.map((s) => ({ ...s })) },
     momentumBreak: { enabled: momentumEnabled, params: { ...momentumParams }, symbols: momentumSymbols.map((s) => ({ ...s })) },
+    ...(extras.fnoValidation ? { fnoValidation: { enabled: extras.fnoValidation.enabled, params: { ...extras.fnoValidation.params } } } : {}),
   };
+}
+
+/** The stamp with every live switch — what the engine writes on setups and decisions. */
+export function liveLogicStamp(): LogicStamp {
+  return logicStamp(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, {
+    fnoValidation: { enabled: FNO_VALIDATION, params: FNO_VALIDATION_PARAMS },
+  });
 }

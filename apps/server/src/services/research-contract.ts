@@ -54,6 +54,10 @@ const REFUSAL_CLASS: Record<string, RefusalClass> = {
   POOR_OPTION_QUALITY: 'REFUSED',
   LOW_OPTION_LIQUIDITY: 'REFUSED',
   WIDE_SPREAD: 'REFUSED',
+  // F&O trade validation (flag FNO_VALIDATION): the contract itself was judged and found wanting.
+  OPTION_DELTA_OUT_OF_BAND: 'REFUSED',
+  COST_TOO_HIGH: 'REFUSED',
+  STOP_INSIDE_NOISE: 'REFUSED',
 
   // A safety rule intervened. Nothing here is a statement about the setup.
   RISK_OFF: 'BLOCKED_BY_RISK_CONTROL',

@@ -41,7 +41,7 @@ import { signalAgeSeconds, validUntil, type InputTimestamps, type StalenessAsses
 import type { StrategyLabelResult } from './strategy-label.js';
 import { provisionalExecutionScore, type VoteContributions } from './confidence-dimensions.js';
 import type { ExitReason } from './exit-reason.js';
-import { logicStamp } from '../config/trading-flags.js';
+import { liveLogicStamp } from '../config/trading-flags.js';
 
 export interface DecisionSnapshotInput {
   /**
@@ -218,7 +218,7 @@ export function recordDecisionSnapshot(input: DecisionSnapshotInput): string {
   // --- Validation review: which rules and flags this decision was made under.
   // Stamped on every decision, TAKE and REFUSE, so pre- and post-review
   // results are never pooled. NULL on rows written before 026. ---
-  const logic = logicStamp();
+  const logic = liveLogicStamp();
 
   void sql`
     INSERT INTO decision_snapshots (
@@ -307,7 +307,7 @@ export function recordDecisionSnapshot(input: DecisionSnapshotInput): string {
       ${contractValidation?.tradeable ?? null}, ${contractValidation?.refusalReason ?? null},
       ${sql.json((contractValidation?.checks ?? {}) as never)},
       ${input.openingEnvironment ?? null}, ${input.minutesSinceLastLoss ?? null}, ${input.roomCheckOiAgeSeconds ?? null},
-      ${logic.logicVersion}, ${sql.json({ flags: logic.flags, params: logic.params, coverageLag: logic.coverageLag ?? null, momentumBreak: logic.momentumBreak ?? null } as never)},
+      ${logic.logicVersion}, ${sql.json({ flags: logic.flags, params: logic.params, coverageLag: logic.coverageLag ?? null, momentumBreak: logic.momentumBreak ?? null, fnoValidation: logic.fnoValidation ?? null } as never)},
       ${sql.json((input.underlying ?? {}) as never)},
       ${sql.json((input.market ?? {}) as never)},
       ${sql.json((input.futures ?? {}) as never)},

@@ -420,6 +420,51 @@ export interface TradeSetup {
   stopBeforeStructure?: boolean;
   /** The reward:risk this setup had to clear after costs (flag RICH_IV_RR): 1.5 normally, higher when IV was RICH. */
   requiredRiskReward?: number;
+  /** F&O trade validation (flag FNO_VALIDATION): strike by delta, IV-capped target, cost ceiling, stop outside noise, expiry fallback. Absent when the flag was off. */
+  fnoValidation?: TradeSetupFnoValidation;
+}
+
+/** Part A — F&O trade validation. Every field is what the rule saw, so a refusal or a pass can be audited. */
+export interface TradeSetupFnoValidation {
+  /** Rule 1: the strike chosen by |delta| band rather than by rounding spot. */
+  strikeSelection: {
+    method: 'DELTA_BAND';
+    band: [number, number];
+    selectedStrike: number | null;
+    /** The chain's rounded ATM strike, for comparison. */
+    atmStrike: number;
+    delta: number | null;
+    moneyness: 'ITM' | 'ATM' | 'OTM' | null;
+    candidatesEvaluated: number;
+    eligible: number;
+  } | null;
+  /** Rule 2: IV used for the target's expected move = min(ATM IV, HV × mult). Null when the family's target is structural, not IV-based. */
+  ivCap: {
+    atmIvPct: number | null;
+    hvPct: number | null;
+    mult: number;
+    ivUsedPct: number | null;
+    capped: boolean;
+    uncappedMovePoints: number;
+    cappedMovePoints: number;
+  } | null;
+  /** Rule 3: round-trip cost as % of entry premium, and the ceiling. Null when the builder refused before costing. */
+  costPct: number | null;
+  maxCostPct: number;
+  /** Rule 4: the premium stop's underlying equivalent (stopWidth / |delta|) in 15m ATR. Null when no ATR was available. */
+  stopUnderlyingAtr: number | null;
+  minStopAtr: number;
+  /** True when the stop was widened (never past the 45% cap) to sit outside the noise floor. */
+  stopWidenedForNoise: boolean;
+  /** Rule 5: the 0-DTE contract failed and the next expiry's chain was used (or tried). */
+  expiryFallback: boolean;
+  /** The expiry first evaluated, and why it failed when a fallback happened. */
+  primaryExpiry: string | null;
+  primaryRefusalCode: string | null;
+  /** The expiry the setup was finally built (or refused) on. */
+  finalExpiry: string | null;
+  /** The F&O rule that refused, or null when the contract passed. */
+  refusalCode: 'OPTION_DELTA_OUT_OF_BAND' | 'COST_TOO_HIGH' | 'STOP_INSIDE_NOISE' | null;
 }
 
 /** Fix 1 of the validation review: the stop widened to structure, never squeezed to fit R:R. */
@@ -1347,6 +1392,13 @@ export type NoTradeCode =
   // Momentum-break family: no qualifying trigger on the newest closed bar,
   // or price already back through the level / at the target.
   | 'TRIGGER_QUALITY'
+  // F&O trade validation (flag FNO_VALIDATION): no strike in the delta band,
+  // round-trip cost above the ceiling, or a stop inside the underlying's noise.
+  | 'OPTION_DELTA_OUT_OF_BAND'
+  | 'COST_TOO_HIGH'
+  | 'STOP_INSIDE_NOISE'
+  // Structure engine (flag STRUCTURE): no filled sweep → displacement → zone sequence.
+  | 'STRUCTURE_SEQUENCE'
   | 'UNKNOWN';
 
 /** A structured account of one entry decision — why it was taken, or why it was not. */

@@ -143,6 +143,58 @@ function evaluateCandidate(row: OptionChainStrike, input: StrikeSelectionInput):
   return evaluated;
 }
 
+// ============================================================
+// LIVE STRIKE BY DELTA BAND (Part A rule 1, flag FNO_VALIDATION)
+// ============================================================
+// Not shadow: with the flag on, the server trades the strike this returns in
+// place of chain.atmStrike. It reuses evaluateCandidate above, so a candidate
+// has to pass exactly the refusals the live ATM leg always had (quote, delta
+// range, the MAX_ATM_SPREAD_PCT ceiling, the option-quality liquidity floors,
+// a positive projected response) and then sit inside the |delta| band.
+// Ordered by nearness of |delta| to the target; ties by tighter spread, then
+// by nearness to the rounded ATM strike. The first eligible candidate wins.
+
+export interface DeltaBandInput extends StrikeSelectionInput {
+  deltaMin: number;
+  deltaMax: number;
+  deltaTarget: number;
+}
+
+export interface DeltaBandSelection {
+  /** The strike to trade, or null when no candidate is eligible. */
+  strike: number | null;
+  candidate: StrikeCandidate | null;
+  /** Every candidate with why it was not chosen (OUT_OF_BAND, WIDE_SPREAD, ...). */
+  candidates: StrikeCandidate[];
+  eligible: number;
+  reason: string;
+}
+
+export function selectStrikeByDelta(input: DeltaBandInput): DeltaBandSelection {
+  const candidates = input.strikes.map((row) => {
+    const c = evaluateCandidate(row, input);
+    if (c.rejectedReason != null) return c;
+    const abs = Math.abs(c.delta ?? 0);
+    return abs >= input.deltaMin && abs <= input.deltaMax ? c : { ...c, rejectedReason: `OUT_OF_BAND (|delta| ${round2(abs)})` };
+  });
+  const eligible = candidates.filter((c) => c.rejectedReason == null);
+  eligible.sort(
+    (a, b) =>
+      Math.abs(Math.abs(a.delta ?? 0) - input.deltaTarget) - Math.abs(Math.abs(b.delta ?? 0) - input.deltaTarget) ||
+      (a.spreadPct ?? 0) - (b.spreadPct ?? 0) ||
+      Math.abs(a.strike - input.liveStrike) - Math.abs(b.strike - input.liveStrike)
+  );
+  const best = eligible[0] ?? null;
+  const band = `${input.deltaMin}-${input.deltaMax}`;
+  const atm = candidates.find((c) => c.isLive);
+  const reason = best
+    ? `${input.side} ${best.strike} chosen at delta ${best.delta?.toFixed(2)} (band ${band}, closest to ${input.deltaTarget}); ${eligible.length} eligible of ${candidates.length} strikes.`
+    : `No ${input.side} strike of ${input.expiry ?? 'this expiry'} has |delta| in ${band} with a tradeable quote — ${candidates.length} evaluated` +
+      (atm ? `; the rounded ATM ${atm.strike} ${atm.rejectedReason ? `was rejected (${atm.rejectedReason})` : ''}` : '') +
+      '.';
+  return { strike: best?.strike ?? null, candidate: best, candidates, eligible: eligible.length, reason };
+}
+
 /**
  * Ranks eligible candidates by tradeability score (the existing option-quality
  * score), breaking ties by response per rupee of premium, then by nearness to

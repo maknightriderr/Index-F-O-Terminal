@@ -106,7 +106,7 @@ import { notifyTradeSetup } from './telegram.js';
 import { trackSymbolForOiSnapshot } from './oi-close-snapshot.js';
 import { riskOffReason } from './risk-circuit-breaker.js';
 import { assessLocation, assessRoom, type StructuralLevel } from './location-quality.js';
-import { TRADING_FLAGS, TRADING_PARAMS, COVERAGE_LAG_FLAGS, COVERAGE_LAG_PARAMS, logicStamp, type LogicStamp } from '../config/trading-flags.js';
+import { TRADING_FLAGS, TRADING_PARAMS, COVERAGE_LAG_FLAGS, COVERAGE_LAG_PARAMS, liveLogicStamp, FNO_VALIDATION, FNO_VALIDATION_PARAMS, type LogicStamp } from '../config/trading-flags.js';
 import { bandVote, type Vote } from './vote-bands.js';
 import {
   evaluateIntradayPositioning,
@@ -153,6 +153,11 @@ import {
   type SlotAction,
   type StoredMomentumBreak,
 } from './momentum-break-live.js';
+// F&O trade validation (Part A, flag FNO_VALIDATION): strike by delta, the IV
+// cap on the target, and the next-expiry fallback — for every setup family.
+import { capExpectedMoveByHv } from '@fno/analytics';
+import type { TradeSetupFnoValidation } from '@fno/shared';
+import { buildWithFnoValidation, fnoValidationDiagnostic } from './fno-validation.js';
 
 // Angel One rate-limits historical-candle and Greeks requests far more
 // strictly than quotes (a burst of these returns a flat 403) — cache
@@ -2852,15 +2857,12 @@ async function resolveStickyTradeSetup(
   //
   // (Computed here, ahead of the refusal chain, only so the corrected room
   // measure below can see the target actually used. Pure; unchanged.)
-  const targetExpectedMovePoints = isPositional
-    ? chain.expectedMove.points
-    : (() => {
-        const atmIvPct = computeAtmIv(chain);
-        if (atmIvPct <= 0) return chain.expectedMove.points;
-        const oneDayMove = calculateExpectedMove(chain.spotPrice, atmIvPct / 100, 1, underlying).expectedMove;
-        return oneDayMove * Math.sqrt(remainingSessionFraction(exchange));
-      })();
-
+  //
+  // Part A rule 2 (flag FNO_VALIDATION): the IV behind that move is capped at
+  // HV × IV_TARGET_CAP_MULT — an IV of 138% against HV 27% produced the fake
+  // 3.2x target on 29 Sep. Target only; rich IV still raises the R:R bar via
+  // RICH_IV_RR. Per chain, because an expiry fallback prices a second chain.
+  //
   // Room to target: the move a target may assume is capped at the distance
   // to the nearest strong OI wall or pivot in the trade's direction. The
   // target used to be delta × expected move with no regard for what sits in
@@ -2868,8 +2870,41 @@ async function resolveStickyTradeSetup(
   // R:R 2.2+ won 0 of 16 (avg -0.37R) vs +0.17R below 1.9. A capped target
   // that no longer clears the minimum R:R is refused, like any other.
   const roomPoints = entryContext?.roomToTargetPoints ?? null;
-  const targetCapped = roomPoints != null && roomPoints < targetExpectedMovePoints;
-  const targetMovePoints = targetCapped ? roomPoints : targetExpectedMovePoints;
+  const targetMoveFor = (c: OptionChain) => {
+    const atmIvPct = computeAtmIv(c);
+    const uncapped = isPositional
+      ? c.expectedMove.points
+      : (() => {
+          if (atmIvPct <= 0) return c.expectedMove.points;
+          const oneDayMove = calculateExpectedMove(c.spotPrice, atmIvPct / 100, 1, underlying).expectedMove;
+          return oneDayMove * Math.sqrt(remainingSessionFraction(exchange));
+        })();
+    const cap = FNO_VALIDATION
+      ? capExpectedMoveByHv(uncapped, atmIvPct > 0 ? atmIvPct : null, entryContext?.hvPct ?? null, FNO_VALIDATION_PARAMS.IV_TARGET_CAP_MULT)
+      : null;
+    const expected = cap ? cap.points : uncapped;
+    const capped = roomPoints != null && roomPoints < expected;
+    return {
+      targetExpectedMovePoints: expected,
+      targetCapped: capped,
+      targetMovePoints: capped ? roomPoints! : expected,
+      ivCap: cap
+        ? {
+            atmIvPct: atmIvPct > 0 ? round2(atmIvPct) : null,
+            hvPct: entryContext?.hvPct != null ? round2(entryContext.hvPct) : null,
+            mult: FNO_VALIDATION_PARAMS.IV_TARGET_CAP_MULT,
+            ivUsedPct: cap.ivUsedPct != null ? round2(cap.ivUsedPct) : null,
+            capped: cap.capped,
+            uncappedMovePoints: round2(uncapped),
+            cappedMovePoints: round2(cap.points),
+          }
+        : null,
+    };
+  };
+  const primaryMove = targetMoveFor(chain);
+  const targetExpectedMovePoints = primaryMove.targetExpectedMovePoints;
+  const targetCapped = primaryMove.targetCapped;
+  const targetMovePoints = primaryMove.targetMovePoints;
 
   // Validation review, fix 2 — the corrected room measure. The old one (kept
   // below as roomSufficient) divides the UNCAPPED move by ATR and fails ~94%
@@ -2929,6 +2964,9 @@ async function resolveStickyTradeSetup(
   // would have refused, not only the first. The pure parts are captured now;
   // the post-loss reads run lazily, only for a decision that is recorded.
   const diagnosticsAt = decisionNow();
+  // Part A: set once the contract has been validated below; read lazily by the
+  // FNO_VALIDATION diagnostic row (NOT_EVALUATED when a gate above refused first).
+  let consensusFnoRecord: TradeSetupFnoValidation | null = null;
   const diagnosticSnapshot = {
     sessionRefusal: sessionGateReason(exchange, mode),
     minutesSinceOpen: minutesSinceSessionOpen(exchange),
@@ -2968,6 +3006,7 @@ async function resolveStickyTradeSetup(
       // logged so a report can tell whether room-to-target ever ran on stale
       // OI, never read back and never able to refuse anything.
       rows.push(oiWallFreshnessDiagnostic(entryContext?.roomCheckOiAgeSeconds ?? null, diagnosticsAt));
+      if (FNO_VALIDATION) rows.push(fnoValidationDiagnostic({ enabled: true, record: consensusFnoRecord, params: { ...FNO_VALIDATION_PARAMS }, at: diagnosticsAt }));
       // Validation-review gates: one row each, enforced or not, so an
       // unenforced gate's would-refuse rate is measured on live decisions.
       rows.push(
@@ -3141,41 +3180,65 @@ async function resolveStickyTradeSetup(
   const expectedHoldHours = isPositional
     ? 5 * 6.25
     : Math.max(0.5, remainingSessionMinutesFrom(exchange, decisionNow()) / 60);
-  const builtRaw = buildTradeSetup(
-    chain.strikes,
-    chain.atmStrike,
-    direction,
-    confidence,
-    targetMovePoints,
-    slPremiumPct,
-    vix,
-    chain.dte,
-    chain.lotSize,
-    entryContext?.atrPoints ?? null,
-    // 0.05 is the premium tick on NSE/BSE options and the MCX option
-    // contracts this engine trades; the chain leg does not carry its own.
-    {
-      ivRank,
-      hvPct: entryContext?.hvPct ?? null,
-      tickSize: 0.05,
-      expectedHoldHours,
-      // Validation review, fixes 1 and 6. The switches come from the server's
-      // config (trading-flags.ts) so the analytics package stays pure; with
-      // both off the builder ignores every field below.
-      flags: { structuralStop: TRADING_FLAGS.STRUCTURAL_STOP, richIvRr: TRADING_FLAGS.RICH_IV_RR },
-      spot: entryContext?.locationSpot ?? chain.spotPrice,
-      nearestBehindLevel: entryContext?.locationBehindLevel ?? null,
-      structuralStopBufferAtr: TRADING_PARAMS.STRUCTURAL_STOP_BUFFER_ATR,
-      ivVsHv: entryContext?.ivVsHv ?? null,
-      richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
-    }
-  );
+  // Part A (flag FNO_VALIDATION): the strike is chosen by |delta| band, the
+  // builder enforces the cost ceiling and the stop-outside-noise rule, and a
+  // failing 0-DTE contract falls back to the next expiry. Flag off =
+  // buildTradeSetup on chain.atmStrike exactly as before.
+  const validated = await buildWithFnoValidation({
+    enabled: FNO_VALIDATION,
+    primary: chain,
+    side: direction === 'BEARISH' ? 'PE' : 'CE',
+    params: { deltaMin: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MIN, deltaMax: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MAX, deltaTarget: FNO_VALIDATION_PARAMS.OPTION_DELTA_TARGET },
+    contextFor: (c) => {
+      const move = c === chain ? primaryMove : targetMoveFor(c);
+      return { expectedMovePoints: move.targetMovePoints, expectedHoldHours, ivRank, hvPct: entryContext?.hvPct ?? null, ivCap: move.ivCap };
+    },
+    fetchNextExpiry: (expiry) => buildOptionChain(provider, underlying, exchange, expiry),
+    onError: (stage, err: any) => logger.warn({ error: err?.message ?? String(err), stage, underlying, exchange, mode }, 'F&O validation: next-expiry chain unavailable — no fallback contract'),
+    build: (c, strike, ctx) =>
+      buildTradeSetup(
+        c.strikes,
+        strike,
+        direction,
+        confidence,
+        ctx.expectedMovePoints,
+        slPremiumPct,
+        vix,
+        c.dte,
+        c.lotSize,
+        entryContext?.atrPoints ?? null,
+        // 0.05 is the premium tick on NSE/BSE options and the MCX option
+        // contracts this engine trades; the chain leg does not carry its own.
+        {
+          ivRank,
+          hvPct: entryContext?.hvPct ?? null,
+          tickSize: 0.05,
+          expectedHoldHours,
+          // Validation review, fixes 1 and 6. The switches come from the server's
+          // config (trading-flags.ts) so the analytics package stays pure; with
+          // both off the builder ignores every field below.
+          flags: { structuralStop: TRADING_FLAGS.STRUCTURAL_STOP, richIvRr: TRADING_FLAGS.RICH_IV_RR },
+          spot: entryContext?.locationSpot ?? c.spotPrice,
+          nearestBehindLevel: entryContext?.locationBehindLevel ?? null,
+          structuralStopBufferAtr: TRADING_PARAMS.STRUCTURAL_STOP_BUFFER_ATR,
+          ivVsHv: entryContext?.ivVsHv ?? null,
+          richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
+          ...(FNO_VALIDATION
+            ? { fnoValidation: { enabled: true, maxCostPctOfPremium: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM, minOptionStopAtr: FNO_VALIDATION_PARAMS.MIN_OPTION_STOP_ATR } }
+            : {}),
+        }
+      ),
+  });
+  const builtRaw = validated.setup;
+  // The contract actually traded (or finally refused) — the next expiry's chain after a fallback.
+  const usedChain = validated.chain;
+  consensusFnoRecord = validated.fnoValidation;
 
   // --- Phase 2 shadow models (observation only) ---
   // Computed AFTER builtRaw is fixed, from the same chain and inputs, into a
   // separate object that is only ever handed to the decision snapshot. None of
   // it flows back into builtRaw/fresh, the sticky setup, or any gate.
-  const shadowModels = computeShadowModels(builtRaw, chain, direction, targetMovePoints, expectedHoldHours, {
+  const shadowModels = computeShadowModels(builtRaw, usedChain, direction, targetMovePoints, expectedHoldHours, {
     ivRank,
     hvPct: entryContext?.hvPct ?? null,
     underlying,
@@ -3195,7 +3258,7 @@ async function resolveStickyTradeSetup(
       ? ` Monthly stock options carry weeks of time value, so a one-session move rarely pays for the stop — switch this stock to Positional for a multi-day setup.`
       : '';
   const built: TradeSetup = builtRaw.available
-    ? { ...builtRaw, expiry: chain.expiry, dte: chain.dte, reason: `${builtRaw.reason}${roomNote}${regimeNote}` }
+    ? { ...builtRaw, expiry: usedChain.expiry, dte: usedChain.dte, reason: `${builtRaw.reason}${roomNote}${regimeNote}` }
     : { ...builtRaw, reason: `${builtRaw.reason}${stockNote}${roomNote}${regimeNote}` };
   const fresh: TradeSetup =
     built.available && counterIndex
@@ -3225,21 +3288,21 @@ async function resolveStickyTradeSetup(
     // as buildTradeSetup computed it: no new check, nothing here changes
     // what refuses.
     const refusedSide: 'CE' | 'PE' = direction === 'BEARISH' ? 'PE' : 'CE';
-    const refusalBlocks = snapshotBlocks(chain, entryContext, fresh, refusedSide);
+    const refusalBlocks = snapshotBlocks(usedChain, entryContext, fresh, refusedSide);
     const refusalInstrumentation = snapshotInstrumentation(exchange, entryContext, fresh);
     recordDecisionSnapshot({
       ...refusalInstrumentation,
       ...phase1Context,
       freshness: {
-        timestamps: inputTimestampsFrom(chain, findLeg(chain, chain.atmStrike, refusedSide)),
-        underlyingPriceAtGeneration: chain.spotPrice,
+        timestamps: inputTimestampsFrom(usedChain, findLeg(usedChain, usedChain.atmStrike, refusedSide)),
+        underlyingPriceAtGeneration: usedChain.spotPrice,
       },
       gateDiagnostics: gateDiagnosticsFor,
       contractValidation: fresh.contractValidation ?? null,
       symbol: underlying,
       exchange,
       mode,
-      expiry: chain.expiry,
+      expiry: usedChain.expiry,
       decision: 'REFUSE',
       reasonCode: fresh.noTradeCode ?? null,
       reason: fresh.reason,
@@ -3264,7 +3327,7 @@ async function resolveStickyTradeSetup(
   // second message. Flag off = the unlocked path exactly as before.
   const mintFresh = (): Promise<StoredTradeSetup> =>
     mintTradeSetup({
-      underlying, exchange, mode, key, today, setupTtl, chain, fresh, direction, confidence, regime, intelligenceScore,
+      underlying, exchange, mode, key, today, setupTtl, chain: usedChain, fresh, direction, confidence, regime, intelligenceScore,
       voteSnapshot, entryContext, phase1Context, gateDiagnosticsFor, shadowModels,
     });
   return mintUnderLock({ underlying, exchange, mode, key, today, isPositional, priorDecisionId, mintFresh });
@@ -3406,6 +3469,7 @@ async function resolveMomentumBreakSetup(ctx: {
     : undefined;
 
   const minutesSinceOpen = minutesSinceSessionOpen(exchange);
+  let momentumFnoRecord: TradeSetupFnoValidation | null = null;
   const gateDiagnosticsFor = async (): Promise<GateDiagnostic[]> => {
     try {
       const losingClose = await readLosingCloseState(underlying, exchange, direction, mode);
@@ -3436,6 +3500,7 @@ async function resolveMomentumBreakSetup(ctx: {
         at
       ).filter((r) => r.gate !== 'LOW_SETUP_QUALITY' && r.gate !== 'POSITIONING_CONFLICT');
       rows.push(triggerQualityDiagnostic(trigger, refusal, at));
+      if (FNO_VALIDATION) rows.push(fnoValidationDiagnostic({ enabled: true, record: momentumFnoRecord, params: { ...FNO_VALIDATION_PARAMS }, at }));
       rows.push(
         ...evaluateValidationGateDiagnostics(
           {
@@ -3527,37 +3592,55 @@ async function resolveMomentumBreakSetup(ctx: {
 
   const stopDistance = Math.abs(trigger.stop - spot);
   const targetMove = Math.abs(trigger.target - spot);
-  const sl = triggerSlPremiumPct(chain.strikes, chain.atmStrike, direction, stopDistance);
   const vix = await lookupIndiaVix(provider, exchange);
   const ivRank = await ivRankFor(underlying, chain.expiry, computeAtmIv(chain)).catch((err: any) => {
     logger.warn({ error: err.message, underlying }, 'Momentum break: IV rank unavailable — building without it');
     return null;
   });
   const expectedHoldHours = Math.max(0.5, remainingSessionMinutesFrom(exchange, at) / 60);
-  const builtRaw = buildTradeSetup(
-    chain.strikes,
-    chain.atmStrike,
-    direction,
-    quality,
-    targetMove,
-    sl?.slPremiumPct,
-    vix,
-    chain.dte,
-    chain.lotSize,
-    trigger.atr,
-    {
-      ivRank,
-      hvPct: entryContext?.hvPct ?? null,
-      tickSize: 0.05,
-      expectedHoldHours,
-      flags: { structuralStop: TRADING_FLAGS.STRUCTURAL_STOP, richIvRr: TRADING_FLAGS.RICH_IV_RR },
-      spot,
-      nearestBehindLevel: trigger.levelPrice,
-      structuralStopBufferAtr: TRADING_PARAMS.STRUCTURAL_STOP_BUFFER_ATR,
-      ivVsHv: entryContext?.ivVsHv ?? null,
-      richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
-    }
-  );
+  // Part A applies to this family too; its target is a level, so no IV cap.
+  const validated = await buildWithFnoValidation({
+    enabled: FNO_VALIDATION,
+    primary: chain,
+    side,
+    params: { deltaMin: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MIN, deltaMax: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MAX, deltaTarget: FNO_VALIDATION_PARAMS.OPTION_DELTA_TARGET },
+    contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: entryContext?.hvPct ?? null, ivCap: null }),
+    fetchNextExpiry: (expiry) => buildOptionChain(provider, underlying, exchange, expiry),
+    onError: (stage, err: any) => logger.warn({ error: err?.message ?? String(err), stage, underlying, exchange }, 'Momentum break: next-expiry chain unavailable — no fallback contract'),
+    build: (c, strike) => {
+      const sl = triggerSlPremiumPct(c.strikes, strike, direction, stopDistance);
+      return buildTradeSetup(
+        c.strikes,
+        strike,
+        direction,
+        quality,
+        targetMove,
+        sl?.slPremiumPct,
+        vix,
+        c.dte,
+        c.lotSize,
+        trigger.atr,
+        {
+          ivRank,
+          hvPct: entryContext?.hvPct ?? null,
+          tickSize: 0.05,
+          expectedHoldHours,
+          flags: { structuralStop: TRADING_FLAGS.STRUCTURAL_STOP, richIvRr: TRADING_FLAGS.RICH_IV_RR },
+          spot,
+          nearestBehindLevel: trigger.levelPrice,
+          structuralStopBufferAtr: TRADING_PARAMS.STRUCTURAL_STOP_BUFFER_ATR,
+          ivVsHv: entryContext?.ivVsHv ?? null,
+          richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
+          ...(FNO_VALIDATION
+            ? { fnoValidation: { enabled: true, maxCostPctOfPremium: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM, minOptionStopAtr: FNO_VALIDATION_PARAMS.MIN_OPTION_STOP_ATR } }
+            : {}),
+        }
+      );
+    },
+  });
+  const builtRaw = validated.setup;
+  const usedChain = validated.chain;
+  momentumFnoRecord = validated.fnoValidation;
   if (!builtRaw.available) {
     // Far-dated contracts will often land here on REWARD_RISK_TOO_LOW: the
     // option cannot pay for a stop where the break is wrong. Recorded, honest.
@@ -3568,14 +3651,14 @@ async function resolveMomentumBreakSetup(ctx: {
   const fresh: TradeSetup = {
     ...builtRaw,
     strategy: MOMENTUM_BREAK_STRATEGY,
-    expiry: chain.expiry,
-    dte: chain.dte,
+    expiry: usedChain.expiry,
+    dte: usedChain.dte,
     reason: `${describe} ${builtRaw.reason}`,
   };
-  const shadowModels = computeShadowModels(builtRaw, chain, direction, targetMove, expectedHoldHours, { ivRank, hvPct: entryContext?.hvPct ?? null, underlying });
+  const shadowModels = computeShadowModels(builtRaw, usedChain, direction, targetMove, expectedHoldHours, { ivRank, hvPct: entryContext?.hvPct ?? null, underlying });
   const mintFresh = (): Promise<StoredTradeSetup> =>
     mintTradeSetup({
-      underlying, exchange, mode, key, today, setupTtl, chain, fresh, direction, confidence: quality, regime, intelligenceScore,
+      underlying, exchange, mode, key, today, setupTtl, chain: usedChain, fresh, direction, confidence: quality, regime, intelligenceScore,
       voteSnapshot, entryContext: triggerContext, phase1Context, gateDiagnosticsFor, shadowModels,
       momentumBreak: storedMomentumBreak(trigger),
     });
@@ -3614,7 +3697,7 @@ async function mintTradeSetup(ctx: {
   } = ctx;
   // Which rules and flags minted this setup — carried on the sticky setup and
   // written to signals.inputs.logic so pre- and post-review trades are never pooled.
-  const logic = logicStamp();
+  const logic = liveLogicStamp();
   const signalId = await recordTradeSetupGenerated(underlying, exchange, fresh, direction, confidence, regime, intelligenceScore, mode, voteSnapshot, entryContext, logic);
 
   logDecision({
@@ -3786,6 +3869,8 @@ async function recordTradeSetupGenerated(
             expiry: fresh.expiry ?? null,
             dte: fresh.dte ?? null,
             estimatedCostPct: fresh.estimatedCostPct ?? null,
+            // Part A (flag FNO_VALIDATION): strike-by-delta, IV cap, cost, stop-noise and expiryFallback — present only when the flag was on.
+            ...(fresh.fnoValidation ? { fnoValidation: fresh.fnoValidation } : {}),
             votes: votes ?? null,
             // Entry context (regime alignment, IV vs HV, VWAP distance, day
             // move, time into session, room to target) — so these can be
