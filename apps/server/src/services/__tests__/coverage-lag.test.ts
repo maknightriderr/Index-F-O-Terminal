@@ -88,13 +88,13 @@ describe('MCX close time follows US DST the right way round', () => {
     }
   });
 
-  it('isMarketOpen(MCX) at 23:31 on a DST date is false; on a winter date it is still open until 23:55', () => {
-    expect(isMarketOpen('MCX', ist('2026-09-24', '23:30'))).toBe(true);
-    expect(isMarketOpen('MCX', ist('2026-09-24', '23:31'))).toBe(false);
+  it('isMarketOpen(MCX) closes at 23:30 on a DST date and at 23:55 on a winter date (the close is exclusive)', () => {
+    expect(isMarketOpen('MCX', ist('2026-09-24', '23:29'))).toBe(true);
+    expect(isMarketOpen('MCX', ist('2026-09-24', '23:30'))).toBe(false);
     expect(isMarketOpen('MCX', ist('2026-09-24', '23:50'))).toBe(false);
     expect(isMarketOpen('MCX', ist('2026-12-09', '23:31'))).toBe(true);
-    expect(isMarketOpen('MCX', ist('2026-12-09', '23:55'))).toBe(true);
-    expect(isMarketOpen('MCX', ist('2026-12-09', '23:56'))).toBe(false);
+    expect(isMarketOpen('MCX', ist('2026-12-09', '23:54'))).toBe(true);
+    expect(isMarketOpen('MCX', ist('2026-12-09', '23:55'))).toBe(false);
   });
 
   it('the transition Mondays: DST starts Sun 8 Mar 2026, ends Sun 1 Nov 2026', () => {

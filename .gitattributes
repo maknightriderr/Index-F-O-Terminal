@@ -1,0 +1,14 @@
+# Check text files out with LF on every OS. The repo already stores LF, but
+# Windows clones with core.autocrlf=true got CRLF working copies, which broke
+# the tests that read source files and made vitest rewrite snapshot files.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
