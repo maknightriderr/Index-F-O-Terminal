@@ -58,17 +58,41 @@ describe('rejectionCloseCandidate: the fill rule', () => {
   it('a bar that trades into the zone and closes back beyond the top, in the outer half, fills at ITS OWN close', () => {
     const state = confirmedState();
     const rejectionBar = { time: CONFIRMED_AT, open: 100.55, high: 100.7, low: 100.3, close: 100.45 }; // closeFrac (100.45-100.3)/0.4=0.375, lower half — bearish rejection
-    const hit = rejectionCloseCandidate(state, rejectionBar, FILL_WITHIN_BARS, BAR);
-    expect(hit).not.toBeNull();
+    const outcome = rejectionCloseCandidate(state, rejectionBar, FILL_WITHIN_BARS, BAR);
+    expect(outcome?.kind).toBe('FILL');
+    const hit = outcome as Extract<typeof outcome, { kind: 'FILL' }>;
     expect(hit!.lc.direction).toBe('BEARISH');
     expect(hit!.entry).toBe(100.45);
     expect(hit!.pattern.label).toMatch(/at FVG$/);
   });
 
-  it('a bar that merely touches the zone without a decisive close-back does NOT fill', () => {
+  it('a bar that merely touches the zone without a decisive close-back does NOT fill (and is not invalidated or missed either)', () => {
     const state = confirmedState();
     const touchOnly = { time: CONFIRMED_AT, open: 100.5, high: 100.65, low: 100.5, close: 100.6 }; // closes AT the bottom, not beyond it
     expect(rejectionCloseCandidate(state, touchOnly, FILL_WITHIN_BARS, BAR)).toBeNull();
+  });
+
+  it('a close beyond the sweep extreme before ever rejecting the zone is INVALIDATED (as now)', () => {
+    const state = confirmedState();
+    // Sweep extreme is 102.3 (bearish): closing beyond it means the setup broke the wrong way.
+    const badBar = { time: CONFIRMED_AT, open: 100.5, high: 103.0, low: 100.4, close: 102.5 };
+    const outcome = rejectionCloseCandidate(state, badBar, FILL_WITHIN_BARS, BAR);
+    expect(outcome).toEqual({ kind: 'INVALIDATED', lc: expect.objectContaining({ direction: 'BEARISH' }) });
+  });
+
+  it('T1 reached before any rejection close is MISSED', () => {
+    const state = confirmedState();
+    // T1 is 97 (PREV_DAY_LOW): this bar never even reaches the zone (high 99.5 < bottom 100.6) but its low already hit T1.
+    const runawayBar = { time: CONFIRMED_AT, open: 99.0, high: 99.5, low: 96.5, close: 99.2 };
+    const outcome = rejectionCloseCandidate(state, runawayBar, FILL_WITHIN_BARS, BAR);
+    expect(outcome).toEqual({ kind: 'MISSED', lc: expect.objectContaining({ direction: 'BEARISH' }) });
+  });
+
+  it('a fill takes priority over invalidation/MISSED on the very same bar (matches the backtest harness priority)', () => {
+    const state = confirmedState();
+    // Rejects the zone AND closes beyond neither the sweep extreme nor T1.
+    const rejectionBar = { time: CONFIRMED_AT, open: 100.55, high: 100.7, low: 100.3, close: 100.45 };
+    expect(rejectionCloseCandidate(state, rejectionBar, FILL_WITHIN_BARS, BAR)?.kind).toBe('FILL');
   });
 
   it('never offers a lifecycle that already has a live outcome', () => {
@@ -89,6 +113,17 @@ describe('rejectionCloseCandidate: the fill rule', () => {
     const state = confirmedState();
     const tooLate = { time: CONFIRMED_AT + (FILL_WITHIN_BARS + 1) * BAR, open: 100.55, high: 100.7, low: 100.3, close: 100.45 };
     expect(rejectionCloseCandidate(state, tooLate, FILL_WITHIN_BARS, BAR)).toBeNull();
+  });
+
+  it('gating is by confirmedAt, not by the engine\'s own (touch-based) shadow stage — a lifecycle whose shadow stage has already moved past CONFIRMED is still checked', () => {
+    const state = confirmedState();
+    const lc = state.lifecycles.find((l) => l.direction === 'BEARISH')!;
+    // Simulate the engine's own internal touch-based simulation having moved on
+    // (e.g. an earlier bar merely touched the zone and the shadow sim called it
+    // ENTRY/ACTIVE) — confirmedAt is unaffected, so REJECTION_CLOSE still works.
+    lc.stage = 'ACTIVE';
+    const rejectionBar = { time: CONFIRMED_AT, open: 100.55, high: 100.7, low: 100.3, close: 100.45 };
+    expect(rejectionCloseCandidate(state, rejectionBar, FILL_WITHIN_BARS, BAR)?.kind).toBe('FILL');
   });
 });
 

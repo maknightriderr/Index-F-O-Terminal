@@ -4090,8 +4090,12 @@ async function recordStructureOutcome(
  * STRUCTURE_ENTRY_MODE = 'REJECTION_CLOSE': the candidate (if any) comes from
  * rejectionCloseCandidate reading the newest CLOSED bar, never from the live
  * spot tick; its fill price is that bar's own close (rejectionFillPrice),
- * read by resolveStructureSetup instead of the live spot. TOUCH (default):
- * unchanged — fillCandidate reacts to the live spot between bar closes.
+ * read by resolveStructureSetup instead of the live spot. A bar that closes
+ * beyond the sweep extreme (INVALIDATED) or reaches T1 first (MISSED) is
+ * recorded as REFUSED right here — the same STRUCTURE_SEQUENCE code the
+ * TOUCH sequence gate uses — so the lifecycle stops being offered and the
+ * "waiting for rejection candle" text clears. TOUCH (default): unchanged —
+ * fillCandidate reacts to the live spot between bar closes.
  */
 async function claimStructureFill(
   exchange: Exchange,
@@ -4104,11 +4108,19 @@ async function claimStructureFill(
   let candidate: LiveLifecycle | null;
   if (STRUCTURE_ENTRY_MODE === 'REJECTION_CLOSE') {
     const timeframe = family.state.timeframe ?? '15m';
-    const hit =
+    const outcome =
       closedBar?.open != null && closedBar?.high != null && closedBar?.low != null
         ? rejectionCloseCandidate(family.state, { time: closedBar.time, open: closedBar.open, high: closedBar.high, low: closedBar.low, close: closedBar.close }, structureRulesFor(timeframe).fillWithinBars, STRUCTURE_TF_BAR_MS[timeframe])
         : null;
-    candidate = hit ? { ...hit.lc, rejectionFillPrice: hit.entry, rejectionPattern: hit.pattern } : null;
+    if (outcome && outcome.kind !== 'FILL') {
+      const reason =
+        outcome.kind === 'INVALIDATED'
+          ? 'Closed beyond the sweep extreme before a rejection close (REJECTION_CLOSE).'
+          : 'T1 reached before a rejection close (REJECTION_CLOSE) — MISSED.';
+      await recordStructureOutcome(family.state, outcome.lc, { outcome: 'REFUSED', code: 'STRUCTURE_SEQUENCE', reason, at: closedBar!.time }, null);
+      return null;
+    }
+    candidate = outcome ? { ...outcome.lc, rejectionFillPrice: outcome.entry, rejectionPattern: outcome.pattern } : null;
   } else {
     candidate = fillCandidate(family.state, spot, closedBar?.time ?? null);
   }
