@@ -18,7 +18,7 @@ import { redis } from '../lib/redis.js';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 import { sendTelegramMessage, isTelegramConfigured } from '../lib/telegram.js';
-import type { AlertChannel, Exchange, StructureTradePreview, TradingMode } from '@fno/shared';
+import { buildSetupExplanation, type AlertChannel, type Exchange, type StructureTradePreview, type TradingMode } from '@fno/shared';
 import { STRUCTURE_PARAMS, liveLogicStamp, STRATEGY_VERSION, TRIGGER_VERSION, RISK_VERSION, OPTION_VERSION, COST_VERSION } from '../config/trading-flags.js';
 import { isAlertFresh, structureRulesFor, structureStateKey, type LifecycleEventRow, type LiveLifecycle, type LiveState } from './structure-live.js';
 import { recordSetupEvent } from './setup-events.js';
@@ -143,6 +143,8 @@ export function recordLifecycleEvents(events: readonly LifecycleEventRow[]): voi
         context: { sessionPhase: sessionPhaseAt(e.at) },
         decisionId: e.decisionId ?? null,
         signalId: e.signalId ?? null,
+        atr: e.atr ?? null,
+        cost: e.cost ?? null,
         versions: SETUP_EVENTS_VERSIONS,
       });
     }
@@ -197,32 +199,27 @@ async function deliverConfirmed(state: LiveState, lc: LiveLifecycle, preview: St
 }
 
 /**
- * "For / Against / Invalidation / Would be valid if" — built ONLY from
- * fields already on the lifecycle (pool rank, R:R, the candle bonus, the
- * score). No free-text guessing: mirrors
- * apps/web/src/components/common/structure-stage.tsx's explanationLines,
- * which renders the same reasoning on the setup card.
+ * "For / Against / Invalidation / Would be valid if" — the shared builder
+ * (@fno/shared buildSetupExplanation) the web cards use too, fed ONLY from
+ * fields already on the lifecycle. Informational: changes nothing it reads.
  */
-function explanationLines(lc: LiveLifecycle): { forLines: string[]; against: string[]; invalidation: string; wouldBeValidIf: string | null } {
-  const forLines: string[] = [];
-  const against: string[] = [];
-  if (lc.pool) {
-    if (lc.pool.rank <= 2) forLines.push(`${lc.pool.kind.replace(/_/g, ' ').toLowerCase()} is a rank-${lc.pool.rank} pool.`);
-    else against.push(`${lc.pool.kind.replace(/_/g, ' ').toLowerCase()} is a lower rank-${lc.pool.rank} pool.`);
-  }
-  if (lc.rToT1 != null) {
-    if (lc.rToT1 >= 2) forLines.push(`T1 is ${lc.rToT1}R away — comfortably past the 1.5R floor.`);
-    else if (lc.rToT1 < 1.75) against.push(`T1 is only ${lc.rToT1}R away — close to the 1.5R minimum.`);
-  }
-  if (lc.scoreCandle && lc.scoreCandle.applied > 0 && lc.patterns) forLines.push(`Candles: ${lc.patterns.label} (+${lc.scoreCandle.applied} score).`);
-  else if (lc.patterns) against.push('No scored candle pattern on the sweep or displacement.');
-  if (lc.score != null) {
-    if (lc.score >= 55) forLines.push(`Setup quality ${lc.score}/100 (A-band).`);
-    else if (lc.score < 40) against.push(`Setup quality ${lc.score}/100 (C-band).`);
-  }
-  const invalidation = `A close back beyond the sweep extreme (${lc.sweepExtreme}) invalidates it (SWEEP_RECLAIMED).`;
-  const wouldBeValidIf = lc.rToT1 != null && lc.rToT1 < 1.5 ? `T1 >= 1.5R would need a closer entry or a farther T1 (currently ${lc.rToT1}R).` : null;
-  return { forLines, against, invalidation, wouldBeValidIf };
+function explanationLines(lc: LiveLifecycle, tf: string): { forLines: string[]; against: string[]; invalidation: string; wouldBeValidIf: string | null } {
+  const e = buildSetupExplanation({
+    direction: lc.direction,
+    pool: lc.pool,
+    sweepExtreme: lc.sweepExtreme,
+    zone: lc.zone,
+    entry: lc.entry,
+    stop: lc.stop,
+    t1: lc.t1,
+    t2: lc.t2,
+    rToT1: lc.rToT1,
+    score: lc.score,
+    scoreCandle: lc.scoreCandle ?? null,
+    patterns: lc.patterns ?? null,
+    timeframe: tf,
+  });
+  return { forLines: e.forLines, against: e.against, invalidation: e.invalidation, wouldBeValidIf: e.wouldBeValidIf };
 }
 
 export function confirmedMessage(state: LiveState, lc: LiveLifecycle, esc: (s: string) => string, preview?: StructureTradePreview | null): string {
@@ -237,7 +234,7 @@ export function confirmedMessage(state: LiveState, lc: LiveLifecycle, esc: (s: s
     `Limit ${lc.entry} (${lc.zone?.kind === 'FVG' ? `fair-value gap ${lc.zone.near}–${lc.zone.far}` : 'displacement 50%'}) · stop ${lc.stop} · T1 ${lc.t1 ? `${lc.t1.price} (${lc.t1.kind.replace(/_/g, ' ').toLowerCase()}, ${lc.rToT1}R)` : '—'}${lc.t2 ? ` · T2 ${lc.t2.price}` : ''}`,
     `Setup quality ${lc.score ?? '—'}/100 · ranking only, never gates. A ${side} paper trade is minted only if the limit fills within ${fillWithin} and every gate passes.`,
     ...(() => {
-      const { forLines, against, invalidation, wouldBeValidIf } = explanationLines(lc);
+      const { forLines, against, invalidation, wouldBeValidIf } = explanationLines(lc, tf);
       if (forLines.length === 0 && against.length === 0) return [];
       return [
         '',

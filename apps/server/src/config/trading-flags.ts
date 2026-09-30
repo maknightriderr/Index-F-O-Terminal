@@ -427,7 +427,10 @@ export const STRATEGY_VERSION = 'STRUCTURE-15M-1.0';
 export const TRIGGER_VERSION = 'LEGACY-1.0';
 export const RISK_VERSION = 'RISK-1.0';
 export const OPTION_VERSION = 'OPTION-1.0';
-export const COST_VERSION = 'COST-1.0';
+// COST-2.0: setup_events carry a per-setup cost measured at the fill from the
+// leg's live quote (setup-cost.ts; spread observed, slippage/charges modelled
+// from TRADING_COST_MODEL). COST-1.0 rows carry no cost at all.
+export const COST_VERSION = 'COST-2.0';
 
 /** User decision: live now, behind the flag. */
 export const STRUCTURE_DEFAULT = true;

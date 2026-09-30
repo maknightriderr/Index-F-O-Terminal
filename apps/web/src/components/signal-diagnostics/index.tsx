@@ -4,27 +4,73 @@
 // SIGNAL DIAGNOSTICS
 // ============================================================
 // Answers one question: are we missing good trades because of our
-// architecture? Detection (opportunities available/detected/missed),
-// decision (rejection-reason distribution, late entries), performance by
-// grade/pool/trigger/instrument, and architecture health (trigger/rejection
-// frequency, capture rate, filter and late-entry leakage).
+// architecture? Opportunity (objective opportunities, detected, rejected,
+// traded, late, never detected, with auditable detection/capture rates),
+// decision (rejection-reason distribution), performance (PF, drawdown,
+// gross/net R, MFE/MAE, and by grade/pool/trigger), cost (what spread,
+// slippage and charges took), and architecture health (filter leakage, the
+// daily census).
 //
 // Read-only. Nothing here touches a live decision, and every figure is a
-// SIMULATED paper-trade outcome, not account P&L. Instruments are always
-// shown SEPARATELY — index and MCX are never pooled into one headline.
+// SIMULATED paper-trade outcome in R, not account P&L. Instruments are shown
+// separately; segment totals sum inside INDEX or inside MCX, never across.
 // ============================================================
 
 import React, { useState } from 'react';
-import { useSignalDiagnostics, type DiagnosticsSummaryRow, type DiagnosticsGradeRow, type DiagnosticsLeakageRow } from '@/lib/use-signal-diagnostics';
+import {
+  useSignalDiagnostics,
+  type DiagnosticsSummaryRow,
+  type DiagnosticsGradeRow,
+  type DiagnosticsLeakageRow,
+  type DiagnosticsRate,
+  type DiagnosticsPerformanceStats,
+  type DiagnosticsCostStats,
+  type DiagnosticsOpportunityStats,
+  type SignalDiagnosticsData,
+} from '@/lib/use-signal-diagnostics';
 
-type View = 'detection' | 'decision' | 'performance' | 'health';
+type View = 'opportunity' | 'decision' | 'performance' | 'cost' | 'health';
 
 const VIEW_LABELS: Record<View, string> = {
-  detection: 'Detection',
+  opportunity: 'Opportunity',
   decision: 'Decision',
   performance: 'Performance',
+  cost: 'Cost',
   health: 'Architecture Health',
 };
+
+const INSTRUMENTS = ['NIFTY', 'BANKNIFTY', 'SENSEX', 'CRUDEOIL', 'GOLD'];
+
+/** Metric definitions: every label on the page quotes one of these as its tooltip. */
+const DEF = {
+  opportunities: 'Objective opportunities: census windows where price reached +2 ATR before −1 ATR from a 15m bar close within the session (the research definition).',
+  detected: 'Detected: opportunities with a setup_events row in the same direction within ±2 bars (traded, rejected) or 2–6 bars later (late).',
+  rejected: 'Rejected: detected near the window start, but the engine refused or invalidated the setup.',
+  traded: 'Traded: a paper trade was minted within ±2 bars of the opportunity window.',
+  late: 'Late: the first setup row came 2–6 bars after the window started.',
+  never: 'Never detected: no setup_events row in that direction within 6 bars.',
+  detectionRate: 'Detection rate = (traded + rejected + late) ÷ objective opportunities.',
+  captureRate: 'Capture rate = traded ÷ objective opportunities. Late and rejected detections are not captures.',
+  cohortTraded: 'TRADED: paper trades the engine took, graded on the underlying path against their own stop and T1.',
+  cohortRejected: 'REJECTED: setups the engine refused, graded as if entered — only those whose entry price actually traded afterwards (FILLED).',
+  count: 'n: graded rows with a result.',
+  winRate: 'Win rate: share of graded rows with result > 0R.',
+  grossR: 'Gross R: sum of results before costs, in R of the underlying stop.',
+  netR: 'Net R: sum of results after costs (result − cost R). Covers only rows with a measured option cost; the count in brackets says how many.',
+  pf: 'Profit factor: sum of winning R ÷ |sum of losing R|. Blank with no losing row.',
+  pfNet: 'Profit factor after costs, over the rows with a measured cost.',
+  maxDd: 'Max drawdown: largest peak-to-trough fall of the cumulative R curve, in time order.',
+  mfe: 'MFE: average most favourable excursion before exit, in R.',
+  mae: 'MAE: average most adverse excursion before exit, in R.',
+  priced: 'Priced: graded rows that carry a cost in R. OBSERVED = spread from a two-sided live quote; MODELLED = no two-sided quote, spread assumed. Slippage and charges are always modelled from the cost schedule.',
+  totalCost: 'Total cost R: sum of cost R (spread + slippage + charges) over priced rows. Cost R = cost per option unit ÷ (|delta| × underlying stop).',
+  avgCost: 'Average cost R per priced row.',
+  costLeakage: 'Cost leakage R: cost R taken out of trades that were winners before costs.',
+  flipped: 'Flipped: winners before costs that were not winners after them.',
+  spreadLeak: 'Spread leakage R: the bid-ask part of total cost R.',
+  slippageLeak: 'Slippage leakage R: the modelled slippage part of total cost R (paper trading has no fills to observe).',
+  chargesLeak: 'Charges leakage R: statutory charges and brokerage, from the cost schedule.',
+} as const;
 
 function fmt(v: number | null | undefined, d = 2): string {
   return v == null ? '—' : v.toFixed(d);
@@ -49,31 +95,131 @@ function Card({ title, subtitle, children }: { title: string; subtitle?: string;
   );
 }
 
-function DetectionView({ summary }: { summary: DiagnosticsSummaryRow[] }) {
-  if (summary.length === 0) return <p className="text-xs text-gray-500 light:text-slate-500 italic py-4">No setup_events rows in this window yet.</p>;
+/** A column header or label that carries its definition as a tooltip. */
+function Th({ def, align = 'right', children }: { def?: string; align?: 'left' | 'right'; children: React.ReactNode }) {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {summary.map((row) => (
-        <Card key={`${row.instrument}:${row.exchange}`} title={`${row.instrument} (${row.exchange})`}>
-          <div className="grid grid-cols-3 gap-2 text-xs">
-            <div>
-              <div className="text-gray-500 light:text-slate-500 text-[10px] uppercase">Opportunities</div>
-              <div className="text-lg font-mono text-gray-200 light:text-slate-800">{row.detection.opportunitiesAvailable ?? '—'}</div>
-            </div>
-            <div>
-              <div className="text-gray-500 light:text-slate-500 text-[10px] uppercase">Detection rate</div>
-              <div className="text-lg font-mono text-gray-200 light:text-slate-800">{pct(row.detection.detectionRate)}</div>
-            </div>
-            <div>
-              <div className="text-gray-500 light:text-slate-500 text-[10px] uppercase">Never detected</div>
-              <div className="text-lg font-mono text-amber-400">{row.detection.neverDetected ?? '—'}</div>
-            </div>
-          </div>
-        </Card>
-      ))}
+    <th className={`${align === 'left' ? 'text-left' : 'text-right'} px-2 py-1.5 font-medium`} title={def}>
+      <span className={def ? 'underline decoration-dotted decoration-gray-600 underline-offset-2 cursor-help' : undefined}>{children}</span>
+    </th>
+  );
+}
+
+/** A rate with its numerator and denominator, so it can be audited. */
+function RateCell({ r }: { r: DiagnosticsRate }) {
+  return (
+    <td className="text-right px-2 py-1.5 tabular-nums">
+      <span className="text-gray-200 light:text-slate-800 font-medium">{pct(r.rate)}</span>
+      <span className="text-gray-500 light:text-slate-500 ml-1">
+        ({r.numerator}/{r.denominator})
+      </span>
+    </td>
+  );
+}
+
+function Definitions({ keys }: { keys: (keyof typeof DEF)[] }) {
+  return (
+    <details className="text-[11px] text-gray-400 light:text-slate-600">
+      <summary className="cursor-pointer text-gray-500 light:text-slate-500 select-none">Definitions</summary>
+      <ul className="mt-1.5 space-y-0.5 list-disc pl-4">
+        {keys.map((k) => (
+          <li key={k}>{DEF[k]}</li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+const SegmentTag = ({ segment }: { segment: string }) => (
+  <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${segment === 'MCX' ? 'bg-amber-500/15 text-amber-300 light:text-amber-700' : 'bg-sky-500/15 text-sky-300 light:text-sky-700'}`}>{segment}</span>
+);
+
+const bySegmentThenName = <T extends { segment: string; instrument?: string }>(a: T, b: T) => a.segment.localeCompare(b.segment) || (a.instrument ?? '').localeCompare(b.instrument ?? '');
+
+// ---------------- Opportunity ----------------
+
+function OpportunityCells({ s }: { s: DiagnosticsOpportunityStats }) {
+  return (
+    <>
+      <td className="text-right px-2 py-1.5 tabular-nums text-gray-200 light:text-slate-800">{s.opportunities}</td>
+      <td className="text-right px-2 py-1.5 tabular-nums text-gray-300 light:text-slate-700">{s.detected}</td>
+      <td className="text-right px-2 py-1.5 tabular-nums text-red-400">{s.rejected}</td>
+      <td className="text-right px-2 py-1.5 tabular-nums text-emerald-400">{s.traded}</td>
+      <td className="text-right px-2 py-1.5 tabular-nums text-amber-400">{s.late}</td>
+      <td className="text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600">{s.neverDetected}</td>
+      <RateCell r={s.detectionRate} />
+      <RateCell r={s.captureRate} />
+    </>
+  );
+}
+
+function OpportunityHead({ first }: { first: string }) {
+  return (
+    <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+      <Th align="left">{first}</Th>
+      <Th def={DEF.opportunities}>Objective opps</Th>
+      <Th def={DEF.detected}>Detected</Th>
+      <Th def={DEF.rejected}>Rejected</Th>
+      <Th def={DEF.traded}>Traded</Th>
+      <Th def={DEF.late}>Late</Th>
+      <Th def={DEF.never}>Never detected</Th>
+      <Th def={DEF.detectionRate}>Detection rate</Th>
+      <Th def={DEF.captureRate}>Capture rate</Th>
+    </tr>
+  );
+}
+
+function OpportunityView({ opportunity }: { opportunity: SignalDiagnosticsData['opportunity'] }) {
+  if (opportunity.byInstrument.length === 0) return <p className="text-xs text-gray-500 light:text-slate-500 italic py-4">No census rows in this window yet. The census runs after each exchange closes, for sessions recorded from their open.</p>;
+  return (
+    <div className="space-y-4">
+      <Card title="Opportunities and what the engine did" subtitle="Per instrument. Rates show numerator/denominator. The strategy-version filter applies to census windows; the daily session counts carry no version.">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <OpportunityHead first="Instrument" />
+            </thead>
+            <tbody>
+              {[...opportunity.byInstrument].sort(bySegmentThenName).map((o) => (
+                <tr key={`${o.instrument}:${o.exchange}`} className="border-t border-gray-800/40 light:border-slate-200">
+                  <td className="px-2 py-1.5 font-medium text-gray-200 light:text-slate-800">
+                    <span className="mr-1.5">{o.instrument}</span>
+                    <SegmentTag segment={o.segment} />
+                    <span className="block text-[10px] text-gray-500 light:text-slate-500 font-normal">
+                      {o.sessions} sessions · {o.correctlyEmptySessions} correctly empty
+                    </span>
+                  </td>
+                  <OpportunityCells s={o} />
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+      <Card title="Segment totals" subtitle="Instruments summed inside INDEX or inside MCX. The two are never added together.">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <OpportunityHead first="Segment" />
+            </thead>
+            <tbody>
+              {[...opportunity.bySegment].sort((a, b) => a.segment.localeCompare(b.segment)).map((s) => (
+                <tr key={s.segment} className="border-t border-gray-800/40 light:border-slate-200">
+                  <td className="px-2 py-1.5">
+                    <SegmentTag segment={s.segment} />
+                  </td>
+                  <OpportunityCells s={s} />
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+      <Definitions keys={['opportunities', 'detected', 'rejected', 'traded', 'late', 'never', 'detectionRate', 'captureRate']} />
     </div>
   );
 }
+
+// ---------------- Decision ----------------
 
 function DecisionView({ summary, rejections }: { summary: DiagnosticsSummaryRow[]; rejections: import('@/lib/use-signal-diagnostics').DiagnosticsRejectionRow[] }) {
   return (
@@ -122,52 +268,239 @@ function DecisionView({ summary, rejections }: { summary: DiagnosticsSummaryRow[
   );
 }
 
-function PerformanceView({ grades }: { grades: DiagnosticsGradeRow[] }) {
-  if (grades.length === 0) return <p className="text-xs text-gray-500 light:text-slate-500 italic py-4">No graded setup_events rows yet.</p>;
+// ---------------- Performance ----------------
+
+function PerformanceHead({ first }: { first: string }) {
   return (
-    <Card title="Performance by grade / pool / trigger / instrument" subtitle="Grade bands (A+/A/B/C) are fixed from the score's own component structure, not fitted to outcomes.">
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
-              <th className="text-left px-2 py-1.5 font-medium">Instrument</th>
-              <th className="text-left px-2 py-1.5 font-medium">Grade</th>
-              <th className="text-left px-2 py-1.5 font-medium">Pool</th>
-              <th className="text-left px-2 py-1.5 font-medium">Trigger</th>
-              <th className="text-right px-2 py-1.5 font-medium">n</th>
-              <th className="text-right px-2 py-1.5 font-medium">Win %</th>
-              <th className="text-right px-2 py-1.5 font-medium">Avg R</th>
-              <th className="text-right px-2 py-1.5 font-medium">Net R</th>
-              <th className="text-right px-2 py-1.5 font-medium">Avg MFE R</th>
-              <th className="text-right px-2 py-1.5 font-medium">Avg MAE R</th>
-            </tr>
-          </thead>
-          <tbody>
-            {grades.map((g, i) => (
-              <tr key={i} className="border-t border-gray-800/40 light:border-slate-200">
-                <td className="px-2 py-1.5 font-medium text-gray-200 light:text-slate-800">{g.instrument} ({g.exchange})</td>
-                <td className="px-2 py-1.5 text-gray-300 light:text-slate-700">{g.grade ?? '—'}</td>
-                <td className="px-2 py-1.5 text-gray-400 light:text-slate-600">{g.poolType ?? '—'}</td>
-                <td className="px-2 py-1.5 text-gray-400 light:text-slate-600">{g.triggerType ?? '—'}</td>
-                <td className="text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600">{g.count}</td>
-                <td className="text-right px-2 py-1.5 tabular-nums text-gray-300 light:text-slate-700">{pct(g.winRate)}</td>
-                <td className={`text-right px-2 py-1.5 tabular-nums font-medium ${rColor(g.avgR)}`}>{fmt(g.avgR)}</td>
-                <td className={`text-right px-2 py-1.5 tabular-nums font-medium ${rColor(g.netR)}`}>{fmt(g.netR)}</td>
-                <td className="text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600">{fmt(g.avgMfeR)}</td>
-                <td className="text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600">{fmt(g.avgMaeR)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </Card>
+    <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+      <Th align="left">{first}</Th>
+      <Th align="left" def={`${DEF.cohortTraded} ${DEF.cohortRejected}`}>Cohort</Th>
+      <Th def={DEF.count}>n</Th>
+      <Th def={DEF.winRate}>Win %</Th>
+      <Th def={DEF.grossR}>Gross R</Th>
+      <Th def={DEF.netR}>Net R</Th>
+      <Th def={DEF.pf}>PF</Th>
+      <Th def={DEF.pfNet}>PF net</Th>
+      <Th def={DEF.maxDd}>Max DD R</Th>
+      <Th def={DEF.mfe}>Avg MFE R</Th>
+      <Th def={DEF.mae}>Avg MAE R</Th>
+    </tr>
   );
 }
+
+function PerformanceCells({ cohort, p }: { cohort: string; p: DiagnosticsPerformanceStats }) {
+  return (
+    <>
+      <td className="px-2 py-1.5 text-gray-300 light:text-slate-700">{cohort}</td>
+      <td className="text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600">{p.count}</td>
+      <td className="text-right px-2 py-1.5 tabular-nums text-gray-300 light:text-slate-700">{pct(p.winRate)}</td>
+      <td className={`text-right px-2 py-1.5 tabular-nums font-medium ${rColor(p.grossR)}`}>{fmt(p.grossR)}</td>
+      <td className={`text-right px-2 py-1.5 tabular-nums font-medium ${rColor(p.netR)}`}>
+        {fmt(p.netR)}
+        {p.netCount !== p.count && <span className="text-gray-500 light:text-slate-500 font-normal ml-1">({p.netCount})</span>}
+      </td>
+      <td className="text-right px-2 py-1.5 tabular-nums text-gray-300 light:text-slate-700">{fmt(p.profitFactor)}</td>
+      <td className="text-right px-2 py-1.5 tabular-nums text-gray-300 light:text-slate-700">{fmt(p.profitFactorNet)}</td>
+      <td className="text-right px-2 py-1.5 tabular-nums text-red-400">{fmt(p.maxDrawdownR)}</td>
+      <td className="text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600">{fmt(p.avgMfeR)}</td>
+      <td className="text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600">{fmt(p.avgMaeR)}</td>
+    </>
+  );
+}
+
+function PerformanceView({ performance, grades }: { performance: SignalDiagnosticsData['performance']; grades: DiagnosticsGradeRow[] }) {
+  return (
+    <div className="space-y-4">
+      <Card title="Performance by instrument" subtitle="TRADED and REJECTED cohorts are kept apart. R is the underlying stop; every figure is simulated.">
+        {performance.byInstrument.length === 0 ? (
+          <p className="text-xs text-gray-500 light:text-slate-500 italic py-2">No graded setup_events rows yet. Grading runs after each session.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <PerformanceHead first="Instrument" />
+              </thead>
+              <tbody>
+                {[...performance.byInstrument].sort(bySegmentThenName).map((r) => (
+                  <tr key={`${r.instrument}:${r.exchange}:${r.cohort}`} className="border-t border-gray-800/40 light:border-slate-200">
+                    <td className="px-2 py-1.5 font-medium text-gray-200 light:text-slate-800">
+                      <span className="mr-1.5">{r.instrument}</span>
+                      <SegmentTag segment={r.segment} />
+                    </td>
+                    <PerformanceCells cohort={r.cohort} p={r.performance} />
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+      {performance.bySegment.length > 0 && (
+        <Card title="Segment totals" subtitle="Instruments combined inside INDEX or inside MCX only.">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <PerformanceHead first="Segment" />
+              </thead>
+              <tbody>
+                {[...performance.bySegment].sort((a, b) => a.segment.localeCompare(b.segment) || a.cohort.localeCompare(b.cohort)).map((s) => (
+                  <tr key={`${s.segment}:${s.cohort}`} className="border-t border-gray-800/40 light:border-slate-200">
+                    <td className="px-2 py-1.5">
+                      <SegmentTag segment={s.segment} />
+                    </td>
+                    <PerformanceCells cohort={s.cohort} p={s.performance} />
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+      <Card title="By grade / pool / trigger / instrument" subtitle="Grade bands (A+/A/B/C) are fixed from the score's own component structure, not fitted to outcomes.">
+        {grades.length === 0 ? (
+          <p className="text-xs text-gray-500 light:text-slate-500 italic py-2">No graded setup_events rows yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+                  <Th align="left">Instrument</Th>
+                  <Th align="left">Grade</Th>
+                  <Th align="left">Pool</Th>
+                  <Th align="left">Trigger</Th>
+                  <Th def={DEF.count}>n</Th>
+                  <Th def={DEF.winRate}>Win %</Th>
+                  <Th>Avg R</Th>
+                  <Th def={DEF.grossR}>Sum R</Th>
+                  <Th def={DEF.mfe}>Avg MFE R</Th>
+                  <Th def={DEF.mae}>Avg MAE R</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {grades.map((g, i) => (
+                  <tr key={i} className="border-t border-gray-800/40 light:border-slate-200">
+                    <td className="px-2 py-1.5 font-medium text-gray-200 light:text-slate-800">{g.instrument} ({g.exchange})</td>
+                    <td className="px-2 py-1.5 text-gray-300 light:text-slate-700">{g.grade ?? '—'}</td>
+                    <td className="px-2 py-1.5 text-gray-400 light:text-slate-600">{g.poolType ?? '—'}</td>
+                    <td className="px-2 py-1.5 text-gray-400 light:text-slate-600">{g.triggerType ?? '—'}</td>
+                    <td className="text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600">{g.count}</td>
+                    <td className="text-right px-2 py-1.5 tabular-nums text-gray-300 light:text-slate-700">{pct(g.winRate)}</td>
+                    <td className={`text-right px-2 py-1.5 tabular-nums font-medium ${rColor(g.avgR)}`}>{fmt(g.avgR)}</td>
+                    <td className={`text-right px-2 py-1.5 tabular-nums font-medium ${rColor(g.netR)}`}>{fmt(g.netR)}</td>
+                    <td className="text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600">{fmt(g.avgMfeR)}</td>
+                    <td className="text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600">{fmt(g.avgMaeR)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+      <Definitions keys={['cohortTraded', 'cohortRejected', 'count', 'winRate', 'grossR', 'netR', 'pf', 'pfNet', 'maxDd', 'mfe', 'mae']} />
+    </div>
+  );
+}
+
+// ---------------- Cost ----------------
+
+function CostHead({ first }: { first: string }) {
+  return (
+    <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+      <Th align="left">{first}</Th>
+      <Th align="left" def={`${DEF.cohortTraded} ${DEF.cohortRejected}`}>Cohort</Th>
+      <Th def={DEF.priced}>Priced (obs/mod)</Th>
+      <Th def={DEF.totalCost}>Total cost R</Th>
+      <Th def={DEF.avgCost}>Avg cost R</Th>
+      <Th def={DEF.costLeakage}>Cost leakage R</Th>
+      <Th def={DEF.flipped}>Flipped</Th>
+      <Th def={DEF.spreadLeak}>Spread R</Th>
+      <Th def={DEF.slippageLeak}>Slippage R</Th>
+      <Th def={DEF.chargesLeak}>Charges R</Th>
+    </tr>
+  );
+}
+
+function CostCells({ cohort, c }: { cohort: string; c: DiagnosticsCostStats }) {
+  return (
+    <>
+      <td className="px-2 py-1.5 text-gray-300 light:text-slate-700">{cohort}</td>
+      <td className="text-right px-2 py-1.5 tabular-nums text-gray-300 light:text-slate-700">
+        {c.priced} <span className="text-gray-500 light:text-slate-500">({c.observed}/{c.modelled})</span>
+      </td>
+      <td className="text-right px-2 py-1.5 tabular-nums text-red-400">{fmt(c.totalCostR)}</td>
+      <td className="text-right px-2 py-1.5 tabular-nums text-gray-300 light:text-slate-700">{fmt(c.avgCostR, 3)}</td>
+      <td className="text-right px-2 py-1.5 tabular-nums text-amber-400">{fmt(c.costLeakageR)}</td>
+      <td className="text-right px-2 py-1.5 tabular-nums text-amber-400">{c.flippedByCost}</td>
+      <td className="text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600">{fmt(c.spreadLeakageR)}</td>
+      <td className="text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600">{fmt(c.slippageLeakageR)}</td>
+      <td className="text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600">{fmt(c.chargesLeakageR)}</td>
+    </>
+  );
+}
+
+function CostView({ performance }: { performance: SignalDiagnosticsData['performance'] }) {
+  const anyPriced = performance.byInstrument.some((r) => r.cost.priced > 0);
+  return (
+    <div className="space-y-4">
+      <Card
+        title="What costs took"
+        subtitle="Measured at the fill from the option leg's live quote (COST-2.0 onward). Spread is observed when the quote is two-sided; slippage and charges come from the cost schedule. Rows without a quote are left out, never filled with a flat estimate."
+      >
+        {!anyPriced ? (
+          <p className="text-xs text-gray-500 light:text-slate-500 italic py-2">No graded rows with a measured cost yet. Costs are recorded from COST-2.0; older rows carry none.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <CostHead first="Instrument" />
+              </thead>
+              <tbody>
+                {[...performance.byInstrument].sort(bySegmentThenName).map((r) => (
+                  <tr key={`${r.instrument}:${r.exchange}:${r.cohort}`} className="border-t border-gray-800/40 light:border-slate-200">
+                    <td className="px-2 py-1.5 font-medium text-gray-200 light:text-slate-800">
+                      <span className="mr-1.5">{r.instrument}</span>
+                      <SegmentTag segment={r.segment} />
+                    </td>
+                    <CostCells cohort={r.cohort} c={r.cost} />
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+      {anyPriced && (
+        <Card title="Segment totals" subtitle="Inside INDEX or inside MCX only.">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <CostHead first="Segment" />
+              </thead>
+              <tbody>
+                {[...performance.bySegment].sort((a, b) => a.segment.localeCompare(b.segment) || a.cohort.localeCompare(b.cohort)).map((s) => (
+                  <tr key={`${s.segment}:${s.cohort}`} className="border-t border-gray-800/40 light:border-slate-200">
+                    <td className="px-2 py-1.5">
+                      <SegmentTag segment={s.segment} />
+                    </td>
+                    <CostCells cohort={s.cohort} c={s.cost} />
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+      <Definitions keys={['priced', 'totalCost', 'avgCost', 'costLeakage', 'flipped', 'spreadLeak', 'slippageLeak', 'chargesLeak']} />
+    </div>
+  );
+}
+
+// ---------------- Architecture health ----------------
 
 function HealthView({ leakage, census }: { leakage: DiagnosticsLeakageRow[]; census: import('@/lib/use-signal-diagnostics').DiagnosticsCensusRow[] }) {
   return (
     <div className="space-y-4">
-      <Card title="Filter leakage" subtitle="Rejected setups that were graded and later reached +2R — the architecture's own filters throwing away trades that would have worked.">
+      <Card title="Filter leakage" subtitle="Rejected setups that were graded and later reached +2R — the architecture's own filters throwing away trades that would have worked. Unfilled setups are excluded.">
         {leakage.length === 0 ? (
           <p className="text-xs text-gray-500 light:text-slate-500 italic py-2">No graded rejections in this window.</p>
         ) : (
@@ -212,7 +545,7 @@ function HealthView({ leakage, census }: { leakage: DiagnosticsLeakageRow[]; cen
                   <th className="text-right px-2 py-1.5 font-medium">Rejected</th>
                   <th className="text-right px-2 py-1.5 font-medium">Late</th>
                   <th className="text-right px-2 py-1.5 font-medium">Never</th>
-                  <th className="text-right px-2 py-1.5 font-medium">Capture</th>
+                  <th className="text-right px-2 py-1.5 font-medium" title={DEF.captureRate}>Capture</th>
                   <th className="text-center px-2 py-1.5 font-medium">Empty OK?</th>
                 </tr>
               </thead>
@@ -226,7 +559,14 @@ function HealthView({ leakage, census }: { leakage: DiagnosticsLeakageRow[]; cen
                     <td className="text-right px-2 py-1.5 tabular-nums text-red-400">{c.rejected}</td>
                     <td className="text-right px-2 py-1.5 tabular-nums text-amber-400">{c.late}</td>
                     <td className="text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600">{c.never_detected}</td>
-                    <td className="text-right px-2 py-1.5 tabular-nums text-gray-300 light:text-slate-700">{pct(c.capture_rate)}</td>
+                    <td className="text-right px-2 py-1.5 tabular-nums text-gray-300 light:text-slate-700">
+                      {pct(c.capture_rate)}
+                      {c.opportunities > 0 && (
+                        <span className="text-gray-500 light:text-slate-500 ml-1">
+                          ({c.traded}/{c.opportunities})
+                        </span>
+                      )}
+                    </td>
                     <td className="text-center px-2 py-1.5">{c.correctly_empty ? '✓' : c.opportunities === 0 ? '✗' : '—'}</td>
                   </tr>
                 ))}
@@ -239,17 +579,94 @@ function HealthView({ leakage, census }: { leakage: DiagnosticsLeakageRow[]; cen
   );
 }
 
+// ---------------- Filters ----------------
+
+const inputClass =
+  'text-xs rounded border border-gray-700 light:border-slate-300 bg-gray-900/60 light:bg-white text-gray-200 light:text-slate-800 px-2 py-1 focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500';
+
+function FilterBar({
+  from,
+  to,
+  instrument,
+  strategyVersion,
+  costVersion,
+  versions,
+  onChange,
+}: {
+  from: string;
+  to: string;
+  instrument: string;
+  strategyVersion: string;
+  costVersion: string;
+  versions: SignalDiagnosticsData['versions'];
+  onChange: (patch: Partial<{ from: string; to: string; instrument: string; strategyVersion: string; costVersion: string }>) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-end gap-3">
+      <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wide text-gray-500 light:text-slate-500">
+        From
+        <input id="diag-from" type="date" value={from} onChange={(e) => onChange({ from: e.target.value })} className={inputClass} />
+      </label>
+      <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wide text-gray-500 light:text-slate-500">
+        To
+        <input id="diag-to" type="date" value={to} onChange={(e) => onChange({ to: e.target.value })} className={inputClass} />
+      </label>
+      <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wide text-gray-500 light:text-slate-500">
+        Instrument
+        <select id="diag-instrument" value={instrument} onChange={(e) => onChange({ instrument: e.target.value })} className={inputClass}>
+          <option value="">All, shown separately</option>
+          {INSTRUMENTS.map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wide text-gray-500 light:text-slate-500">
+        Strategy version
+        <select id="diag-strategy-version" value={strategyVersion} onChange={(e) => onChange({ strategyVersion: e.target.value })} className={inputClass}>
+          <option value="">All versions</option>
+          {versions.strategyVersions.map((v) => (
+            <option key={v} value={v}>
+              {v}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wide text-gray-500 light:text-slate-500">
+        Cost version
+        <select id="diag-cost-version" value={costVersion} onChange={(e) => onChange({ costVersion: e.target.value })} className={inputClass}>
+          <option value="">All versions</option>
+          {versions.costVersions.map((v) => (
+            <option key={v} value={v}>
+              {v}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
+  );
+}
+
 export function SignalDiagnosticsPage() {
-  const [view, setView] = useState<View>('detection');
-  const { loading, error, summary, rejections, census, grades, leakage, refresh } = useSignalDiagnostics();
+  const [view, setView] = useState<View>('opportunity');
+  const [filters, setFilters] = useState({ from: '', to: '', instrument: '', strategyVersion: '', costVersion: '' });
+  const data = useSignalDiagnostics({
+    from: filters.from || undefined,
+    to: filters.to || undefined,
+    instrument: filters.instrument || undefined,
+    strategyVersion: filters.strategyVersion || undefined,
+    costVersion: filters.costVersion || undefined,
+  });
+  const { loading, error, summary, rejections, census, grades, leakage, performance, opportunity, versions, refresh } = data;
 
   return (
     <div className="p-4 space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold text-gray-100 light:text-slate-900">Signal Diagnostics</h2>
           <p className="text-xs text-gray-500 light:text-slate-500 mt-0.5">
-            Are we missing good trades because of our architecture? Read-only, simulated paper-trade outcomes only. Instruments are always shown separately — index and MCX are never pooled.
+            Are we missing good trades because of our architecture? Read-only, simulated paper-trade outcomes only. Instruments are shown separately; INDEX and MCX are never pooled.
           </p>
         </div>
         <button onClick={refresh} className="text-xs px-3 py-1.5 rounded border border-gray-700 light:border-slate-300 text-gray-300 light:text-slate-700 hover:bg-gray-800/60 light:hover:bg-slate-100">
@@ -257,12 +674,14 @@ export function SignalDiagnosticsPage() {
         </button>
       </div>
 
-      <div className="flex gap-1 border-b border-gray-800/60 light:border-slate-200">
+      <FilterBar {...filters} versions={versions} onChange={(patch) => setFilters((f) => ({ ...f, ...patch }))} />
+
+      <div className="flex gap-1 border-b border-gray-800/60 light:border-slate-200 overflow-x-auto">
         {(Object.keys(VIEW_LABELS) as View[]).map((v) => (
           <button
             key={v}
             onClick={() => setView(v)}
-            className={`px-3 py-2 text-xs font-medium border-b-2 -mb-px ${
+            className={`px-3 py-2 text-xs font-medium border-b-2 -mb-px whitespace-nowrap ${
               view === v ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-500 light:text-slate-500 hover:text-gray-300 light:hover:text-slate-700'
             }`}
           >
@@ -274,9 +693,10 @@ export function SignalDiagnosticsPage() {
       {error && <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded px-3 py-2">{error}</div>}
       {loading && summary.length === 0 && !error && <p className="text-xs text-gray-500 light:text-slate-500 italic py-4">Loading…</p>}
 
-      {view === 'detection' && <DetectionView summary={summary} />}
+      {view === 'opportunity' && <OpportunityView opportunity={opportunity} />}
       {view === 'decision' && <DecisionView summary={summary} rejections={rejections} />}
-      {view === 'performance' && <PerformanceView grades={grades} />}
+      {view === 'performance' && <PerformanceView performance={performance} grades={grades} />}
+      {view === 'cost' && <CostView performance={performance} />}
       {view === 'health' && <HealthView leakage={leakage} census={census} />}
     </div>
   );

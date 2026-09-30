@@ -98,6 +98,10 @@ const FILES = [
   // Stage 2: opportunity_census / opportunity_census_daily, written by the
   // daily post-session census job. Ensured at boot for the same reason.
   '030_opportunity_census.sql',
+  // Removes census rows for sessions that opened before setup_events recorded.
+  '031_census_before_recording.sql',
+  // setup_events: per-setup option cost, stop distance and fill status (measurement only).
+  '032_setup_event_costs.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */

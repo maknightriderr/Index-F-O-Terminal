@@ -175,7 +175,8 @@ import {
   type StructureVariant,
 } from '@fno/analytics';
 import type { StructureBlock, StructureLifecycleView, StructureTradePreview } from '@fno/shared';
-import { CONSENSUS_SETUPS, STRUCTURE, STRUCTURE_ENTRY_MODE, STRUCTURE_ENTRY_TF, STRUCTURE_PARAMS, structureEnabledFor } from '../config/trading-flags.js';
+import { CONSENSUS_SETUPS, STRUCTURE, STRUCTURE_ENTRY_MODE, STRUCTURE_ENTRY_TF, STRUCTURE_PARAMS, structureEnabledFor, COST_VERSION } from '../config/trading-flags.js';
+import { measureSetupCost, type SetupCostMeasurement } from './setup-cost.js';
 import {
   STRUCTURE_SEQUENCE_CONFIDENCE,
   STRUCTURE_SETUP_TYPE,
@@ -4108,7 +4109,9 @@ async function recordStructureOutcome(
   state: LiveState,
   lc: LiveLifecycle,
   outcome: NonNullable<LiveLifecycle['live']>,
-  spot: number | null
+  spot: number | null,
+  /** Measurement for setup_events only — written after the outcome is decided, never read by it. */
+  cost: SetupCostMeasurement | null = null
 ): Promise<void> {
   lc.live = outcome;
   try {
@@ -4141,6 +4144,8 @@ async function recordStructureOutcome(
       signalId: outcome.signalId ?? null,
       patterns: lc.patterns ?? null,
       scoreCandle: lc.scoreCandle ?? null,
+      atr: lc.atr,
+      cost,
     },
   ]);
 }
@@ -4372,7 +4377,7 @@ async function resolveStructureSetup(ctx: {
     `${lc.patterns ? ` Candles: ${lc.patterns.label}.` : ''}` +
     `${lc.rejectionPattern ? ` Entry confirmed by ${lc.rejectionPattern.label.toLowerCase()} (REJECTION_CLOSE).` : ''}`;
 
-  const recordRefusal = async (code: NoTradeCode | null, reason: string, setup: TradeSetup | null) => {
+  const recordRefusal = async (code: NoTradeCode | null, reason: string, setup: TradeSetup | null, costChain: OptionChain = chain) => {
     logDecision({
       at,
       symbol: underlying,
@@ -4413,7 +4418,7 @@ async function resolveStructureSetup(ctx: {
       atr: lc.atr,
       ...snapshotBlocks(chain, structureContext, setup, side),
     });
-    await recordStructureOutcome(state, lc, { outcome: 'REFUSED', code: code ?? null, reason, at }, spot);
+    await recordStructureOutcome(state, lc, { outcome: 'REFUSED', code: code ?? null, reason, at }, spot, measureStructureFillCost(costChain, lc, side, setup));
   };
 
   if (refusal) {
@@ -4484,7 +4489,7 @@ async function resolveStructureSetup(ctx: {
   structureFnoRecord = validated.fnoValidation;
   if (!builtRaw.available) {
     logger.info({ underlying, exchange, code: builtRaw.noTradeCode ?? null, lifecycleId: lc.id }, 'Structure: option leg refused by buildTradeSetup');
-    await recordRefusal(builtRaw.noTradeCode ?? null, `${describe} ${builtRaw.reason}`, builtRaw);
+    await recordRefusal(builtRaw.noTradeCode ?? null, `${describe} ${builtRaw.reason}`, builtRaw, usedChain);
     return null;
   }
   const fresh: TradeSetup = {
@@ -4509,7 +4514,9 @@ async function resolveStructureSetup(ctx: {
     ours
       ? { outcome: 'MINTED', code: null, reason: `${minted.side} ${minted.strike} @ ${minted.entry}`, at, decisionId: (minted as StoredTradeSetup).decisionId ?? null, signalId: (minted as StoredTradeSetup).signalId ?? null }
       : { outcome: 'REFUSED', code: 'MINT_LOCK', reason: minted.available ? 'Another evaluation minted a setup into this slot first.' : minted.reason, at },
-    spot
+    spot,
+    // A MINT_LOCK refusal never traded its contract: priced as the SELECTED leg, not TRADED.
+    measureStructureFillCost(usedChain, lc, side, ours ? fresh : { ...fresh, available: false })
   );
   return minted;
 }
@@ -5579,6 +5586,46 @@ function structureRefusalStopTargetAtr(entryContext: SetupEntryContext | undefin
   const targetInAtr = Math.abs(structure.t1.price - structure.entry) / atr;
   if (!Number.isFinite(stopInAtr) || !Number.isFinite(targetInAtr)) return null;
   return { stopInAtr: Math.round(stopInAtr * 10000) / 10000, targetInAtr: Math.round(targetInAtr * 10000) / 10000 };
+}
+
+/**
+ * Measurement only (setup_events cost columns, setup-cost.ts): the option leg
+ * a structure fill met, priced from its live quote. Called after the decision
+ * is already made, never read by a gate; any failure gives null.
+ *   minted              → the traded contract (TRADED)
+ *   refused in the build → F&O validation's pick when it made one (SELECTED)
+ *   refused before it   → the ATM leg of the same side (ATM_PROXY)
+ */
+function measureStructureFillCost(chain: OptionChain, lc: LiveLifecycle, side: 'CE' | 'PE', setup: TradeSetup | null): SetupCostMeasurement | null {
+  try {
+    const selected = setup?.fnoValidation?.strikeSelection?.selectedStrike ?? null;
+    const traded = setup?.available && setup.strike != null ? setup.strike : null;
+    const strike = traded ?? selected ?? chain.atmStrike;
+    const strikeBasis = traded != null ? 'TRADED' : selected != null ? 'SELECTED' : 'ATM_PROXY';
+    const leg = findLeg(chain, strike, side);
+    const base = { entry: lc.entry, stop: lc.stop, t1: lc.t1?.price ?? null, atr: lc.atr, costVersion: COST_VERSION };
+    if (!leg) return measureSetupCost({ ...base, option: null });
+    const twoSided = leg.bid > 0 && leg.ask > leg.bid;
+    const quotePremium = twoSided ? (leg.bid + leg.ask) / 2 : leg.ltp > 0 ? leg.ltp : null;
+    return measureSetupCost({
+      ...base,
+      option: {
+        side,
+        strike,
+        expiry: chain.expiry ?? null,
+        strikeBasis,
+        premium: traded != null && setup?.entry != null ? setup.entry : quotePremium,
+        bid: leg.bid > 0 ? leg.bid : null,
+        ask: leg.ask > 0 ? leg.ask : null,
+        delta: Number.isFinite(leg.delta) ? leg.delta : null,
+        lotSize: chain.lotSize > 0 ? chain.lotSize : null,
+        premiumStop: traded != null ? setup?.stopLoss ?? null : null,
+      },
+    });
+  } catch (err: any) {
+    logger.warn({ error: err.message, lifecycleId: lc.id }, 'Structure: fill cost measurement failed — setup_events row written without it');
+    return null;
+  }
 }
 
 function snapshotBlocks(

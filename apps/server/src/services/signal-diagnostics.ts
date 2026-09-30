@@ -11,11 +11,16 @@
 // ============================================================
 
 import { sql } from '../lib/db.js';
+import { costStats, opportunityStats, performanceStats, segmentOf, type GradedEventRow, type Segment } from './diagnostics-metrics.js';
 
 export interface DiagnosticsQuery {
   since: Date | null;
   until: Date | null;
   instrument: string | null;
+  /** setup_events.strategy_version (and the census windows' own); null = every version. */
+  strategyVersion: string | null;
+  /** setup_events.cost_version; null = every version. */
+  costVersion: string | null;
 }
 
 /** Detection + decision summary, by instrument. */
@@ -34,6 +39,8 @@ export async function diagnosticsSummary(q: DiagnosticsQuery) {
     WHERE (${q.since}::timestamptz IS NULL OR time >= ${q.since})
       AND (${q.until}::timestamptz IS NULL OR time < ${q.until})
       AND (${q.instrument}::text IS NULL OR instrument = ${q.instrument})
+      AND (${q.strategyVersion}::text IS NULL OR strategy_version = ${q.strategyVersion})
+      AND (${q.costVersion}::text IS NULL OR cost_version = ${q.costVersion})
     GROUP BY instrument, exchange, decision, event_type
   `;
 
@@ -57,7 +64,7 @@ export async function diagnosticsSummary(q: DiagnosticsQuery) {
     SELECT instrument, exchange,
       SUM(opportunities)::text AS opportunities, SUM(traded)::text AS traded, SUM(rejected)::text AS rejected,
       SUM(late)::text AS late, SUM(never_detected)::text AS never_detected,
-      CASE WHEN SUM(opportunities) > 0 THEN (SUM(traded + late)::numeric / SUM(opportunities))::text ELSE NULL END AS capture_rate
+      CASE WHEN SUM(opportunities) > 0 THEN (SUM(traded)::numeric / SUM(opportunities))::text ELSE NULL END AS capture_rate
     FROM opportunity_census_daily
     WHERE (${q.since}::timestamptz IS NULL OR session_date >= ${q.since})
       AND (${q.until}::timestamptz IS NULL OR session_date < ${q.until})
@@ -74,7 +81,8 @@ export async function diagnosticsSummary(q: DiagnosticsQuery) {
       exchange: e.exchange,
       detection: {
         opportunitiesAvailable: opportunities,
-        detectionRate: opportunities && opportunities > 0 && c ? round4((Number(c.traded) + Number(c.late)) / opportunities) : null,
+        // Detected = seen at all (traded, rejected or late); only never_detected is a miss.
+        detectionRate: opportunities && opportunities > 0 && c ? round4((opportunities - Number(c.never_detected)) / opportunities) : null,
         neverDetected: c ? Number(c.never_detected) : null,
       },
       decision: {
@@ -97,6 +105,8 @@ export async function diagnosticsRejections(q: DiagnosticsQuery) {
       AND (${q.since}::timestamptz IS NULL OR time >= ${q.since})
       AND (${q.until}::timestamptz IS NULL OR time < ${q.until})
       AND (${q.instrument}::text IS NULL OR instrument = ${q.instrument})
+      AND (${q.strategyVersion}::text IS NULL OR strategy_version = ${q.strategyVersion})
+      AND (${q.costVersion}::text IS NULL OR cost_version = ${q.costVersion})
     GROUP BY instrument, exchange, event_type, rejection_reason
     ORDER BY n DESC
   `;
@@ -147,6 +157,8 @@ export async function diagnosticsGrades(q: DiagnosticsQuery) {
       AND (${q.since}::timestamptz IS NULL OR time >= ${q.since})
       AND (${q.until}::timestamptz IS NULL OR time < ${q.until})
       AND (${q.instrument}::text IS NULL OR instrument = ${q.instrument})
+      AND (${q.strategyVersion}::text IS NULL OR strategy_version = ${q.strategyVersion})
+      AND (${q.costVersion}::text IS NULL OR cost_version = ${q.costVersion})
     GROUP BY instrument, exchange, grade, pool_type, trigger_type
   `;
   return rows.map((r) => {
@@ -181,6 +193,8 @@ export async function diagnosticsLeakage(q: DiagnosticsQuery) {
       AND (${q.since}::timestamptz IS NULL OR time >= ${q.since})
       AND (${q.until}::timestamptz IS NULL OR time < ${q.until})
       AND (${q.instrument}::text IS NULL OR instrument = ${q.instrument})
+      AND (${q.strategyVersion}::text IS NULL OR strategy_version = ${q.strategyVersion})
+      AND (${q.costVersion}::text IS NULL OR cost_version = ${q.costVersion})
     GROUP BY instrument, exchange, event_type
   `;
   return rows.map((r) => ({
@@ -190,6 +204,196 @@ export async function diagnosticsLeakage(q: DiagnosticsQuery) {
     rejectedGraded: Number(r.n),
     laterHit2R: Number(r.leaked),
     leakageRate: Number(r.n) > 0 ? round4(Number(r.leaked) / Number(r.n)) : null,
+  }));
+}
+
+const numOrNull = (v: string | null) => (v == null ? null : Number(v));
+
+/**
+ * Performance and cost, per instrument, for two cohorts kept apart:
+ * TRADED (paper entries the engine took) and REJECTED (setups it refused,
+ * graded as if entered — only those whose entry price actually traded).
+ * Segment totals sum instruments inside INDEX or inside MCX, never across.
+ */
+export async function diagnosticsPerformance(q: DiagnosticsQuery) {
+  const rows = await sql<
+    {
+      instrument: string;
+      exchange: string;
+      time: Date;
+      decision: string;
+      result_r: string | null;
+      net_result_r: string | null;
+      mfe_r: string | null;
+      mae_r: string | null;
+      cost_r: string | null;
+      spread_r: string | null;
+      slippage_r: string | null;
+      charges_r: string | null;
+      cost_quality: string | null;
+    }[]
+  >`
+    SELECT instrument, exchange, time, decision,
+      result_r::text, net_result_r::text, mfe_r::text, mae_r::text,
+      cost_r::text, spread_r::text, slippage_r::text, charges_r::text, cost_quality
+    FROM setup_events
+    WHERE graded_at IS NOT NULL AND result_r IS NOT NULL
+      AND event_type IN ('TRADED', 'REJECTED', 'LOW_RR', 'LATE')
+      AND (${q.since}::timestamptz IS NULL OR time >= ${q.since})
+      AND (${q.until}::timestamptz IS NULL OR time < ${q.until})
+      AND (${q.instrument}::text IS NULL OR instrument = ${q.instrument})
+      AND (${q.strategyVersion}::text IS NULL OR strategy_version = ${q.strategyVersion})
+      AND (${q.costVersion}::text IS NULL OR cost_version = ${q.costVersion})
+    ORDER BY time ASC
+  `;
+  type Cohort = 'TRADED' | 'REJECTED';
+  const groups = new Map<string, { instrument: string; exchange: string; segment: Segment; cohort: Cohort; rows: GradedEventRow[] }>();
+  const segments = new Map<string, { segment: Segment; cohort: Cohort; rows: GradedEventRow[] }>();
+  for (const r of rows) {
+    const cohort: Cohort = r.decision === 'TRADED' ? 'TRADED' : 'REJECTED';
+    const segment = segmentOf(r.exchange);
+    const row: GradedEventRow = {
+      time: new Date(r.time).getTime(),
+      resultR: numOrNull(r.result_r),
+      netResultR: numOrNull(r.net_result_r),
+      mfeR: numOrNull(r.mfe_r),
+      maeR: numOrNull(r.mae_r),
+      costR: numOrNull(r.cost_r),
+      spreadR: numOrNull(r.spread_r),
+      slippageR: numOrNull(r.slippage_r),
+      chargesR: numOrNull(r.charges_r),
+      costQuality: r.cost_quality,
+    };
+    const key = `${r.instrument}:${r.exchange}:${cohort}`;
+    const g = groups.get(key) ?? { instrument: r.instrument, exchange: r.exchange, segment, cohort, rows: [] };
+    g.rows.push(row);
+    groups.set(key, g);
+    const sKey = `${segment}:${cohort}`;
+    const s = segments.get(sKey) ?? { segment, cohort, rows: [] };
+    s.rows.push(row);
+    segments.set(sKey, s);
+  }
+  return {
+    byInstrument: [...groups.values()].map((g) => ({ instrument: g.instrument, exchange: g.exchange, segment: g.segment, cohort: g.cohort, performance: performanceStats(g.rows), cost: costStats(g.rows) })),
+    bySegment: [...segments.values()].map((s) => ({ segment: s.segment, cohort: s.cohort, performance: performanceStats(s.rows), cost: costStats(s.rows) })),
+  };
+}
+
+/**
+ * Objective opportunities and what the engine did with them, from the census
+ * windows (which carry strategy_version, so the version filter applies).
+ * Detection and capture rates carry their numerator and denominator.
+ */
+export async function diagnosticsOpportunity(q: DiagnosticsQuery) {
+  const windows = await sql<{ instrument: string; exchange: string; classification: string; n: string }[]>`
+    SELECT instrument, exchange, classification, COUNT(*)::text AS n
+    FROM opportunity_census
+    WHERE (${q.since}::timestamptz IS NULL OR session_date >= ${q.since})
+      AND (${q.until}::timestamptz IS NULL OR session_date < ${q.until})
+      AND (${q.instrument}::text IS NULL OR instrument = ${q.instrument})
+      AND (${q.strategyVersion}::text IS NULL OR strategy_version = ${q.strategyVersion})
+    GROUP BY instrument, exchange, classification
+  `;
+  const days = await sql<{ instrument: string; exchange: string; days: string; empty_days: string }[]>`
+    SELECT instrument, exchange, COUNT(*)::text AS days, COUNT(*) FILTER (WHERE correctly_empty)::text AS empty_days
+    FROM opportunity_census_daily
+    WHERE (${q.since}::timestamptz IS NULL OR session_date >= ${q.since})
+      AND (${q.until}::timestamptz IS NULL OR session_date < ${q.until})
+      AND (${q.instrument}::text IS NULL OR instrument = ${q.instrument})
+    GROUP BY instrument, exchange
+  `;
+  const counts = new Map<string, { instrument: string; exchange: string; segment: Segment; c: Record<string, number> }>();
+  const segCounts = new Map<Segment, Record<string, number>>();
+  for (const d of days) {
+    const key = `${d.instrument}:${d.exchange}`;
+    if (!counts.has(key)) counts.set(key, { instrument: d.instrument, exchange: d.exchange, segment: segmentOf(d.exchange), c: {} });
+  }
+  for (const w of windows) {
+    const key = `${w.instrument}:${w.exchange}`;
+    const e = counts.get(key) ?? { instrument: w.instrument, exchange: w.exchange, segment: segmentOf(w.exchange), c: {} };
+    e.c[w.classification] = (e.c[w.classification] ?? 0) + Number(w.n);
+    counts.set(key, e);
+    const s = segCounts.get(e.segment) ?? {};
+    s[w.classification] = (s[w.classification] ?? 0) + Number(w.n);
+    segCounts.set(e.segment, s);
+  }
+  const dayBy = new Map(days.map((d) => [`${d.instrument}:${d.exchange}`, d]));
+  return {
+    byInstrument: [...counts.entries()].map(([key, e]) => ({
+      instrument: e.instrument,
+      exchange: e.exchange,
+      segment: e.segment,
+      sessions: Number(dayBy.get(key)?.days ?? 0),
+      correctlyEmptySessions: Number(dayBy.get(key)?.empty_days ?? 0),
+      ...opportunityStats(e.c),
+    })),
+    bySegment: [...segCounts.entries()].map(([segment, c]) => ({ segment, ...opportunityStats(c) })),
+  };
+}
+
+/** The versions present, for the dashboard's filter. */
+export async function diagnosticsVersions() {
+  const rows = await sql<{ strategy_version: string | null; cost_version: string | null }[]>`
+    SELECT DISTINCT strategy_version, cost_version FROM setup_events
+  `;
+  const uniq = (xs: (string | null)[]) => [...new Set(xs.filter((x): x is string => !!x))].sort();
+  return { strategyVersions: uniq(rows.map((r) => r.strategy_version)), costVersions: uniq(rows.map((r) => r.cost_version)) };
+}
+
+/** Event types the post-session grading checks against the price path. */
+const GRADED_EVENT_TYPES = new Set(['TRADED', 'REJECTED', 'LOW_RR', 'LATE']);
+
+/**
+ * The newest decision-level setup_events row per lifecycle, for the Trade
+ * Setup card: net R, cost quality, rejection, would-be-valid-if, fill status
+ * and graded outcome. Read-only.
+ */
+export async function diagnosticsSetupOutcomes(lifecycleIds: readonly string[]) {
+  if (lifecycleIds.length === 0) return [];
+  const rows = await sql<
+    {
+      lifecycle_id: string;
+      event_type: string;
+      decision: string | null;
+      gross_rr: string | null;
+      net_rr: string | null;
+      cost_r: string | null;
+      cost_quality: string | null;
+      fill_status: string | null;
+      result_r: string | null;
+      net_result_r: string | null;
+      exit_reason: string | null;
+      rejection_reason: string | null;
+      would_be_valid_if: string | null;
+      grade: string | null;
+      graded_at: Date | null;
+    }[]
+  >`
+    SELECT DISTINCT ON (lifecycle_id)
+      lifecycle_id, event_type, decision, gross_rr::text, net_rr::text, cost_r::text, cost_quality,
+      fill_status, result_r::text, net_result_r::text, exit_reason, rejection_reason, would_be_valid_if, grade, graded_at
+    FROM setup_events
+    WHERE lifecycle_id IN ${sql(lifecycleIds as string[])}
+      AND event_type IN ('TRADED', 'REJECTED', 'LOW_RR', 'LATE', 'MISSED', 'INVALIDATED')
+    ORDER BY lifecycle_id, time DESC
+  `;
+  return rows.map((r) => ({
+    lifecycleId: r.lifecycle_id,
+    eventType: r.event_type,
+    decision: r.decision,
+    grossRr: numOrNull(r.gross_rr),
+    netRr: numOrNull(r.net_rr),
+    costR: numOrNull(r.cost_r),
+    costQuality: r.cost_quality,
+    // Grading only checks fills for some event types; the rest are NOT_GRADED rather than guessed.
+    fillStatus: r.fill_status ?? (GRADED_EVENT_TYPES.has(r.event_type) ? null : 'NOT_GRADED'),
+    resultR: numOrNull(r.result_r),
+    netResultR: numOrNull(r.net_result_r),
+    exitReason: r.exit_reason,
+    rejectionReason: r.rejection_reason,
+    wouldBeValidIf: r.would_be_valid_if,
+    grade: r.grade,
+    gradedAt: r.graded_at ? new Date(r.graded_at).getTime() : null,
   }));
 }
 

@@ -57,12 +57,13 @@ interface PendingRow {
   entry: string | null;
   stop: string | null;
   t1: string | null;
+  cost_r: string | null;
 }
 
 async function runGradingPass(provider: MarketDataProvider): Promise<void> {
   const now = Date.now();
   const rows = await sql<PendingRow[]>`
-    SELECT id, time, instrument, exchange, direction, entry, stop, t1
+    SELECT id, time, instrument, exchange, direction, entry, stop, t1, cost_r
     FROM setup_events
     WHERE graded_at IS NULL
       AND event_type IN ('TRADED', 'REJECTED', 'LOW_RR', 'LATE')
@@ -110,9 +111,20 @@ async function gradeRow(provider: MarketDataProvider, row: PendingRow): Promise<
     return false;
   }
 
-  const path = gradePath(candles, direction as 1 | -1, entry, stop, t1);
-  const resultR = path.hitStop ? -1 : path.hitTarget ? Math.abs(t1 - entry) / riskPoints : finalR(direction as 1 | -1, entry, riskPoints, candles);
+  // A structure entry is a limit into a zone. If price never traded back to
+  // it, the rejected setup would not have filled, and counting its later move
+  // would inflate filter leakage.
+  const fill = firstFillIndex(candles, entry);
+  if (fill < 0) {
+    await sql`UPDATE setup_events SET exit_reason = 'NO_FILL', fill_status = 'NO_FILL', graded_at = ${new Date()} WHERE id = ${row.id}`;
+    return true;
+  }
+  const filled = candles.slice(fill);
+
+  const path = gradePath(filled, direction as 1 | -1, entry, stop, t1);
+  const resultR = path.hitStop ? -1 : path.hitTarget ? Math.abs(t1 - entry) / riskPoints : finalR(direction as 1 | -1, entry, riskPoints, filled);
   const exitReason = exitReasonFromGrade(path.hitTarget, path.hitStop);
+  const costR = num(row.cost_r);
 
   await sql`
     UPDATE setup_events SET
@@ -120,10 +132,26 @@ async function gradeRow(provider: MarketDataProvider, row: PendingRow): Promise<
       mfe_r = ${round4(path.mfe / riskPoints)},
       mae_r = ${round4(path.mae / riskPoints)},
       exit_reason = ${exitReason},
+      fill_status = 'FILLED',
+      net_result_r = ${netResultR(resultR, costR)},
       graded_at = ${new Date()}
     WHERE id = ${row.id}
   `;
   return true;
+}
+
+/**
+ * The first bar whose range includes the entry price: where a limit order
+ * there would have filled. -1 when price never traded at the entry. The fill
+ * bar itself is graded, stop-first, so a same-bar stop still counts.
+ */
+export function firstFillIndex(bars: readonly GradeBar[], entry: number): number {
+  return bars.findIndex((b) => b.low <= entry && entry <= b.high);
+}
+
+/** The graded result after costs: result − cost, both in the underlying's R. Null without a measured cost (never a flat stand-in). */
+export function netResultR(resultR: number, costR: number | null): number | null {
+  return costR == null ? null : round4(resultR - costR);
 }
 
 /** Neither level was reached: the thesis's final mark, in R (never zero-padded as "flat"). */

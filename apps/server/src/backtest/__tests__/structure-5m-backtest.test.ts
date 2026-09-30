@@ -118,7 +118,8 @@ describe('STRUCTURE_5M strategy', () => {
       }
     }
     expect(checked).toBeGreaterThan(0);
-  });
+    // A full replay per confirmed setup: ~5s on a loaded machine, past vitest's default.
+  }, 30_000);
 
   it('replays as 5m LIMIT orders resting 24 bars, filled at the setup entry', () => {
     expect(STRUCTURE_5M_STRATEGY.toOrder(sessionSetups(loaded, 1, STRUCTURE_5M_VARIANTS[0]).find((s) => s.entry != null && s.t1 != null)!).fillWithinBars).toBe(STRUCTURE_RULES_5M.fillWithinBars);

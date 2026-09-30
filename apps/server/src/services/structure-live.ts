@@ -21,6 +21,7 @@
 import { rejectionCloseFill, STRUCTURE_RULES, STRUCTURE_RULES_5M, TERMINAL_STAGES, type LiquidityPool, type StructureEvaluation, type StructureScore, type StructureSetup, type StructureStage } from '@fno/analytics';
 import type { Exchange, StructureBlock, StructureCandleScoreView, StructureLifecycleView, StructurePatternsView, StructurePoolView, StructureTimeframe, TradingMode } from '@fno/shared';
 import type { GateDiagnostic } from './gate-diagnostics.js';
+import type { SetupCostMeasurement } from './setup-cost.js';
 
 export { STRUCTURE_STRATEGY } from './momentum-break-live.js';
 export type { StructureTimeframe };
@@ -209,6 +210,10 @@ export interface LifecycleEventRow {
   poolRank?: number | null;
   sweepDepthAtr?: number | null;
   displacementBodyAtr?: number | null;
+  /** The lifecycle's ATR on its entry timeframe (setup_events stop distance in ATR). */
+  atr?: number | null;
+  /** Option cost measured at the fill (ENTRY_MINTED / ENTRY_REFUSED only). Measurement, never read by a decision. */
+  cost?: SetupCostMeasurement | null;
 }
 
 const poolView = (p: LiquidityPool | null | undefined): StructurePoolView | null => (p ? { kind: p.kind, price: round2(p.price), rank: p.rank } : null);
@@ -324,6 +329,7 @@ export function advanceLiveState(args: {
         poolRank: setup.pool.rank,
         sweepDepthAtr: setup.sweep.depthAtr,
         displacementBodyAtr: setup.displacement?.bodyAtr ?? null,
+        atr: round2(setup.atr),
       });
     }
     lc.recorded = setup.history.length;
