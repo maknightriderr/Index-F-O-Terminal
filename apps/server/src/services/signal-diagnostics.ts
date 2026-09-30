@@ -57,7 +57,7 @@ export async function diagnosticsSummary(q: DiagnosticsQuery) {
     SELECT instrument, exchange,
       SUM(opportunities)::text AS opportunities, SUM(traded)::text AS traded, SUM(rejected)::text AS rejected,
       SUM(late)::text AS late, SUM(never_detected)::text AS never_detected,
-      CASE WHEN SUM(opportunities) > 0 THEN (SUM(traded + late)::numeric / SUM(opportunities))::text ELSE NULL END AS capture_rate
+      CASE WHEN SUM(opportunities) > 0 THEN (SUM(traded)::numeric / SUM(opportunities))::text ELSE NULL END AS capture_rate
     FROM opportunity_census_daily
     WHERE (${q.since}::timestamptz IS NULL OR session_date >= ${q.since})
       AND (${q.until}::timestamptz IS NULL OR session_date < ${q.until})
@@ -74,7 +74,8 @@ export async function diagnosticsSummary(q: DiagnosticsQuery) {
       exchange: e.exchange,
       detection: {
         opportunitiesAvailable: opportunities,
-        detectionRate: opportunities && opportunities > 0 && c ? round4((Number(c.traded) + Number(c.late)) / opportunities) : null,
+        // Detected = seen at all (traded, rejected or late); only never_detected is a miss.
+        detectionRate: opportunities && opportunities > 0 && c ? round4((opportunities - Number(c.never_detected)) / opportunities) : null,
         neverDetected: c ? Number(c.never_detected) : null,
       },
       decision: {

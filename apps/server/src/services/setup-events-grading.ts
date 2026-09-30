@@ -110,8 +110,18 @@ async function gradeRow(provider: MarketDataProvider, row: PendingRow): Promise<
     return false;
   }
 
-  const path = gradePath(candles, direction as 1 | -1, entry, stop, t1);
-  const resultR = path.hitStop ? -1 : path.hitTarget ? Math.abs(t1 - entry) / riskPoints : finalR(direction as 1 | -1, entry, riskPoints, candles);
+  // A structure entry is a limit into a zone. If price never traded back to
+  // it, the rejected setup would not have filled, and counting its later move
+  // would inflate filter leakage.
+  const fill = firstFillIndex(candles, entry);
+  if (fill < 0) {
+    await sql`UPDATE setup_events SET exit_reason = 'NO_FILL', graded_at = ${new Date()} WHERE id = ${row.id}`;
+    return true;
+  }
+  const filled = candles.slice(fill);
+
+  const path = gradePath(filled, direction as 1 | -1, entry, stop, t1);
+  const resultR = path.hitStop ? -1 : path.hitTarget ? Math.abs(t1 - entry) / riskPoints : finalR(direction as 1 | -1, entry, riskPoints, filled);
   const exitReason = exitReasonFromGrade(path.hitTarget, path.hitStop);
 
   await sql`
@@ -124,6 +134,15 @@ async function gradeRow(provider: MarketDataProvider, row: PendingRow): Promise<
     WHERE id = ${row.id}
   `;
   return true;
+}
+
+/**
+ * The first bar whose range includes the entry price: where a limit order
+ * there would have filled. -1 when price never traded at the entry. The fill
+ * bar itself is graded, stop-first, so a same-bar stop still counts.
+ */
+export function firstFillIndex(bars: readonly GradeBar[], entry: number): number {
+  return bars.findIndex((b) => b.low <= entry && entry <= b.high);
 }
 
 /** Neither level was reached: the thesis's final mark, in R (never zero-padded as "flat"). */
