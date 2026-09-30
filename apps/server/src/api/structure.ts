@@ -15,6 +15,7 @@ import { logger } from '../lib/logger.js';
 import { decisionIstDate } from '../services/decision-clock.js';
 import { readAllLiveStates } from '../services/setup-lifecycle.js';
 import { watchlistRows } from '../services/structure-live.js';
+import { readCachedStructurePreview } from '../services/market-bias.js';
 import { STRUCTURE } from '../config/trading-flags.js';
 
 const STAGE_ORDER: Record<string, number> = { ACTIVE: 0, ENTRY: 1, CONFIRMED: 2, DEVELOPING: 3, WATCH: 4 };
@@ -30,6 +31,19 @@ export function createStructureRoutes(): Router {
         .filter((s) => s.day === today)
         .flatMap((s) => watchlistRows(s))
         .sort((a, b) => (STAGE_ORDER[a.stage] ?? 9) - (STAGE_ORDER[b.stage] ?? 9) || (b.score ?? -1) - (a.score ?? -1) || b.stageAt - a.stageAt);
+
+      // CONFIRMED rows get whatever preview the last /api/market/bias poll
+      // for that symbol already cached (structure_preview:*, 60s TTL) — a
+      // plain cache READ, never a compute-on-miss, so this endpoint stays
+      // exactly what its own comment promises: it never evaluates a symbol.
+      await Promise.all(
+        rows.map(async (row) => {
+          if (row.stage !== 'CONFIRMED' || row.liveOutcome != null) return;
+          const preview = await readCachedStructurePreview(row.exchange, row.symbol, row.mode, row.id);
+          if (preview) row.preview = preview;
+        })
+      );
+
       res.json({ success: true, data: { enabled: STRUCTURE, day: today, rows }, meta: { count: rows.length, timestamp: Date.now(), source: 'LIVE' } });
     } catch (error: any) {
       logger.error({ error: error.message }, 'Structure watchlist read failed');

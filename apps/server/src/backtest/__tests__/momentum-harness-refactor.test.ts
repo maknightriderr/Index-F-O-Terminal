@@ -29,7 +29,8 @@ describe('momentum harness — unchanged by the refactor', () => {
     });
     expect(out.reduce((n, r) => n + r.trades.length, 0)).toBeGreaterThan(0);
     expect(out).toMatchSnapshot();
-  });
+    // ~2.4s alone, >5s (vitest's default) when the full suite runs in parallel.
+  }, 30_000);
 
   const dataDir = join(HERE, '../../../backtest-data');
   const reference = join(HERE, '__fixtures__/momentum-report.reference.md');

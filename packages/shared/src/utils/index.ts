@@ -67,6 +67,20 @@ export function formatExpiryDate(expiry: string): string {
 }
 
 /**
+ * Which engine produced a setup, for display — the Trade Setup card,
+ * Telegram messages and any trade list need to say this the same way
+ * everywhere, so it's computed once here rather than re-derived per
+ * component. `strategy` is TradeSetup.strategy (also reused for a spread's
+ * name, e.g. "Bull Call Spread" — anything not exactly 'STRUCTURE' or
+ * 'MOMENTUM_BREAK' reads as the indicator/consensus engine).
+ */
+export function engineBadge(strategy: string | null | undefined): { key: 'STRUCTURE' | 'MOMENTUM_BREAK' | 'INDICATOR'; label: string } {
+  if (strategy === 'STRUCTURE') return { key: 'STRUCTURE', label: 'Structure · NEW' };
+  if (strategy === 'MOMENTUM_BREAK') return { key: 'MOMENTUM_BREAK', label: 'Momentum · off by default' };
+  return { key: 'INDICATOR', label: 'Indicator · OLD' };
+}
+
+/**
  * Calendar days from today (IST) to the expiry date: 0 on expiry day, 1 the
  * day before. Never negative.
  */

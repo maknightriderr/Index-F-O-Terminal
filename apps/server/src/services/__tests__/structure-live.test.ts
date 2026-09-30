@@ -146,7 +146,7 @@ describe('the fill and its gate', () => {
     expect(isAlertFresh(1_000_000, 1_000_000 + 45 * 60_000, 30)).toBe(false);
     const lc = state.lifecycles.find((l) => l.direction === 'BEARISH')!;
     const msg = confirmedMessage(state, lc, (s) => s);
-    expect(msg).toMatch(/STRUCTURE CONFIRMED — NIFTY BEARISH/);
+    expect(msg).toMatch(/STRUCTURE · NEW CONFIRMED — NIFTY BEARISH/);
     expect(msg).toMatch(/Limit 100.6/);
     expect(msg).toMatch(/never gates/);
   });
@@ -248,7 +248,7 @@ describe('API and UI surface', () => {
   });
   it('the bias response carries the structure block only while the flag is on; the alerts filter lists STRUCTURE_CONFIRMED', () => {
     const src = readFileSync(path.join(REPO_ROOT, 'apps/server/src/services/market-bias.ts'), 'utf-8');
-    expect(src).toContain('...(structureOn ? { structure: structureBlock(structureState');
+    expect(src).toContain('structureOn ? structureBlock(structureState');
     const alerts = readFileSync(path.join(REPO_ROOT, 'apps/web/src/components/alerts/index.tsx'), 'utf-8');
     expect(alerts).toContain("{ value: 'STRUCTURE_CONFIRMED', label: 'Structure Confirmed' }");
   });

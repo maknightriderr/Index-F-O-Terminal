@@ -2,6 +2,7 @@
 
 import React from 'react';
 import type { StructureLifecycleView } from '@fno/shared';
+import { formatExpiryDate } from '@fno/shared';
 
 // Structure engine lifecycle: WATCH → DEVELOPING → CONFIRMED → ENTRY → ACTIVE.
 // Shared by the scanner's "Developing setups" list and the asset workspace's
@@ -87,6 +88,89 @@ export function PatternLabel({ row }: { row: Pick<StructureLifecycleView, 'patte
 export function LifecycleReason({ row }: { row: Pick<StructureLifecycleView, 'reason'> }) {
   if (!row.reason) return null;
   return <span className="block text-[11px] text-amber-300 light:text-amber-700 mt-0.5 italic">{row.reason}</span>;
+}
+
+/**
+ * The plain-words summary of where a lifecycle stands, per stage — the
+ * wording the user asked for so a CONFIRMED-with-no-trade reads as a
+ * pending order rather than a contradiction. INVALIDATED/LATE/MISSED show
+ * the engine's own reason when it has one.
+ */
+export function stageOneLiner(row: Pick<StructureLifecycleView, 'stage' | 'reason' | 'pool'>): string {
+  switch (row.stage) {
+    case 'WATCH':
+      return `Watching — price near ${pretty(row.pool?.kind)} ${num(row.pool?.price)}`;
+    case 'DEVELOPING':
+      return 'Level swept — waiting for a strong reversal candle';
+    case 'CONFIRMED':
+      return 'Order pending — waiting for pullback to zone';
+    case 'ENTRY':
+    case 'ACTIVE':
+      return 'Trade open';
+    case 'INVALIDATED':
+    case 'LATE':
+    case 'MISSED':
+      return row.reason || 'Setup did not complete';
+    default:
+      return row.reason ?? '';
+  }
+}
+
+/**
+ * A CONFIRMED lifecycle's pending order, in full — replaces a bare
+ * "Confirmed · score N" with the actual plan: what would be bought, at
+ * what estimated premiums, with what stop/target/R:R, and the trailing
+ * rule it would run under once filled. Every premium is a read-only
+ * ESTIMATE (server-computed, cached 60s) — no order exists yet.
+ */
+export function TradePreviewPanel({ row }: { row: StructureLifecycleView }) {
+  const preview = row.preview;
+  if (row.stage !== 'CONFIRMED' || !preview) return null;
+
+  if (!preview.available) {
+    return (
+      <div className="mt-2 rounded border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-[11px] text-amber-300 light:text-amber-700">
+        If it fills now, F&amp;O validation would refuse it: {preview.reason ?? 'reason unavailable'}.
+      </div>
+    );
+  }
+
+  const zoneLabel = preview.underlyingZone
+    ? preview.underlyingZone.kind === 'FVG'
+      ? `${num(preview.underlyingZone.near)}–${num(preview.underlyingZone.far)}`
+      : `${num(preview.underlyingZone.near)} (50%)`
+    : '—';
+  const expiryLabel = preview.expiry ? `${formatExpiryDate(preview.expiry)}${preview.dte != null ? `, ${preview.dte} DTE` : ''}` : null;
+
+  return (
+    <div className="mt-2 rounded border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 text-[11px] space-y-1">
+      <div className="font-semibold text-cyan-300 light:text-cyan-700">
+        ORDER PENDING (est.) — Buy {row.symbol} {preview.strike} {preview.side}
+        {expiryLabel ? ` (${expiryLabel})` : ''} if price returns to {zoneLabel}
+      </div>
+      <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-gray-300 light:text-slate-700 tabular-nums">
+        <span>Entry ~₹{num(preview.estEntryPremium)}</span>
+        <span>SL ~₹{num(preview.estStopLossPremium)}</span>
+        <span>Target ~₹{num(preview.estTargetPremium)}</span>
+        <span>R:R {preview.riskReward != null ? `1:${preview.riskReward.toFixed(2)}` : '—'}</span>
+        <span>Underlying stop {num(preview.underlyingStop)}</span>
+        <span>
+          T1 {num(preview.underlyingT1)}
+          {preview.underlyingT2 != null ? ` · T2 ${num(preview.underlyingT2)}` : ''}
+        </span>
+        {preview.lotSize != null && <span>Lot size {preview.lotSize}</span>}
+      </div>
+      {preview.trailPlan && (
+        <div className="text-gray-400 light:text-slate-600">
+          Trail: SL → entry at +{preview.trailPlan.breakevenAtR}R (₹{num(preview.trailPlan.breakevenPremium)}); locks +1x risk at +{preview.trailPlan.lockAtR}R (₹
+          {num(preview.trailPlan.lockPremium)})
+        </div>
+      )}
+      {preview.validUntil != null && (
+        <div className="text-gray-500 light:text-slate-500">Valid until {new Date(preview.validUntil).toLocaleString('en-IN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short' })}</div>
+      )}
+    </div>
+  );
 }
 
 /** One-line description of a lifecycle's levels: pool, zone, stop, T1. */

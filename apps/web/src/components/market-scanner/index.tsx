@@ -7,7 +7,7 @@ import { formatIndianNumber } from '@fno/shared';
 import type { ScannedCandidate, ScanPortfolioRisk, ScannerScoreBreakdown } from '@fno/shared';
 import { ScoreBadge } from '@/components/common/badges';
 import { useStructureWatchlist } from '@/lib/use-structure-watchlist';
-import { LifecycleLevels, LifecycleReason, PatternLabel, StageBadge, stageMeaning, TimeframeTag } from '@/components/common/structure-stage';
+import { LifecycleLevels, LifecycleReason, PatternLabel, StageBadge, stageMeaning, stageOneLiner, TimeframeTag, TradePreviewPanel } from '@/components/common/structure-stage';
 
 const TREND_STYLES: Record<string, { label: string; className: string; dot: string }> = {
   BULLISH: { label: 'Bullish', className: 'text-emerald-400', dot: 'bg-emerald-400' },
@@ -411,15 +411,17 @@ function DevelopingSetups({ onOpen }: { onOpen: (symbol: string, exchange: 'NSE'
                 {r.direction === 'BULLISH' ? '▲ Bullish' : '▼ Bearish'}
               </span>
               <span className="flex-1 min-w-[16rem]">
+                <span className="block text-[11px] text-gray-300 light:text-slate-700">{stageOneLiner(r)}</span>
                 <LifecycleLevels row={r} />
                 <PatternLabel row={r} />
                 <LifecycleReason row={r} />
                 {r.liveOutcome === 'REFUSED' && r.liveReason && (
                   <span className="block text-[11px] text-amber-400 light:text-amber-700 mt-0.5">Fill refused: {r.liveReason}</span>
                 )}
+                <TradePreviewPanel row={r} />
               </span>
-              <span className="text-[11px] text-gray-400 light:text-slate-600 tabular-nums w-16 shrink-0 text-right">
-                {r.score != null ? `score ${r.score}` : ''}
+              <span className="text-[11px] text-gray-400 light:text-slate-600 tabular-nums w-24 shrink-0 text-right" title="Ranks lifecycles for which one fills first; never gates a fill.">
+                {r.score != null ? `quality ${r.score}/100` : ''}
               </span>
             </button>
           ))}

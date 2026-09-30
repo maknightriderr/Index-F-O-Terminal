@@ -5,7 +5,7 @@ import { useMarketStore } from '@/stores';
 import { api, ApiError } from '@/lib/api';
 import { useMarketBias } from '@/lib/use-market-bias';
 import { useCorporateActionsForSymbol } from '@/lib/use-corporate-actions';
-import { formatIndianNumber, formatCompact, formatExpiryDate, calculateDTE, isMarketOpen, DEFAULT_RISK_CONFIG } from '@fno/shared';
+import { formatIndianNumber, formatCompact, formatExpiryDate, calculateDTE, isMarketOpen, DEFAULT_RISK_CONFIG, engineBadge } from '@fno/shared';
 import type {
   Exchange,
   OptionChain,
@@ -26,7 +26,7 @@ import { MarketBiasCard, MarketRegimeCard, IntelligenceScoreCard, SupportResista
 import { NewsPanel } from '@/components/common/news-panel';
 import { EventCalendarPanel } from '@/components/common/event-calendar-panel';
 import { PayoffDiagram } from '@/components/common/payoff-diagram';
-import { LifecycleLevels, LifecycleReason, PatternLabel, StageBadge, stageMeaning, TimeframeTag } from '@/components/common/structure-stage';
+import { LifecycleLevels, LifecycleReason, PatternLabel, StageBadge, stageMeaning, stageOneLiner, TimeframeTag, TradePreviewPanel } from '@/components/common/structure-stage';
 
 const STRIKE_RANGE_OPTIONS = [5, 10, 15, 20];
 const REFRESH_INTERVAL_MS = 15000;
@@ -752,8 +752,12 @@ function DecayCard({ decay }: { decay: DecayAnalysis }) {
 
 function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: StructureBlock | null }) {
   if (!setup.available) {
-    // No paper trade: show where the structure engine is for this symbol
-    // (its lifecycle stage per direction) above the refusal sentence.
+    // No paper trade: the two engines are shown as separate, clearly
+    // labelled sections so a CONFIRMED structure lifecycle (a pending limit
+    // order, not yet filled) is never read as contradicting the old
+    // indicator engine's refusal sentence below it — they're independent
+    // engines, and only one of them (the indicator engine) is even
+    // reporting a refusal here.
     const running = structure?.enabled
       ? (['BEARISH', 'BULLISH'] as const)
           .map((dir) => structure.current[dir] ?? (structure.watch[dir] ? watchRow(structure, dir) : null))
@@ -762,26 +766,39 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
     return (
       <IntelCard title="Trade Setup" accent="emerald">
         {running.length > 0 && (
-          <div className="space-y-1.5 mb-2">
-            {running.map((r) => (
-              <div key={r.id} className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5" title={stageMeaning(r.stage, r.timeframe)}>
-                <div className="flex items-center gap-2 mb-0.5">
-                  <StageBadge stage={r.stage} />
-                  <TimeframeTag timeframe={r.timeframe} />
-                  <span className={`text-[11px] font-semibold ${r.direction === 'BULLISH' ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700'}`}>
-                    {r.direction === 'BULLISH' ? '▲ Bullish structure' : '▼ Bearish structure'}
-                  </span>
-                  {r.score != null && <span className="text-[10px] text-gray-400 light:text-slate-600 ml-auto">score {r.score}</span>}
+          <div className="mb-3">
+            <div className="text-[10px] font-bold uppercase tracking-wide text-cyan-400 light:text-cyan-700 mb-1.5">Structure engine · NEW</div>
+            <div className="space-y-1.5">
+              {running.map((r) => (
+                <div key={r.id} className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5" title={stageMeaning(r.stage, r.timeframe)}>
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <StageBadge stage={r.stage} />
+                    <TimeframeTag timeframe={r.timeframe} />
+                    <span className={`text-[11px] font-semibold ${r.direction === 'BULLISH' ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700'}`}>
+                      {r.direction === 'BULLISH' ? '▲ Bullish' : '▼ Bearish'}
+                    </span>
+                    {r.score != null && (
+                      <span className="text-[10px] text-gray-400 light:text-slate-600 ml-auto" title="Ranks lifecycles for which one fills first; never gates a fill.">
+                        Setup quality {r.score}/100 · ranking only
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-gray-300 light:text-slate-700 mb-0.5">{stageOneLiner(r)}</p>
+                  <LifecycleLevels row={r} />
+                  <PatternLabel row={r} />
+                  <LifecycleReason row={r} />
+                  {r.liveOutcome === 'REFUSED' && r.liveReason && <div className="text-[10px] text-amber-400 light:text-amber-700 mt-0.5">Fill refused: {r.liveReason}</div>}
+                  <TradePreviewPanel row={r} />
                 </div>
-                <LifecycleLevels row={r} />
-                <PatternLabel row={r} />
-                <LifecycleReason row={r} />
-                {r.liveOutcome === 'REFUSED' && r.liveReason && <div className="text-[10px] text-amber-400 light:text-amber-700 mt-0.5">Fill refused: {r.liveReason}</div>}
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         )}
-        <p className="text-[11px] text-gray-400 light:text-slate-600 leading-snug">{setup.reason}</p>
+        <div>
+          <div className="text-[10px] font-bold uppercase tracking-wide text-gray-400 light:text-slate-600 mb-1">Indicator engine · OLD</div>
+          <p className="text-[11px] text-gray-400 light:text-slate-600 leading-snug">{setup.reason}</p>
+          {structure?.enabled && <p className="text-[10px] text-gray-500 light:text-slate-500 mt-0.5 italic">Doesn't block structure setups.</p>}
+        </div>
       </IntelCard>
     );
   }
@@ -798,6 +815,7 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
     const isCredit = (setup.netPremium ?? 0) < 0;
     return (
       <IntelCard title="Trade Setup" accent="emerald">
+        <div className="text-[10px] font-bold uppercase tracking-wide text-emerald-400 light:text-emerald-700 mb-1.5">Active paper trade</div>
         <div className="flex items-center justify-between mb-2.5">
           <span className="text-xs font-bold px-2 py-1 rounded-md bg-cyan-500/15 text-cyan-400 shadow-[0_0_10px_-2px_rgba(34,211,238,0.4)]">
             {setup.strategy}
@@ -843,17 +861,25 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
     setup.strategy === 'STRUCTURE' && structure?.enabled
       ? structure.lifecycles.find((l) => l.liveOutcome === 'MINTED' && l.direction === (isCall ? 'BULLISH' : 'BEARISH')) ?? null
       : null;
+  const badge = engineBadge(setup.strategy);
+  const trailed = setup.initialStopLoss != null && setup.stopLoss != null && Math.abs(setup.stopLoss - setup.initialStopLoss) > 0.005;
   return (
     <IntelCard title="Trade Setup" accent="emerald">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[10px] font-bold uppercase tracking-wide text-emerald-400 light:text-emerald-700">Active paper trade</span>
+        <span
+          className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+            badge.key === 'STRUCTURE' ? 'bg-cyan-500/15 text-cyan-400 light:text-cyan-700' : badge.key === 'MOMENTUM_BREAK' ? 'bg-violet-500/15 text-violet-300 light:text-violet-700' : 'bg-gray-500/15 text-gray-300 light:text-slate-700'
+          }`}
+        >
+          {badge.label}
+        </span>
+      </div>
       <div className="flex items-center justify-between mb-2.5">
         <span className={`text-xs font-bold px-2 py-1 rounded-md ${isCall ? 'bg-emerald-500/15 text-emerald-400 shadow-[0_0_10px_-2px_rgba(16,185,129,0.4)]' : 'bg-red-500/15 text-red-400 shadow-[0_0_10px_-2px_rgba(239,68,68,0.4)]'}`}>
           {setup.side} {formatIndianNumber(setup.strike!, 0)}
         </span>
-        {setup.strategy === 'STRUCTURE' && structure?.enabled && (
-          <span className="flex items-center gap-1 text-[10px] text-gray-400 light:text-slate-600">
-            Structure <TimeframeTag timeframe={structure.timeframe} />
-          </span>
-        )}
+        {setup.strategy === 'STRUCTURE' && structure?.enabled && <TimeframeTag timeframe={structure.timeframe} />}
         <span className="text-[10px] text-gray-400 light:text-slate-600 font-medium">R:R {setup.riskReward!.toFixed(2)}</span>
       </div>
       {mintedFrom?.patterns && (
@@ -870,12 +896,22 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
           <div className="text-gray-400 light:text-slate-600 text-[10px]">SL</div>
           <div className="text-red-400 font-bold tabular-nums text-base text-glow-red">{setup.stopLoss!.toFixed(2)}</div>
+          {trailed && <div className="text-[9px] text-gray-500 light:text-slate-500">trailed from {setup.initialStopLoss!.toFixed(2)}</div>}
         </div>
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
           <div className="text-gray-400 light:text-slate-600 text-[10px]">Target</div>
           <div className="text-emerald-400 font-bold tabular-nums text-base text-glow-emerald">{setup.target!.toFixed(2)}</div>
         </div>
       </div>
+      {setup.trailState && (
+        <div className="mt-1.5 text-[10px] text-gray-400 light:text-slate-600" title="Server-side trailing rule: at +1R the stop moves to entry, at +2R it locks +1x initial risk. Display only.">
+          {setup.trailState.state === 'LOCKED_PROFIT'
+            ? `SL locked +1x risk (₹${setup.trailState.lockPremium.toFixed(2)})`
+            : setup.trailState.state === 'BREAKEVEN'
+            ? `SL at breakeven — next: locks +1x risk at +${setup.trailState.lockAtR}R (₹${setup.trailState.lockPremium.toFixed(2)})`
+            : `Next: SL → entry at +${setup.trailState.breakevenAtR}R (₹${setup.trailState.breakevenPremium.toFixed(2)}); locks +1x risk at +${setup.trailState.lockAtR}R (₹${setup.trailState.lockPremium.toFixed(2)})`}
+        </div>
+      )}
       {setup.positionSize && (
         <div className="mt-1.5 bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-1.5 flex items-center justify-between text-[10px]">
           <span className="text-gray-400 light:text-slate-600">

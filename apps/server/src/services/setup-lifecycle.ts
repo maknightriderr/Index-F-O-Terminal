@@ -18,7 +18,7 @@ import { redis } from '../lib/redis.js';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 import { sendTelegramMessage, isTelegramConfigured } from '../lib/telegram.js';
-import type { AlertChannel, Exchange, TradingMode } from '@fno/shared';
+import type { AlertChannel, Exchange, StructureTradePreview, TradingMode } from '@fno/shared';
 import { STRUCTURE_PARAMS, liveLogicStamp } from '../config/trading-flags.js';
 import { isAlertFresh, structureRulesFor, structureStateKey, type LifecycleEventRow, type LiveLifecycle, type LiveState } from './structure-live.js';
 
@@ -107,16 +107,16 @@ export function recordLifecycleEvents(events: readonly LifecycleEventRow[]): voi
  * A transition older than STRUCTURE_ALERT_MAX_AGE_MIN is recorded but not
  * pushed. Fire-and-forget.
  */
-export function notifyStructureConfirmed(state: LiveState, lc: LiveLifecycle, now: number): void {
+export function notifyStructureConfirmed(state: LiveState, lc: LiveLifecycle, now: number, preview?: StructureTradePreview | null): void {
   if (lc.stage !== 'CONFIRMED' || !isAlertFresh(lc.stageAt, now, STRUCTURE_PARAMS.STRUCTURE_ALERT_MAX_AGE_MIN)) return;
-  void deliverConfirmed(state, lc).catch((err: any) => logger.warn({ error: err.message, lifecycleId: lc.id }, 'Structure: CONFIRMED alert failed'));
+  void deliverConfirmed(state, lc, preview ?? null).catch((err: any) => logger.warn({ error: err.message, lifecycleId: lc.id }, 'Structure: CONFIRMED alert failed'));
 }
 
-async function deliverConfirmed(state: LiveState, lc: LiveLifecycle): Promise<void> {
+async function deliverConfirmed(state: LiveState, lc: LiveLifecycle, preview: StructureTradePreview | null): Promise<void> {
   const claimed = await redis.set(`structure_confirmed_notified:${lc.id}`, '1', 'EX', ALERT_DEDUPE_TTL_SECONDS, 'NX');
   if (claimed !== 'OK') return;
   const channels: AlertChannel[] = isTelegramConfigured() ? ['TERMINAL', 'TELEGRAM'] : ['TERMINAL'];
-  const message = confirmedMessage(state, lc, (s) => s);
+  const message = confirmedMessage(state, lc, (s) => s, preview);
   try {
     await sql`
       INSERT INTO alerts (symbol, alert_type, message, severity, channels, condition, triggered, triggered_at)
@@ -146,20 +146,32 @@ async function deliverConfirmed(state: LiveState, lc: LiveLifecycle): Promise<vo
     logger.error({ error: err.message, symbol: state.underlying }, 'Failed to persist STRUCTURE_CONFIRMED alert');
   }
   logger.info({ symbol: state.underlying, alertType: 'STRUCTURE_CONFIRMED', lifecycleId: lc.id }, message.replace(/\n/g, ' | '));
-  if (channels.includes('TELEGRAM')) await sendTelegramMessage(confirmedMessage(state, lc, escapeHtml));
+  if (channels.includes('TELEGRAM')) await sendTelegramMessage(confirmedMessage(state, lc, escapeHtml, preview));
 }
 
-export function confirmedMessage(state: LiveState, lc: LiveLifecycle, esc: (s: string) => string): string {
+export function confirmedMessage(state: LiveState, lc: LiveLifecycle, esc: (s: string) => string, preview?: StructureTradePreview | null): string {
   const arrow = lc.direction === 'BULLISH' ? '🟢' : '🔴';
   const side = lc.direction === 'BULLISH' ? 'CE' : 'PE';
   const tf = lc.timeframe ?? state.timeframe ?? '15m';
   const fillWithin = tf === '5m' ? `${structureRulesFor(tf).fillWithinBars} five-minute bars (120 min)` : `${structureRulesFor(tf).fillWithinBars} bars`;
   const lines = [
-    `${arrow} STRUCTURE CONFIRMED — ${state.underlying} ${lc.direction} (${state.exchange} · ${tf === '5m' ? '5m entry, 15m pools' : '15m'})`,
+    `${arrow} STRUCTURE · NEW CONFIRMED — ${state.underlying} ${lc.direction} (${state.exchange} · ${tf === '5m' ? '5m entry, 15m pools' : '15m'})`,
     `${lc.pool.kind.replace(/_/g, ' ').toLowerCase()} ${lc.pool.price} swept, displacement printed.`,
     ...(lc.patterns ? [`Candles: ${lc.patterns.label}${lc.scoreCandle && lc.scoreCandle.applied > 0 ? ` (+${lc.scoreCandle.applied} score)` : ''}.`] : []),
     `Limit ${lc.entry} (${lc.zone?.kind === 'FVG' ? `fair-value gap ${lc.zone.near}–${lc.zone.far}` : 'displacement 50%'}) · stop ${lc.stop} · T1 ${lc.t1 ? `${lc.t1.price} (${lc.t1.kind.replace(/_/g, ' ').toLowerCase()}, ${lc.rToT1}R)` : '—'}${lc.t2 ? ` · T2 ${lc.t2.price}` : ''}`,
-    `Score ${lc.score ?? '—'}/100 (describes, never gates). A ${side} paper trade is minted only if the limit fills within ${fillWithin} and every gate passes.`,
+    `Setup quality ${lc.score ?? '—'}/100 · ranking only, never gates. A ${side} paper trade is minted only if the limit fills within ${fillWithin} and every gate passes.`,
+    ...(preview
+      ? preview.available
+        ? [
+            '',
+            `ORDER PENDING (est.) — ${side} ${preview.strike} ${preview.expiry ? `(exp ${preview.expiry}, ${preview.dte} DTE)` : ''}`,
+            `Entry ~${preview.estEntryPremium} · SL ~${preview.estStopLossPremium} · Target ~${preview.estTargetPremium}${preview.riskReward != null ? ` · R:R 1:${preview.riskReward.toFixed(2)}` : ''}`,
+            ...(preview.trailPlan
+              ? [`Trail: SL → entry at +${preview.trailPlan.breakevenAtR}R (₹${preview.trailPlan.breakevenPremium}); locks +1x risk at +${preview.trailPlan.lockAtR}R (₹${preview.trailPlan.lockPremium}).`]
+              : []),
+          ]
+        : ['', `If it fills now, F&O validation would refuse it: ${preview.reason ?? 'reason unavailable'}.`]
+      : []),
     'Paper signal — no order is placed.',
   ];
   return lines.map(esc).join('\n');

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { DEFAULT_RISK_CONFIG, ESTIMATED_ROUND_TRIP_COST_PCT, TRADE_LOGIC_UPDATED_AT, formatExpiryDate, formatIndianNumber } from '@fno/shared';
+import { DEFAULT_RISK_CONFIG, ESTIMATED_ROUND_TRIP_COST_PCT, TRADE_LOGIC_UPDATED_AT, formatExpiryDate, formatIndianNumber, engineBadge } from '@fno/shared';
 import type { WinRateBucket, TradeSetupRecord, RiskMetrics, ExpiredCloseBreakdown, IndependentBetsSummary, LogicVersionBucket, StrategyBucket } from '@fno/shared';
 import { useBacktesting } from '@/lib/use-backtesting';
 import { useAssetTabsStore } from '@/stores';
@@ -728,6 +728,7 @@ function TradeSetupHistoryTable({
                 <th className="text-left px-2 py-1.5 font-medium">Generated</th>
                 <th className="text-left px-2 py-1.5 font-medium">Symbol</th>
                 <th className="text-center px-2 py-1.5 font-medium">Mode</th>
+                <th className="text-center px-2 py-1.5 font-medium">Engine</th>
                 <th className="text-left px-2 py-1.5 font-medium">Structure</th>
                 <th className="text-right px-2 py-1.5 font-medium">Entry</th>
                 <th className="text-right px-2 py-1.5 font-medium">Risk</th>
@@ -773,6 +774,20 @@ function TradeSetupHistoryTable({
                     <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${r.mode === 'POSITIONAL' ? 'text-purple-400 bg-purple-500/10' : 'text-blue-400 bg-blue-500/10'}`}>
                       {r.mode === 'POSITIONAL' ? 'POS' : 'INTRA'}
                     </span>
+                  </td>
+                  <td className="text-center px-2 py-2">
+                    {(() => {
+                      const badge = engineBadge(isSpread ? null : r.strategy);
+                      return (
+                        <span
+                          className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold whitespace-nowrap ${
+                            badge.key === 'STRUCTURE' ? 'text-cyan-400 bg-cyan-500/10' : badge.key === 'MOMENTUM_BREAK' ? 'text-violet-300 bg-violet-500/10' : 'text-gray-300 light:text-slate-700 bg-gray-500/10'
+                          }`}
+                        >
+                          {badge.label}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td className="px-2 py-2 text-gray-300 light:text-slate-700 whitespace-nowrap">
                     {isSpread
