@@ -381,8 +381,13 @@ export interface TradeSetup {
   target?: number;
 
   // --- Spread (structureType === 'SPREAD') ---
-  /** e.g. "Bull Call Spread", "Iron Condor" — matches Strategy Recommender's naming for the same regime. */
-  strategy?: string;
+  /**
+   * For a spread: e.g. "Bull Call Spread", "Iron Condor" — matches Strategy
+   * Recommender's naming for the same regime. For a naked long: which
+   * engine minted it — 'STRUCTURE' (liquidity sweep → FVG) or
+   * 'MOMENTUM_BREAK'; undefined means the indicator/consensus engine (OLD).
+   */
+  strategy?: 'STRUCTURE' | 'MOMENTUM_BREAK' | string;
   legs?: SpreadLeg[];
   /** Cost to enter: positive = debit paid, negative = credit received. */
   netPremium?: number;
@@ -422,6 +427,24 @@ export interface TradeSetup {
   requiredRiskReward?: number;
   /** F&O trade validation (flag FNO_VALIDATION): strike by delta, IV-capped target, cost ceiling, stop outside noise, expiry fallback. Absent when the flag was off. */
   fnoValidation?: TradeSetupFnoValidation;
+
+  /** The SL at generation time, fixed — `stopLoss` itself trails upward as price moves favorably; this is what "1x/2x initial risk" is measured against. Naked long only. */
+  initialStopLoss?: number;
+  /**
+   * Display-only read of where the trailing stop sits against the rule
+   * server-side (TRAIL_TO_BREAKEVEN_AT_R / TRAIL_LOCK_PROFIT_AT_R) — derived
+   * from stopLoss vs initialStopLoss, never itself a trading decision. Null
+   * for a spread or a setup with no initialStopLoss recorded.
+   */
+  trailState?: {
+    state: 'INITIAL' | 'BREAKEVEN' | 'LOCKED_PROFIT';
+    breakevenAtR: number;
+    breakevenPremium: number;
+    lockAtR: number;
+    lockPremium: number;
+    /** e.g. "next: SL → entry at +1R (₹128.50); locks +1x risk at +2R (₹146.80)." */
+    nextNote: string;
+  } | null;
 }
 
 /** Part A — F&O trade validation. Every field is what the rule saw, so a refusal or a pass can be audited. */
@@ -1855,6 +1878,55 @@ export interface StructureLifecycleView {
   stageAt: number;
   /** The last transition's reason (e.g. NO_FILL, "PREV_DAY_HIGH 102 swept"). */
   reason: string | null;
+  /**
+   * CONFIRMED only: a read-only preview of the option trade that would be
+   * placed if price returns to the zone and fills it. Computed off the same
+   * chain the bias read already fetched, through the identical strike
+   * selection / SL / target math the real mint uses — never a mint itself,
+   * never written to the paper-trade slot, and never a Telegram push. Null
+   * once a lifecycle has moved past CONFIRMED, or when it could not be
+   * computed this poll (e.g. no option chain).
+   */
+  preview?: StructureTradePreview | null;
+}
+
+/**
+ * A CONFIRMED lifecycle's pending order, in full: what would be bought if
+ * the zone fills, right now. Every premium here is an ESTIMATE — the
+ * current option mid adjusted for the underlying's move from spot to the
+ * zone (delta × distance, sign correct for CE/PE) — not a live quote at the
+ * zone itself, since price has not traded there yet.
+ */
+export interface StructureTradePreview {
+  /** False when F&O validation (or a safety gate) would refuse the trade right now — see `reason`. */
+  available: boolean;
+  /** Plain-words refusal when `available` is false. */
+  reason?: string;
+  side?: 'CE' | 'PE';
+  strike?: number;
+  /** Expiry (YYYY-MM-DD) the preview was priced from. */
+  expiry?: string;
+  dte?: number;
+  lotSize?: number;
+  /** Estimated premium if filled at the zone now (label as "est." in the UI). */
+  estEntryPremium?: number;
+  estStopLossPremium?: number;
+  estTargetPremium?: number;
+  riskReward?: number | null;
+  underlyingZone: { kind: 'FVG' | 'DISP_50'; near: number; far: number } | null;
+  underlyingStop: number | null;
+  underlyingT1: number | null;
+  underlyingT2: number | null;
+  /** The same trailing rule the real position runs under (TRAIL_TO_BREAKEVEN_AT_R / TRAIL_LOCK_PROFIT_AT_R), expressed in estimated premium. */
+  trailPlan?: {
+    breakevenAtR: number;
+    breakevenPremium: number;
+    lockAtR: number;
+    lockPremium: number;
+  };
+  /** Epoch ms: the fill window implied by the engine's fillWithinBars, from when this lifecycle first reached CONFIRMED. Null when unknown. */
+  validUntil: number | null;
+  computedAt: number;
 }
 
 export interface StructureBlock {

@@ -174,7 +174,7 @@ import {
   type StructureEvaluation,
   type StructureVariant,
 } from '@fno/analytics';
-import type { StructureBlock } from '@fno/shared';
+import type { StructureBlock, StructureLifecycleView, StructureTradePreview } from '@fno/shared';
 import { CONSENSUS_SETUPS, STRUCTURE, STRUCTURE_ENTRY_MODE, STRUCTURE_ENTRY_TF, STRUCTURE_PARAMS, structureEnabledFor } from '../config/trading-flags.js';
 import {
   STRUCTURE_SEQUENCE_CONFIDENCE,
@@ -1410,9 +1410,9 @@ async function computeMarketBias(
     ? null
     : structureTimeframe === '5m'
       ? structureClosed5m
-        ? await advanceStructureLifecycle(underlying, exchange, mode, closedNow, chain?.spotPrice ?? null, { timeframe: '5m', bars5: structureClosed5m })
+        ? await advanceStructureLifecycle(underlying, exchange, mode, closedNow, chain?.spotPrice ?? null, { timeframe: '5m', bars5: structureClosed5m }, chain ? { provider, chain } : null)
         : null
-      : await advanceStructureLifecycle(underlying, exchange, mode, closedNow, chain?.spotPrice ?? null);
+      : await advanceStructureLifecycle(underlying, exchange, mode, closedNow, chain?.spotPrice ?? null, undefined, chain ? { provider, chain } : null);
   // The structure family's own newest closed bar (5m in 5m mode): the engine-fill check, SWEEP_RECLAIMED and REJECTION_CLOSE read it.
   const structureLastBar =
     structureTimeframe === '5m' && structureClosed5m && structureClosed5m.length > 0
@@ -2012,6 +2012,7 @@ async function computeMarketBias(
         ],
       })
     : { available: false, reason: 'Option chain unavailable for this symbol — cannot size a setup.' };
+  const tradeSetupWithTrail: TradeSetup = tradeSetup.available ? { ...tradeSetup, trailState: deriveTrailState(tradeSetup) } : tradeSetup;
 
   // A fill this poll claimed but the slot never reached (it already held a
   // same-direction setup): recorded on the lifecycle, never silently dropped.
@@ -2024,11 +2025,36 @@ async function computeMarketBias(
     }, chain?.spotPrice ?? null);
   }
 
+  // CONFIRMED structure lifecycles get a read-only PREVIEW of the option
+  // trade that would be placed if price returns to the zone. Never mints,
+  // never writes trade_setup:*, never logs a decision, never pushes
+  // Telegram — see buildStructurePreview. Best-effort per lifecycle: one
+  // failing never drops the rest of the structure block.
+  let structureBlockResult = structureOn ? structureBlock(structureState, { enabled: STRUCTURE, symbol: underlying, exchange, mode, timeframe: structureTimeframe }) : null;
+  if (structureBlockResult && chain && structureState) {
+    const previewById = new Map<string, StructureTradePreview>();
+    for (const lc of structureState.lifecycles) {
+      if (lc.stage !== 'CONFIRMED' || lc.live != null) continue;
+      try {
+        const preview = await buildStructurePreviewCached(provider, underlying, exchange, mode, chain, lc);
+        if (preview) previewById.set(lc.id, preview);
+      } catch (err: any) {
+        logger.warn({ error: err.message, underlying, exchange, lifecycleId: lc.id }, 'Structure: preview build failed — CONFIRMED shown without it');
+      }
+    }
+    const attach = (lc: StructureLifecycleView | null): StructureLifecycleView | null => (lc && previewById.has(lc.id) ? { ...lc, preview: previewById.get(lc.id)! } : lc);
+    structureBlockResult = {
+      ...structureBlockResult,
+      current: { BULLISH: attach(structureBlockResult.current.BULLISH), BEARISH: attach(structureBlockResult.current.BEARISH) },
+      lifecycles: structureBlockResult.lifecycles.map(attach) as StructureLifecycleView[],
+    };
+  }
+
   const result: MarketBiasResult = {
     bias,
     score,
-    tradeSetup,
-    ...(structureOn ? { structure: structureBlock(structureState, { enabled: STRUCTURE, symbol: underlying, exchange, mode, timeframe: structureTimeframe }) } : {}),
+    tradeSetup: tradeSetupWithTrail,
+    ...(structureBlockResult ? { structure: structureBlockResult } : {}),
   };
   biasComputedAt.set(`${exchange}:${underlying}:${mode}`, Date.now());
 
@@ -2384,6 +2410,32 @@ interface SurfacedFreshness {
 // never loosens back down.
 const TRAIL_TO_BREAKEVEN_AT_R = 1;
 const TRAIL_LOCK_PROFIT_AT_R = 2;
+
+/**
+ * Display-only read of where a naked long's stop sits against the trailing
+ * rule above. Never itself a decision input — the trailing block above has
+ * already moved `stopLoss`; this only describes, after the fact, which of
+ * the two thresholds that move corresponds to, so the UI can show "SL at
+ * breakeven" / "locked +1R" instead of a bare number. A spread, or a setup
+ * with no `initialStopLoss` (persisted before the field existed), gets null.
+ */
+function deriveTrailState(setup: TradeSetup): NonNullable<TradeSetup['trailState']> | null {
+  if (setup.structureType === 'SPREAD') return null;
+  if (setup.entry == null || setup.initialStopLoss == null || setup.stopLoss == null) return null;
+  const initialRisk = setup.entry - setup.initialStopLoss;
+  if (!(initialRisk > 0)) return null;
+  const breakevenPremium = round2(setup.entry);
+  const lockPremium = round2(setup.entry + initialRisk);
+  const state: 'INITIAL' | 'BREAKEVEN' | 'LOCKED_PROFIT' =
+    setup.stopLoss >= setup.entry + initialRisk ? 'LOCKED_PROFIT' : setup.stopLoss >= setup.entry ? 'BREAKEVEN' : 'INITIAL';
+  const nextNote =
+    state === 'LOCKED_PROFIT'
+      ? `SL locked +${TRAIL_LOCK_PROFIT_AT_R - TRAIL_TO_BREAKEVEN_AT_R}x initial risk (₹${lockPremium.toFixed(2)}).`
+      : state === 'BREAKEVEN'
+      ? `SL at breakeven (₹${breakevenPremium.toFixed(2)}) — next: locks +1x risk at +${TRAIL_LOCK_PROFIT_AT_R}R (₹${lockPremium.toFixed(2)}).`
+      : `next: SL → entry at +${TRAIL_TO_BREAKEVEN_AT_R}R (₹${breakevenPremium.toFixed(2)}); locks +1x risk at +${TRAIL_LOCK_PROFIT_AT_R}R (₹${lockPremium.toFixed(2)}).`;
+  return { state, breakevenAtR: TRAIL_TO_BREAKEVEN_AT_R, breakevenPremium, lockAtR: TRAIL_LOCK_PROFIT_AT_R, lockPremium, nextNote };
+}
 
 const STICKY_TRADE_SETUP_TTL_SECONDS = 60 * 60 * 24 * 2;
 const STICKY_TRADE_SETUP_TTL_SECONDS_POSITIONAL = 60 * 60 * 24 * 30; // a positional hold is meant to run days/weeks, not roll over after 2 days
@@ -3976,7 +4028,9 @@ async function advanceStructureLifecycle(
   mode: TradingMode,
   bars: MomentumBar[],
   spot: number | null,
-  fiveMinute?: { timeframe: '5m'; bars5: MomentumBar[] }
+  fiveMinute?: { timeframe: '5m'; bars5: MomentumBar[] },
+  /** Present whenever this poll has a live option chain — used ONLY to attach a read-only preview to a fresh CONFIRMED's Telegram alert. Never mints. */
+  previewCtx?: { provider: MarketDataProvider; chain: OptionChain } | null
 ): Promise<LiveState | null> {
   try {
     const timeframe: StructureTimeframe = fiveMinute ? '5m' : '15m';
@@ -4011,7 +4065,15 @@ async function advanceStructureLifecycle(
       const lc = state.lifecycles.find((l) => l.id === e.lifecycleId);
       if (lc) {
         logger.info({ underlying, exchange, lifecycleId: lc.id, entry: lc.entry, stop: lc.stop, t1: lc.t1 }, 'Structure: setup CONFIRMED — limit resting');
-        notifyStructureConfirmed(state, lc, now);
+        let preview: StructureTradePreview | null = null;
+        if (previewCtx) {
+          try {
+            preview = await buildStructurePreview(previewCtx.provider, underlying, exchange, mode, previewCtx.chain, lc);
+          } catch (err: any) {
+            logger.warn({ error: err.message, underlying, exchange, lifecycleId: lc.id }, 'Structure: preview for CONFIRMED alert failed — alert sent without it');
+          }
+        }
+        notifyStructureConfirmed(state, lc, now, preview);
       }
     }
     await writeLiveState(state);
@@ -4450,6 +4512,218 @@ async function resolveStructureSetup(ctx: {
     spot
   );
   return minted;
+}
+
+const STRUCTURE_PREVIEW_TTL_SECONDS = 60;
+
+/**
+ * A READ of the same structure_preview:* cache buildStructurePreviewCached
+ * writes, with no compute-on-miss. Used by /api/structure/watchlist, which
+ * is documented (and load-tested) as never evaluating a symbol — it must
+ * not start pricing option chains itself, so a miss here just means no
+ * preview is shown for that row until the next /api/market/bias poll for
+ * that symbol has populated it.
+ */
+export async function readCachedStructurePreview(exchange: Exchange, underlying: string, mode: TradingMode, lifecycleId: string): Promise<StructureTradePreview | null> {
+  try {
+    const raw = await redis.get(`structure_preview:${exchange}:${underlying}:${mode}:${lifecycleId}`);
+    return raw ? (JSON.parse(raw) as StructureTradePreview) : null;
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying, exchange, lifecycleId }, 'Structure preview: cache read failed');
+    return null;
+  }
+}
+
+/**
+ * 60s cache for buildStructurePreview, under structure_preview:* — a prefix
+ * the mint path, every gate and every scanner never read. A cache miss or a
+ * stale hit here can only make the shown preview less fresh; it can never
+ * affect a real trade.
+ */
+async function buildStructurePreviewCached(
+  provider: MarketDataProvider,
+  underlying: string,
+  exchange: Exchange,
+  mode: TradingMode,
+  chain: OptionChain,
+  lc: LiveLifecycle
+): Promise<StructureTradePreview | null> {
+  const key = `structure_preview:${exchange}:${underlying}:${mode}:${lc.id}`;
+  return cached(key, STRUCTURE_PREVIEW_TTL_SECONDS, () => buildStructurePreview(provider, underlying, exchange, mode, chain, lc), (v) => v != null);
+}
+
+/**
+ * The pending order a CONFIRMED lifecycle would mint if price retraces into
+ * the zone — computed READ-ONLY off the chain the bias read already
+ * fetched. REUSES the real mint's own code (buildWithFnoValidation +
+ * buildTradeSetup, the identical call resolveStructureSetup makes above)
+ * for strike selection, the structural slPremiumPct and the T1 target
+ * distance, anchored on the zone entry (lc.entry) rather than the live
+ * spot — the fill this previews has not happened yet. No second
+ * calculator: any drift between this and a real mint can only come from a
+ * real code change, never two implementations disagreeing.
+ *
+ * Never mints, never claims a lifecycle, never writes trade_setup:* or
+ * structure_claimed:*, never calls recordDecisionSnapshot/logDecision,
+ * never calls notifyTradeSetup. Returns null on any internal failure; the
+ * caller logs it and shows the CONFIRMED lifecycle without a preview rather
+ * than failing the whole bias read.
+ */
+async function buildStructurePreview(
+  provider: MarketDataProvider,
+  underlying: string,
+  exchange: Exchange,
+  mode: TradingMode,
+  chain: OptionChain,
+  lc: LiveLifecycle
+): Promise<StructureTradePreview | null> {
+  if (lc.entry == null || lc.stop == null || lc.t1 == null) return null;
+  const direction = lc.direction;
+  const side: 'CE' | 'PE' = direction === 'BEARISH' ? 'PE' : 'CE';
+  const zoneEntry = lc.entry;
+  const spot = chain.spotPrice;
+  const fiveMinute = lc.timeframe === '5m';
+  const optionAtr = lc.atr;
+  const at = decisionNow();
+  const today = decisionIstDate();
+  const key = `trade_setup:${exchange}:${underlying}:${mode}`;
+  const timeframe: StructureTimeframe = lc.timeframe ?? '15m';
+  const barMs = STRUCTURE_TF_BAR_MS[timeframe];
+  const fillWithinBars = structureRulesFor(timeframe).fillWithinBars;
+  const validUntil = lc.confirmedAt != null ? lc.confirmedAt + fillWithinBars * barMs : null;
+  const zone = lc.zone ? { kind: lc.zone.kind, near: lc.zone.near, far: lc.zone.far } : null;
+  const refused = (reason: string): StructureTradePreview => ({
+    available: false,
+    reason,
+    underlyingZone: zone,
+    underlyingStop: lc.stop,
+    underlyingT1: lc.t1!.price,
+    underlyingT2: lc.t2?.price ?? null,
+    validUntil,
+    computedAt: at,
+  });
+
+  // The same safety gates the real fill chain checks — every one a pure
+  // read, nothing written — so a plain-words refusal for "if it fills right
+  // now". The structural sequence gate (price still between stop and T1) is
+  // not evaluated: it's a fact about the live price AT a real fill, which
+  // hasn't happened.
+  const riskOff = await riskOffReason(exchange, mode);
+  const reliability = riskOff ? null : await checkReliabilityFilters(underlying, exchange, direction, mode);
+  const feedBlock = dataQualityBlock(exchange, underlying);
+  const session = sessionGateReason(exchange, mode, structureSessionOpts(STRUCTURE_PARAMS));
+  const cooldown = await losingCloseCooldownReason(underlying, exchange, direction, mode, STRUCTURE_SEQUENCE_CONFIDENCE);
+  const concurrencyExposure: ExposureSnapshot | null = TRADING_FLAGS.CONCURRENCY_CAP
+    ? await readExposureAtCreation({ key, exchange, underlying, mode, direction, strike: null, side: null, expiry: null, riskAmount: 0 }, today)
+    : null;
+  const concurrency = concurrencyGateReason({ enabled: TRADING_FLAGS.CONCURRENCY_CAP, exposure: concurrencyExposure, max: TRADING_PARAMS.MAX_CONCURRENT_SAME_DIRECTION });
+  const refusal = safetyRefusal({ riskOff, feedBlock, session, cooldown, reliability, concurrency });
+  if (refusal) return refused(refusal.reason);
+
+  const stopDistance = Math.abs(lc.stop - zoneEntry);
+  const targetMove = Math.abs(lc.t1.price - zoneEntry);
+  const vix = await lookupIndiaVix(provider, exchange);
+  const ivRank = await ivRankFor(underlying, chain.expiry, computeAtmIv(chain)).catch((err: any) => {
+    logger.warn({ error: err.message, underlying }, 'Structure preview: IV rank unavailable — building without it');
+    return null;
+  });
+  const expectedHoldHours = Math.max(0.5, remainingSessionMinutesFrom(exchange, at) / 60);
+
+  const validated = await buildWithFnoValidation({
+    enabled: FNO_VALIDATION,
+    primary: chain,
+    side,
+    params: { deltaMin: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MIN, deltaMax: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MAX, deltaTarget: FNO_VALIDATION_PARAMS.OPTION_DELTA_TARGET },
+    contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: null, ivCap: null }),
+    fetchNextExpiry: (expiry) => buildOptionChain(provider, underlying, exchange, expiry),
+    onError: (stage, err: any) => logger.warn({ error: err?.message ?? String(err), stage, underlying, exchange }, 'Structure preview: next-expiry chain unavailable — no fallback contract'),
+    build: (c, strike) => {
+      const sl = triggerSlPremiumPct(c.strikes, strike, direction, stopDistance);
+      return buildTradeSetup(
+        c.strikes,
+        strike,
+        direction,
+        STRUCTURE_SEQUENCE_CONFIDENCE,
+        targetMove,
+        sl?.slPremiumPct,
+        vix,
+        c.dte,
+        c.lotSize,
+        optionAtr,
+        {
+          ivRank,
+          hvPct: null,
+          tickSize: 0.05,
+          expectedHoldHours,
+          flags: { structuralStop: TRADING_FLAGS.STRUCTURAL_STOP, richIvRr: TRADING_FLAGS.RICH_IV_RR },
+          spot: zoneEntry,
+          nearestBehindLevel: fiveMinute ? lc.stop! : lc.sweepExtreme,
+          structuralStopBufferAtr: fiveMinute ? 0 : STRUCTURE_RULES.stopBufferAtr,
+          ivVsHv: null,
+          richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
+          ...(FNO_VALIDATION
+            ? {
+                fnoValidation: {
+                  enabled: true,
+                  maxCostPctOfPremium: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM,
+                  minOptionStopAtr: FNO_VALIDATION_PARAMS.MIN_OPTION_STOP_ATR,
+                  ...(fiveMinute ? { noiseAtrPoints: lc.atr } : {}),
+                },
+              }
+            : {}),
+        }
+      );
+    },
+  });
+  const built = validated.setup;
+  const usedChain = validated.chain;
+  if (!built.available) return refused(built.reason);
+
+  // The premium AT THE ZONE is an estimate: the current mid (what
+  // buildTradeSetup above just priced off the live chain) adjusted by
+  // delta × the underlying's distance from spot to the zone — sign correct
+  // for CE (moves WITH the underlying) and PE (moves AGAINST it). The
+  // strike/SL%/target-move math above is exact and reused as-is; only this
+  // anchor premium is an estimate, because price hasn't traded at the zone.
+  const leg = findLeg(usedChain, built.strike!, side);
+  const absDelta = Math.abs(leg?.delta ?? 0);
+  const signedDelta = side === 'CE' ? absDelta : -absDelta;
+  const currentMid = built.entry!;
+  const estEntry = round2(Math.max(0.05, currentMid + signedDelta * (zoneEntry - spot)));
+  const slGap = currentMid - built.stopLoss!;
+  const targetGap = built.target! - currentMid;
+  const estStop = round2(Math.max(0.05, estEntry - slGap));
+  const estTarget = round2(Math.max(estStop + 0.05, estEntry + targetGap));
+  const initialRisk = estEntry - estStop;
+
+  return {
+    available: true,
+    side,
+    strike: built.strike,
+    expiry: usedChain.expiry,
+    dte: usedChain.dte,
+    lotSize: usedChain.lotSize,
+    estEntryPremium: estEntry,
+    estStopLossPremium: estStop,
+    estTargetPremium: estTarget,
+    riskReward: built.riskReward ?? null,
+    underlyingZone: zone,
+    underlyingStop: lc.stop,
+    underlyingT1: lc.t1.price,
+    underlyingT2: lc.t2?.price ?? null,
+    ...(initialRisk > 0
+      ? {
+          trailPlan: {
+            breakevenAtR: TRAIL_TO_BREAKEVEN_AT_R,
+            breakevenPremium: round2(estEntry),
+            lockAtR: TRAIL_LOCK_PROFIT_AT_R,
+            lockPremium: round2(estEntry + initialRisk),
+          },
+        }
+      : {}),
+    validUntil,
+    computedAt: at,
+  };
 }
 
 /**

@@ -181,7 +181,7 @@ describe('the lifecycle carries its timeframe', () => {
   it('the CONFIRMED alert names the timeframe and its fill window', () => {
     const s5 = advanceLiveState({ prev: null, evaluation: eval5(), ...base, timeframe: '5m' }).state;
     const m5 = confirmedMessage(s5, s5.lifecycles.find((l) => l.direction === 'BEARISH')!, (s) => s);
-    expect(m5).toMatch(/STRUCTURE CONFIRMED — NIFTY BEARISH \(NSE · 5m entry, 15m pools\)/);
+    expect(m5).toMatch(/STRUCTURE · NEW CONFIRMED — NIFTY BEARISH \(NSE · 5m entry, 15m pools\)/);
     expect(m5).toMatch(/within 24 five-minute bars \(120 min\)/);
     const s15 = advanceLiveState({ prev: null, evaluation: eval15(), ...base }).state;
     const m15 = confirmedMessage(s15, s15.lifecycles.find((l) => l.direction === 'BEARISH')!, (s) => s);
