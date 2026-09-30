@@ -17,7 +17,7 @@ import { redis } from '../lib/redis.js';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 import { sendTelegramMessage, isTelegramConfigured } from '../lib/telegram.js';
-import { formatExpiryDate } from '@fno/shared';
+import { formatExpiryDate, engineBadge } from '@fno/shared';
 import type { AlertChannel, Exchange, OptionType, TradingMode } from '@fno/shared';
 
 export type TradeCloseReason =
@@ -142,6 +142,7 @@ function buildMessage(n: TradeCloseNotice, esc: (s: string) => string): string {
 
   const lines = [
     `${icon} PAPER TRADE ${n.outcome} — ${n.underlying} ${instrument} (${modeLabel} · ${n.exchange})`,
+    engineBadge(n.strategy).label,
     REASON_TEXT[n.reason],
     'Simulated outcome — no order was placed.',
   ];
