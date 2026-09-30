@@ -21,7 +21,8 @@
     "clean": "turbo run clean && rimraf node_modules",
     "backtest-momentum": "npm run backtest-momentum --workspace=@fno/server --",
     "backtest-structure": "npm run backtest-structure --workspace=@fno/server --",
-    "backtest-structure-5m": "npm run backtest-structure-5m --workspace=@fno/server --"
+    "backtest-structure-5m": "npm run backtest-structure-5m --workspace=@fno/server --",
+    "diagnose": "npm run diagnose --workspace=@fno/server --"
   },
   "devDependencies": {
     "turbo": "^2.4.0",

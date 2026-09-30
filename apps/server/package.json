@@ -19,7 +19,8 @@
     "backtest-structure-5m": "tsx src/cli/backtest-structure-5m.ts",
     "backtest-structure-entry-mode": "tsx src/cli/backtest-structure-entry-mode.ts",
     "backtest-structure-patterns": "tsx src/cli/backtest-structure-patterns.ts",
-    "fetch-history": "tsx src/backtest/fetch-history.ts"
+    "fetch-history": "tsx src/backtest/fetch-history.ts",
+    "diagnose": "tsx src/cli/diagnose.ts"
   },
   "dependencies": {
     "@fno/shared": "*",
