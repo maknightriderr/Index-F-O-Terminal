@@ -7,7 +7,7 @@ import { formatIndianNumber } from '@fno/shared';
 import type { ScannedCandidate, ScanPortfolioRisk, ScannerScoreBreakdown } from '@fno/shared';
 import { ScoreBadge } from '@/components/common/badges';
 import { useStructureWatchlist } from '@/lib/use-structure-watchlist';
-import { LifecycleLevels, LifecycleReason, PatternLabel, StageBadge, stageMeaning, stageOneLiner, TimeframeTag, TradePreviewPanel } from '@/components/common/structure-stage';
+import { ExplanationBlock, LifecycleLevels, LifecycleReason, PatternLabel, StageBadge, stageMeaning, stageOneLiner, TimeframeTag, TradePreviewPanel } from '@/components/common/structure-stage';
 
 const TREND_STYLES: Record<string, { label: string; className: string; dot: string }> = {
   BULLISH: { label: 'Bullish', className: 'text-emerald-400', dot: 'bg-emerald-400' },
@@ -419,6 +419,7 @@ function DevelopingSetups({ onOpen }: { onOpen: (symbol: string, exchange: 'NSE'
                   <span className="block text-[11px] text-amber-400 light:text-amber-700 mt-0.5">Fill refused: {r.liveReason}</span>
                 )}
                 <TradePreviewPanel row={r} />
+                {(r.stage === 'CONFIRMED' || r.stage === 'ENTRY' || r.stage === 'ACTIVE') && <ExplanationBlock row={r} />}
               </span>
               <span className="text-[11px] text-gray-400 light:text-slate-600 tabular-nums w-24 shrink-0 text-right" title="Ranks lifecycles for which one fills first; never gates a fill.">
                 {r.score != null ? `quality ${r.score}/100` : ''}

@@ -40,6 +40,8 @@ const ICONS: Record<string, string> = {
   backtesting:  'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z',
   // trending-down line over an axis, for the loss-attribution page
   'loss-attribution': 'M3 3v18h18 M7 8l4 4 3-3 5 6',
+  // magnifying glass over a pulse line, for the signal-diagnostics page
+  'signal-diagnostics': 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z M21 21l-4.35-4.35 M7 11h2l1.5-3 2 6 1.5-3h2',
   'institutional-flow':'M1 4v6h6 M23 20v-6h-6 M20.49 9A9 9 0 0 0 5.64 5.64L1 10 M23 14l-4.64 4.36A9 9 0 0 1 3.51 15',
   positions:    'M20 7h-9 M14 17H5 M17 17a3 3 0 1 0 0-6 M7 7a3 3 0 1 0 0 6',
   alerts:       'M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9 M13.73 21a2 2 0 0 1-3.46 0',
@@ -89,6 +91,7 @@ const NAV_SECTIONS: NavSection[] = [
       { id: 'strategy-scanner', label: 'Strategy Scanner', icon: 'strategy-scanner' },
       { id: 'backtesting', label: 'Backtesting', icon: 'backtesting' },
       { id: 'loss-attribution', label: 'Loss Attribution', icon: 'loss-attribution' },
+      { id: 'signal-diagnostics', label: 'Signal Diagnostics', icon: 'signal-diagnostics' },
       { id: 'institutional-flow', label: 'Institutional Flow', icon: 'institutional-flow' },
       { id: 'positions', label: 'Positions', icon: 'positions' },
     ],

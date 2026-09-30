@@ -201,6 +201,14 @@ export interface LifecycleEventRow {
   patterns?: StructurePatternsView | null;
   /** The candle-pattern points inside `score`. Migration 028. */
   scoreCandle?: StructureCandleScoreView | null;
+  // ---- Stage 2 (signal-diagnostics), additive: only populated at the
+  // transition site that still has the full engine StructureSetup (pool
+  // rank, sweep depth, displacement) — null everywhere else (WATCH rows,
+  // the live ENTRY_MINTED/ENTRY_REFUSED row). setup-events.ts reads them
+  // best-effort; nothing in the decision path reads them. ----
+  poolRank?: number | null;
+  sweepDepthAtr?: number | null;
+  displacementBodyAtr?: number | null;
 }
 
 const poolView = (p: LiquidityPool | null | undefined): StructurePoolView | null => (p ? { kind: p.kind, price: round2(p.price), rank: p.rank } : null);
@@ -313,6 +321,9 @@ export function advanceLiveState(args: {
         underlyingPrice: spot,
         patterns: lc.patterns ?? null,
         scoreCandle: lc.scoreCandle ?? null,
+        poolRank: setup.pool.rank,
+        sweepDepthAtr: setup.sweep.depthAtr,
+        displacementBodyAtr: setup.displacement?.bodyAtr ?? null,
       });
     }
     lc.recorded = setup.history.length;

@@ -91,6 +91,13 @@ const FILES = [
   // Structure engine candle labels: pattern_label / patterns on
   // setup_lifecycle_events. The lifecycle writer inserts into them.
   '028_lifecycle_candle_patterns.sql',
+  // Stage 2 (signal-diagnostics): setup_events, the measurement table the
+  // Signal Diagnostics API reads. The lifecycle writer and the structure
+  // mint path's refusal both insert into it, so it is ensured at boot too.
+  '029_setup_events.sql',
+  // Stage 2: opportunity_census / opportunity_census_daily, written by the
+  // daily post-session census job. Ensured at boot for the same reason.
+  '030_opportunity_census.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */

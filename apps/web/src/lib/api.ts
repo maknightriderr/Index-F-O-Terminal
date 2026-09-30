@@ -344,6 +344,37 @@ class ApiClient {
   async getLossAttributionShadow(opts: { since?: string; until?: string } = {}) {
     return this.get<unknown>(`/api/loss-attribution/shadow${this.lossAttributionQuery(opts)}`);
   }
+
+  // --- Signal diagnostics (read-only; every figure is a simulated paper-trade outcome) ---
+
+  private diagnosticsQuery(opts: { from?: string; to?: string; instrument?: string }): string {
+    const params = new URLSearchParams();
+    if (opts.from) params.set('from', opts.from);
+    if (opts.to) params.set('to', opts.to);
+    if (opts.instrument) params.set('instrument', opts.instrument);
+    const qs = params.toString();
+    return qs ? `?${qs}` : '';
+  }
+
+  async getDiagnosticsSummary(opts: { from?: string; to?: string; instrument?: string } = {}) {
+    return this.get<unknown>(`/api/diagnostics/summary${this.diagnosticsQuery(opts)}`);
+  }
+
+  async getDiagnosticsRejections(opts: { from?: string; to?: string; instrument?: string } = {}) {
+    return this.get<unknown>(`/api/diagnostics/rejections${this.diagnosticsQuery(opts)}`);
+  }
+
+  async getDiagnosticsCensus(opts: { from?: string; to?: string; instrument?: string } = {}) {
+    return this.get<unknown>(`/api/diagnostics/census${this.diagnosticsQuery(opts)}`);
+  }
+
+  async getDiagnosticsGrades(opts: { from?: string; to?: string; instrument?: string } = {}) {
+    return this.get<unknown>(`/api/diagnostics/grades${this.diagnosticsQuery(opts)}`);
+  }
+
+  async getDiagnosticsLeakage(opts: { from?: string; to?: string; instrument?: string } = {}) {
+    return this.get<unknown>(`/api/diagnostics/leakage${this.diagnosticsQuery(opts)}`);
+  }
 }
 
 export class ApiError extends Error {

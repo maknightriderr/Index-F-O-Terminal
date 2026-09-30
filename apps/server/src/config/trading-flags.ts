@@ -412,6 +412,23 @@ export const STRUCTURE_LOGIC_VERSION = '2026-09-29.structure.1';
 /** Stamped instead of STRUCTURE_LOGIC_VERSION while STRUCTURE_ENTRY_TF = '5m' (15m pools, 5m sweep/displacement/zone/fill). */
 export const STRUCTURE_5M_LOGIC_VERSION = '2026-09-29.structure.2';
 
+// ============================================================
+// STAGE 2 (signal-diagnostics) VERSIONING
+// ============================================================
+// Separate from logicVersion above (one string, bumped whenever anything in
+// the live decision path changes). These five track the measurement-side
+// pieces independently, so `setup_events` rows and decision snapshots can be
+// grouped by which strategy/trigger/risk/option/cost logic produced them
+// even when logicVersion itself hasn't moved. Fixed current values — there
+// is no SWEEP_CLOSE trigger yet (Stage 3, gated on the Stage 1 result), so
+// TRIGGER_VERSION stays LEGACY-1.0.
+// ============================================================
+export const STRATEGY_VERSION = 'STRUCTURE-15M-1.0';
+export const TRIGGER_VERSION = 'LEGACY-1.0';
+export const RISK_VERSION = 'RISK-1.0';
+export const OPTION_VERSION = 'OPTION-1.0';
+export const COST_VERSION = 'COST-1.0';
+
 /** User decision: live now, behind the flag. */
 export const STRUCTURE_DEFAULT = true;
 
@@ -608,6 +625,14 @@ export interface LogicStamp {
     /** STRUCTURE_ENTRY_MODE (absent on setups minted before it: TOUCH). */
     entryMode?: StructureEntryMode;
   };
+  /** Stage 2 (signal-diagnostics): absent on setups minted before it. */
+  versions?: {
+    strategyVersion: string;
+    triggerVersion: string;
+    riskVersion: string;
+    optionVersion: string;
+    costVersion: string;
+  };
 }
 
 /**
@@ -626,6 +651,14 @@ export interface LogicStampExtras {
     entryTimeframe?: StructureEntryTimeframe;
     /** Absent = 'TOUCH' (the stamp then reads exactly as before). */
     entryMode?: StructureEntryMode;
+  };
+  /** Stage 2 (signal-diagnostics): absent on setups minted before it. */
+  versions?: {
+    strategyVersion: string;
+    triggerVersion: string;
+    riskVersion: string;
+    optionVersion: string;
+    costVersion: string;
   };
 }
 
@@ -671,6 +704,7 @@ export function logicStamp(
           },
         }
       : {}),
+    ...(extras.versions ? { versions: { ...extras.versions } } : {}),
   };
 }
 
@@ -679,5 +713,6 @@ export function liveLogicStamp(): LogicStamp {
   return logicStamp(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, {
     fnoValidation: { enabled: FNO_VALIDATION, params: FNO_VALIDATION_PARAMS },
     structure: { enabled: STRUCTURE, consensusSetups: CONSENSUS_SETUPS, params: STRUCTURE_PARAMS, symbols: STRUCTURE_SYMBOLS, entryTimeframe: STRUCTURE_ENTRY_TF, entryMode: STRUCTURE_ENTRY_MODE },
+    versions: { strategyVersion: STRATEGY_VERSION, triggerVersion: TRIGGER_VERSION, riskVersion: RISK_VERSION, optionVersion: OPTION_VERSION, costVersion: COST_VERSION },
   });
 }

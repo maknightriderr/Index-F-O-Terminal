@@ -173,6 +173,67 @@ export function TradePreviewPanel({ row }: { row: StructureLifecycleView }) {
   );
 }
 
+/**
+ * "For / Against / Invalidation / Would be valid if" — built ONLY from
+ * fields already on the lifecycle (score components, pool rank, R:R,
+ * candle bonus). No free-text guessing: every line traces to a stored
+ * number, and a line is omitted rather than invented when its field is
+ * absent. Mirrors the reasoning setup-lifecycle.ts's confirmedMessage puts
+ * in the Telegram CONFIRMED alert.
+ */
+export function explanationLines(row: Pick<StructureLifecycleView, 'pool' | 'rToT1' | 'scoreCandle' | 'patterns' | 'sweepExtreme' | 'stage' | 'score'>): {
+  forLines: string[];
+  against: string[];
+  invalidation: string;
+  wouldBeValidIf: string | null;
+} {
+  const forLines: string[] = [];
+  const against: string[] = [];
+
+  if (row.pool) {
+    if (row.pool.rank <= 2) forLines.push(`${pretty(row.pool.kind)} is a rank-${row.pool.rank} pool (previous-day / equal highs-lows tier).`);
+    else against.push(`${pretty(row.pool.kind)} is a lower rank-${row.pool.rank} pool (a swing/opening-range level, less liquidity resting there).`);
+  }
+  if (row.rToT1 != null) {
+    if (row.rToT1 >= 2) forLines.push(`T1 is ${row.rToT1}R away — comfortably past the 1.5R floor.`);
+    else if (row.rToT1 < 1.75) against.push(`T1 is only ${row.rToT1}R away — close to the 1.5R minimum.`);
+  }
+  if (row.scoreCandle && row.scoreCandle.applied > 0 && row.patterns) {
+    forLines.push(`Candles: ${row.patterns.label} (+${row.scoreCandle.applied} score).`);
+  } else if (row.patterns) {
+    against.push('No scored candle pattern on the sweep or displacement.');
+  }
+  if (row.score != null) {
+    if (row.score >= 55) forLines.push(`Setup quality ${row.score}/100 (A-band by the fixed grade bands).`);
+    else if (row.score < 40) against.push(`Setup quality ${row.score}/100 (C-band by the fixed grade bands).`);
+  }
+
+  const invalidation = row.sweepExtreme != null ? `A close back beyond the sweep extreme (${num(row.sweepExtreme)}) invalidates it (SWEEP_RECLAIMED).` : 'A close back beyond the sweep invalidates it (SWEEP_RECLAIMED).';
+
+  let wouldBeValidIf: string | null = null;
+  if (row.rToT1 != null && row.rToT1 < 1.5) wouldBeValidIf = `T1 >= 1.5R would need a closer entry or a farther T1 (currently ${row.rToT1}R).`;
+
+  return { forLines, against, invalidation, wouldBeValidIf };
+}
+
+/** Renders explanationLines() as a compact block. Nothing renders for an empty section. */
+export function ExplanationBlock({ row }: { row: Pick<StructureLifecycleView, 'pool' | 'rToT1' | 'scoreCandle' | 'patterns' | 'sweepExtreme' | 'stage' | 'score'> }) {
+  const { forLines, against, invalidation, wouldBeValidIf } = explanationLines(row);
+  if (forLines.length === 0 && against.length === 0) return null;
+  return (
+    <div className="mt-1.5 text-[10px] space-y-0.5">
+      {forLines.map((l, i) => (
+        <div key={`for-${i}`} className="text-emerald-400 light:text-emerald-700">+ {l}</div>
+      ))}
+      {against.map((l, i) => (
+        <div key={`against-${i}`} className="text-amber-400 light:text-amber-700">- {l}</div>
+      ))}
+      <div className="text-gray-500 light:text-slate-500">{invalidation}</div>
+      {wouldBeValidIf && <div className="text-gray-500 light:text-slate-500 italic">{wouldBeValidIf}</div>}
+    </div>
+  );
+}
+
 /** One-line description of a lifecycle's levels: pool, zone, stop, T1. */
 export function LifecycleLevels({ row }: { row: StructureLifecycleView }) {
   return (

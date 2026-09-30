@@ -5564,6 +5564,23 @@ function computeShadowModels(
   }
 }
 
+/**
+ * Stage 2 (signal-diagnostics): the structure engine's own stop/T1 in ATR,
+ * for a REFUSE row that has `entryContext.structure` (the lifecycle's stored
+ * trade) but no `setup` (the mint never happened). Returns null when the
+ * ATR or the structure block is missing — the caller then leaves the field
+ * null exactly as before this fix.
+ */
+function structureRefusalStopTargetAtr(entryContext: SetupEntryContext | undefined): { stopInAtr: number; targetInAtr: number } | null {
+  const structure = entryContext?.structure;
+  const atr = entryContext?.atrPoints;
+  if (!structure || atr == null || !(atr > 0)) return null;
+  const stopInAtr = Math.abs(structure.entry - structure.stop) / atr;
+  const targetInAtr = Math.abs(structure.t1.price - structure.entry) / atr;
+  if (!Number.isFinite(stopInAtr) || !Number.isFinite(targetInAtr)) return null;
+  return { stopInAtr: Math.round(stopInAtr * 10000) / 10000, targetInAtr: Math.round(targetInAtr * 10000) / 10000 };
+}
+
 function snapshotBlocks(
   chain: OptionChain | null,
   entryContext: SetupEntryContext | undefined,
@@ -5658,8 +5675,17 @@ function snapshotBlocks(
       sufficientV2: entryContext?.roomSufficientV2 ?? null,
     },
     risk: {
-      stopInAtr: setup?.available ? setup.stopInAtr ?? null : null,
-      targetInAtr: setup?.available ? setup.targetInAtr ?? null : null,
+      // Stage 2 fix: a structure REFUSE has no `setup` (it never got that far),
+      // but the lifecycle's own stop/T1 were already known (`entryContext.structure`,
+      // stamped by resolveStructureSetup's recordRefusal). Use them instead of
+      // leaving stopInAtr/targetInAtr null, which used to fall back to the
+      // missed-winner audit's 2/3 ATR defaults for every structure refusal.
+      stopInAtr: setup?.available
+        ? setup.stopInAtr ?? null
+        : structureRefusalStopTargetAtr(entryContext)?.stopInAtr ?? null,
+      targetInAtr: setup?.available
+        ? setup.targetInAtr ?? null
+        : structureRefusalStopTargetAtr(entryContext)?.targetInAtr ?? null,
       estimatedCostPct: setup?.available ? setup.estimatedCostPct ?? null : null,
       riskReward: setup?.available ? setup.riskReward ?? null : null,
       lots: setup?.available ? setup.positionSize?.lots ?? null : null,

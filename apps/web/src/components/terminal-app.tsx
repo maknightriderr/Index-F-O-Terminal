@@ -17,6 +17,7 @@ import { InstitutionalFlowPage } from '@/components/institutional-flow';
 import { BacktestingPage } from '@/components/backtesting';
 import { SystemLearningPage } from '@/components/system-learning';
 import { LossAttributionPage } from '@/components/loss-attribution';
+import { SignalDiagnosticsPage } from '@/components/signal-diagnostics';
 import { AddAssetModal } from '@/components/common/add-asset-modal';
 import { useMarketStore, useUISettingsStore, useSystemHealthStore } from '@/stores';
 import { useMarketWebSocket } from '@/lib/ws';
@@ -52,6 +53,8 @@ export function TerminalApp() {
         return <BacktestingPage />;
       case 'loss-attribution':
         return <LossAttributionPage />;
+      case 'signal-diagnostics':
+        return <SignalDiagnosticsPage />;
       case 'institutional-flow':
         return <InstitutionalFlowPage />;
       case 'positions':

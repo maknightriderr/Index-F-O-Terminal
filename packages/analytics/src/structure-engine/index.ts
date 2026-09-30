@@ -66,33 +66,19 @@ import {
   type MomentumSeries,
 } from '../momentum-break/index.js';
 import { classifyStructureCandles, CLEAN_REJECTION_PATTERNS, type StructureCandlePatterns } from './candle-labels.js';
+import { buildTradeablePools, type TradeablePoolKind, type BasePool, type LiquidityMapRules } from '../liquidity-map/index.js';
 
 export * from './candle-labels.js';
 export * from './rejection-close.js';
 
 export type StructureDirection = 'BULLISH' | 'BEARISH';
 
-export type PoolKind =
-  | 'PREV_DAY_HIGH'
-  | 'PREV_DAY_LOW'
-  | 'EQUAL_HIGHS'
-  | 'EQUAL_LOWS'
-  | 'SESSION_HIGH'
-  | 'SESSION_LOW'
-  | 'OPENING_RANGE_HIGH'
-  | 'OPENING_RANGE_LOW'
-  | 'SWING_HIGH'
-  | 'SWING_LOW';
+/** The engine's own pool-kind union (unchanged): the canonical map's tradeable kinds. */
+export type PoolKind = TradeablePoolKind;
 
-export interface LiquidityPool {
-  kind: PoolKind;
-  side: 'HIGH' | 'LOW';
-  price: number;
-  /** 1 = strongest (previous day) … 5 = an untaken fractal. */
-  rank: number;
-}
+export type LiquidityPool = BasePool<TradeablePoolKind>;
 
-/** Pool rank. Lower = more liquidity resting there. */
+/** Pool rank. Lower = more liquidity resting there. Re-exported from the canonical liquidity map. */
 export const POOL_RANK: Record<PoolKind, number> = {
   PREV_DAY_HIGH: 1,
   PREV_DAY_LOW: 1,
@@ -312,6 +298,11 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
  * The Tier-1 pools for session ordinal `s`, from bars [.., end) only. Pools a
  * later visible bar has already traded through are dropped (taken). Pools
  * within poolMergeAtr of a better-ranked pool on the same side merge into it.
+ *
+ * Delegates to the canonical liquidity map (`packages/analytics/src/liquidity-map`)
+ * — `buildTradeablePools` there is the exact same algorithm that used to live
+ * inline here, moved verbatim. This function is now a thin wrapper so the
+ * engine's decisions stay byte-identical.
  */
 export function buildLiquidityPools(
   series: MomentumSeries,
@@ -320,112 +311,14 @@ export function buildLiquidityPools(
   atr: number,
   rules: StructureRules = STRUCTURE_RULES
 ): LiquidityPool[] {
-  const { bars } = series;
-  // s may be one past the last session: "today" has no bar in the series yet
-  // (the MTF engine before today's first 15m bar closes). It then starts at
-  // the series end, so only the previous-day and fractal pools exist.
-  const start = series.sessionStarts[s] ?? bars.length;
-  const e = Math.min(end, bars.length);
-  const raw: LiquidityPool[] = [];
-  const takenAbove = (price: number, from: number) => {
-    for (let j = from; j < e; j++) if (bars[j].high > price) return true;
-    return false;
+  const lmRules: LiquidityMapRules = {
+    equalTolAtr: rules.equalTolAtr,
+    poolMergeAtr: rules.poolMergeAtr,
+    openingRangeMinutes: rules.openingRangeMinutes,
+    swingLookback: rules.swingLookback,
+    swingSessions: rules.swingSessions,
   };
-  const takenBelow = (price: number, from: number) => {
-    for (let j = from; j < e; j++) if (bars[j].low < price) return true;
-    return false;
-  };
-
-  // 1. Previous session high/low, taken if today traded through it.
-  if (s > 0) {
-    const pStart = series.sessionStarts[s - 1];
-    let hi = -Infinity;
-    let lo = Infinity;
-    for (let j = pStart; j < start; j++) {
-      hi = Math.max(hi, bars[j].high);
-      lo = Math.min(lo, bars[j].low);
-    }
-    if (Number.isFinite(hi) && !takenAbove(hi, start)) raw.push({ kind: 'PREV_DAY_HIGH', side: 'HIGH', price: hi, rank: 1 });
-    if (Number.isFinite(lo) && !takenBelow(lo, start)) raw.push({ kind: 'PREV_DAY_LOW', side: 'LOW', price: lo, rank: 1 });
-  }
-
-  // 3. Session high/low so far (never taken by construction).
-  if (e > start) {
-    let hi = -Infinity;
-    let lo = Infinity;
-    for (let j = start; j < e; j++) {
-      hi = Math.max(hi, bars[j].high);
-      lo = Math.min(lo, bars[j].low);
-    }
-    raw.push({ kind: 'SESSION_HIGH', side: 'HIGH', price: hi, rank: 3 }, { kind: 'SESSION_LOW', side: 'LOW', price: lo, rank: 3 });
-
-    // 4. Opening range, once every bar in it has closed.
-    const orEnd = bars[start].time + rules.openingRangeMinutes * 60 * 1000;
-    if (bars[e - 1].time + BAR_MS >= orEnd) {
-      let orHi = -Infinity;
-      let orLo = Infinity;
-      let after = e;
-      for (let j = start; j < e; j++) {
-        if (bars[j].time < orEnd) {
-          orHi = Math.max(orHi, bars[j].high);
-          orLo = Math.min(orLo, bars[j].low);
-        } else if (after === e) after = j;
-      }
-      if (Number.isFinite(orHi) && !takenAbove(orHi, after)) raw.push({ kind: 'OPENING_RANGE_HIGH', side: 'HIGH', price: orHi, rank: 4 });
-      if (Number.isFinite(orLo) && !takenBelow(orLo, after)) raw.push({ kind: 'OPENING_RANGE_LOW', side: 'LOW', price: orLo, rank: 4 });
-    }
-  }
-
-  // 5 (and 2). Untaken 5-bar fractals from the last `swingSessions` sessions;
-  // a fractal at k is confirmed once bar k + lookback is visible.
-  const lb = rules.swingLookback;
-  const wFrom = series.sessionStarts[Math.max(0, s - (rules.swingSessions - 1))];
-  const highs: Array<{ p: number; k: number }> = [];
-  const lows: Array<{ p: number; k: number }> = [];
-  for (let k = wFrom + lb; k + lb < e; k++) {
-    let peak = true;
-    let trough = true;
-    for (let d = 1; d <= lb; d++) {
-      if (bars[k].high <= bars[k - d].high || bars[k].high <= bars[k + d].high) peak = false;
-      if (bars[k].low >= bars[k - d].low || bars[k].low >= bars[k + d].low) trough = false;
-    }
-    if (peak) highs.push({ p: bars[k].high, k });
-    if (trough) lows.push({ p: bars[k].low, k });
-  }
-  // Equal highs/lows: two confirmed swings within equalTolAtr. The later one
-  // usually pokes a hair past the earlier, so the pair is judged as one pool
-  // at its outer price, taken only if traded through after the later swing.
-  // Unpaired swings stand alone (rank 5) while untaken.
-  const tol = rules.equalTolAtr * atr;
-  const pairUp = (swings: Array<{ p: number; k: number }>, side: 'HIGH' | 'LOW') => {
-    const high = side === 'HIGH';
-    const taken = (price: number, from: number) => (high ? takenAbove(price, from) : takenBelow(price, from));
-    const used = new Set<number>();
-    const sorted = swings.map((w, idx) => ({ ...w, idx })).sort((a, b) => a.p - b.p);
-    for (let a = 0; a + 1 < sorted.length; a++) {
-      const x = sorted[a];
-      const y = sorted[a + 1];
-      if (used.has(x.idx) || used.has(y.idx) || Math.abs(y.p - x.p) > tol) continue;
-      const price = high ? Math.max(x.p, y.p) : Math.min(x.p, y.p);
-      if (taken(price, Math.max(x.k, y.k) + 1)) continue;
-      used.add(x.idx);
-      used.add(y.idx);
-      raw.push({ kind: high ? 'EQUAL_HIGHS' : 'EQUAL_LOWS', side, price, rank: 2 });
-    }
-    swings.forEach((w, idx) => {
-      if (!used.has(idx) && !taken(w.p, w.k + 1)) raw.push({ kind: high ? 'SWING_HIGH' : 'SWING_LOW', side, price: w.p, rank: 5 });
-    });
-  };
-  pairUp(highs, 'HIGH');
-  pairUp(lows, 'LOW');
-
-  // Merge near-duplicates into the better-ranked pool.
-  const merge = rules.poolMergeAtr * atr;
-  const kept: LiquidityPool[] = [];
-  for (const p of [...raw].filter((p) => Number.isFinite(p.price) && p.price > 0).sort((a, b) => a.rank - b.rank || a.price - b.price)) {
-    if (!kept.some((k) => k.side === p.side && Math.abs(k.price - p.price) <= merge)) kept.push(p);
-  }
-  return kept.sort((a, b) => a.price - b.price);
+  return buildTradeablePools(series, s, end, atr, lmRules);
 }
 
 // ---------------- helpers ----------------
