@@ -19,12 +19,21 @@
 //   score component. score_option is null: no option-chain breakdown
 //   reaches this layer today (future work, see the diagnostics dashboard).
 //
+// COST COLUMNS (migration 032) — setup-cost.ts's measurement, present on the
+// transitions that met a live option quote (the fill: ENTRY_MINTED /
+// ENTRY_REFUSED); every other row records stop distance and
+// cost_quality = UNAVAILABLE. Measurement only, never a gate.
+//
 // GRADE BANDS — fixed BEFORE any outcome was looked at, from the score's own
-// component structure (see gradeFromScore below), never fitted to results.
+// component structure (gradeFromScore, @fno/shared), never fitted to results.
 // ============================================================
 
+import { gradeFromScore } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
+import { measureStopDistance, type SetupCostMeasurement } from './setup-cost.js';
+
+export { gradeFromScore };
 
 export type SetupEventType =
   | 'WATCH'
@@ -74,24 +83,6 @@ const DECISION_BY_EVENT_TYPE: Record<SetupEventType, SetupDecision> = {
   TRADED: 'TRADED',
   CLOSED: 'TRADED',
 };
-
-/**
- * Descriptive grade bands, fixed in advance from the score's own shape (Tier
- * 1 maxes at 60: pool 15 + sweep 10 + displacement 15 + structure-shift 10 +
- * FVG 10; Tier 2/3 add up to +/-25 and +/-15). Chosen before any `setup_events`
- * outcome was graded — NOT fitted to win rate or R:
- *   A+  total >= 70  (a fully-formed Tier 1 setup plus favourable context)
- *   A   55-69        (a fully-formed Tier 1 setup, or a strong one with mixed context)
- *   B   40-54        (a workable but incomplete Tier 1 setup)
- *   C   < 40         (a thin setup: low pool rank, shallow sweep, weak or no displacement)
- */
-export function gradeFromScore(total: number | null | undefined): 'A+' | 'A' | 'B' | 'C' | null {
-  if (total == null || !Number.isFinite(total)) return null;
-  if (total >= 70) return 'A+';
-  if (total >= 55) return 'A';
-  if (total >= 40) return 'B';
-  return 'C';
-}
 
 /**
  * A required entry that would give exactly minT1R, holding stop and T1
@@ -169,6 +160,10 @@ export interface SetupEventInput {
   optionCandidate?: Record<string, unknown> | null;
   decisionId?: string | null;
   signalId?: string | null;
+  /** The lifecycle's ATR on its entry timeframe, for stop distance in ATR. */
+  atr?: number | null;
+  /** setup-cost.ts's measurement, when this transition met a live option quote. */
+  cost?: SetupCostMeasurement | null;
   versions: { strategyVersion: string; triggerVersion: string; riskVersion: string; optionVersion: string; costVersion: string };
 }
 
@@ -197,6 +192,12 @@ async function insertSetupEvent(input: SetupEventInput): Promise<void> {
   const scoreCandle = input.scoreCandleApplied ?? null;
   const scoreRr = grossRr;
 
+  // Cost and stop distance (migration 032). Without a priced leg, stop distance still lands.
+  const cost = input.cost ?? null;
+  const stopDist = cost?.stop ?? measureStopDistance({ entry: input.entry, stop: input.stop, atr: input.atr ?? null });
+  const opt = cost?.option ?? null;
+  const optionCandidate = opt ? { ...(input.optionCandidate ?? {}), ...opt } : input.optionCandidate ?? null;
+
   try {
     await sql`
       INSERT INTO setup_events (
@@ -208,17 +209,24 @@ async function insertSetupEvent(input: SetupEventInput): Promise<void> {
         score_pool, score_sweep, score_displacement, score_candle, score_rr, score_option, score_total, grade,
         context, option_candidate,
         decision, rejection_reason, would_be_valid_if,
-        strategy_version, trigger_version, risk_version, option_version, cost_version
+        strategy_version, trigger_version, risk_version, option_version, cost_version,
+        cost_quality, option_side, option_strike, option_expiry, option_strike_basis, option_premium, option_bid, option_ask, option_delta, lot_size,
+        cost_spread, cost_slippage, cost_charges, cost_total, cost_pct_premium, cost_r, spread_r, slippage_r, charges_r,
+        stop_points, stop_atr, stop_pct, underlying_risk_lot, option_risk_unit, option_risk_lot, option_risk_basis
       ) VALUES (
         ${input.time}, ${input.instrument}, ${input.exchange}, ${input.timeframe}, ${input.lifecycleId}, ${input.direction}, ${eventType},
         ${input.poolId ?? null}, ${input.poolType}, ${input.poolPrice},
         ${input.triggerType ?? (input.poolType ? `${input.poolType}_SWEEP` : null)}, ${input.sweepHigh ?? null}, ${input.sweepLow ?? null}, ${input.sweepDepthAtr ?? null},
         ${input.entry}, ${input.stop}, ${input.t1}, ${input.t2}, ${grossRr},
-        ${null}, ${null},
+        ${cost ? sql.json(cost as never) : null}, ${cost?.netR ?? null},
         ${scorePool}, ${scoreSweep}, ${scoreDisplacement}, ${scoreCandle}, ${scoreRr}, ${null}, ${input.scoreTotal}, ${grade},
-        ${input.context ? sql.json(input.context as never) : null}, ${input.optionCandidate ? sql.json(input.optionCandidate as never) : null},
+        ${input.context ? sql.json(input.context as never) : null}, ${optionCandidate ? sql.json(optionCandidate as never) : null},
         ${decision}, ${rejectionReason}, ${validIf},
-        ${input.versions.strategyVersion}, ${input.versions.triggerVersion}, ${input.versions.riskVersion}, ${input.versions.optionVersion}, ${input.versions.costVersion}
+        ${input.versions.strategyVersion}, ${input.versions.triggerVersion}, ${input.versions.riskVersion}, ${input.versions.optionVersion}, ${input.versions.costVersion},
+        ${cost?.quality ?? 'UNAVAILABLE'}, ${opt?.side ?? null}, ${opt?.strike ?? null}, ${opt?.expiry ?? null}, ${opt?.strikeBasis ?? null}, ${opt?.premium ?? null}, ${opt?.bid ?? null}, ${opt?.ask ?? null}, ${opt?.delta ?? null}, ${opt?.lotSize ?? null},
+        ${cost?.perUnit?.spread ?? null}, ${cost?.perUnit?.slippage ?? null}, ${cost?.perUnit?.charges ?? null}, ${cost?.perUnit?.total ?? null}, ${cost?.costPctOfPremium ?? null},
+        ${cost?.costR ?? null}, ${cost?.spreadR ?? null}, ${cost?.slippageR ?? null}, ${cost?.chargesR ?? null},
+        ${stopDist.points}, ${stopDist.atr}, ${stopDist.pct}, ${stopDist.underlyingRiskPerLot}, ${stopDist.optionRiskPerUnit}, ${stopDist.optionRiskPerLot}, ${stopDist.optionRiskBasis}
       )
     `;
   } catch (err: any) {

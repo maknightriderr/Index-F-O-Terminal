@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { api } from './api';
+import { api, type DiagnosticsFilter } from './api';
 
 // setup_events is graded hours after a session ends, so the report cannot
 // change faster than this.
@@ -60,6 +60,85 @@ export interface DiagnosticsLeakageRow {
   leakageRate: number | null;
 }
 
+/** Mirrors apps/server/src/services/diagnostics-metrics.ts. */
+export interface DiagnosticsRate {
+  numerator: number;
+  denominator: number;
+  rate: number | null;
+}
+
+export interface DiagnosticsPerformanceStats {
+  count: number;
+  wins: number;
+  winRate: number | null;
+  grossR: number;
+  avgGrossR: number | null;
+  netCount: number;
+  netR: number | null;
+  avgNetR: number | null;
+  profitFactor: number | null;
+  profitFactorNet: number | null;
+  maxDrawdownR: number;
+  maxDrawdownNetR: number | null;
+  avgMfeR: number | null;
+  avgMaeR: number | null;
+}
+
+export interface DiagnosticsCostStats {
+  priced: number;
+  observed: number;
+  modelled: number;
+  totalCostR: number | null;
+  avgCostR: number | null;
+  costLeakageR: number | null;
+  flippedByCost: number;
+  spreadLeakageR: number | null;
+  slippageLeakageR: number | null;
+  chargesLeakageR: number | null;
+}
+
+export type DiagnosticsSegment = 'INDEX' | 'MCX';
+export type DiagnosticsCohort = 'TRADED' | 'REJECTED';
+
+export interface DiagnosticsPerformanceRow {
+  instrument: string;
+  exchange: string;
+  segment: DiagnosticsSegment;
+  cohort: DiagnosticsCohort;
+  performance: DiagnosticsPerformanceStats;
+  cost: DiagnosticsCostStats;
+}
+
+export interface DiagnosticsPerformanceSegmentRow {
+  segment: DiagnosticsSegment;
+  cohort: DiagnosticsCohort;
+  performance: DiagnosticsPerformanceStats;
+  cost: DiagnosticsCostStats;
+}
+
+export interface DiagnosticsOpportunityStats {
+  opportunities: number;
+  detected: number;
+  traded: number;
+  rejected: number;
+  late: number;
+  neverDetected: number;
+  detectionRate: DiagnosticsRate;
+  captureRate: DiagnosticsRate;
+}
+
+export interface DiagnosticsOpportunityRow extends DiagnosticsOpportunityStats {
+  instrument: string;
+  exchange: string;
+  segment: DiagnosticsSegment;
+  sessions: number;
+  correctlyEmptySessions: number;
+}
+
+export interface DiagnosticsOpportunitySegmentRow extends DiagnosticsOpportunityStats {
+  segment: DiagnosticsSegment;
+}
+
 export interface SignalDiagnosticsData {
   loading: boolean;
   error: string | null;
@@ -68,10 +147,13 @@ export interface SignalDiagnosticsData {
   census: DiagnosticsCensusRow[];
   grades: DiagnosticsGradeRow[];
   leakage: DiagnosticsLeakageRow[];
+  performance: { byInstrument: DiagnosticsPerformanceRow[]; bySegment: DiagnosticsPerformanceSegmentRow[] };
+  opportunity: { byInstrument: DiagnosticsOpportunityRow[]; bySegment: DiagnosticsOpportunitySegmentRow[] };
+  versions: { strategyVersions: string[]; costVersions: string[] };
   refresh: () => void;
 }
 
-export function useSignalDiagnostics(opts: { from?: string; to?: string; instrument?: string } = {}): SignalDiagnosticsData {
+export function useSignalDiagnostics(opts: DiagnosticsFilter = {}): SignalDiagnosticsData {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<DiagnosticsSummaryRow[]>([]);
@@ -79,6 +161,9 @@ export function useSignalDiagnostics(opts: { from?: string; to?: string; instrum
   const [census, setCensus] = useState<DiagnosticsCensusRow[]>([]);
   const [grades, setGrades] = useState<DiagnosticsGradeRow[]>([]);
   const [leakage, setLeakage] = useState<DiagnosticsLeakageRow[]>([]);
+  const [performance, setPerformance] = useState<SignalDiagnosticsData['performance']>({ byInstrument: [], bySegment: [] });
+  const [opportunity, setOpportunity] = useState<SignalDiagnosticsData['opportunity']>({ byInstrument: [], bySegment: [] });
+  const [versions, setVersions] = useState<SignalDiagnosticsData['versions']>({ strategyVersions: [], costVersions: [] });
   const [nonce, setNonce] = useState(0);
 
   const refresh = useCallback(() => setNonce((n) => n + 1), []);
@@ -88,12 +173,15 @@ export function useSignalDiagnostics(opts: { from?: string; to?: string; instrum
     const load = async () => {
       setLoading(true);
       try {
-        const [summaryRes, rejectionsRes, censusRes, gradesRes, leakageRes] = await Promise.all([
+        const [summaryRes, rejectionsRes, censusRes, gradesRes, leakageRes, performanceRes, opportunityRes, versionsRes] = await Promise.all([
           api.getDiagnosticsSummary(opts),
           api.getDiagnosticsRejections(opts),
           api.getDiagnosticsCensus(opts),
           api.getDiagnosticsGrades(opts),
           api.getDiagnosticsLeakage(opts),
+          api.getDiagnosticsPerformance(opts),
+          api.getDiagnosticsOpportunity(opts),
+          api.getDiagnosticsVersions(),
         ]);
         if (cancelled) return;
         setSummary(((summaryRes as any)?.data?.byInstrument ?? []) as DiagnosticsSummaryRow[]);
@@ -101,6 +189,12 @@ export function useSignalDiagnostics(opts: { from?: string; to?: string; instrum
         setCensus(((censusRes as any)?.data?.rows ?? []) as DiagnosticsCensusRow[]);
         setGrades(((gradesRes as any)?.data?.rows ?? []) as DiagnosticsGradeRow[]);
         setLeakage(((leakageRes as any)?.data?.rows ?? []) as DiagnosticsLeakageRow[]);
+        const perf = (performanceRes as any)?.data;
+        setPerformance({ byInstrument: perf?.byInstrument ?? [], bySegment: perf?.bySegment ?? [] });
+        const opp = (opportunityRes as any)?.data;
+        setOpportunity({ byInstrument: opp?.byInstrument ?? [], bySegment: opp?.bySegment ?? [] });
+        const ver = (versionsRes as any)?.data;
+        setVersions({ strategyVersions: ver?.strategyVersions ?? [], costVersions: ver?.costVersions ?? [] });
         setError(null);
       } catch (err: any) {
         if (!cancelled) setError(err?.message ?? 'Failed to load signal diagnostics');
@@ -115,7 +209,7 @@ export function useSignalDiagnostics(opts: { from?: string; to?: string; instrum
       clearInterval(id);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [opts.from, opts.to, opts.instrument, nonce]);
+  }, [opts.from, opts.to, opts.instrument, opts.strategyVersion, opts.costVersion, nonce]);
 
-  return { loading, error, summary, rejections, census, grades, leakage, refresh };
+  return { loading, error, summary, rejections, census, grades, leakage, performance, opportunity, versions, refresh };
 }

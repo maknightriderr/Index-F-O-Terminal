@@ -347,34 +347,61 @@ class ApiClient {
 
   // --- Signal diagnostics (read-only; every figure is a simulated paper-trade outcome) ---
 
-  private diagnosticsQuery(opts: { from?: string; to?: string; instrument?: string }): string {
+  private diagnosticsQuery(opts: DiagnosticsFilter): string {
     const params = new URLSearchParams();
     if (opts.from) params.set('from', opts.from);
     if (opts.to) params.set('to', opts.to);
     if (opts.instrument) params.set('instrument', opts.instrument);
+    if (opts.strategyVersion) params.set('strategyVersion', opts.strategyVersion);
+    if (opts.costVersion) params.set('costVersion', opts.costVersion);
     const qs = params.toString();
     return qs ? `?${qs}` : '';
   }
 
-  async getDiagnosticsSummary(opts: { from?: string; to?: string; instrument?: string } = {}) {
+  async getDiagnosticsSummary(opts: DiagnosticsFilter = {}) {
     return this.get<unknown>(`/api/diagnostics/summary${this.diagnosticsQuery(opts)}`);
   }
 
-  async getDiagnosticsRejections(opts: { from?: string; to?: string; instrument?: string } = {}) {
+  async getDiagnosticsRejections(opts: DiagnosticsFilter = {}) {
     return this.get<unknown>(`/api/diagnostics/rejections${this.diagnosticsQuery(opts)}`);
   }
 
-  async getDiagnosticsCensus(opts: { from?: string; to?: string; instrument?: string } = {}) {
+  async getDiagnosticsCensus(opts: DiagnosticsFilter = {}) {
     return this.get<unknown>(`/api/diagnostics/census${this.diagnosticsQuery(opts)}`);
   }
 
-  async getDiagnosticsGrades(opts: { from?: string; to?: string; instrument?: string } = {}) {
+  async getDiagnosticsGrades(opts: DiagnosticsFilter = {}) {
     return this.get<unknown>(`/api/diagnostics/grades${this.diagnosticsQuery(opts)}`);
   }
 
-  async getDiagnosticsLeakage(opts: { from?: string; to?: string; instrument?: string } = {}) {
+  async getDiagnosticsLeakage(opts: DiagnosticsFilter = {}) {
     return this.get<unknown>(`/api/diagnostics/leakage${this.diagnosticsQuery(opts)}`);
   }
+
+  async getDiagnosticsPerformance(opts: DiagnosticsFilter = {}) {
+    return this.get<unknown>(`/api/diagnostics/performance${this.diagnosticsQuery(opts)}`);
+  }
+
+  async getDiagnosticsOpportunity(opts: DiagnosticsFilter = {}) {
+    return this.get<unknown>(`/api/diagnostics/opportunity${this.diagnosticsQuery(opts)}`);
+  }
+
+  async getDiagnosticsVersions() {
+    return this.get<unknown>('/api/diagnostics/versions');
+  }
+
+  /** Per-setup measurement (net R, cost quality, rejection, fill, graded outcome) for the Trade Setup card. */
+  async getSetupOutcomes(lifecycleIds: string[]) {
+    return this.get<unknown>(`/api/diagnostics/setup-outcomes?lifecycleIds=${encodeURIComponent(lifecycleIds.join(','))}`);
+  }
+}
+
+export interface DiagnosticsFilter {
+  from?: string;
+  to?: string;
+  instrument?: string;
+  strategyVersion?: string;
+  costVersion?: string;
 }
 
 export class ApiError extends Error {

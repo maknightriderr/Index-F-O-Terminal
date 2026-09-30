@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { gradeFromScore, wouldBeValidIf } from '../setup-events.js';
-import { firstFillIndex } from '../setup-events-grading.js';
+import { firstFillIndex, netResultR } from '../setup-events-grading.js';
 
 describe('gradeFromScore', () => {
   it('bands are fixed at 70 / 55 / 40', () => {
@@ -64,5 +64,13 @@ describe('firstFillIndex', () => {
 
   it('-1 when price never trades at the entry (the limit would not have filled)', () => {
     expect(firstFillIndex(bars, 110)).toBe(-1);
+  });
+});
+
+describe('netResultR', () => {
+  it('result minus cost, both in the underlying R; null without a measured cost', () => {
+    expect(netResultR(2.5, 0.3)).toBe(2.2);
+    expect(netResultR(-1, 0.25)).toBe(-1.25);
+    expect(netResultR(2.5, null)).toBeNull();
   });
 });

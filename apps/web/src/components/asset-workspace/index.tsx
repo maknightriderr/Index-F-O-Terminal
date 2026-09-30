@@ -26,7 +26,19 @@ import { MarketBiasCard, MarketRegimeCard, IntelligenceScoreCard, SupportResista
 import { NewsPanel } from '@/components/common/news-panel';
 import { EventCalendarPanel } from '@/components/common/event-calendar-panel';
 import { PayoffDiagram } from '@/components/common/payoff-diagram';
-import { LifecycleLevels, LifecycleReason, PatternLabel, StageBadge, stageMeaning, stageOneLiner, TimeframeTag, TradePreviewPanel } from '@/components/common/structure-stage';
+import {
+  LifecycleLevels,
+  LifecycleReason,
+  lifecycleExplanationInput,
+  PatternLabel,
+  SetupExplanationPanel,
+  StageBadge,
+  stageMeaning,
+  stageOneLiner,
+  TimeframeTag,
+  TradePreviewPanel,
+} from '@/components/common/structure-stage';
+import { useSetupOutcomes, type SetupOutcome } from '@/lib/use-setup-outcomes';
 
 const STRIKE_RANGE_OPTIONS = [5, 10, 15, 20];
 const REFRESH_INTERVAL_MS = 15000;
@@ -750,7 +762,56 @@ function DecayCard({ decay }: { decay: DecayAnalysis }) {
   );
 }
 
+const REJECTED_STAGES = new Set(['INVALIDATED', 'LATE', 'MISSED', 'LOW_RR']);
+const isRejectedLifecycle = (l: StructureLifecycleView) => l.liveOutcome === 'REFUSED' || REJECTED_STAGES.has(l.stage);
+
+/**
+ * Today's rejected structure setups, newest first: reason, potential levels,
+ * fill status and (only once it filled and was graded) the outcome. Built
+ * from stored fields by the shared explanation builder; informational only.
+ */
+function RejectedToday({ rows, outcomes }: { rows: StructureLifecycleView[]; outcomes: Record<string, SetupOutcome> }) {
+  if (rows.length === 0) return null;
+  return (
+    <details className="mb-3">
+      <summary className="text-[10px] font-bold uppercase tracking-wide text-red-400 light:text-red-700 cursor-pointer select-none">Rejected today ({rows.length})</summary>
+      <div className="space-y-1.5 mt-1.5">
+        {rows.map((r) => (
+          <div key={r.id} className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
+            <div className="flex items-center gap-2">
+              <StageBadge stage={r.liveOutcome === 'REFUSED' ? 'REFUSED' : r.stage} />
+              <TimeframeTag timeframe={r.timeframe} />
+              <span className={`text-[11px] font-semibold ${r.direction === 'BULLISH' ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700'}`}>
+                {r.direction === 'BULLISH' ? '▲ Bullish' : '▼ Bearish'}
+              </span>
+            </div>
+            <SetupExplanationPanel input={lifecycleExplanationInput(r, outcomes[r.id])} />
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: StructureBlock | null }) {
+  // Structure lifecycles, computed up front so the measurement lookup below runs on every render.
+  const running = structure?.enabled
+    ? (['BEARISH', 'BULLISH'] as const)
+        .map((dir) => structure.current[dir] ?? (structure.watch[dir] ? watchRow(structure, dir) : null))
+        .filter((r): r is StructureLifecycleView => r != null)
+    : [];
+  const runningIds = new Set(running.map((r) => r.id));
+  const rejectedToday = structure?.enabled ? structure.lifecycles.filter((l) => isRejectedLifecycle(l) && !runningIds.has(l.id)).slice(0, 5) : [];
+  const isCallSide = setup.available ? setup.side === 'CE' : null;
+  // A structure paper trade: the lifecycle it was minted from (newest first), for its candle label and explanation.
+  const mintedFrom =
+    setup.available && setup.strategy === 'STRUCTURE' && structure?.enabled
+      ? structure.lifecycles.find((l) => l.liveOutcome === 'MINTED' && l.direction === (isCallSide ? 'BULLISH' : 'BEARISH')) ?? null
+      : null;
+  const outcomes = useSetupOutcomes(
+    [...running.filter((r) => r.stage !== 'WATCH'), ...rejectedToday, ...(mintedFrom ? [mintedFrom] : [])].map((r) => r.id)
+  );
+
   if (!setup.available) {
     // No paper trade: the two engines are shown as separate, clearly
     // labelled sections so a CONFIRMED structure lifecycle (a pending limit
@@ -758,11 +819,6 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
     // indicator engine's refusal sentence below it — they're independent
     // engines, and only one of them (the indicator engine) is even
     // reporting a refusal here.
-    const running = structure?.enabled
-      ? (['BEARISH', 'BULLISH'] as const)
-          .map((dir) => structure.current[dir] ?? (structure.watch[dir] ? watchRow(structure, dir) : null))
-          .filter((r): r is StructureLifecycleView => r != null)
-      : [];
     return (
       <IntelCard title="Trade Setup" accent="emerald">
         {running.length > 0 && (
@@ -789,11 +845,13 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
                   <LifecycleReason row={r} />
                   {r.liveOutcome === 'REFUSED' && r.liveReason && <div className="text-[10px] text-amber-400 light:text-amber-700 mt-0.5">Fill refused: {r.liveReason}</div>}
                   <TradePreviewPanel row={r} />
+                  {r.stage !== 'WATCH' && r.stage !== 'DEVELOPING' && <SetupExplanationPanel input={lifecycleExplanationInput(r, outcomes[r.id])} />}
                 </div>
               ))}
             </div>
           </div>
         )}
+        <RejectedToday rows={rejectedToday} outcomes={outcomes} />
         <div>
           <div className="text-[10px] font-bold uppercase tracking-wide text-gray-400 light:text-slate-600 mb-1">Indicator engine · OLD</div>
           <p className="text-[11px] text-gray-400 light:text-slate-600 leading-snug">{setup.reason}</p>
@@ -856,11 +914,6 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
   }
 
   const isCall = setup.side === 'CE';
-  // A structure paper trade: the lifecycle it was minted from (newest first), for its candle label.
-  const mintedFrom =
-    setup.strategy === 'STRUCTURE' && structure?.enabled
-      ? structure.lifecycles.find((l) => l.liveOutcome === 'MINTED' && l.direction === (isCall ? 'BULLISH' : 'BEARISH')) ?? null
-      : null;
   const badge = engineBadge(setup.strategy);
   const trailed = setup.initialStopLoss != null && setup.stopLoss != null && Math.abs(setup.stopLoss - setup.initialStopLoss) > 0.005;
   return (
@@ -925,6 +978,22 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
         </div>
       )}
       {liveMark}
+      {mintedFrom && (
+        <SetupExplanationPanel
+          input={lifecycleExplanationInput(mintedFrom, outcomes[mintedFrom.id], {
+            side: setup.side!,
+            strike: setup.strike!,
+            expiry: setup.expiry ?? null,
+            dte: setup.expiry ? calculateDTE(setup.expiry) : null,
+            entryPremium: setup.entry ?? null,
+            stopPremium: setup.initialStopLoss ?? setup.stopLoss ?? null,
+            targetPremium: setup.target ?? null,
+            lotSize: setup.positionSize && setup.positionSize.lots > 0 ? setup.positionSize.quantity / setup.positionSize.lots : null,
+            estimated: false,
+          })}
+        />
+      )}
+      <RejectedToday rows={rejectedToday} outcomes={outcomes} />
       <p className="text-[10px] text-gray-400 mt-2.5 leading-snug">
         PAPER TRADE — heuristic from live data, outcomes are simulated. Not investment advice.{lockedNote}
       </p>

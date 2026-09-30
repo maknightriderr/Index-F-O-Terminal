@@ -1,8 +1,9 @@
 'use client';
 
 import React from 'react';
-import type { StructureLifecycleView } from '@fno/shared';
-import { formatExpiryDate } from '@fno/shared';
+import type { StructureLifecycleView, SetupExplanationInput } from '@fno/shared';
+import { buildSetupExplanation, formatExpiryDate } from '@fno/shared';
+import type { SetupOutcome } from '@/lib/use-setup-outcomes';
 
 // Structure engine lifecycle: WATCH → DEVELOPING → CONFIRMED → ENTRY → ACTIVE.
 // Shared by the scanner's "Developing setups" list and the asset workspace's
@@ -14,6 +15,11 @@ const STAGE_STYLES: Record<string, { label: string; className: string }> = {
   CONFIRMED: { label: 'Confirmed', className: 'bg-cyan-500/15 text-cyan-400 light:text-cyan-700' },
   ENTRY: { label: 'Entry', className: 'bg-emerald-500/15 text-emerald-400 light:text-emerald-700' },
   ACTIVE: { label: 'Active', className: 'bg-emerald-500/15 text-emerald-400 light:text-emerald-700' },
+  REFUSED: { label: 'Refused', className: 'bg-red-500/15 text-red-400 light:text-red-700' },
+  INVALIDATED: { label: 'Invalidated', className: 'bg-red-500/15 text-red-400 light:text-red-700' },
+  LATE: { label: 'Late', className: 'bg-amber-500/15 text-amber-400 light:text-amber-700' },
+  MISSED: { label: 'Missed', className: 'bg-amber-500/15 text-amber-400 light:text-amber-700' },
+  LOW_RR: { label: 'Low R:R', className: 'bg-amber-500/15 text-amber-400 light:text-amber-700' },
 };
 
 const STAGE_MEANING: Record<string, string> = {
@@ -174,50 +180,54 @@ export function TradePreviewPanel({ row }: { row: StructureLifecycleView }) {
 }
 
 /**
- * "For / Against / Invalidation / Would be valid if" — built ONLY from
- * fields already on the lifecycle (score components, pool rank, R:R,
- * candle bonus). No free-text guessing: every line traces to a stored
- * number, and a line is omitted rather than invented when its field is
- * absent. Mirrors the reasoning setup-lifecycle.ts's confirmedMessage puts
- * in the Telegram CONFIRMED alert.
+ * The shared builder's input from a lifecycle row plus, when known, its
+ * stored setup_events measurement. Structured fields only; informational.
  */
-export function explanationLines(row: Pick<StructureLifecycleView, 'pool' | 'rToT1' | 'scoreCandle' | 'patterns' | 'sweepExtreme' | 'stage' | 'score'>): {
+export function lifecycleExplanationInput(row: StructureLifecycleView, outcome?: SetupOutcome | null, option?: SetupExplanationInput['option']): SetupExplanationInput {
+  const rejected = row.liveOutcome === 'REFUSED' || row.stage === 'INVALIDATED' || row.stage === 'LATE' || row.stage === 'MISSED' || row.stage === 'LOW_RR';
+  return {
+    direction: row.direction,
+    pool: row.pool,
+    sweepExtreme: row.sweepExtreme,
+    zone: row.zone,
+    entry: row.entry,
+    stop: row.stop,
+    t1: row.t1,
+    t2: row.t2,
+    rToT1: row.rToT1,
+    score: row.score,
+    scoreCandle: row.scoreCandle ?? null,
+    patterns: row.patterns ?? null,
+    timeframe: row.timeframe ?? null,
+    option: option ?? null,
+    netR: outcome?.netRr ?? null,
+    costR: outcome?.costR ?? null,
+    costQuality: outcome?.costQuality ?? null,
+    rejection: rejected
+      ? {
+          reason: outcome?.rejectionReason ?? row.liveReason ?? row.reason,
+          wouldBeValidIf: outcome?.wouldBeValidIf ?? null,
+          fillStatus: outcome?.fillStatus ?? null,
+          resultR: outcome?.resultR ?? null,
+          netResultR: outcome?.netResultR ?? null,
+        }
+      : null,
+  };
+}
+
+/** For / Against / Invalidation / Would be valid if, from the shared builder (the same one Telegram uses). */
+export function explanationLines(row: StructureLifecycleView): {
   forLines: string[];
   against: string[];
   invalidation: string;
   wouldBeValidIf: string | null;
 } {
-  const forLines: string[] = [];
-  const against: string[] = [];
-
-  if (row.pool) {
-    if (row.pool.rank <= 2) forLines.push(`${pretty(row.pool.kind)} is a rank-${row.pool.rank} pool (previous-day / equal highs-lows tier).`);
-    else against.push(`${pretty(row.pool.kind)} is a lower rank-${row.pool.rank} pool (a swing/opening-range level, less liquidity resting there).`);
-  }
-  if (row.rToT1 != null) {
-    if (row.rToT1 >= 2) forLines.push(`T1 is ${row.rToT1}R away — comfortably past the 1.5R floor.`);
-    else if (row.rToT1 < 1.75) against.push(`T1 is only ${row.rToT1}R away — close to the 1.5R minimum.`);
-  }
-  if (row.scoreCandle && row.scoreCandle.applied > 0 && row.patterns) {
-    forLines.push(`Candles: ${row.patterns.label} (+${row.scoreCandle.applied} score).`);
-  } else if (row.patterns) {
-    against.push('No scored candle pattern on the sweep or displacement.');
-  }
-  if (row.score != null) {
-    if (row.score >= 55) forLines.push(`Setup quality ${row.score}/100 (A-band by the fixed grade bands).`);
-    else if (row.score < 40) against.push(`Setup quality ${row.score}/100 (C-band by the fixed grade bands).`);
-  }
-
-  const invalidation = row.sweepExtreme != null ? `A close back beyond the sweep extreme (${num(row.sweepExtreme)}) invalidates it (SWEEP_RECLAIMED).` : 'A close back beyond the sweep invalidates it (SWEEP_RECLAIMED).';
-
-  let wouldBeValidIf: string | null = null;
-  if (row.rToT1 != null && row.rToT1 < 1.5) wouldBeValidIf = `T1 >= 1.5R would need a closer entry or a farther T1 (currently ${row.rToT1}R).`;
-
-  return { forLines, against, invalidation, wouldBeValidIf };
+  const e = buildSetupExplanation(lifecycleExplanationInput(row));
+  return { forLines: e.forLines, against: e.against, invalidation: e.invalidation, wouldBeValidIf: e.wouldBeValidIf };
 }
 
 /** Renders explanationLines() as a compact block. Nothing renders for an empty section. */
-export function ExplanationBlock({ row }: { row: Pick<StructureLifecycleView, 'pool' | 'rToT1' | 'scoreCandle' | 'patterns' | 'sweepExtreme' | 'stage' | 'score'> }) {
+export function ExplanationBlock({ row }: { row: StructureLifecycleView }) {
   const { forLines, against, invalidation, wouldBeValidIf } = explanationLines(row);
   if (forLines.length === 0 && against.length === 0) return null;
   return (
@@ -230,6 +240,69 @@ export function ExplanationBlock({ row }: { row: Pick<StructureLifecycleView, 'p
       ))}
       <div className="text-gray-500 light:text-slate-500">{invalidation}</div>
       {wouldBeValidIf && <div className="text-gray-500 light:text-slate-500 italic">{wouldBeValidIf}</div>}
+    </div>
+  );
+}
+
+const FILL_LABEL: Record<string, string> = {
+  FILLED: 'FILLED — the entry price traded after the refusal',
+  NO_FILL: 'NO_FILL — price never came back to the entry',
+  PENDING: 'Pending — graded after the session',
+  NOT_GRADED: 'Not graded for this event type',
+};
+
+/**
+ * The full explanation for the main Trade Setup card: why, trigger, pool,
+ * levels, option, grade, gross/net R, for/against, invalidation, would be
+ * valid if, and for a rejected setup its reason, potential levels, fill
+ * status and (only when it filled) the graded outcome. Every line comes from
+ * the shared builder over stored fields. Informational: it changes nothing.
+ */
+export function SetupExplanationPanel({ input }: { input: SetupExplanationInput }) {
+  const e = buildSetupExplanation(input);
+  const rows: [string, React.ReactNode][] = [
+    ['Why', e.why],
+    ['Trigger', e.trigger ?? '—'],
+    ['Pool', e.pool ?? '—'],
+    ['Entry · Stop', `${num(e.entry)} · ${num(e.stop)}`],
+    ['T1 · T2', `${num(e.t1)} · ${num(e.t2)}`],
+  ];
+  if (e.option) rows.push(['Option', e.option]);
+  rows.push([
+    'Grade · R',
+    <>
+      {e.grade ?? '—'} · gross {e.grossR != null ? `${e.grossR}R` : '—'} · net {e.netR != null ? `${e.netR.toFixed(2)}R` : 'not measured'}
+      {e.costNote && <span className="block text-gray-500 light:text-slate-500">{e.costNote}</span>}
+    </>,
+  ]);
+  return (
+    <div className="mt-2 rounded border border-gray-700/60 light:border-slate-300 px-2 py-1.5 text-[10px] space-y-1">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+        {rows.map(([k, v]) => (
+          <React.Fragment key={k}>
+            <dt className="text-gray-500 light:text-slate-500 whitespace-nowrap">{k}</dt>
+            <dd className="text-gray-300 light:text-slate-700 tabular-nums min-w-0 break-words">{v}</dd>
+          </React.Fragment>
+        ))}
+      </dl>
+      {e.rejected && (
+        <div className="rounded bg-red-500/5 border border-red-500/20 px-1.5 py-1 space-y-0.5">
+          <div className="text-red-300 light:text-red-700 font-semibold">Rejected: {e.rejected.reason}</div>
+          <div className="text-gray-400 light:text-slate-600 tabular-nums">{e.rejected.potential}</div>
+          <div className="text-gray-400 light:text-slate-600">Fill: {FILL_LABEL[e.rejected.fillStatus] ?? e.rejected.fillStatus}</div>
+          {e.rejected.outcome && <div className="text-gray-300 light:text-slate-700">{e.rejected.outcome}</div>}
+        </div>
+      )}
+      {e.forLines.map((l, i) => (
+        <div key={`for-${i}`} className="text-emerald-400 light:text-emerald-700">+ {l}</div>
+      ))}
+      {e.against.map((l, i) => (
+        <div key={`against-${i}`} className="text-amber-400 light:text-amber-700">- {l}</div>
+      ))}
+      <div className="text-gray-500 light:text-slate-500">{e.invalidation}</div>
+      {e.wouldBeValidIf && (
+        <div className="text-gray-500 light:text-slate-500 italic">{/^would be valid/i.test(e.wouldBeValidIf) ? e.wouldBeValidIf : `Would be valid if: ${e.wouldBeValidIf}`}</div>
+      )}
     </div>
   );
 }
