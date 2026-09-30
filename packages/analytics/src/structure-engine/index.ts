@@ -430,7 +430,32 @@ export function buildLiquidityPools(
 
 // ---------------- helpers ----------------
 
-function isDisplacement(bar: MomentumBar, direction: StructureDirection, atr: number, dispMult: number, rules: StructureRules): { bodyAtr: number; closeLocation: number } | null {
+/**
+ * The nearest opposite-side pool that was resting before the sweep (from
+ * `poolsAtSweep`, i.e. `poolsAt(sweep.index)`) and is still untaken: beyond
+ * `entry` in the trade's favour, and beyond `lowSince`/`highSince` (the
+ * extreme the price itself has already reached since the sweep — a level the
+ * move itself just printed is not resting liquidity). `t2` is the next one
+ * further out. Shared by the live engine's `confirm()` and any research
+ * counterfactual that needs the same T1/T2, so both read one definition.
+ */
+export function nearestOppositePool(
+  poolsAtSweep: readonly LiquidityPool[],
+  direction: StructureDirection,
+  entry: number,
+  lowSince: number,
+  highSince: number
+): { t1: LiquidityPool | null; t2: LiquidityPool | null } {
+  const bear = direction === 'BEARISH';
+  const pools = poolsAtSweep
+    .filter((p) => p.side === (bear ? 'LOW' : 'HIGH') && (bear ? p.price < entry && p.price < lowSince : p.price > entry && p.price > highSince))
+    .sort((a, b) => Math.abs(a.price - entry) - Math.abs(b.price - entry) || a.rank - b.rank);
+  const t1 = pools[0] ?? null;
+  const t2 = pools.find((p) => t1 != null && Math.abs(p.price - entry) > Math.abs(t1.price - entry)) ?? null;
+  return { t1, t2 };
+}
+
+export function isDisplacement(bar: MomentumBar, direction: StructureDirection, atr: number, dispMult: number, rules: StructureRules): { bodyAtr: number; closeLocation: number } | null {
   const span = bar.high - bar.low;
   if (!(span > 0)) return null;
   const body = direction === 'BEARISH' ? bar.open - bar.close : bar.close - bar.open;
@@ -814,11 +839,7 @@ function runStructureMachine(ctx: MachineContext): StructureEvaluation {
       lowSince = Math.min(lowSince, bars[k].low);
       highSince = Math.max(highSince, bars[k].high);
     }
-    const pools = (poolsAt(st.sweep.index)?.pools ?? [])
-      .filter((p) => p.side === (bear ? 'LOW' : 'HIGH') && (bear ? p.price < entry && p.price < lowSince : p.price > entry && p.price > highSince))
-      .sort((a, b) => Math.abs(a.price - entry) - Math.abs(b.price - entry) || a.rank - b.rank);
-    const t1 = pools[0] ?? null;
-    const t2 = pools.find((p) => t1 != null && Math.abs(p.price - entry) > Math.abs(t1.price - entry)) ?? null;
+    const { t1, t2 } = nearestOppositePool(poolsAt(st.sweep.index)?.pools ?? [], st.direction, entry, lowSince, highSince);
     st.t1 = t1 ? { kind: t1.kind, price: round2(t1.price) } : null;
     st.t2 = t2 ? { kind: t2.kind, price: round2(t2.price) } : null;
     st.rToT1 = t1 && risk > 0 ? round2(Math.abs(t1.price - entry) / risk) : null;
@@ -873,7 +894,7 @@ function runStructureMachine(ctx: MachineContext): StructureEvaluation {
  * 2-bar: bar j-1 closed beyond a pool (from bars < j-1) and bar j closes back
  * inside. The best-ranked pool wins, then the deeper sweep.
  */
-function findSweep(
+export function findSweep(
   series: MomentumSeries,
   s: number,
   j: number,
