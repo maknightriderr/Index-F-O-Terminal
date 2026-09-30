@@ -19,8 +19,23 @@ import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 import { sendTelegramMessage, isTelegramConfigured } from '../lib/telegram.js';
 import type { AlertChannel, Exchange, StructureTradePreview, TradingMode } from '@fno/shared';
-import { STRUCTURE_PARAMS, liveLogicStamp } from '../config/trading-flags.js';
+import { STRUCTURE_PARAMS, liveLogicStamp, STRATEGY_VERSION, TRIGGER_VERSION, RISK_VERSION, OPTION_VERSION, COST_VERSION } from '../config/trading-flags.js';
 import { isAlertFresh, structureRulesFor, structureStateKey, type LifecycleEventRow, type LiveLifecycle, type LiveState } from './structure-live.js';
+import { recordSetupEvent } from './setup-events.js';
+
+const SETUP_EVENTS_VERSIONS = { strategyVersion: STRATEGY_VERSION, triggerVersion: TRIGGER_VERSION, riskVersion: RISK_VERSION, optionVersion: OPTION_VERSION, costVersion: COST_VERSION };
+
+/** Best-effort session phase from IST clock time — the only context field cheap enough to compute here without threading more state through. */
+function sessionPhaseAt(atMs: number): string {
+  const ist = new Date(atMs).toLocaleString('en-US', { timeZone: 'Asia/Kolkata', hour12: false });
+  const hhmm = ist.split(', ')[1] ?? ist;
+  const [h, m] = hhmm.split(':').map(Number);
+  const minutes = (h ?? 0) * 60 + (m ?? 0);
+  if (minutes < 9 * 60 + 45) return 'OPENING';
+  if (minutes < 13 * 60) return 'MORNING';
+  if (minutes < 14 * 60 + 45) return 'MIDDAY';
+  return 'CLOSING';
+}
 
 const EVENT_DEDUPE_TTL_SECONDS = 3 * 24 * 60 * 60;
 const ALERT_DEDUPE_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -98,6 +113,38 @@ export function recordLifecycleEvents(events: readonly LifecycleEventRow[]): voi
       } catch (err: any) {
         logger.warn({ error: err.message, lifecycleId: e.lifecycleId, toState: e.toState }, 'Structure: lifecycle event insert failed');
       }
+      // Stage 2 (signal-diagnostics): setup_events, a separate table nothing
+      // in the decision path reads. Every transition setup_lifecycle_events
+      // gets, setup_events gets too (see setup-events.ts's module comment for
+      // what its score columns are and aren't). Never blocks/alters the
+      // lifecycle above — recordSetupEvent is fire-and-forget and logs its
+      // own failures loudly.
+      recordSetupEvent({
+        time: new Date(e.at),
+        instrument: e.symbol,
+        exchange: e.exchange,
+        timeframe: '15m',
+        lifecycleId: e.lifecycleId,
+        direction: e.direction,
+        fromStage: e.fromState,
+        toStage: e.toState,
+        reason: e.reason,
+        poolType: e.poolKind,
+        poolPrice: e.poolPrice,
+        poolRank: e.poolRank ?? null,
+        sweepDepthAtr: e.sweepDepthAtr ?? null,
+        entry: e.entry,
+        stop: e.stop,
+        t1: e.t1,
+        t2: e.t2,
+        scoreTotal: e.score,
+        scoreCandleApplied: e.scoreCandle?.applied ?? null,
+        displacementBodyAtr: e.displacementBodyAtr ?? null,
+        context: { sessionPhase: sessionPhaseAt(e.at) },
+        decisionId: e.decisionId ?? null,
+        signalId: e.signalId ?? null,
+        versions: SETUP_EVENTS_VERSIONS,
+      });
     }
   })().catch((err: any) => logger.warn({ error: err.message }, 'Structure: lifecycle event recording failed'));
 }

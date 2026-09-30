@@ -49,6 +49,9 @@ import { startPositionalStockScan } from './services/positional-stock-scan.js';
 import { startBackgroundBiasEvaluator } from './services/background-bias-evaluator.js';
 import { startMarketStateCapture } from './services/market-state-capture.js';
 import { startMissedWinnerAudit } from './services/missed-winner-audit.js';
+import { startSetupEventsGrading } from './services/setup-events-grading.js';
+import { startOpportunityCensus } from './services/opportunity-census-job.js';
+import { createDiagnosticsRoutes } from './api/diagnostics.js';
 import { ensureCaptureSchema } from './services/ensure-capture-schema.js';
 
 // --- Initialize Provider + Subscription Manager ---
@@ -118,6 +121,7 @@ app.use('/api/fii-dii', createFiiDiiRoutes());
 app.use('/api/learning', createLearningRoutes());
 app.use('/api/loss-attribution', createLossAttributionRoutes());
 app.use('/api/structure', createStructureRoutes());
+app.use('/api/diagnostics', createDiagnosticsRoutes());
 
 // --- Health Check ---
 
@@ -277,12 +281,16 @@ void ensureCaptureSchema()
   .then(() => {
     startMarketStateCapture(provider);
     startMissedWinnerAudit(provider);
+    startSetupEventsGrading(provider);
+    startOpportunityCensus(provider);
   })
   .catch((err: any) => {
     // Capture is instrumentation. It must never keep the engine down.
     logger.error({ error: err.message }, 'Capture schema check failed — starting capture anyway');
     startMarketStateCapture(provider);
     startMissedWinnerAudit(provider);
+    startSetupEventsGrading(provider);
+    startOpportunityCensus(provider);
   });
 startHolidayCalendarCheck();
 // The self-audit. Runs after the day's capture is in, feeds the failures the
