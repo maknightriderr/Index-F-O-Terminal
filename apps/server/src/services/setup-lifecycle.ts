@@ -196,6 +196,35 @@ async function deliverConfirmed(state: LiveState, lc: LiveLifecycle, preview: St
   if (channels.includes('TELEGRAM')) await sendTelegramMessage(confirmedMessage(state, lc, escapeHtml, preview));
 }
 
+/**
+ * "For / Against / Invalidation / Would be valid if" — built ONLY from
+ * fields already on the lifecycle (pool rank, R:R, the candle bonus, the
+ * score). No free-text guessing: mirrors
+ * apps/web/src/components/common/structure-stage.tsx's explanationLines,
+ * which renders the same reasoning on the setup card.
+ */
+function explanationLines(lc: LiveLifecycle): { forLines: string[]; against: string[]; invalidation: string; wouldBeValidIf: string | null } {
+  const forLines: string[] = [];
+  const against: string[] = [];
+  if (lc.pool) {
+    if (lc.pool.rank <= 2) forLines.push(`${lc.pool.kind.replace(/_/g, ' ').toLowerCase()} is a rank-${lc.pool.rank} pool.`);
+    else against.push(`${lc.pool.kind.replace(/_/g, ' ').toLowerCase()} is a lower rank-${lc.pool.rank} pool.`);
+  }
+  if (lc.rToT1 != null) {
+    if (lc.rToT1 >= 2) forLines.push(`T1 is ${lc.rToT1}R away — comfortably past the 1.5R floor.`);
+    else if (lc.rToT1 < 1.75) against.push(`T1 is only ${lc.rToT1}R away — close to the 1.5R minimum.`);
+  }
+  if (lc.scoreCandle && lc.scoreCandle.applied > 0 && lc.patterns) forLines.push(`Candles: ${lc.patterns.label} (+${lc.scoreCandle.applied} score).`);
+  else if (lc.patterns) against.push('No scored candle pattern on the sweep or displacement.');
+  if (lc.score != null) {
+    if (lc.score >= 55) forLines.push(`Setup quality ${lc.score}/100 (A-band).`);
+    else if (lc.score < 40) against.push(`Setup quality ${lc.score}/100 (C-band).`);
+  }
+  const invalidation = `A close back beyond the sweep extreme (${lc.sweepExtreme}) invalidates it (SWEEP_RECLAIMED).`;
+  const wouldBeValidIf = lc.rToT1 != null && lc.rToT1 < 1.5 ? `T1 >= 1.5R would need a closer entry or a farther T1 (currently ${lc.rToT1}R).` : null;
+  return { forLines, against, invalidation, wouldBeValidIf };
+}
+
 export function confirmedMessage(state: LiveState, lc: LiveLifecycle, esc: (s: string) => string, preview?: StructureTradePreview | null): string {
   const arrow = lc.direction === 'BULLISH' ? '🟢' : '🔴';
   const side = lc.direction === 'BULLISH' ? 'CE' : 'PE';
@@ -207,6 +236,17 @@ export function confirmedMessage(state: LiveState, lc: LiveLifecycle, esc: (s: s
     ...(lc.patterns ? [`Candles: ${lc.patterns.label}${lc.scoreCandle && lc.scoreCandle.applied > 0 ? ` (+${lc.scoreCandle.applied} score)` : ''}.`] : []),
     `Limit ${lc.entry} (${lc.zone?.kind === 'FVG' ? `fair-value gap ${lc.zone.near}–${lc.zone.far}` : 'displacement 50%'}) · stop ${lc.stop} · T1 ${lc.t1 ? `${lc.t1.price} (${lc.t1.kind.replace(/_/g, ' ').toLowerCase()}, ${lc.rToT1}R)` : '—'}${lc.t2 ? ` · T2 ${lc.t2.price}` : ''}`,
     `Setup quality ${lc.score ?? '—'}/100 · ranking only, never gates. A ${side} paper trade is minted only if the limit fills within ${fillWithin} and every gate passes.`,
+    ...(() => {
+      const { forLines, against, invalidation, wouldBeValidIf } = explanationLines(lc);
+      if (forLines.length === 0 && against.length === 0) return [];
+      return [
+        '',
+        ...forLines.map((l) => `+ ${l}`),
+        ...against.map((l) => `- ${l}`),
+        invalidation,
+        ...(wouldBeValidIf ? [wouldBeValidIf] : []),
+      ];
+    })(),
     ...(preview
       ? preview.available
         ? [

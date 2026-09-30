@@ -24,3 +24,23 @@ export * from './ema-trend/index.js';
 export * from './momentum-break/index.js';
 // Structure engine: liquidity sweep -> displacement -> FVG retrace (a third setup family; see its file header).
 export * from './structure-engine/index.js';
+// Canonical liquidity map (Stage 2: signal-diagnostics). structure-engine's
+// PoolKind/POOL_RANK stay the package's public names for those concepts
+// (unchanged); this module's wider pool-kind union is exported under
+// LiquidityMap-prefixed names so the two never collide.
+export {
+  buildTradeablePools,
+  buildResearchOnlyPools,
+  buildLiquidityMap,
+  poolId,
+  TRADEABLE_POOL_KINDS,
+  RESEARCH_ONLY_POOL_KINDS,
+  LIQUIDITY_MAP_DEFAULT_RULES,
+  type TradeablePoolKind,
+  type ResearchOnlyPoolKind,
+  type PoolKind as LiquidityMapPoolKind,
+  type BasePool as LiquidityMapBasePool,
+  type LiquidityMapRules,
+  type LiquidityMapPool,
+  type PoolStatus as LiquidityMapPoolStatus,
+} from './liquidity-map/index.js';
