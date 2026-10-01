@@ -129,8 +129,9 @@ import {
   roomGateReason,
   roomV2,
   setupConfidenceRefusal,
+  netRiskReward,
 } from './validation-gates.js';
-import { INDICATOR_CONFIDENCE_MODE } from '../config/trading-flags.js';
+import { INDICATOR_CONFIDENCE_MODE, locationGateEnforced } from '../config/trading-flags.js';
 import type { ExposureSnapshot } from './exposure-tracker.js';
 import { stopOvershootPct } from './stop-overshoot.js';
 import type { NoTradeCode, TradeDecision } from '@fno/shared';
@@ -1982,6 +1983,7 @@ async function computeMarketBias(
     locationAheadAtr: location.aheadAtr != null ? Math.round(location.aheadAtr * 100) / 100 : null,
     locationBehindAtr: location.behindAtr != null ? Math.round(location.behindAtr * 100) / 100 : null,
     locationAheadKind: location.nearestAhead?.kind ?? null,
+    locationAheadLevel: location.nearestAhead?.price ?? null,
     locationReason: location.reasons[0] ?? null,
     // Validation review, fix 1: the level the structural stop is placed
     // beyond, and the spot the location was read at.
@@ -3258,8 +3260,10 @@ async function resolveStickyTradeSetup(
     // INDICATOR_CONFIDENCE_MODE: EVIDENCE (default) never refuses on confidence; LEGACY is the old 75 floor.
     setupConfidenceRefusal({ mode: INDICATOR_CONFIDENCE_MODE, confidence, minConfidence: MIN_SETUP_CONFIDENCE }) ??
     // Validation review, fix 2 (flags LOCATION_GATE, ROOM_GATE). Null when off.
+    // INDICATOR_LOCATION_MODE: EVIDENCE (default) records the score and never refuses on it;
+    // executable room stays enforced by the target cap and the builder's R:R-after-costs floor.
     locationGateReason({
-      enabled: TRADING_FLAGS.LOCATION_GATE,
+      enabled: locationGateEnforced(),
       locationScore: entryContext?.locationScore ?? null,
       minScore: TRADING_PARAMS.LOCATION_GATE_MIN_SCORE,
       locationReason: entryContext?.locationReason ?? null,
@@ -3337,7 +3341,7 @@ async function resolveStickyTradeSetup(
             exchange,
             liveRefusalCode: refusal?.code ?? null,
             closing: { enforced: TRADING_FLAGS.CLOSING_GUARD, minutesToClose: diagnosticSnapshot.minutesToClose, guardMinutes: TRADING_PARAMS.SETUP_CLOSING_GUARD_MINUTES },
-            location: { enforced: TRADING_FLAGS.LOCATION_GATE, score: entryContext?.locationScore ?? null, minScore: TRADING_PARAMS.LOCATION_GATE_MIN_SCORE },
+            location: { enforced: locationGateEnforced(), score: entryContext?.locationScore ?? null, minScore: TRADING_PARAMS.LOCATION_GATE_MIN_SCORE },
             room: {
               enforced: TRADING_FLAGS.ROOM_GATE,
               availableAtr: entryContext?.locationAheadAtr ?? null,
@@ -5736,6 +5740,7 @@ function snapshotBlocks(
       aheadAtr: entryContext?.locationAheadAtr ?? null,
       behindAtr: entryContext?.locationBehindAtr ?? null,
       aheadKind: entryContext?.locationAheadKind ?? null,
+      aheadLevel: entryContext?.locationAheadLevel ?? null,
       reason: entryContext?.locationReason ?? null,
       behindLevel: entryContext?.locationBehindLevel ?? null,
       behindKind: entryContext?.locationBehindKind ?? null,
@@ -5769,6 +5774,8 @@ function snapshotBlocks(
         : structureRefusalStopTargetAtr(entryContext)?.targetInAtr ?? null,
       estimatedCostPct: setup?.available ? setup.estimatedCostPct ?? null : null,
       riskReward: setup?.available ? setup.riskReward ?? null : null,
+      // The builder's own net measure, from the setup's stored prices (measurement only).
+      riskRewardNet: setup?.available ? netRiskReward(setup) : null,
       lots: setup?.available ? setup.positionSize?.lots ?? null : null,
       // Validation review, fixes 1 and 6 (absent when those flags were off).
       structuralStop: setup?.structuralStop ?? null,
@@ -5892,6 +5899,8 @@ interface SetupEntryContext {
   locationAheadAtr: number | null;
   locationBehindAtr: number | null;
   locationAheadKind: string | null;
+  /** Price of the nearest level ahead (the obstacle the location score measured to). */
+  locationAheadLevel?: number | null;
   locationReason: string | null;
   /** Validation review: price and kind of assessLocation's nearestBehind — what the structural stop sits beyond. */
   locationBehindLevel?: number | null;
