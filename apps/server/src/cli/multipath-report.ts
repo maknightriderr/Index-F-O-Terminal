@@ -17,7 +17,7 @@
 
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { TRIGGER_REGISTRY, EVENT_RULES, EVENT_ENGINE_TRIGGER_IDS, type TriggerCandidate } from '@fno/analytics';
+import { TRIGGER_REGISTRY, EVENT_RULES, EVENT_ENGINE_TRIGGER_IDS, arbitrateParents, type TriggerCandidate } from '@fno/analytics';
 import { BACKTEST_SYMBOLS, loadSymbol, splitDate } from '../backtest/harness.js';
 import { BACKTEST_DATA_DIR } from '../backtest/fetch-history.js';
 import { runMultiPath, gradeTrigger, gradeCandidate, type MultiPathRun, type GradedCandidate } from '../research/multipath.js';
@@ -140,6 +140,29 @@ async function main() {
     };
   });
 
+  // ---- The arbitrated book: one selected setup per parent move, one trade at a time per symbol (in-sample) ----
+  // Retired rules are left out (their evidence is already on record); eligibility at decision time = TRADE geometry.
+  const arbitratedRows: Row[] = [];
+  for (const run of runs) {
+    const live = run.candidates.map((c) => TRIGGER_REGISTRY.find((t) => t.triggerId === c.triggerId)?.status !== 'RETIRED');
+    const decisions = arbitrateParents(run.parents, run.candidates, (idx) => ({ eligible: run.candidates[idx].bucket === 'TRADE', ineligibleReason: run.candidates[idx].bucket, stageAllowed: live[idx], netR: null }));
+    const selected = [...decisions.entries()].filter(([, d]) => d.role === 'SELECTED').map(([idx]) => run.candidates[idx]).sort((a, b) => a.decisionIndex - b.decisionIndex);
+    let busyUntil = -1;
+    for (const c of selected) {
+      if (c.decisionIndex <= busyUntil) continue;
+      const g = gradeCandidate(run, c);
+      if (!g) continue;
+      arbitratedRows.push(toRow(g));
+      busyUntil = c.decisionIndex + g.barsHeld;
+    }
+  }
+  const arbitrated = Object.fromEntries(
+    Object.keys(GROUPS).map((g) => {
+      const rows = arbitratedRows.filter((r) => r.group === g && r.session < splitAt);
+      return [g, { gross: stats(rows, 'grossR'), modelled: stats(rows, 'netModelledR'), selectedBy: dist(rows.map((r) => r.candidate.triggerId)) }];
+    })
+  );
+
   // ---- Parent setups and entry stages (in-sample, gross) ----
   const stageRows: Record<string, number[]> = { firstAvailable: [], bos: [], displacement: [], retest: [] };
   let parentCount = 0;
@@ -209,6 +232,7 @@ async function main() {
     rules: EVENT_RULES,
     registry: TRIGGER_REGISTRY,
     triggers,
+    arbitratedInSample: arbitrated,
     parents: { count: parentCount, multiFamilyShare: parentCount ? round(multiFamily / parentCount) : null, avgCandidatesPerParent: parentCount ? round(candidatesInParents / parentCount, 2) : null, entryStagesInSample: entryStages },
     perSymbol,
   };
@@ -248,6 +272,9 @@ function renderMarkdown(r: any): string {
       for (const [g, p] of Object.entries<any>(t.outOfSample.passBar)) L.push(`- **${t.triggerId} ${g}: ${p.pass ? 'PASS' : 'FAIL'}** — ${fmt(p.oos)}, windows positive ${p.windowsPositive}`);
     }
   }
+  L.push('');
+  L.push('## Arbitrated book: one selected setup per parent move (in-sample)');
+  for (const [g, a] of Object.entries<any>(r.arbitratedInSample)) L.push(`- **${g}** gross ${fmt(a.gross)} · modelled ${fmt(a.modelled)} · selected by ${JSON.stringify(a.selectedBy)}`);
   L.push('');
   L.push('## Parent setups and entry stages (in-sample, gross)');
   L.push(`${r.parents.count} parents; ${r.parents.avgCandidatesPerParent} candidates each on average; ${r.parents.multiFamilyShare} recognised by more than one family.`);

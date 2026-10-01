@@ -210,6 +210,8 @@ export interface DiagnosticsShadowRow {
   segment: DiagnosticsSegment;
   candidates: number;
   wouldTrade: number;
+  /** Times this trigger was its parent move's selected setup. */
+  selected: number;
   noFill: number;
   forwardTrades: number;
   forwardTradesRequired: number;

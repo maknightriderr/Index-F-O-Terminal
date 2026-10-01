@@ -381,7 +381,7 @@ function RegistryView({
               <Th align="left">Family</Th>
               <Th align="left" def="The trigger's live stage now: ACTIVE/PAPER trade; SHADOW is live but never trades; RETIRED is off.">Live stage</Th>
               <Th align="left" def="Whether this trigger's own rule requires a displacement candle. No other trigger is gated on one.">Displacement</Th>
-              <Th align="left" def="SHADOW forward record, per segment: candidates seen live · would have traded (valid geometry, session window, cost) · graded so far of the 30 needed · avg R before / after cost · PF.">Forward (shadow)</Th>
+              <Th align="left" def="SHADOW forward record, per segment: candidates seen live · would have traded (valid geometry, session window, cost) · selected as its parent move's one setup · graded so far of the 30 needed · avg R before / after cost · PF.">Forward (shadow)</Th>
               <Th align="left">Exact rule</Th>
               <Th align="left">Stop</Th>
             </tr>
@@ -402,7 +402,7 @@ function RegistryView({
                     ? '—'
                     : forward(t.triggerId).map((f) => (
                         <span key={f.segment} className="block">
-                          <SegmentTag segment={f.segment} /> {f.candidates} · {f.wouldTrade} · {f.forwardTrades}/{f.forwardTradesRequired} · {fmt(f.avgGrossR)}/{fmt(f.avgNetR)}R · PF {fmt(f.profitFactor)}
+                          <SegmentTag segment={f.segment} /> {f.candidates} · {f.wouldTrade} · sel {f.selected} · {f.forwardTrades}/{f.forwardTradesRequired} · {fmt(f.avgGrossR)}/{fmt(f.avgNetR)}R · PF {fmt(f.profitFactor)}
                         </span>
                       ))}
                 </td>
@@ -417,6 +417,16 @@ function RegistryView({
           </tbody>
         </table>
       </div>
+      {forward('ONE_PER_PARENT').length > 0 && (
+        <div className="mt-3 text-[11px] text-gray-300 light:text-slate-700 tabular-nums" title="Each parent move's selected setup only (setup arbitration): what trading one setup per move would have recorded.">
+          <span className="font-semibold">One setup per parent move (arbitrated): </span>
+          {forward('ONE_PER_PARENT').map((f) => (
+            <span key={f.segment} className="mr-3">
+              <SegmentTag segment={f.segment} /> {f.candidates} selected · {f.forwardTrades}/{f.forwardTradesRequired} graded · {fmt(f.avgGrossR)}/{fmt(f.avgNetR)}R · PF {fmt(f.profitFactor)}
+            </span>
+          ))}
+        </div>
+      )}
       {triggers[0] && <p className="text-[11px] text-gray-500 light:text-slate-500 mt-2">Entry: {triggers[0].entryRule} Target: {triggers[0].targetRule}</p>}
     </Card>
   );

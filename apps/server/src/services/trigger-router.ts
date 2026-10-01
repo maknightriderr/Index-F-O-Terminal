@@ -14,6 +14,15 @@
 // engine, which runs unchanged beside this router) and C2's anchor; for every
 // other family it is only an event in the log.
 //
+// Several families often see the same move. Candidates are grouped into
+// parent setups and ARBITRATED (event-engine arbitration.ts): one selected
+// setup per parent, chosen at the parent's first bar with an eligible
+// candidate from decision-time fields only, then fixed; every other
+// candidate is stored as an ALTERNATIVE or INELIGIBLE with its reason. Two
+// arbitrations run: observation (SHADOW and up — which setup would be
+// chosen) and trading (PAPER and up — the only one that may trade). Different
+// parents stay separate opportunities, subject to the slot and exposure rules.
+//
 // What happens next depends on the trigger's own live stage
 // (resolveTriggerStage):
 //   SHADOW   recorded to setup_events (decision SHADOW) and graded forward —
@@ -33,12 +42,16 @@ import {
   buildSeriesContext,
   runSessionEvents,
   evaluateTriggersAt,
+  groupIntoParents,
+  arbitrateParents,
   TRIGGER_REGISTRY,
   TRIGGERS_BY_ID,
   EVENT_ENGINE_TRIGGER_IDS,
   BAR_MS_15M,
   type MomentumBar,
   type TriggerCandidate,
+  type ArbitrationDecision,
+  type FixedSelection,
 } from '@fno/analytics';
 import { getSessionWindow, type Exchange, type OptionChain, type TradingMode } from '@fno/shared';
 import { redis } from '../lib/redis.js';
@@ -83,6 +96,10 @@ export interface RoutedCandidate {
   risk: RiskValidation;
   cost: SetupCostMeasurement | null;
   lifecycleId: string;
+  /** Observation arbitration (SHADOW and up): which setup this parent move would select, and this candidate's role. */
+  arbitration?: ArbitrationDecision | null;
+  /** Trading arbitration (PAPER and up): the one setup per parent that may trade. */
+  tradeArbitration?: ArbitrationDecision | null;
 }
 
 /** Each trigger's live stage (S1 is the structure engine's own; it is listed for completeness). */
@@ -214,20 +231,67 @@ export async function routeTriggerFamilies(args: { underlying: string; exchange:
 
     const log = runSessionEvents(ctx, s);
     const closingGuardMs = STRUCTURE_PARAMS.STRUCTURE_CLOSING_GUARD_MIN * 60 * 1000;
-    const paper: RoutedCandidate[] = [];
-    for (const i of todo) {
-      const barTime = series.bars[i].time;
+    const todoSet = new Set(todo);
+
+    // 1. Every trigger, independently, on every bar of today's session so far
+    //    (each rule reads only bars up to its own decision bar). One rule
+    //    failing — no displacement, no target — never stops another.
+    const all: TriggerCandidate[] = [];
+    for (let i = start; i <= end; i++) all.push(...evaluateTriggersAt(ctx, log, i, ids));
+
+    // 2. Qualify each: risk geometry, session window, and option cost on the
+    //    live quote (only meaningful for the bar that just closed).
+    const routed: RoutedCandidate[] = all.map((c) => {
+      const barTime = c.decisionTime;
       const sessionOk = barTime - window.open >= SETTLE_MS && window.close - (barTime + BAR_MS_15M) >= closingGuardMs;
-      // A quote is only meaningful for the bar that just closed.
-      const isNewest = i === end;
-      for (const c of evaluateTriggersAt(ctx, log, i, ids)) {
-        const cost = isNewest ? costOnChain(c, chain) : null;
-        const risk = validateCandidateRisk(c, { sessionOk, costPct: cost?.costPctOfPremium != null ? Math.round(cost.costPctOfPremium * 100) / 100 : null, maxCostPct: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM });
-        const stage = stages[c.triggerId];
-        const rc: RoutedCandidate = { candidate: c, stage, risk, cost, lifecycleId: routedLifecycleId(exchange, underlying, c) };
-        await recordCandidate(underlying, exchange, rc);
-        if (stage === 'PAPER' && isNewest && risk.wouldTrade) paper.push(rc);
+      const cost = c.decisionIndex === end ? costOnChain(c, chain) : null;
+      const risk = validateCandidateRisk(c, { sessionOk, costPct: cost?.costPctOfPremium != null ? Math.round(cost.costPctOfPremium * 100) / 100 : null, maxCostPct: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM });
+      return { candidate: c, stage: stages[c.triggerId], risk, cost, lifecycleId: routedLifecycleId(exchange, underlying, c) };
+    });
+
+    // 3. Group by parent move, then 4. arbitrate one setup per parent — once
+    //    for observation (SHADOW and up) and once for trading (PAPER and up).
+    //    A bar settled by an earlier evaluation keeps its verdict: its
+    //    selection (if any) is persisted, and its other candidates cannot be
+    //    re-selected with hindsight.
+    const parents = groupIntoParents(all, new Map([[session, log]]));
+    const arbitrate = async (modeKey: 'observe' | 'trade', allowed: LiveTriggerStage[]) => {
+      const selKey = `mp_sel:${modeKey}:${exchange}:${underlying}:${session}`;
+      const fixed: Record<string, FixedSelection> = JSON.parse((await redis.get(selKey).catch(() => null)) ?? '{}');
+      const decisions = arbitrateParents(parents, all, (idx) => {
+        const r = routed[idx];
+        const fresh = todoSet.has(r.candidate.decisionIndex);
+        return {
+          eligible: fresh && r.risk.wouldTrade,
+          ineligibleReason: fresh ? r.risk.reason : 'Decided at an earlier evaluation',
+          stageAllowed: allowed.includes(r.stage),
+          netR: r.cost?.netR ?? null,
+        };
+      }, fixed);
+      let changed = false;
+      for (const [idx, d] of decisions) {
+        const c = all[idx];
+        if (d.role === 'SELECTED' && todoSet.has(c.decisionIndex) && !fixed[d.parentId]) {
+          fixed[d.parentId] = { triggerId: c.triggerId, decisionIndex: c.decisionIndex };
+          changed = true;
+        }
       }
+      if (changed) await redis.set(selKey, JSON.stringify(fixed), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);
+      return decisions;
+    };
+    const observed = await arbitrate('observe', ['SHADOW', 'PAPER', 'ACTIVE']);
+    const traded = await arbitrate('trade', ['PAPER', 'ACTIVE']);
+
+    // 5. Record every new candidate with its role; hand the slot only the
+    //    trading selection of the bar that just closed (none without a promotion).
+    const paper: RoutedCandidate[] = [];
+    for (let idx = 0; idx < all.length; idx++) {
+      const rc = routed[idx];
+      if (!todoSet.has(rc.candidate.decisionIndex)) continue;
+      rc.arbitration = observed.get(idx) ?? null;
+      rc.tradeArbitration = traded.get(idx) ?? null;
+      await recordCandidate(underlying, exchange, rc);
+      if (rc.tradeArbitration?.role === 'SELECTED' && rc.candidate.decisionIndex === end && rc.stage === 'PAPER') paper.push(rc);
     }
     await redis.set(stateKey, String(series.bars[end].time), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);
     return { paper, evaluated: todo.length };
@@ -272,6 +336,11 @@ async function recordCandidate(underlying: string, exchange: Exchange, rc: Route
       risk: rc.risk,
       eventIds: c.eventIds,
       anchorEventId: c.anchorEventId,
+      // One setup per parent move: this candidate's role, and why it was or wasn't the one.
+      arbitration: rc.arbitration
+        ? { parentId: rc.arbitration.parentId, role: rc.arbitration.role, reason: rc.arbitration.reason, rank: rc.arbitration.rank, selectedTriggerId: rc.arbitration.selectedTriggerId }
+        : null,
+      tradeArbitration: rc.tradeArbitration ? { role: rc.tradeArbitration.role, reason: rc.tradeArbitration.reason, selectedTriggerId: rc.tradeArbitration.selectedTriggerId } : null,
     },
     versions: { strategyVersion: EVENT_ENGINE_VERSION, triggerVersion: `${c.triggerId}-${def?.version ?? '1.0'}`, riskVersion: RISK_VERSION, optionVersion: OPTION_VERSION, costVersion: COST_VERSION },
   });
