@@ -58,6 +58,7 @@ import { redis } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
 import {
   resolveTriggerStage,
+  PAPER_TRADING_STAGES,
   EVENT_ENGINE_VERSION,
   RISK_VERSION,
   OPTION_VERSION,
@@ -109,7 +110,7 @@ export function liveTriggerStages(): Record<string, LiveTriggerStage> {
 
 /** The triggers the router evaluates live: event-engine rules at SHADOW or above. */
 export function liveRoutedTriggerIds(stages: Record<string, LiveTriggerStage> = liveTriggerStages()): string[] {
-  return EVENT_ENGINE_TRIGGER_IDS.filter((id) => ['SHADOW', 'PAPER', 'ACTIVE'].includes(stages[id]));
+  return EVENT_ENGINE_TRIGGER_IDS.filter((id) => ['SHADOW', ...PAPER_TRADING_STAGES].includes(stages[id]));
 }
 
 export function routedLifecycleId(exchange: Exchange, underlying: string, c: TriggerCandidate): string {
@@ -279,11 +280,11 @@ export async function routeTriggerFamilies(args: { underlying: string; exchange:
       if (changed) await redis.set(selKey, JSON.stringify(fixed), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);
       return decisions;
     };
-    const observed = await arbitrate('observe', ['SHADOW', 'PAPER', 'ACTIVE']);
-    const traded = await arbitrate('trade', ['PAPER', 'ACTIVE']);
+    const observed = await arbitrate('observe', ['SHADOW', ...PAPER_TRADING_STAGES]);
+    const traded = await arbitrate('trade', [...PAPER_TRADING_STAGES]);
 
     // 5. Record every new candidate with its role; hand the slot only the
-    //    trading selection of the bar that just closed (none without a promotion).
+    //    trading selection of the bar that just closed (PAPER_RESEARCH and up).
     const paper: RoutedCandidate[] = [];
     for (let idx = 0; idx < all.length; idx++) {
       const rc = routed[idx];
@@ -291,7 +292,7 @@ export async function routeTriggerFamilies(args: { underlying: string; exchange:
       rc.arbitration = observed.get(idx) ?? null;
       rc.tradeArbitration = traded.get(idx) ?? null;
       await recordCandidate(underlying, exchange, rc);
-      if (rc.tradeArbitration?.role === 'SELECTED' && rc.candidate.decisionIndex === end && rc.stage === 'PAPER') paper.push(rc);
+      if (rc.tradeArbitration?.role === 'SELECTED' && rc.candidate.decisionIndex === end && PAPER_TRADING_STAGES.includes(rc.stage)) paper.push(rc);
     }
     await redis.set(stateKey, String(series.bars[end].time), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);
     return { paper, evaluated: todo.length };

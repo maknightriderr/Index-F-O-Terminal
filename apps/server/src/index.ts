@@ -31,7 +31,7 @@ import { createBacktestingRoutes } from './api/backtesting.js';
 import { createLearningRoutes } from './api/learning.js';
 import { createLossAttributionRoutes } from './api/loss-attribution.js';
 import { createStructureRoutes } from './api/structure.js';
-import { STRUCTURE, STRUCTURE_ENTRY_TF, STRUCTURE_ENTRY_TF_REJECTED, STRUCTURE_PARAMS, INDICATOR_CONFIDENCE_MODE, INDICATOR_CONFIDENCE_MODE_REJECTED, INDICATOR_LOCATION_MODE, INDICATOR_LOCATION_MODE_REJECTED } from './config/trading-flags.js';
+import { STRUCTURE, STRUCTURE_ENTRY_TF, STRUCTURE_ENTRY_TF_REJECTED, STRUCTURE_PARAMS, INDICATOR_CONFIDENCE_MODE, INDICATOR_CONFIDENCE_MODE_REJECTED, INDICATOR_LOCATION_MODE, INDICATOR_LOCATION_MODE_REJECTED, RESEARCH_PAPER_TRADING } from './config/trading-flags.js';
 import { startAbandonedSetupSweep } from './services/backtesting.js';
 import { createNewsRoutes } from './api/news.js';
 import { createCorporateActionsRoutes } from './api/corporate-actions.js';
@@ -218,6 +218,7 @@ const server = app.listen(config.server.port, config.server.host, () => {
   }
   logger.info({ mode: INDICATOR_CONFIDENCE_MODE }, 'Indicator engine: confidence mode (EVIDENCE = evidence only; LEGACY = the old 75 gate)');
   logger.info({ mode: INDICATOR_LOCATION_MODE }, 'Indicator engine: location mode (EVIDENCE = recorded only; LEGACY = the old POOR_LOCATION gate)');
+  logger.info({ enabled: RESEARCH_PAPER_TRADING }, 'Research paper trading: trigger families A2–F3 compete for the paper slot as PAPER_RESEARCH (off = SHADOW, recorded only)');
   if (INDICATOR_LOCATION_MODE_REJECTED != null) {
     logger.warn({ value: INDICATOR_LOCATION_MODE_REJECTED, using: INDICATOR_LOCATION_MODE }, 'INDICATOR_LOCATION_MODE is not EVIDENCE or LEGACY — using the default');
   }

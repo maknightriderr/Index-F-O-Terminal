@@ -1426,6 +1426,8 @@ export type NoTradeCode =
   | 'STRUCTURE_SEQUENCE'
   // CONSENSUS_SETUPS off: the consensus engine computes bias but does not mint.
   | 'CONSENSUS_OFF'
+  // Slot arbitration: the setup built cleanly, but another engine's candidate ranked higher for the symbol's one slot.
+  | 'NOT_SELECTED'
   | 'UNKNOWN';
 
 /** A structured account of one entry decision — why it was taken, or why it was not. */

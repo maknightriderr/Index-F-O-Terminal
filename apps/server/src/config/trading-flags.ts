@@ -508,8 +508,23 @@ export function locationGateEnforced(mode: IndicatorConfidenceMode = INDICATOR_L
 // pre-registered out-of-sample pass, then ≥ 30 forward SHADOW trades). The
 // TRIGGER_STAGES env var can only DEMOTE (e.g. "B2=RESEARCH,D1=RETIRED");
 // a promotion asked for there is ignored and logged.
-export type LiveTriggerStage = 'RESEARCH' | 'SHADOW' | 'PAPER' | 'ACTIVE' | 'RETIRED';
-const STAGE_RANK: Record<LiveTriggerStage, number> = { RETIRED: 0, RESEARCH: 1, SHADOW: 2, PAPER: 3, ACTIVE: 4 };
+export type LiveTriggerStage = 'RESEARCH' | 'SHADOW' | 'PAPER_RESEARCH' | 'PAPER' | 'ACTIVE' | 'RETIRED';
+const STAGE_RANK: Record<LiveTriggerStage, number> = { RETIRED: 0, RESEARCH: 1, SHADOW: 2, PAPER_RESEARCH: 3, PAPER: 4, ACTIVE: 5 };
+/** The stages that may take the paper-trade slot (this terminal places no real orders: every trade is a paper trade). */
+export const PAPER_TRADING_STAGES: readonly LiveTriggerStage[] = ['PAPER_RESEARCH', 'PAPER', 'ACTIVE'];
+
+// ---- Research paper trading (user decision, 2026-10-01) ----
+// Every SHADOW trigger family (A2–F3) is raised to PAPER_RESEARCH: it may
+// build a paper candidate and compete for the symbol's one paper-trade slot
+// (slot-arbitration.ts) against S1 and the indicator engine, through the
+// same safety gates, option leg and cost limits. This BYPASSES the earlier
+// promotion bar (an out-of-sample pass, then 30 forward trades); its trades
+// carry "+paper-research.<trigger>" in their logic version so they are never
+// pooled with S1's or the indicator engine's history. The terminal has no
+// broker execution path: nothing here can place a real order.
+// Rollback without a deploy: RESEARCH_PAPER_TRADING=off (back to SHADOW).
+export const RESEARCH_PAPER_TRADING_DEFAULT = true;
+export const RESEARCH_PAPER_TRADING: boolean = parseFlag(process.env.RESEARCH_PAPER_TRADING, RESEARCH_PAPER_TRADING_DEFAULT);
 
 export interface TriggerPromotion {
   stage: 'PAPER' | 'ACTIVE';
@@ -518,7 +533,7 @@ export interface TriggerPromotion {
   approvedOn: string;
 }
 
-/** Empty: no trigger family besides S1 can trade. */
+/** Empty: no trigger family has EARNED a promotion (their paper trades come from RESEARCH_PAPER_TRADING). */
 export const TRIGGER_PROMOTIONS: Readonly<Record<string, TriggerPromotion>> = Object.freeze({});
 
 export function parseTriggerStages(raw: string | undefined): { overrides: Record<string, LiveTriggerStage>; rejected: string[] } {
@@ -541,9 +556,17 @@ export function resolveTriggerStage(
   triggerId: string,
   registryStatus: LiveTriggerStage,
   promotions: Readonly<Record<string, TriggerPromotion>> = TRIGGER_PROMOTIONS,
-  overrides: Readonly<Record<string, LiveTriggerStage>> = parsedTriggerStages.overrides
+  overrides: Readonly<Record<string, LiveTriggerStage>> = parsedTriggerStages.overrides,
+  researchPaper: boolean = RESEARCH_PAPER_TRADING
 ): LiveTriggerStage {
-  const earned: LiveTriggerStage = registryStatus === 'RETIRED' ? 'RETIRED' : promotions[triggerId] ? promotions[triggerId].stage : registryStatus;
+  const earned: LiveTriggerStage =
+    registryStatus === 'RETIRED'
+      ? 'RETIRED'
+      : promotions[triggerId]
+        ? promotions[triggerId].stage
+        : registryStatus === 'SHADOW' && researchPaper
+          ? 'PAPER_RESEARCH'
+          : registryStatus;
   const asked = overrides[triggerId];
   return asked && STAGE_RANK[asked] < STAGE_RANK[earned] ? asked : earned;
 }
@@ -839,6 +862,16 @@ export function logicStamp(
       : {}),
     ...(extras.versions ? { versions: { ...extras.versions } } : {}),
   };
+}
+
+/**
+ * A trigger-family paper trade (A2, B1, … at PAPER_RESEARCH and up) carries
+ * its trigger in the logic version, so its rows never pool with S1's or the
+ * indicator engine's: `<base>+paper-research.<triggerId>`.
+ */
+export const PAPER_RESEARCH_LOGIC_SUFFIX = '+paper-research';
+export function paperResearchStamp(stamp: LogicStamp, triggerId: string | null | undefined): LogicStamp {
+  return triggerId ? { ...stamp, logicVersion: `${stamp.logicVersion}${PAPER_RESEARCH_LOGIC_SUFFIX}.${triggerId}` } : stamp;
 }
 
 /** The stamp with every live switch — what the engine writes on setups and decisions. */

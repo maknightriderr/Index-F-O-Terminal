@@ -6,8 +6,8 @@
 // 2. No universal displacement gate: only S1 and C2 require one.
 // 3. Each family keeps its own rule; non-displacement candidates reach risk
 //    validation and option feasibility.
-// 4. Unvalidated families cannot trade: SHADOW by default, PAPER only through
-//    a code-level promotion, never through a setting.
+// 4. Unvalidated families paper-trade as PAPER_RESEARCH (RESEARCH_PAPER_TRADING,
+//    rollback to SHADOW by setting); PAPER only through a code-level promotion.
 // ============================================================
 
 import { describe, it, expect } from 'vitest';
@@ -25,7 +25,7 @@ import {
   EVENT_ENGINE_TRIGGER_IDS,
   type MomentumBar,
 } from '@fno/analytics';
-import { resolveTriggerStage, parseTriggerStages, TRIGGER_PROMOTIONS, TRIGGER_VERSION } from '../../config/trading-flags.js';
+import { resolveTriggerStage, parseTriggerStages, TRIGGER_PROMOTIONS, TRIGGER_VERSION, RESEARCH_PAPER_TRADING, PAPER_TRADING_STAGES } from '../../config/trading-flags.js';
 import { liveTriggerStages, liveRoutedTriggerIds, validateCandidateRisk, lifecycleFromCandidate, routedLifecycleId, type RoutedCandidate } from '../../services/trigger-router.js';
 import { structureSequenceRefusal } from '../../services/structure-live.js';
 
@@ -104,17 +104,24 @@ describe('no universal displacement gate', () => {
   });
 });
 
-describe('stages: unvalidated families cannot trade', () => {
-  it('defaults: S1 ACTIVE, the SWEEP_CLOSE restatements RETIRED, every other family SHADOW, nothing PAPER', () => {
+describe('stages: research families paper-trade, nothing has earned PAPER', () => {
+  it('defaults: S1 ACTIVE, the SWEEP_CLOSE restatements RETIRED, every other family PAPER_RESEARCH, nothing promoted to PAPER', () => {
+    expect(RESEARCH_PAPER_TRADING).toBe(true);
     expect(TRIGGER_PROMOTIONS).toEqual({});
     const stages = liveTriggerStages();
     expect(stages.S1).toBe('ACTIVE');
     expect(stages.A1).toBe('RETIRED');
     expect(stages.F4).toBe('RETIRED');
-    for (const [id, st] of Object.entries(stages)) if (!['S1', 'A1', 'F4'].includes(id)) expect(st, id).toBe('SHADOW');
+    for (const [id, st] of Object.entries(stages)) if (!['S1', 'A1', 'F4'].includes(id)) expect(st, id).toBe('PAPER_RESEARCH');
     expect(Object.values(stages).filter((x) => x === 'PAPER')).toEqual([]);
+    expect(PAPER_TRADING_STAGES).toEqual(['PAPER_RESEARCH', 'PAPER', 'ACTIVE']);
   });
-  it('the router evaluates SHADOW families live, never RETIRED ones', () => {
+  it('RESEARCH_PAPER_TRADING off puts every research family back to SHADOW (rollback without a deploy)', () => {
+    expect(resolveTriggerStage('A3', 'SHADOW', {}, {}, false)).toBe('SHADOW');
+    expect(resolveTriggerStage('A3', 'SHADOW', {}, {}, true)).toBe('PAPER_RESEARCH');
+    expect(resolveTriggerStage('A1', 'RETIRED', {}, {}, true)).toBe('RETIRED');
+  });
+  it('the router evaluates paper-research families live, never RETIRED ones', () => {
     const ids = liveRoutedTriggerIds();
     expect(ids).toContain('A2');
     expect(ids).toContain('B2');
@@ -122,19 +129,21 @@ describe('stages: unvalidated families cannot trade', () => {
     expect(ids).not.toContain('S1');
   });
   it('a setting can only demote; promotion needs a code-level record', () => {
-    const { overrides, rejected } = parseTriggerStages('A2=PAPER, B2=RESEARCH, junk');
+    const { overrides, rejected } = parseTriggerStages('A2=PAPER, B2=RESEARCH, A3=SHADOW, junk');
     expect(rejected).toEqual(['junk']);
-    expect(resolveTriggerStage('A2', 'SHADOW', {}, overrides)).toBe('SHADOW');
-    expect(resolveTriggerStage('B2', 'SHADOW', {}, overrides)).toBe('RESEARCH');
+    expect(resolveTriggerStage('A2', 'SHADOW', {}, overrides, true)).toBe('PAPER_RESEARCH');
+    expect(resolveTriggerStage('B2', 'SHADOW', {}, overrides, true)).toBe('RESEARCH');
+    expect(resolveTriggerStage('A3', 'SHADOW', {}, overrides, true)).toBe('SHADOW');
     const promoted = { A2: { stage: 'PAPER' as const, evidence: 'OOS pass + 30 forward trades', approvedOn: '2026-12-01' } };
     expect(resolveTriggerStage('A2', 'SHADOW', promoted, {})).toBe('PAPER');
     expect(resolveTriggerStage('A1', 'RETIRED', { A1: { stage: 'PAPER', evidence: 'x', approvedOn: 'x' } }, {})).toBe('RETIRED');
   });
-  it('the slot mints a routed candidate only at PAPER stage', () => {
+  it('the slot builds a routed candidate only at a paper-trading stage, and before any arbitration', () => {
     const src = readFileSync(fileURLToPath(new URL('../../services/market-bias.ts', import.meta.url)), 'utf8');
-    const loop = src.slice(src.indexOf('const multipathFamily'), src.indexOf('one routed attempt per poll'));
-    expect(loop).toMatch(/if \(rc\.stage !== 'PAPER'\) continue;/);
-    expect(loop.indexOf("rc.stage !== 'PAPER'")).toBeLessThan(loop.indexOf('resolveStructureSetup'));
+    const loop = src.slice(src.indexOf('const multipathFamily'), src.indexOf('let indicator: TradeSetup | DeferredSetup'));
+    expect(loop).toMatch(/if \(!PAPER_TRADING_STAGES\.includes\(rc\.stage\)\) continue;/);
+    expect(loop.indexOf('PAPER_TRADING_STAGES.includes(rc.stage)')).toBeLessThan(loop.indexOf('resolveStructureSetup'));
+    expect(loop).toMatch(/if \(built\) pending\.push\(built\);/);
   });
 });
 

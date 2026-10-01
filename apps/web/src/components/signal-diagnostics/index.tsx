@@ -351,7 +351,8 @@ function MajorMovesView({ rows }: { rows: SignalDiagnosticsData['majorMoves'] })
 const STATUS_STYLE: Record<string, string> = {
   RESEARCH: 'bg-sky-500/15 text-sky-300 light:text-sky-700',
   SHADOW: 'bg-violet-500/15 text-violet-300 light:text-violet-700',
-  PAPER: 'bg-amber-500/15 text-amber-300 light:text-amber-700',
+  PAPER_RESEARCH: 'bg-orange-500/15 text-orange-300 light:text-orange-700',
+  PAPER:'bg-amber-500/15 text-amber-300 light:text-amber-700',
   ACTIVE: 'bg-emerald-500/15 text-emerald-300 light:text-emerald-700',
   RETIRED: 'bg-gray-500/15 text-gray-400 light:text-slate-600',
 };

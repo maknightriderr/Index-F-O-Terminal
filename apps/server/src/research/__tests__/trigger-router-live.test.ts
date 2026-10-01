@@ -1,6 +1,7 @@
 // ============================================================
-// TRIGGER ROUTER (live) — records SHADOW candidates once, never hands one to
-// the slot, and evaluates each closed bar once.
+// TRIGGER ROUTER (live) — records every candidate once, hands the slot only
+// the trading selection (one per parent) of the bar that just closed, and
+// evaluates each closed bar once.
 // ============================================================
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -54,13 +55,12 @@ describe('routeTriggerFamilies', () => {
     recorded.length = 0;
   });
 
-  it('records SHADOW candidates (with risk, timing and move potential) and hands none to the slot', async () => {
+  it('records every candidate (with risk, timing and move potential) and hands the slot one trading selection per parent', async () => {
     const out = await routeTriggerFamilies({ underlying: 'NIFTY', exchange: 'NSE', mode: 'INTRADAY', bars, chain: null, now: ist('2026-08-10T11:20:00') });
-    expect(out?.paper).toEqual([]);
     const a2 = recorded.find((r) => r.triggerType === 'A2');
     expect(a2).toBeDefined();
     expect(a2).toMatchObject({ toStage: 'CANDIDATE', direction: 'BEARISH', instrument: 'NIFTY' });
-    expect(a2.context.stage).toBe('SHADOW');
+    expect(a2.context.stage).toBe('PAPER_RESEARCH');
     expect(a2.context.risk).toHaveProperty('wouldTrade');
     expect(a2.context.timing).toHaveProperty('class');
     expect(a2.context.movePotential).toHaveProperty('class');
@@ -72,8 +72,26 @@ describe('routeTriggerFamilies', () => {
     const selectedPerParent = new Map<string, number>();
     for (const r of recorded) if (r.context.arbitration?.role === 'SELECTED') selectedPerParent.set(r.context.arbitration.parentId, (selectedPerParent.get(r.context.arbitration.parentId) ?? 0) + 1);
     for (const n of selectedPerParent.values()) expect(n).toBe(1);
-    // Trading arbitration admits PAPER and up only: nothing is selected to trade today.
-    expect(recorded.filter((r) => r.context.tradeArbitration?.role === 'SELECTED')).toEqual([]);
+    // Trading arbitration (PAPER_RESEARCH and up): at most one selection per
+    // parent, and the slot receives exactly the selections of the bar that
+    // just closed — no displacement needed (this session has none).
+    const tradeSelected = recorded.filter((r) => r.context.tradeArbitration?.role === 'SELECTED');
+    const tradePerParent = new Map<string, number>();
+    for (const r of tradeSelected) tradePerParent.set(r.context.arbitration.parentId, (tradePerParent.get(r.context.arbitration.parentId) ?? 0) + 1);
+    for (const n of tradePerParent.values()) expect(n).toBe(1);
+    const newest = tradeSelected.filter((r) => r.time.getTime() === today[7].time + M15).map((r) => r.lifecycleId).sort();
+    expect(out!.paper.map((p) => p.lifecycleId).sort()).toEqual(newest);
+    // The risk controls still bind a paper-research trigger: every candidate in
+    // this session has T1 under 1.5R, so each is INELIGIBLE and none reaches the slot.
+    for (const r of recorded) {
+      expect(r.context.bucket, r.triggerType).toBe('LOW_RR');
+      expect(r.context.tradeArbitration.role, r.triggerType).toBe('INELIGIBLE');
+    }
+    expect(out!.paper).toEqual([]);
+    for (const p of out!.paper) {
+      expect(p.stage).toBe('PAPER_RESEARCH');
+      expect(p.risk.wouldTrade).toBe(true);
+    }
   });
 
   it('evaluates each closed bar once: a second poll on the same bars records nothing new', async () => {
