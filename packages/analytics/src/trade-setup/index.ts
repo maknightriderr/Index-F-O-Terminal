@@ -306,7 +306,8 @@ export function buildTradeSetup(
   /** Extra inputs for the option-quality read. See SetupInstrumentContext. */
   instrument: SetupInstrumentContext = {}
 ): TradeSetup {
-  if (confidence < MIN_CONFIDENCE) {
+  // `confidenceGate: false` (the server's EVIDENCE mode): confidence is evidence, not a refusal. Default on = unchanged.
+  if (instrument.confidenceGate !== false && confidence < MIN_CONFIDENCE) {
     return {
       available: false,
       noTradeCode: 'LOW_SETUP_QUALITY',
@@ -759,6 +760,8 @@ function buildNakedLong(
  * two mechanical tradeability floors.
  */
 export interface SetupInstrumentContext {
+  /** False = confidence never refuses the setup (the caller's EVIDENCE mode). Absent/true = the MIN_CONFIDENCE floor, exactly as before. */
+  confidenceGate?: boolean;
   ivRank?: number | null;
   hvPct?: number | null;
   tickSize?: number;

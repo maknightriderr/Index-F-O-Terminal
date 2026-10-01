@@ -184,6 +184,8 @@ export interface GateEvaluationInputs {
   /** The live thresholds, passed in so this module holds no copy of them. */
   thresholds: {
     minSetupConfidence: number;
+    /** False under INDICATOR_CONFIDENCE_MODE=EVIDENCE: the row still records the comparison (benchmark data) but nothing refused on it. Absent = enforced. */
+    confidenceGateEnforced?: boolean;
     openingSettleMinutes: number;
     openingGuardMinutes: number;
     postLossSettleMinutes: number;
@@ -266,8 +268,8 @@ export function evaluateGateDiagnostics(inputs: Readonly<GateEvaluationInputs>, 
     row(
       'LOW_SETUP_QUALITY',
       confidenceFails ? 'FAIL' : 'PASS',
-      confidenceFails ? `Confidence ${inputs.confidence} is below ${t.minSetupConfidence}.` : null,
-      { minSetupConfidence: t.minSetupConfidence },
+      confidenceFails ? `Confidence ${inputs.confidence} is below ${t.minSetupConfidence}${t.confidenceGateEnforced === false ? ' (not enforced: confidence is evidence only)' : ''}.` : null,
+      t.confidenceGateEnforced === false ? { minSetupConfidence: t.minSetupConfidence, enforced: false } : { minSetupConfidence: t.minSetupConfidence },
       { confidence: inputs.confidence, marginToFloor: inputs.confidence - t.minSetupConfidence }
     )
   );
