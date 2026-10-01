@@ -794,12 +794,11 @@ function RejectedToday({ rows, outcomes }: { rows: StructureLifecycleView[]; out
   );
 }
 
-const WATCH_STATUS_STYLE: Record<SetupWatchRow['status'], string> = {
-  ELIGIBLE: 'bg-emerald-500/15 text-emerald-300 light:text-emerald-700',
-  CONFIRMED_LOW_RR: 'bg-amber-500/15 text-amber-300 light:text-amber-700',
-  BLOCKED: 'bg-rose-500/15 text-rose-300 light:text-rose-700',
-  ENDED: 'bg-gray-500/15 text-gray-400 light:text-slate-600',
-};
+/** The chip: Confirmed (tinted by whether R:R is at 1.50R — information only) or Ended. */
+function watchChipStyle(r: SetupWatchRow): string {
+  if (r.status === 'ENDED') return 'bg-gray-500/15 text-gray-400 light:text-slate-600';
+  return r.rrAtMin ? 'bg-emerald-500/15 text-emerald-300 light:text-emerald-700' : 'bg-amber-500/15 text-amber-300 light:text-amber-700';
+}
 
 const rupee = (n: number | null | undefined) => (n == null ? '—' : `₹${n.toFixed(2)}`);
 const lvl = (n: number | null | undefined) => (n == null ? '—' : formatIndianNumber(n, 2));
@@ -815,7 +814,7 @@ function SetupWatchList({ rows }: { rows: SetupWatchRow[] }) {
   return (
     <IntelCard title="Confirmed setups" accent="emerald">
       <p className="text-[10px] text-gray-400 light:text-slate-600 mb-2 leading-snug">
-        Re-checked on every closed 15m bar under the same setup. Below 1.50R a setup stays visible and is never traded; option levels are premiums (est. when the entry is away from the live price).
+        Every confirmed setup, re-checked on every closed 15m bar under the same setup. R:R against 1.50R is information, not a gate — execution is yours. Option levels are premiums (est. when the entry is away from the live price).
       </p>
       <div className="space-y-2">
         {rows.map((r) => {
@@ -826,7 +825,7 @@ function SetupWatchList({ rows }: { rows: SetupWatchRow[] }) {
                 <span className="text-xs font-semibold text-gray-200 light:text-slate-800">
                   {r.source === 'INDICATOR' ? 'Indicator' : r.source === 'S1' ? 'Structure S1' : `Paper research · ${r.source}`} · 15m {r.direction === 'BEARISH' ? '▼ Bearish' : '▲ Bullish'}
                 </span>
-                <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${WATCH_STATUS_STYLE[r.status]}`}>{r.status === 'CONFIRMED_LOW_RR' ? 'Confirmed' : r.status === 'ELIGIBLE' ? 'Eligible' : r.status === 'BLOCKED' ? 'Blocked' : 'Ended'}</span>
+                <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${watchChipStyle(r)}`}>{r.status === 'ENDED' ? 'Ended' : 'Confirmed'}</span>
               </div>
               <div className="text-[11px] text-gray-300 light:text-slate-700 mb-1">{r.statusText}</div>
               {p ? (
@@ -851,7 +850,12 @@ function SetupWatchList({ rows }: { rows: SetupWatchRow[] }) {
               ) : (
                 <div className="text-[11px] text-gray-400 light:text-slate-600">No option leg could be built{r.blockReason ? `: ${r.blockReason}` : '.'}</div>
               )}
-              {r.blockReason && p && <div className="text-[10px] text-rose-300 light:text-rose-700 mt-1">{r.blockCode ? `${r.blockCode}: ` : ''}{r.blockReason}</div>}
+              {r.blockReason && p && (
+                <div className="text-[10px] text-gray-400 light:text-slate-600 mt-1">
+                  Note — not taken by the automatic paper-trade log right now: {r.blockCode ? `${r.blockCode}: ` : ''}
+                  {r.blockReason}
+                </div>
+              )}
             </div>
           );
         })}

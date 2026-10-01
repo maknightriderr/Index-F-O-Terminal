@@ -28,6 +28,8 @@ import type { OptionChain, OptionChainLeg, OptionChainStrike, TradeSetup } from 
 import { fixtureStrikes, leg, ATM, LOT } from './trade-setup-fixtures.js';
 import {
   RR_MIN,
+  structureDisplayEnd,
+  isShownStructureSetup,
   rrStatus,
   bindingRR,
   structureReference,
@@ -104,18 +106,26 @@ const planOf = (strike: number, entryPremium = 118) =>
     trail: { breakevenAtR: 1, lockAtR: 2 },
   });
 
-describe('3. the status line', () => {
-  it('reads exactly as specified, and the 1.50R minimum is unchanged', () => {
+describe('3. the status line — R:R is informational', () => {
+  it('every confirmed setup reads "Confirmed"; 1.50R is only the reference', () => {
     expect(RR_MIN).toBe(1.5);
-    expect(rrStatus(1.32, null).text).toBe('Confirmed — R:R 1.32R < 1.50R');
-    expect(rrStatus(1.47, null).text).toBe('Confirmed — R:R 1.47R < 1.50R');
-    expect(rrStatus(1.5, null).text).toBe('Eligible — R:R 1.50R ≥ 1.50R');
-    expect(rrStatus(1.82, null).text).toBe('Eligible — R:R 1.82R ≥ 1.50R');
-    // Never "1.50R < 1.50R": a value just below the minimum floors to 1.49.
-    expect(rrStatus(1.4999, null).text).toBe('Confirmed — R:R 1.49R < 1.50R');
+    expect(rrStatus(1.2).text).toBe('Confirmed — R:R 1.20R < 1.50R');
+    expect(rrStatus(1.4).text).toBe('Confirmed — R:R 1.40R < 1.50R');
+    expect(rrStatus(1.49).text).toBe('Confirmed — R:R 1.49R < 1.50R');
+    expect(rrStatus(1.5).text).toBe('Confirmed — R:R 1.50R ≥ 1.50R');
+    expect(rrStatus(1.62).text).toBe('Confirmed — R:R 1.62R ≥ 1.50R');
+    // Never "1.50R < 1.50R": a value just below the reference floors to 1.49.
+    expect(rrStatus(1.4999).text).toBe('Confirmed — R:R 1.49R < 1.50R');
+    expect(rrStatus(null).text).toBe('Confirmed — R:R not measured');
   });
-  it('R:R at the minimum does not bypass another hard check: the exact reason is shown', () => {
-    expect(rrStatus(1.62, { code: 'COST_TOO_HIGH', reason: 'round trip 6.1% of premium' })).toEqual({ status: 'BLOCKED', text: 'Blocked — R:R 1.62R ≥ 1.50R · COST_TOO_HIGH: round trip 6.1% of premium' });
+  it('low R:R or another check never changes the status: the row stays CONFIRMED; the check is only a note', () => {
+    for (const rr of [1.2, 1.4, 1.49, 1.5, 1.62]) {
+      const row = applyWatchUpdate(null, watchUpdate({ statusRR: rr, block: { code: 'COST_TOO_HIGH', reason: 'round trip 6.1% of premium' } })).row;
+      expect(row.status, String(rr)).toBe('CONFIRMED');
+      expect(row.statusText.startsWith('Confirmed — R:R')).toBe(true);
+      expect(row.rrAtMin).toBe(rr >= 1.5);
+      expect(row.blockCode).toBe('COST_TOO_HIGH'); // shown as a note, never hides or ends it
+    }
   });
   it('the binding R:R is the lower of the underlying R:R and the option net R:R', () => {
     expect(bindingRR(1.8, 1.42)).toBe(1.42);
@@ -180,24 +190,25 @@ describe('1–2. a confirmed setup at 1.40R stays visible and is re-evaluated un
   });
 });
 
-describe('3–4. R:R moves from below 1.50R to ≥ 1.50R and the status turns Eligible', () => {
+describe('3–4. R:R moves from below 1.50R to ≥ 1.50R on the same row', () => {
   it('S1: a close inside the zone is the achievable fill — R:R recovers from 1.33R to 2.5R', () => {
     const lc = lowRrS1();
     expect(grossRRFrom(lc, structureReference(lc, 99))).toBe(1.33); // below the zone: the limit
     expect(structureReference(lc, 102)).toBe(102);
     expect(grossRRFrom(lc, 102)).toBe(2.5);
   });
-  it('Confirmed → Eligible on the same row, RR_RECOVERED recorded once, first-eligible time kept', () => {
+  it('1.40R → 1.62R: still Confirmed, the text follows the R:R, RR_RECOVERED recorded once (diagnostic only)', () => {
     const a = applyWatchUpdate(null, watchUpdate({ statusRR: 1.4 })).row;
     const b = applyWatchUpdate(a, watchUpdate({ statusRR: 1.62, barTime: T0 + M15, at: T0 + M15 }));
     expect(b.events).toEqual(['REEVALUATED', 'RR_RECOVERED']);
-    expect(b.row.status).toBe('ELIGIBLE');
-    expect(b.row.statusText).toBe('Eligible — R:R 1.62R ≥ 1.50R');
+    expect(b.row.status).toBe('CONFIRMED');
+    expect(b.row.statusText).toBe('Confirmed — R:R 1.62R ≥ 1.50R');
     expect(b.row.rrRecovered).toBe(true);
-    expect(b.row.firstEligibleAt).toBe(T0 + M15);
-    const c = applyWatchUpdate(b.row, watchUpdate({ statusRR: 1.7, barTime: T0 + 2 * M15, at: T0 + 2 * M15 }));
-    expect(c.events).toEqual(['REEVALUATED']); // recovered once, not again
-    expect(c.row.firstEligibleAt).toBe(T0 + M15);
+    expect(b.row.firstAtMinAt).toBe(T0 + M15);
+    const c = applyWatchUpdate(b.row, watchUpdate({ statusRR: 1.3, barTime: T0 + 2 * M15, at: T0 + 2 * M15 }));
+    expect(c.events).toEqual(['REEVALUATED']);
+    expect(c.row.statusText).toBe('Confirmed — R:R 1.30R < 1.50R'); // back below: still shown, same row
+    expect(c.row.firstAtMinAt).toBe(T0 + M15);
   });
   it('a recovered S1 is offered to the fill chain only at ≥ 1.50R at the live price, at most once per closed bar', () => {
     const ka: StructureKeepAlive = { since: T0, cause: 'LOW_RR_AT_CONFIRM', lastBarTime: null, lastAttemptBar: null, reference: 100, grossRR: 1.33, ended: null };
@@ -449,3 +460,42 @@ function routedOf(c: TriggerCandidate): RoutedCandidate {
     anchorKeys: ['P1', c.anchorEventId],
   };
 }
+
+describe('every confirmed setup is shown; it ends only on genuine invalidation / expiry', () => {
+  it('S1: any confirmed lifecycle with a stop and T1 is shown — CONFIRMED at any R:R, or the engine\'s LOW_RR', () => {
+    expect(isShownStructureSetup(lowRrS1())).toBe(true); // LOW_RR (1.33R)
+    expect(isShownStructureSetup(lowRrS1({ stage: 'CONFIRMED', confirmedAt: T0 + M15, rToT1: 1.9 }))).toBe(true);
+    expect(isShownStructureSetup(lowRrS1({ stage: 'DEVELOPING', confirmedAt: null }))).toBe(false); // not confirmed yet
+    expect(isShownStructureSetup(lowRrS1({ t1: null }))).toBe(false);
+  });
+  it('S1: a refusal by the paper-trade log never ends the shown setup; S1\'s own rules do', () => {
+    // Refused for good by the paper log (e.g. a cooldown): the lifecycle has a live REFUSED outcome — still shown.
+    const refused = lowRrS1({ stage: 'CONFIRMED', confirmedAt: T0 + M15, live: { outcome: 'REFUSED', reason: 'cooldown', code: 'POST_LOSS_COOLDOWN', at: T0 + M15 } });
+    expect(structureDisplayEnd(refused, [bar(1, 99, 101, 98.5, 99), bar(2, 99, 101.5, 98.8, 101)], M15, fill)).toBeNull();
+    expect(structureDisplayEnd(refused, [bar(1, 104, 106.2, 103, 104)], M15, fill)?.reason).toBe('STOP_TRADED');
+    expect(structureDisplayEnd(refused, [bar(1, 104, 105.9, 103, 105.5)], M15, fill)?.reason).toBe('SWEEP_RECLAIMED');
+    expect(structureDisplayEnd(refused, [bar(1, 96, 97, 91.5, 93)], M15, fill)?.reason).toBe('MISSED');
+    const quiet = Array.from({ length: fill + 1 }, (_, j) => bar(j + 1, 99, 99.5, 98.5, 99));
+    expect(structureDisplayEnd(refused, quiet, M15, fill)?.reason).toBe('NO_FILL');
+  });
+  it('families: a confirmed candidate at ≥ 1.50R is shown (DISPLAY) but never handed to the slot again', () => {
+    const { ctx, log, start } = familySession();
+    const original = evaluateTriggersAt(ctx, log, start + 7, EVENT_ENGINE_TRIGGER_IDS).find((c) => c.triggerId === 'A2')!;
+    const rebuilt = { ...rebuildCandidateAt(ctx, log, original, start + 8)!, bucket: 'TRADE' as const, rToT1: 1.8 };
+    const display: FamilyWatchEntry = { ...newFamilyWatch(routedOf(original), 'DISPLAY'), current: rebuilt, lastIndex: start + 8 };
+    expect(recoveredFamilyCandidates([display], start + 8, liveTriggerStages(), null, [])).toEqual([]);
+    // The same candidate kept for the paper log (it started below 1.50R) IS handed once it clears it — unchanged.
+    expect(recoveredFamilyCandidates([{ ...display, cause: 'LOW_RR_AT_DECISION' }], start + 8, liveTriggerStages(), null, [])).toHaveLength(1);
+  });
+  it('the shown plan\'s strike: an R:R-only refusal is a valid strike (ranked by net R:R); the paper log keeps tradeable strikes first', () => {
+    const rrPlan = { entry: 70, stopLoss: 55, target: 95, riskReward: 1.67, riskRewardNet: 1.55, estimatedCostPct: 2, stopInAtr: 1.5, targetInAtr: 2, delta: -0.5 };
+    const builds: StrikeBuild[] = [
+      { strike: 25000, delta: -0.5, spreadPct: 0.3, setup: { available: false, reason: 'rr', noTradeCode: 'REWARD_RISK_TOO_LOW', rrPlan } },
+      { strike: 25100, delta: -0.6, spreadPct: 0.3, setup: { available: true, reason: '', strike: 25100, entry: 120, stopLoss: 100, target: 150, estimatedCostPct: 2 } },
+    ];
+    // Shown setup (R:R informational): the higher net R:R wins even though it is below the paper log's bar.
+    expect(rankStrikeBuilds(builds, 0.5, 25000, false)[0].strike).toBe(25000);
+    // Paper-trade log (unchanged): the tradeable strike first.
+    expect(rankStrikeBuilds(builds, 0.5, 25000)[0].strike).toBe(25100);
+  });
+});

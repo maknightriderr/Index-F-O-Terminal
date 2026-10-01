@@ -186,6 +186,7 @@ import {
   linkStructureToParent,
   keepFamilyAlive,
   endFamilyWatch,
+  displayOnlyFamilyWatch,
   FAMILY_WATCH_BARS,
   type RoutedCandidate,
   type ParentLinkage,
@@ -202,6 +203,8 @@ import {
   grossRRFrom,
   structureReference,
   keepAliveStep,
+  structureDisplayEnd,
+  isShownStructureSetup,
   endUpdateFor,
   type WatchUpdate,
 } from './setup-watch.js';
@@ -2116,7 +2119,7 @@ async function computeMarketBias(
   // Confirmed setups (S1 and the families) re-measured once per closed bar,
   // with their option plans; the indicator's rows are kept by its own chain.
   if (chain && !isPositional && lastClosedBar && (structureState || (routed?.watch?.length ?? 0) > 0)) {
-    await refreshSetupWatch({ provider, underlying, exchange, mode, chain, state: structureState, familyWatch: routed?.watch ?? [], linkage: routed?.linkage ?? null, lastBar: lastClosedBar }).catch((err: any) =>
+    await refreshSetupWatch({ provider, underlying, exchange, mode, chain, state: structureState, familyWatch: routed?.watch ?? [], linkage: routed?.linkage ?? null, lastBar: lastClosedBar, bars15m: closedNow }).catch((err: any) =>
       logger.warn({ error: err.message, underlying, exchange }, 'Setup watch: refresh failed — setups shown as of the last refresh')
     );
   }
@@ -3276,7 +3279,8 @@ async function resolveStickyTradeSetup(
     const slot = routedSlotCandidate(rc, metrics);
     if (parentTraded(slot.anchorKeys)) {
       await recordStructureOutcome(multipathFamily!.state, lc, { outcome: 'REFUSED', code: 'PARENT_ALREADY_TRADED', reason: parentTradedReason, at: decisionNow() }, chain.spotPrice);
-      await endFamilyWatch(exchange, underlying, rc.candidate.session, rc.lifecycleId, 'PARENT_ALREADY_TRADED', decisionNow());
+      // Not an invalidation: the setup stays shown, it is just never handed to the paper-trade log again.
+      await displayOnlyFamilyWatch(exchange, underlying, rc.candidate.session, rc.lifecycleId);
       entries.push({ kind: 'REFUSED', slot, code: 'PARENT_ALREADY_TRADED', reason: parentTradedReason, optionBuild: false });
       continue;
     }
@@ -3318,8 +3322,8 @@ async function resolveStickyTradeSetup(
     markTraded,
     // The traded setup's watch ends here (TRADED) — under the same id it was watched with.
     onSelected: async (slot) => {
-      await endWatchRow(setupWatchKey(exchange, underlying, mode, today), { exchange, underlying }, slot.candidateId, 'TRADED', decisionNow());
-      if (slot.source !== 'S1' && slot.source !== 'INDICATOR') await endFamilyWatch(exchange, underlying, today, slot.candidateId, 'TRADED', decisionNow());
+      await endWatchRow(setupWatchKey(exchange, underlying, mode, today), { exchange, underlying }, slot.candidateId, 'PAPER_TRADED', decisionNow());
+      if (slot.source !== 'S1' && slot.source !== 'INDICATOR') await endFamilyWatch(exchange, underlying, today, slot.candidateId, 'PAPER_TRADED', decisionNow());
     },
     ...(arbitrated ? { record: (r: SlotArbitrationRecord[]) => recordSlotArbitration(underlying, exchange, r) } : {}),
   });
@@ -5042,6 +5046,8 @@ async function planForLifecycle(
     side,
     params: { deltaMin: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MIN, deltaMax: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MAX, deltaTarget: FNO_VALIDATION_PARAMS.OPTION_DELTA_TARGET },
     contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: null, ivCap: null }),
+    // A shown setup's plan: R:R is informational, so a strike refused for R:R alone is a valid strike here.
+    rrIsGate: false,
     fetchNextExpiry: (expiry) => buildOptionChain(provider, underlying, exchange, expiry),
     onError: (stage, err: any) => logger.warn({ error: err?.message ?? String(err), stage, underlying, exchange }, 'Setup watch: next-expiry chain unavailable — no fallback contract'),
     build: (c, strike, ctx) => build(c, strike, ctx.expectedMovePoints),
@@ -5095,8 +5101,10 @@ async function refreshSetupWatch(args: {
   familyWatch: readonly FamilyWatchEntry[];
   linkage: ParentLinkage | null;
   lastBar: { time: number; close: number };
+  /** Today's closed 15m bars: a shown S1 setup ends only on its genuine invalidation / expiry, re-derived from them. */
+  bars15m: readonly MomentumBar[];
 }): Promise<void> {
-  const { provider, underlying, exchange, mode, chain, state, familyWatch, linkage, lastBar } = args;
+  const { provider, underlying, exchange, mode, chain, state, familyWatch, linkage, lastBar, bars15m } = args;
   const first = await redis.set(`setup_watch_eval:${exchange}:${underlying}:${mode}:${lastBar.time}`, '1', 'EX', 6 * 60 * 60, 'NX').catch(() => null);
   if (first !== 'OK') return;
   const at = lastBar.time + BAR_MS_15M;
@@ -5104,12 +5112,13 @@ async function refreshSetupWatch(args: {
   const quiet = { statusRR: null, grossRR: null, netRR: null, block: null, plan: null, optionBuildFailed: false };
 
   for (const lc of state?.lifecycles ?? []) {
+    // EVERY confirmed S1 setup is shown, whatever its R:R and whatever the
+    // automatic paper-trade log decided about it (R:R is informational here).
+    if (!isShownStructureSetup(lc)) continue;
     const ka = lc.keepAlive;
-    const pending = lc.stage === 'CONFIRMED' && lc.live == null && !ka;
-    if (!ka && !pending && lc.live == null) continue;
-    const timeframe = lc.timeframe ?? '15m';
-    const fill = structureRulesFor(timeframe).fillWithinBars;
-    const barMs = STRUCTURE_TF_BAR_MS[timeframe];
+    // Display windows are judged on the 15m bars (a 5m lifecycle's fill window is the same 2 hours).
+    const fill = structureRulesFor('15m').fillWithinBars;
+    const barMs = BAR_MS_15M;
     const base = {
       id: lc.id,
       source: 'S1',
@@ -5118,14 +5127,16 @@ async function refreshSetupWatch(args: {
       at,
       barTime: lastBar.time,
       underlying: { entry: lc.entry, sl: lc.stop, t1: lc.t1?.price ?? null, t2: lc.t2?.price ?? null },
-      expiresAt: ka ? ka.since + fill * barMs : lc.confirmedAt != null ? lc.confirmedAt + fill * barMs : null,
+      expiresAt: (ka?.since ?? lc.confirmedAt ?? lc.stageAt) + fill * barMs,
     };
-    if (lc.live) {
-      updates.push({ ...base, ...quiet, ended: { reason: lc.live.outcome === 'MINTED' ? 'TRADED' : `REFUSED${lc.live.code ? ` ${lc.live.code}` : ''}`, at: lc.live.at }, onlyIfExists: true });
+    if (lc.live?.outcome === 'MINTED') {
+      updates.push({ ...base, ...quiet, ended: { reason: 'PAPER_TRADED', at: lc.live.at }, onlyIfExists: true });
       continue;
     }
-    if (ka?.ended) {
-      updates.push({ ...base, ...quiet, ended: ka.ended, onlyIfExists: true });
+    // Ends only on S1's genuine invalidation / expiry — never because the paper-trade log refused it.
+    const genuineEnd = structureDisplayEnd(lc, bars15m, barMs, fill);
+    if (genuineEnd) {
+      updates.push({ ...base, ...quiet, ended: genuineEnd, onlyIfExists: true });
       continue;
     }
     const reference = structureReference(lc, lastBar.close);

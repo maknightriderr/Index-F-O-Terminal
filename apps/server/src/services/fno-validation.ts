@@ -124,8 +124,12 @@ export function strikeNetRR(setup: TradeSetup): number | null {
  *   7. strike nearest the rounded ATM, then the lower strike
  * Never "nearest ATM", "cheapest" or "highest delta" on its own.
  */
-export function rankStrikeBuilds(builds: readonly StrikeBuild[], deltaTarget: number, atmStrike: number): StrikeBuild[] {
-  const tier = (b: StrikeBuild) => (b.setup.available ? 0 : b.setup.rrPlan ? 1 : 2);
+export function rankStrikeBuilds(builds: readonly StrikeBuild[], deltaTarget: number, atmStrike: number, rrIsGate = true): StrikeBuild[] {
+  // rrIsGate = false (a SHOWN setup's plan — R:R is informational there): a
+  // strike refused for R:R alone is as valid as a tradeable one and the two
+  // are ranked together by net R:R. true (default — every mint chain): the
+  // paper-trade log's 1.50R requirement keeps tradeable strikes first.
+  const tier = (b: StrikeBuild) => (b.setup.available ? 0 : b.setup.rrPlan ? (rrIsGate ? 1 : 0) : 2);
   const levels = (b: StrikeBuild) => (b.setup.available ? b.setup : b.setup.rrPlan ?? null);
   const nz = (v: number | null | undefined, worst: number) => (v == null || !Number.isFinite(v) ? worst : v);
   return [...builds].sort((a, b) => {
@@ -156,6 +160,8 @@ export function validateOnChain(args: {
   params: FnoSelectionParams;
   context: FnoChainContext;
   build: (chain: OptionChain, strike: number, context: FnoChainContext) => TradeSetup;
+  /** False only for a shown setup's plan (R:R informational). Default true. */
+  rrIsGate?: boolean;
 }): ValidatedBuild {
   const { chain, side, params, context, build } = args;
   const sel = selectStrikeByDelta({
@@ -178,7 +184,8 @@ export function validateOnChain(args: {
   const ranked = rankStrikeBuilds(
     inBand.map((c) => ({ strike: c.strike, delta: c.delta ?? null, spreadPct: c.spreadPct ?? null, setup: build(chain, c.strike, context) })),
     params.deltaTarget,
-    chain.atmStrike
+    chain.atmStrike,
+    args.rrIsGate ?? true
   );
   const best = ranked[0] ?? null;
   const leg = best ? chain.strikes.find((s) => s.strike === best.strike) : null;
@@ -236,6 +243,8 @@ export async function buildWithFnoValidation(args: {
   params: FnoSelectionParams;
   contextFor: (chain: OptionChain) => FnoChainContext;
   build: (chain: OptionChain, strike: number, context: FnoChainContext) => TradeSetup;
+  /** False only for a shown setup's plan (R:R informational). Default true (every mint chain). */
+  rrIsGate?: boolean;
   fetchNextExpiry: (expiry: string) => Promise<OptionChain | null>;
   /** Failures are logged by the caller; the fallback is then treated as unavailable. */
   onError?: (stage: 'FETCH_NEXT_EXPIRY', err: unknown) => void;
@@ -245,7 +254,7 @@ export async function buildWithFnoValidation(args: {
     return { setup: build(primary, primary.atmStrike, contextFor(primary)), chain: primary, fnoValidation: null };
   }
 
-  const first = validateOnChain({ chain: primary, side, params, context: contextFor(primary), build });
+  const first = validateOnChain({ chain: primary, side, params, context: contextFor(primary), build, rrIsGate: args.rrIsGate });
   const firstCode = first.setup.available ? null : first.setup.noTradeCode ?? null;
   if (first.setup.available || !isFnoRefusal(firstCode) || primary.dte !== 0) return first;
 
@@ -266,7 +275,7 @@ export async function buildWithFnoValidation(args: {
     return { ...first, setup: { ...first.setup, reason: `${first.setup.reason}${note}`, fnoValidation: record }, fnoValidation: record };
   }
 
-  const second = validateOnChain({ chain: next, side, params, context: contextFor(next), build });
+  const second = validateOnChain({ chain: next, side, params, context: contextFor(next), build, rrIsGate: args.rrIsGate });
   const secondCode = second.setup.available ? null : second.setup.noTradeCode ?? null;
   const fallbackRecord = (base: TradeSetupFnoValidation, finalChain: OptionChain): TradeSetupFnoValidation => ({
     ...base,
