@@ -449,7 +449,25 @@ export function buildCandidate(ctx: SeriesContext, log: SessionEventLog, def: Tr
     marketState: ctx.stateAt(i),
     movePotential: movePotentialAt(ctx, log.s, i, { direction: d, entry, atr, t1: t1?.price ?? null, t2: t2?.price ?? null, rToT1 }),
     timing: entryTimingAt({ direction: d, anchorIndex, anchorPrice: hit.anchor.price, decisionIndex: i, entry, atr, t1: t1?.price ?? null, rToT1 }),
+    stopRef: round2(hit.stopRef),
   };
+}
+
+/**
+ * A candidate re-checked on a LATER closed bar i with the very same rule hit
+ * (anchor, events, invalidation extreme) through buildCandidate: entry = bar
+ * i's close, stop = the same extreme plus the buffer at i's ATR, T1/T2 = the
+ * untaken pools at i, timing and move potential at i. Reads bars ≤ i only.
+ * Null when the hit can't be rebuilt (no stop reference, no ATR at i, or i is
+ * not after the original decision bar).
+ */
+export function rebuildCandidateAt(ctx: SeriesContext, log: SessionEventLog, c: TriggerCandidate, i: number): TriggerCandidate | null {
+  const def = TRIGGERS_BY_ID.get(c.triggerId);
+  if (!def || c.stopRef == null || !Number.isFinite(c.stopRef) || i <= c.decisionIndex) return null;
+  const byId = new Map(log.events.map((e) => [e.id, e]));
+  const anchor: MarketEvent = byId.get(c.anchorEventId) ?? { id: c.anchorEventId, type: 'SWEEP', direction: c.direction, barIndex: c.anchorIndex, time: ctx.series.bars[c.anchorIndex]?.time ?? 0, availableAt: 0, price: c.anchorPrice };
+  const events = c.eventIds.map((id) => byId.get(id)).filter((e): e is MarketEvent => e != null && e.barIndex <= i);
+  return buildCandidate(ctx, log, def, { direction: c.direction, anchor, events, stopRef: c.stopRef }, i);
 }
 
 /**

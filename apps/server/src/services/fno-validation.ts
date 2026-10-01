@@ -5,8 +5,11 @@
 // leg: the round-trip cost ceiling and the stop outside the underlying's
 // noise. This module owns the parts that need the whole chain:
 //
-//   1. the strike, chosen by |delta| band (selectStrikeByDelta) instead of
-//      chain.atmStrike — no eligible strike refuses OPTION_DELTA_OUT_OF_BAND;
+//   1. the strike: EVERY strike inside the |delta| band (selectStrikeByDelta's
+//      eligible set) is built through the family's own builder and ranked by
+//      rankStrikeBuilds — the best AVAILABLE one is traded, so a strike that
+//      fails a hard check falls through to the next. No eligible strike
+//      refuses OPTION_DELTA_OUT_OF_BAND;
 //   2. the IV cap on the target move is computed by the family's own
 //      contextFor(chain) (consensus only — a structural target has no IV);
 //   5. the expiry fallback: a 0-DTE contract that fails rule 1, 3 or 4 is
@@ -89,9 +92,63 @@ function emptyRecord(chain: OptionChain): TradeSetupFnoValidation {
   };
 }
 
+/** One in-band strike as built. */
+export interface StrikeBuild {
+  strike: number;
+  delta: number | null;
+  spreadPct: number | null;
+  setup: TradeSetup;
+}
+
+/** Net R:R after costs of a built (or R:R-planned) leg: (target − entry − cost) / (entry − SL + cost). */
+export function strikeNetRR(setup: TradeSetup): number | null {
+  if (setup.available && setup.entry != null && setup.stopLoss != null && setup.target != null && setup.estimatedCostPct != null) {
+    const cost = setup.entry * (setup.estimatedCostPct / 100);
+    const risk = setup.entry - setup.stopLoss + cost;
+    return risk > 0 ? Math.round(((setup.target - setup.entry - cost) / risk) * 100) / 100 : null;
+  }
+  return setup.rrPlan?.riskRewardNet ?? null;
+}
+
 /**
- * One chain: pick the strike by delta band, build on it, and fold what the
- * builder recorded into the full record.
+ * PRE-REGISTERED strike ranking, identical for every engine (S1, indicator,
+ * trigger families), first difference wins:
+ *   1. tradeable — the builder accepted it (every hard check passed); among
+ *      refusals, an R:R-only refusal (it still has a plan) first, then the
+ *      most specific refusal
+ *   2. net R:R after the option cost model, higher first (2 dp)
+ *   3. execution quality — bid-ask spread % of mid, tighter first
+ *   4. sensitivity — |delta| nearest the target delta
+ *   5. premium risk — entry − SL per unit, smaller first
+ *   6. target potential — (target − entry) / entry, larger first
+ *   7. strike nearest the rounded ATM, then the lower strike
+ * Never "nearest ATM", "cheapest" or "highest delta" on its own.
+ */
+export function rankStrikeBuilds(builds: readonly StrikeBuild[], deltaTarget: number, atmStrike: number): StrikeBuild[] {
+  const tier = (b: StrikeBuild) => (b.setup.available ? 0 : b.setup.rrPlan ? 1 : 2);
+  const levels = (b: StrikeBuild) => (b.setup.available ? b.setup : b.setup.rrPlan ?? null);
+  const nz = (v: number | null | undefined, worst: number) => (v == null || !Number.isFinite(v) ? worst : v);
+  return [...builds].sort((a, b) => {
+    const la = levels(a);
+    const lb = levels(b);
+    return (
+      tier(a) - tier(b) ||
+      (tier(a) === 2 ? refusalSpecificity(b.setup.noTradeCode) - refusalSpecificity(a.setup.noTradeCode) : 0) ||
+      nz(strikeNetRR(b.setup), -Infinity) - nz(strikeNetRR(a.setup), -Infinity) ||
+      nz(a.spreadPct, Infinity) - nz(b.spreadPct, Infinity) ||
+      Math.abs(Math.abs(nz(a.delta, 0)) - deltaTarget) - Math.abs(Math.abs(nz(b.delta, 0)) - deltaTarget) ||
+      nz(la ? la.entry! - la.stopLoss! : null, Infinity) - nz(lb ? lb.entry! - lb.stopLoss! : null, Infinity) ||
+      nz(lb && lb.entry! > 0 ? (lb.target! - lb.entry!) / lb.entry! : null, -Infinity) - nz(la && la.entry! > 0 ? (la.target! - la.entry!) / la.entry! : null, -Infinity) ||
+      Math.abs(a.strike - atmStrike) - Math.abs(b.strike - atmStrike) ||
+      a.strike - b.strike
+    );
+  });
+}
+
+/**
+ * One chain: build EVERY strike in the delta band, rank the builds
+ * (rankStrikeBuilds) and take the best — the first available one, else the
+ * best refusal — then fold what the builder recorded into the full record.
  */
 export function validateOnChain(args: {
   chain: OptionChain;
@@ -116,21 +173,30 @@ export function validateOnChain(args: {
     deltaMax: params.deltaMax,
     deltaTarget: params.deltaTarget,
   });
-  const leg = sel.strike != null ? chain.strikes.find((s) => s.strike === sel.strike) : null;
+  // Every in-band strike, built through the family's own builder, ranked.
+  const inBand = sel.candidates.filter((c) => c.rejectedReason == null);
+  const ranked = rankStrikeBuilds(
+    inBand.map((c) => ({ strike: c.strike, delta: c.delta ?? null, spreadPct: c.spreadPct ?? null, setup: build(chain, c.strike, context) })),
+    params.deltaTarget,
+    chain.atmStrike
+  );
+  const best = ranked[0] ?? null;
+  const leg = best ? chain.strikes.find((s) => s.strike === best.strike) : null;
   const chosenLeg = leg ? (side === 'CE' ? leg.call : leg.put) : null;
   const strikeSelection: TradeSetupFnoValidation['strikeSelection'] = {
-    method: 'DELTA_BAND',
+    method: 'BEST_OF_BAND',
     band: [params.deltaMin, params.deltaMax],
-    selectedStrike: sel.strike,
+    selectedStrike: best?.strike ?? null,
     atmStrike: chain.atmStrike,
-    delta: sel.candidate?.delta ?? null,
+    delta: best?.delta ?? null,
     moneyness: chosenLeg?.moneyness ?? null,
     candidatesEvaluated: sel.candidates.length,
     eligible: sel.eligible,
+    ranking: ranked.map((r) => ({ strike: r.strike, delta: r.delta, spreadPct: r.spreadPct, available: r.setup.available, code: r.setup.available ? null : r.setup.noTradeCode ?? null, netRR: strikeNetRR(r.setup) })),
   };
 
   let setup: TradeSetup;
-  if (sel.strike == null) {
+  if (best == null) {
     const reason = `F&O validation: ${sel.reason} A contract far from 0.5 delta pays for the stop without responding to the move, so no strike is forced.`;
     setup = {
       available: false,
@@ -143,7 +209,7 @@ export function validateOnChain(args: {
       },
     };
   } else {
-    setup = build(chain, sel.strike, context);
+    setup = best.setup;
   }
   const code = setup.available ? null : setup.noTradeCode ?? null;
   const record: TradeSetupFnoValidation = {

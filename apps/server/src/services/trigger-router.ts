@@ -58,6 +58,10 @@ import {
   type FixedSelection,
   type MarketEvent,
   type ParentSetup,
+  type SeriesContext,
+  type SessionEventLog,
+  rebuildCandidateAt,
+  STRUCTURE_RULES,
 } from '@fno/analytics';
 import { getSessionWindow, type Exchange, type OptionChain, type TradingMode } from '@fno/shared';
 import { redis } from '../lib/redis.js';
@@ -184,6 +188,127 @@ export function linkStructureToParent(
   return { parentId, anchorKeys: [parentId, sweep.eventId], linked: true };
 }
 
+// ---------------- keep-alive: a confirmed family candidate below 1.50R ----------------
+
+/** How many closed bars a kept-alive family candidate stays re-checkable: S1's own fill window (user decision 2026-10-01). */
+export const FAMILY_WATCH_BARS: number = STRUCTURE_RULES.fillWithinBars;
+
+/** A confirmed family candidate kept alive under its ORIGINAL lifecycle id. */
+export interface FamilyWatchEntry {
+  lifecycleId: string;
+  /** The candidate as the rule decided it (its hit: anchor, events, stopRef). */
+  original: TriggerCandidate;
+  parentId: string | null;
+  anchorKeys: string[];
+  cause: 'LOW_RR_AT_DECISION' | 'RR_REFUSED_AT_FILL';
+  /** The candidate as re-measured on the newest evaluated bar (null before the first re-check). */
+  current: TriggerCandidate | null;
+  lastIndex: number;
+  ended: { reason: string; at: number } | null;
+}
+
+export function familyWatchKey(exchange: Exchange, underlying: string, session: string): string {
+  return `mp_watch:${exchange}:${underlying}:${session}`;
+}
+
+/**
+ * Pure: advance every live family watch entry to bar `end` with the rule's
+ * own builder (rebuildCandidateAt — bars ≤ end only). Ends an entry on: a
+ * close beyond the rule's invalidation extreme (INVALIDATED), its original T1
+ * traded before any entry (MISSED — the move it was confirmed for has gone),
+ * no longer rebuildable / no target (ENDED), FAMILY_WATCH_BARS elapsed or the
+ * closing guard (EXPIRED). Returns the updated entries; a live one carries its
+ * re-measured candidate.
+ */
+export function advanceFamilyWatch(
+  entries: readonly FamilyWatchEntry[],
+  ctx: SeriesContext,
+  log: SessionEventLog,
+  end: number,
+  sessionOk: (i: number) => boolean
+): FamilyWatchEntry[] {
+  const bars = ctx.series.bars;
+  const closeAt = bars[end].time + BAR_MS_15M;
+  return entries.map((w) => {
+    if (w.ended || w.lastIndex >= end) return w;
+    const o = w.original;
+    const bear = o.direction === 'BEARISH';
+    const stopRef = o.stopRef;
+    const finish = (reason: string): FamilyWatchEntry => ({ ...w, lastIndex: end, ended: { reason, at: closeAt } });
+    for (let i = w.lastIndex + 1; i <= end; i++) {
+      const b = bars[i];
+      if (stopRef != null && (bear ? b.close > stopRef : b.close < stopRef)) return finish('INVALIDATED');
+      if (o.t1 && (bear ? b.low <= o.t1.price : b.high >= o.t1.price)) return finish('MISSED');
+    }
+    if (end - o.decisionIndex > FAMILY_WATCH_BARS) return finish('EXPIRED');
+    if (!sessionOk(end)) return finish('EXPIRED_CLOSING_GUARD');
+    const rebuilt = rebuildCandidateAt(ctx, log, o, end);
+    if (!rebuilt) return finish('NOT_REBUILDABLE');
+    if (rebuilt.bucket === 'INVALID_STOP') return finish('INVALIDATED');
+    if (rebuilt.bucket === 'NO_TARGET') return finish('NO_TARGET');
+    return { ...w, current: rebuilt, lastIndex: end };
+  });
+}
+
+/** Pure: a new watch entry for a confirmed candidate below 1.50R. */
+export function newFamilyWatch(rc: RoutedCandidate, cause: FamilyWatchEntry['cause']): FamilyWatchEntry {
+  return { lifecycleId: rc.lifecycleId, original: rc.candidate, parentId: rc.parentId ?? null, anchorKeys: rc.anchorKeys ?? [], cause, current: null, lastIndex: rc.candidate.decisionIndex, ended: null };
+}
+
+/** Keeps a family candidate the slot refused for R:R alone (it was confirmed): re-checked from the next closed bar. */
+export async function keepFamilyAlive(exchange: Exchange, underlying: string, rc: RoutedCandidate): Promise<void> {
+  const key = familyWatchKey(exchange, underlying, rc.candidate.session);
+  try {
+    const list: FamilyWatchEntry[] = JSON.parse((await redis.get(key)) ?? '[]');
+    const existing = list.find((w) => w.lifecycleId === rc.lifecycleId);
+    if (existing) {
+      // Already kept alive: it stays under its id; the refusal only means "not yet".
+      existing.lastIndex = Math.max(existing.lastIndex, rc.candidate.decisionIndex);
+    } else list.push(newFamilyWatch(rc, 'RR_REFUSED_AT_FILL'));
+    await redis.set(key, JSON.stringify(list), 'EX', EVAL_STATE_TTL_SECONDS);
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying, exchange, lifecycleId: rc.lifecycleId }, 'Trigger router: keep-alive write failed');
+  }
+}
+
+/** Ends a kept-alive family candidate (it traded, or its parent move already did). No-op when it was never kept. */
+export async function endFamilyWatch(exchange: Exchange, underlying: string, session: string, lifecycleId: string, reason: string, at: number): Promise<void> {
+  const key = familyWatchKey(exchange, underlying, session);
+  try {
+    const list: FamilyWatchEntry[] = JSON.parse((await redis.get(key)) ?? '[]');
+    const w = list.find((x) => x.lifecycleId === lifecycleId);
+    if (!w || w.ended) return;
+    w.ended = { reason, at };
+    await redis.set(key, JSON.stringify(list), 'EX', EVAL_STATE_TTL_SECONDS);
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying, exchange, lifecycleId }, 'Trigger router: keep-alive end failed');
+  }
+}
+
+/**
+ * Pure: the kept-alive family candidates that clear every router check on
+ * bar `end` (bucket TRADE = R:R ≥ 1.50R at the rebuilt entry, cost within the
+ * ceiling), handed to the slot under their ORIGINAL id, parent and anchors.
+ */
+export function recoveredFamilyCandidates(
+  watch: readonly FamilyWatchEntry[],
+  end: number,
+  stages: Record<string, LiveTriggerStage>,
+  chain: OptionChain | null,
+  already: readonly RoutedCandidate[]
+): RoutedCandidate[] {
+  const out: RoutedCandidate[] = [];
+  for (const w of watch) {
+    if (w.ended || !w.current || w.current.decisionIndex !== end || w.current.bucket !== 'TRADE') continue;
+    const stage = stages[w.original.triggerId];
+    if (!PAPER_TRADING_STAGES.includes(stage) || already.some((p) => p.lifecycleId === w.lifecycleId)) continue;
+    const cost = costOnChain(w.current, chain);
+    const risk = validateCandidateRisk(w.current, { sessionOk: true, costPct: cost?.costPctOfPremium != null ? Math.round(cost.costPctOfPremium * 100) / 100 : null, maxCostPct: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM });
+    if (risk.wouldTrade) out.push({ candidate: w.current, stage, risk, cost, lifecycleId: w.lifecycleId, parentId: w.parentId, anchorKeys: w.anchorKeys });
+  }
+  return out;
+}
+
 /** Pure: what the slot receives — every eligible paper-stage candidate decided on the newest closed bar (no pre-selection). */
 export function paperCandidatesForSlot(routed: readonly RoutedCandidate[], newestIndex: number): RoutedCandidate[] {
   return routed.filter((rc) => rc.candidate.decisionIndex === newestIndex && PAPER_TRADING_STAGES.includes(rc.stage) && rc.risk.wouldTrade);
@@ -291,7 +416,7 @@ function costOnChain(c: TriggerCandidate, chain: OptionChain | null): SetupCostM
  * candidates of the newest bar that would trade (normally none), or null on
  * any failure. SHADOW candidates are recorded once each.
  */
-export async function routeTriggerFamilies(args: { underlying: string; exchange: Exchange; mode: TradingMode; bars: MomentumBar[]; chain: OptionChain | null; now: number }): Promise<{ paper: RoutedCandidate[]; evaluated: number; linkage?: ParentLinkage | null } | null> {
+export async function routeTriggerFamilies(args: { underlying: string; exchange: Exchange; mode: TradingMode; bars: MomentumBar[]; chain: OptionChain | null; now: number }): Promise<{ paper: RoutedCandidate[]; evaluated: number; linkage?: ParentLinkage | null; watch?: FamilyWatchEntry[] } | null> {
   const { underlying, exchange, mode, bars, chain, now } = args;
   try {
     if (mode !== 'INTRADAY' || bars.length < 30) return { paper: [], evaluated: 0 };
@@ -318,7 +443,8 @@ export async function routeTriggerFamilies(args: { underlying: string; exchange:
     if (todo.length === 0) {
       // No new bar: the linkage written when the newest bar was evaluated is still exact (parents only change on a new bar).
       const cached = await redis.get(linkKey).catch(() => null);
-      return { paper: [], evaluated: 0, linkage: cached ? (JSON.parse(cached) as ParentLinkage) : null };
+      const watched = await redis.get(familyWatchKey(exchange, underlying, session)).catch(() => null);
+      return { paper: [], evaluated: 0, linkage: cached ? (JSON.parse(cached) as ParentLinkage) : null, watch: watched ? (JSON.parse(watched) as FamilyWatchEntry[]) : [] };
     }
 
     const log = runSessionEvents(ctx, s);
@@ -388,9 +514,26 @@ export async function routeTriggerFamilies(args: { underlying: string; exchange:
       await recordCandidate(underlying, exchange, rc, rc.candidate.decisionIndex === end);
     }
     const paper = paperCandidatesForSlot(routed, end);
+
+    // 6. Keep-alive. A paper-stage candidate CONFIRMED on the newest bar (a
+    //    valid stop and target) but below 1.50R is not forgotten: it is kept
+    //    under its id and re-measured on every later closed bar with the
+    //    rule's own builder; once it clears every check it goes to the slot
+    //    with the others, under the same id and parent.
+    const sessionOkAt = (i: number) => series.bars[i].time - window.open >= SETTLE_MS && window.close - (series.bars[i].time + BAR_MS_15M) >= closingGuardMs;
+    const watchKey = familyWatchKey(exchange, underlying, session);
+    let watch: FamilyWatchEntry[] = JSON.parse((await redis.get(watchKey).catch(() => null)) ?? '[]');
+    watch = advanceFamilyWatch(watch, ctx, log, end, sessionOkAt);
+    for (const rc of routed) {
+      if (rc.candidate.decisionIndex !== end || rc.candidate.bucket !== 'LOW_RR' || !PAPER_TRADING_STAGES.includes(rc.stage) || !rc.risk.sessionOk) continue;
+      if (!watch.some((w) => w.lifecycleId === rc.lifecycleId)) watch.push(newFamilyWatch(rc, 'LOW_RR_AT_DECISION'));
+    }
+    paper.push(...recoveredFamilyCandidates(watch, end, stages, chain, paper));
+    await redis.set(watchKey, JSON.stringify(watch), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);
+
     await redis.set(linkKey, JSON.stringify(linkage), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);
     await redis.set(stateKey, String(series.bars[end].time), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);
-    return { paper, evaluated: todo.length, linkage };
+    return { paper, evaluated: todo.length, linkage, watch };
   } catch (err: any) {
     logger.warn({ error: err.message, underlying, exchange }, 'Trigger router: evaluation failed — structure and consensus engines unaffected');
     return null;

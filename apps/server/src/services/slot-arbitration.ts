@@ -405,6 +405,8 @@ export async function settleSlot(args: {
   record?: (records: SlotArbitrationRecord[]) => void;
   /** Called with the winner's anchor keys once it is the slot's trade: its parent move never trades again today. */
   markTraded?: (anchorKeys: readonly string[]) => Promise<void>;
+  /** Called with the winner once it is the slot's trade (e.g. to end its watch row). */
+  onSelected?: (slot: SlotCandidate) => Promise<void>;
 }): Promise<TradeSetup | null> {
   const { underlying, exchange, entries } = args;
   const pre = rankSlotCandidates(entries.map((e) => ({ ...e.slot, netRR: NOT_MEASURED })));
@@ -449,6 +451,7 @@ export async function settleSlot(args: {
   if (result.minted && chosen.slot.anchorKeys.length > 0) {
     await args.markTraded?.(chosen.slot.anchorKeys).catch((err: any) => logger.warn({ error: err.message, underlying }, 'Slot arbitration: traded-parent mark failed'));
   }
+  if (result.minted) await args.onSelected?.(chosen.slot).catch((err: any) => logger.warn({ error: err.message, underlying }, 'Slot arbitration: on-selected hook failed'));
   r.order.forEach((k, pos) => {
     const x = built[k];
     records.push({

@@ -432,7 +432,7 @@ describe('9. one parent move produces exactly one selected trade', () => {
     const flow = src.slice(src.indexOf('const entries: SlotEntry[] = [];'), src.indexOf('async function indicatorEngine()'));
     expect(flow.match(/if \(parentTraded\((link|slot)\.anchorKeys\)\)/g)).toHaveLength(2);
     expect(flow).toMatch(/code: 'PARENT_ALREADY_TRADED'/);
-    expect(flow).toMatch(/settleSlot\(\{ underlying, exchange, entries, markTraded/);
+    expect(flow).toMatch(/settleSlot\(\{\s*underlying,\s*exchange,\s*entries,\s*markTraded/);
     expect(flow).not.toMatch(/return filled|mintUnderLock/);
   });
 });

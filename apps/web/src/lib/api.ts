@@ -28,6 +28,7 @@ import type {
   StrategyTrackRecord,
   FiiDiiActivity,
   StructureBlock,
+  SetupWatchRow,
   StructureLifecycleView,
 } from '@fno/shared';
 
@@ -234,7 +235,7 @@ class ApiClient {
   }
 
   async getMarketBias(symbol: string, exchange = 'NSE', mode: 'INTRADAY' | 'POSITIONAL' = 'INTRADAY') {
-    return this.get<{ bias: MarketBias; score: IntelligenceScore; tradeSetup: TradeSetup; structure?: StructureBlock }>(
+    return this.get<{ bias: MarketBias; score: IntelligenceScore; tradeSetup: TradeSetup; structure?: StructureBlock; setupWatch?: SetupWatchRow[] }>(
       `/api/market/bias/${symbol}?exchange=${exchange}&mode=${mode}`
     );
   }

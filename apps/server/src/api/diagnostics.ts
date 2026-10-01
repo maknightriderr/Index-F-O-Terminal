@@ -38,6 +38,7 @@ import {
   diagnosticsPerformance,
   diagnosticsOpportunity,
   diagnosticsVersions,
+  diagnosticsRrRecovery,
   diagnosticsSetupOutcomes,
   diagnosticsMajorMoves,
   diagnosticsShadow,
@@ -162,6 +163,16 @@ export function createDiagnosticsRoutes(): Router {
       res.json({ success: true, data: { note: SIMULATION_NOTE, rows: await diagnosticsShadow(q) } });
     } catch (err: any) {
       logger.error({ error: err.message }, 'Signal diagnostics shadow failed');
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  router.get('/rr-recovery', async (req: Request, res: Response) => {
+    try {
+      const q = parseQuery(req);
+      res.json({ success: true, data: { note: SIMULATION_NOTE, ...(await diagnosticsRrRecovery(q)) } });
+    } catch (err: any) {
+      logger.error({ error: err.message }, 'Signal diagnostics rr-recovery failed');
       res.status(500).json({ success: false, error: err.message });
     }
   });
