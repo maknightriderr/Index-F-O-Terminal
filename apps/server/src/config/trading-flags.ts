@@ -431,6 +431,12 @@ export const OPTION_VERSION = 'OPTION-1.0';
 // leg's live quote (setup-cost.ts; spread observed, slippage/charges modelled
 // from TRADING_COST_MODEL). COST-1.0 rows carry no cost at all.
 export const COST_VERSION = 'COST-2.0';
+/**
+ * The multi-path event engine and trigger registry (@fno/analytics
+ * event-engine), RESEARCH only: stamped on major_move_diagnostics rows. Not
+ * part of the logic stamp — no live decision reads the engine.
+ */
+export const EVENT_ENGINE_VERSION = 'EVENT-1.0';
 
 /** User decision: live now, behind the flag. */
 export const STRUCTURE_DEFAULT = true;

@@ -74,6 +74,15 @@ describe('opportunityStats', () => {
     expect(s.captureRate).toEqual({ numerator: 1, denominator: 8, rate: 0.125 });
   });
 
+  it('data-gap opportunities are counted but never judged: they leave every denominator', () => {
+    const s = opportunityStats({ TRADED: 1, DETECTED_BUT_REJECTED: 1, DETECTED_LATE: 1, NEVER_DETECTED: 1, DATA_GAP: 6 });
+    expect(s).toMatchObject({ opportunities: 10, dataGap: 6, coveredOpportunities: 4 });
+    expect(s.captureRate).toEqual({ numerator: 1, denominator: 4, rate: 0.25 });
+    expect(s.missedRate).toEqual({ numerator: 1, denominator: 4, rate: 0.25 });
+    expect(s.lateRate.numerator).toBe(1);
+    expect(s.rejectionRate.numerator).toBe(1);
+  });
+
   it('no opportunities: a null rate over 0/0', () => {
     expect(opportunityStats({}).captureRate).toEqual({ numerator: 0, denominator: 0, rate: null });
     expect(rate(0, 0).rate).toBeNull();

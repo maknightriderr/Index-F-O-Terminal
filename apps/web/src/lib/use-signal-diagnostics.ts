@@ -118,6 +118,8 @@ export interface DiagnosticsPerformanceSegmentRow {
 
 export interface DiagnosticsOpportunityStats {
   opportunities: number;
+  dataGap: number;
+  coveredOpportunities: number;
   detected: number;
   traded: number;
   rejected: number;
@@ -125,6 +127,9 @@ export interface DiagnosticsOpportunityStats {
   neverDetected: number;
   detectionRate: DiagnosticsRate;
   captureRate: DiagnosticsRate;
+  missedRate: DiagnosticsRate;
+  lateRate: DiagnosticsRate;
+  rejectionRate: DiagnosticsRate;
 }
 
 export interface DiagnosticsOpportunityRow extends DiagnosticsOpportunityStats {
@@ -133,6 +138,46 @@ export interface DiagnosticsOpportunityRow extends DiagnosticsOpportunityStats {
   segment: DiagnosticsSegment;
   sessions: number;
   correctlyEmptySessions: number;
+  candidatesCreated: number;
+  tradeReady: number;
+  noFill: number;
+}
+
+/** Mirrors signal-diagnostics.ts diagnosticsMajorMoves(). */
+export interface DiagnosticsMajorMoveRow {
+  sessionDate: string;
+  instrument: string;
+  exchange: string;
+  segment: DiagnosticsSegment;
+  direction: string;
+  startTime: number | null;
+  endTime: number | null;
+  startPrice: number | null;
+  endPrice: number | null;
+  sizeAdr: number | null;
+  classification: string;
+  coverage: string | null;
+  firstEventType: string | null;
+  firstEventTime: number | null;
+  familiesRecognized: string[];
+  firstActionable: { triggerId: string; entry: number; remainingMovePct: number; decisionTime?: number } | null;
+  traded: boolean | null;
+  reason: string | null;
+}
+
+/** Mirrors @fno/analytics TriggerDefinition. */
+export interface DiagnosticsTrigger {
+  triggerId: string;
+  family: string;
+  version: string;
+  name: string;
+  exactRule: string;
+  decisionBar: string;
+  entryRule: string;
+  stopRule: string;
+  targetRule: string;
+  status: string;
+  priorEvidence?: string;
 }
 
 export interface DiagnosticsOpportunitySegmentRow extends DiagnosticsOpportunityStats {
@@ -150,6 +195,8 @@ export interface SignalDiagnosticsData {
   performance: { byInstrument: DiagnosticsPerformanceRow[]; bySegment: DiagnosticsPerformanceSegmentRow[] };
   opportunity: { byInstrument: DiagnosticsOpportunityRow[]; bySegment: DiagnosticsOpportunitySegmentRow[] };
   versions: { strategyVersions: string[]; costVersions: string[] };
+  majorMoves: DiagnosticsMajorMoveRow[];
+  triggers: DiagnosticsTrigger[];
   refresh: () => void;
 }
 
@@ -164,6 +211,8 @@ export function useSignalDiagnostics(opts: DiagnosticsFilter = {}): SignalDiagno
   const [performance, setPerformance] = useState<SignalDiagnosticsData['performance']>({ byInstrument: [], bySegment: [] });
   const [opportunity, setOpportunity] = useState<SignalDiagnosticsData['opportunity']>({ byInstrument: [], bySegment: [] });
   const [versions, setVersions] = useState<SignalDiagnosticsData['versions']>({ strategyVersions: [], costVersions: [] });
+  const [majorMoves, setMajorMoves] = useState<DiagnosticsMajorMoveRow[]>([]);
+  const [triggers, setTriggers] = useState<DiagnosticsTrigger[]>([]);
   const [nonce, setNonce] = useState(0);
 
   const refresh = useCallback(() => setNonce((n) => n + 1), []);
@@ -173,7 +222,7 @@ export function useSignalDiagnostics(opts: DiagnosticsFilter = {}): SignalDiagno
     const load = async () => {
       setLoading(true);
       try {
-        const [summaryRes, rejectionsRes, censusRes, gradesRes, leakageRes, performanceRes, opportunityRes, versionsRes] = await Promise.all([
+        const [summaryRes, rejectionsRes, censusRes, gradesRes, leakageRes, performanceRes, opportunityRes, versionsRes, majorMovesRes, triggersRes] = await Promise.all([
           api.getDiagnosticsSummary(opts),
           api.getDiagnosticsRejections(opts),
           api.getDiagnosticsCensus(opts),
@@ -182,6 +231,8 @@ export function useSignalDiagnostics(opts: DiagnosticsFilter = {}): SignalDiagno
           api.getDiagnosticsPerformance(opts),
           api.getDiagnosticsOpportunity(opts),
           api.getDiagnosticsVersions(),
+          api.getDiagnosticsMajorMoves(opts),
+          api.getDiagnosticsTriggers(),
         ]);
         if (cancelled) return;
         setSummary(((summaryRes as any)?.data?.byInstrument ?? []) as DiagnosticsSummaryRow[]);
@@ -195,6 +246,8 @@ export function useSignalDiagnostics(opts: DiagnosticsFilter = {}): SignalDiagno
         setOpportunity({ byInstrument: opp?.byInstrument ?? [], bySegment: opp?.bySegment ?? [] });
         const ver = (versionsRes as any)?.data;
         setVersions({ strategyVersions: ver?.strategyVersions ?? [], costVersions: ver?.costVersions ?? [] });
+        setMajorMoves(((majorMovesRes as any)?.data?.rows ?? []) as DiagnosticsMajorMoveRow[]);
+        setTriggers(((triggersRes as any)?.data?.triggers ?? []) as DiagnosticsTrigger[]);
         setError(null);
       } catch (err: any) {
         if (!cancelled) setError(err?.message ?? 'Failed to load signal diagnostics');
@@ -211,5 +264,5 @@ export function useSignalDiagnostics(opts: DiagnosticsFilter = {}): SignalDiagno
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [opts.from, opts.to, opts.instrument, opts.strategyVersion, opts.costVersion, nonce]);
 
-  return { loading, error, summary, rejections, census, grades, leakage, performance, opportunity, versions, refresh };
+  return { loading, error, summary, rejections, census, grades, leakage, performance, opportunity, versions, majorMoves, triggers, refresh };
 }

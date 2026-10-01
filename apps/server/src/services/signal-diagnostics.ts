@@ -317,6 +317,20 @@ export async function diagnosticsOpportunity(q: DiagnosticsQuery) {
     s[w.classification] = (s[w.classification] ?? 0) + Number(w.n);
     segCounts.set(e.segment, s);
   }
+  // The setup-level funnel beside the opportunity counts: lifecycles created, CONFIRMED (trade-ready), and graded NO_FILL.
+  const funnel = await sql<{ instrument: string; exchange: string; created: string; trade_ready: string; no_fill: string }[]>`
+    SELECT instrument, exchange,
+      COUNT(DISTINCT lifecycle_id) FILTER (WHERE event_type <> 'WATCH')::text AS created,
+      COUNT(*) FILTER (WHERE event_type = 'CONFIRMED')::text AS trade_ready,
+      COUNT(*) FILTER (WHERE fill_status = 'NO_FILL')::text AS no_fill
+    FROM setup_events
+    WHERE (${q.since}::timestamptz IS NULL OR time >= ${q.since})
+      AND (${q.until}::timestamptz IS NULL OR time < ${q.until})
+      AND (${q.instrument}::text IS NULL OR instrument = ${q.instrument})
+      AND (${q.strategyVersion}::text IS NULL OR strategy_version = ${q.strategyVersion})
+    GROUP BY instrument, exchange
+  `;
+  const funnelBy = new Map(funnel.map((f) => [`${f.instrument}:${f.exchange}`, f]));
   const dayBy = new Map(days.map((d) => [`${d.instrument}:${d.exchange}`, d]));
   return {
     byInstrument: [...counts.entries()].map(([key, e]) => ({
@@ -325,10 +339,66 @@ export async function diagnosticsOpportunity(q: DiagnosticsQuery) {
       segment: e.segment,
       sessions: Number(dayBy.get(key)?.days ?? 0),
       correctlyEmptySessions: Number(dayBy.get(key)?.empty_days ?? 0),
+      candidatesCreated: Number(funnelBy.get(key)?.created ?? 0),
+      tradeReady: Number(funnelBy.get(key)?.trade_ready ?? 0),
+      noFill: Number(funnelBy.get(key)?.no_fill ?? 0),
       ...opportunityStats(e.c),
     })),
     bySegment: [...segCounts.entries()].map(([segment, c]) => ({ segment, ...opportunityStats(c) })),
   };
+}
+
+/** Post-session major-move diagnoses: what started each large move, who recognised it, and why it was or wasn't traded. */
+export async function diagnosticsMajorMoves(q: DiagnosticsQuery) {
+  const rows = await sql<
+    {
+      session_date: string;
+      instrument: string;
+      exchange: string;
+      direction: string;
+      start_time: Date | null;
+      end_time: Date | null;
+      start_price: string | null;
+      end_price: string | null;
+      size_adr: string | null;
+      classification: string;
+      coverage: string | null;
+      first_event_type: string | null;
+      first_event_time: Date | null;
+      families_recognized: string[] | null;
+      first_actionable: Record<string, unknown> | null;
+      traded: boolean | null;
+      reason: string | null;
+    }[]
+  >`
+    SELECT session_date::text, instrument, exchange, direction, start_time, end_time, start_price::text, end_price::text, size_adr::text,
+      classification, coverage, first_event_type, first_event_time, families_recognized, first_actionable, traded, reason
+    FROM major_move_diagnostics
+    WHERE (${q.since}::timestamptz IS NULL OR session_date >= ${q.since})
+      AND (${q.until}::timestamptz IS NULL OR session_date < ${q.until})
+      AND (${q.instrument}::text IS NULL OR instrument = ${q.instrument})
+    ORDER BY session_date DESC, instrument
+  `;
+  return rows.map((r) => ({
+    sessionDate: r.session_date,
+    instrument: r.instrument,
+    exchange: r.exchange,
+    segment: segmentOf(r.exchange),
+    direction: r.direction,
+    startTime: r.start_time ? new Date(r.start_time).getTime() : null,
+    endTime: r.end_time ? new Date(r.end_time).getTime() : null,
+    startPrice: numOrNull(r.start_price),
+    endPrice: numOrNull(r.end_price),
+    sizeAdr: numOrNull(r.size_adr),
+    classification: r.classification,
+    coverage: r.coverage,
+    firstEventType: r.first_event_type,
+    firstEventTime: r.first_event_time ? new Date(r.first_event_time).getTime() : null,
+    familiesRecognized: r.families_recognized ?? [],
+    firstActionable: r.first_actionable,
+    traded: r.traded,
+    reason: r.reason,
+  }));
 }
 
 /** The versions present, for the dashboard's filter. */

@@ -138,7 +138,12 @@ export function costStats(rows: readonly GradedEventRow[]): CostStats {
 }
 
 export interface OpportunityStats {
+  /** Every objective opportunity, data gaps included. */
   opportunities: number;
+  /** Opportunities in an uncovered session or a recording gap: not judged. */
+  dataGap: number;
+  /** The denominator of every rate: opportunities − dataGap. */
+  coveredOpportunities: number;
   detected: number;
   traded: number;
   rejected: number;
@@ -146,24 +151,33 @@ export interface OpportunityStats {
   neverDetected: number;
   detectionRate: Rate;
   captureRate: Rate;
+  missedRate: Rate;
+  lateRate: Rate;
+  rejectionRate: Rate;
 }
 
-/** From census window classifications: TRADED / DETECTED_BUT_REJECTED / DETECTED_LATE / NEVER_DETECTED. */
+/** From census window classifications: TRADED / DETECTED_BUT_REJECTED / DETECTED_LATE / NEVER_DETECTED / DATA_GAP. */
 export function opportunityStats(counts: Readonly<Record<string, number>>): OpportunityStats {
   const traded = counts.TRADED ?? 0;
   const rejected = counts.DETECTED_BUT_REJECTED ?? 0;
   const late = counts.DETECTED_LATE ?? 0;
   const neverDetected = counts.NEVER_DETECTED ?? 0;
-  const opportunities = traded + rejected + late + neverDetected;
+  const dataGap = counts.DATA_GAP ?? 0;
+  const covered = traded + rejected + late + neverDetected;
   const detected = traded + rejected + late;
   return {
-    opportunities,
+    opportunities: covered + dataGap,
+    dataGap,
+    coveredOpportunities: covered,
     detected,
     traded,
     rejected,
     late,
     neverDetected,
-    detectionRate: rate(detected, opportunities),
-    captureRate: rate(traded, opportunities),
+    detectionRate: rate(detected, covered),
+    captureRate: rate(traded, covered),
+    missedRate: rate(neverDetected, covered),
+    lateRate: rate(late, covered),
+    rejectionRate: rate(rejected, covered),
   };
 }

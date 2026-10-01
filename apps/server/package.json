@@ -23,7 +23,8 @@
     "diagnose": "tsx src/cli/diagnose.ts",
     "fetch-india-vix": "tsx src/cli/fetch-india-vix.ts",
     "fetch-option-chain-calibration": "tsx src/cli/fetch-option-chain-calibration.ts",
-    "sweep-close-report": "tsx src/cli/sweep-close-report.ts"
+    "sweep-close-report": "tsx src/cli/sweep-close-report.ts",
+    "multipath-report": "tsx src/cli/multipath-report.ts"
   },
   "dependencies": {
     "@fno/shared": "*",
