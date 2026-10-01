@@ -2018,11 +2018,15 @@ export interface SetupWatchRow {
   source: string;
   direction: 'BULLISH' | 'BEARISH';
   parentId: string | null;
-  status: 'CONFIRMED_LOW_RR' | 'ELIGIBLE' | 'BLOCKED' | 'ENDED';
-  /** "Confirmed — R:R 1.40R < 1.50R" / "Eligible — R:R 1.62R ≥ 1.50R" / "Blocked — …". */
+  /** Every confirmed setup is CONFIRMED until its genuine invalidation / expiry (ENDED). R:R never changes this. */
+  status: 'CONFIRMED' | 'ENDED';
+  /** "Confirmed — R:R 1.40R < 1.50R" / "Confirmed — R:R 1.62R ≥ 1.50R" (1.50R is informational). */
   statusText: string;
   /** The binding R:R (the lower of the underlying R:R to T1 and the option's net R:R). */
   statusRR: number | null;
+  /** Informational: statusRR ≥ 1.50R (null = not measured). */
+  rrAtMin: boolean | null;
+  /** Informational: the check (other than R:R) that would stop the AUTOMATIC paper-trade log now. Never hides the setup. */
   blockCode: string | null;
   blockReason: string | null;
   plan: OptionTradePlan | null;
@@ -2030,7 +2034,8 @@ export interface SetupWatchRow {
   current: SetupWatchSnapshot;
   startedBelowMin: boolean;
   rrRecovered: boolean;
-  firstEligibleAt: number | null;
+  /** When the binding R:R first reached 1.50R (informational). */
+  firstAtMinAt: number | null;
   strikeChanges: number;
   optionBuildFailures: number;
   startedAt: number;

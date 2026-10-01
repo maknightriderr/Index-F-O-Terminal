@@ -200,7 +200,13 @@ export interface FamilyWatchEntry {
   original: TriggerCandidate;
   parentId: string | null;
   anchorKeys: string[];
-  cause: 'LOW_RR_AT_DECISION' | 'RR_REFUSED_AT_FILL';
+  /**
+   * LOW_RR_AT_DECISION / RR_REFUSED_AT_FILL: kept alive for the paper-trade log
+   * too (handed to the slot again once it clears 1.50R). DISPLAY: a confirmed
+   * candidate that is only SHOWN and re-measured (it already went to the slot
+   * at its own bar, or its parent move traded) — never handed again.
+   */
+  cause: 'LOW_RR_AT_DECISION' | 'RR_REFUSED_AT_FILL' | 'DISPLAY';
   /** The candidate as re-measured on the newest evaluated bar (null before the first re-check). */
   current: TriggerCandidate | null;
   lastIndex: number;
@@ -262,8 +268,9 @@ export async function keepFamilyAlive(exchange: Exchange, underlying: string, rc
     const list: FamilyWatchEntry[] = JSON.parse((await redis.get(key)) ?? '[]');
     const existing = list.find((w) => w.lifecycleId === rc.lifecycleId);
     if (existing) {
-      // Already kept alive: it stays under its id; the refusal only means "not yet".
+      // Already watched: it stays under its id; the refusal only means "not yet".
       existing.lastIndex = Math.max(existing.lastIndex, rc.candidate.decisionIndex);
+      if (existing.cause === 'DISPLAY') existing.cause = 'RR_REFUSED_AT_FILL';
     } else list.push(newFamilyWatch(rc, 'RR_REFUSED_AT_FILL'));
     await redis.set(key, JSON.stringify(list), 'EX', EVAL_STATE_TTL_SECONDS);
   } catch (err: any) {
@@ -271,7 +278,21 @@ export async function keepFamilyAlive(exchange: Exchange, underlying: string, rc
   }
 }
 
-/** Ends a kept-alive family candidate (it traded, or its parent move already did). No-op when it was never kept. */
+/** A watched family candidate whose parent move already traded: still shown and re-measured, never handed to the slot again. */
+export async function displayOnlyFamilyWatch(exchange: Exchange, underlying: string, session: string, lifecycleId: string): Promise<void> {
+  const key = familyWatchKey(exchange, underlying, session);
+  try {
+    const list: FamilyWatchEntry[] = JSON.parse((await redis.get(key)) ?? '[]');
+    const w = list.find((x) => x.lifecycleId === lifecycleId);
+    if (!w || w.ended || w.cause === 'DISPLAY') return;
+    w.cause = 'DISPLAY';
+    await redis.set(key, JSON.stringify(list), 'EX', EVAL_STATE_TTL_SECONDS);
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying, exchange, lifecycleId }, 'Trigger router: display-only write failed');
+  }
+}
+
+/** Ends a watched family candidate (it was paper-traded). No-op when it was never watched. */
 export async function endFamilyWatch(exchange: Exchange, underlying: string, session: string, lifecycleId: string, reason: string, at: number): Promise<void> {
   const key = familyWatchKey(exchange, underlying, session);
   try {
@@ -299,7 +320,7 @@ export function recoveredFamilyCandidates(
 ): RoutedCandidate[] {
   const out: RoutedCandidate[] = [];
   for (const w of watch) {
-    if (w.ended || !w.current || w.current.decisionIndex !== end || w.current.bucket !== 'TRADE') continue;
+    if (w.ended || w.cause === 'DISPLAY' || !w.current || w.current.decisionIndex !== end || w.current.bucket !== 'TRADE') continue;
     const stage = stages[w.original.triggerId];
     if (!PAPER_TRADING_STAGES.includes(stage) || already.some((p) => p.lifecycleId === w.lifecycleId)) continue;
     const cost = costOnChain(w.current, chain);
@@ -524,9 +545,14 @@ export async function routeTriggerFamilies(args: { underlying: string; exchange:
     const watchKey = familyWatchKey(exchange, underlying, session);
     let watch: FamilyWatchEntry[] = JSON.parse((await redis.get(watchKey).catch(() => null)) ?? '[]');
     watch = advanceFamilyWatch(watch, ctx, log, end, sessionOkAt);
+    // Every CONFIRMED paper-stage candidate (a valid stop and target, any
+    // R:R) is shown and re-measured: below 1.50R it is also kept for the
+    // paper-trade log (LOW_RR_AT_DECISION); at 1.50R or more it already goes
+    // to the slot on this bar, so its watch is DISPLAY only.
     for (const rc of routed) {
-      if (rc.candidate.decisionIndex !== end || rc.candidate.bucket !== 'LOW_RR' || !PAPER_TRADING_STAGES.includes(rc.stage) || !rc.risk.sessionOk) continue;
-      if (!watch.some((w) => w.lifecycleId === rc.lifecycleId)) watch.push(newFamilyWatch(rc, 'LOW_RR_AT_DECISION'));
+      if (rc.candidate.decisionIndex !== end || !PAPER_TRADING_STAGES.includes(rc.stage) || !rc.risk.sessionOk) continue;
+      if (rc.candidate.bucket !== 'LOW_RR' && rc.candidate.bucket !== 'TRADE') continue;
+      if (!watch.some((w) => w.lifecycleId === rc.lifecycleId)) watch.push(newFamilyWatch(rc, rc.candidate.bucket === 'LOW_RR' ? 'LOW_RR_AT_DECISION' : 'DISPLAY'));
     }
     paper.push(...recoveredFamilyCandidates(watch, end, stages, chain, paper));
     await redis.set(watchKey, JSON.stringify(watch), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);

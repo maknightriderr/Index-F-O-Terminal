@@ -35,21 +35,18 @@ export const RR_MIN: number = STRUCTURE_RULES.minT1R;
 const floor2 = (n: number) => Math.floor(n * 100 + 1e-9) / 100;
 
 /**
- * The status line, exactly as specified. `rr` is the BINDING R:R — the lower
- * of the underlying R:R to T1 (where the engine has one) and the option's net
- * R:R after costs; both must clear the minimum.
+ * The status line. R:R is INFORMATIONAL for a shown setup (user decision
+ * 2026-10-02): every confirmed setup reads "Confirmed", and 1.50R is only the
+ * reference it is compared against — never a reason to hide, reject or end
+ * it. `rr` is the BINDING R:R (the lower of the underlying R:R to T1, where
+ * the engine has one, and the option's net R:R after costs). `atMin` = null
+ * when not measured. (The automatic paper-trade log keeps its own 1.50R
+ * requirement in the mint chains; that is not decided here.)
  */
-export function rrStatus(
-  rr: number | null,
-  block: { code: string | null; reason: string } | null,
-  min: number = RR_MIN
-): { status: SetupWatchRow['status']; text: string } {
-  if (rr == null || !Number.isFinite(rr)) {
-    return { status: 'BLOCKED', text: `Confirmed — R:R not measured${block ? ` · ${block.code ? `${block.code}: ` : ''}${block.reason}` : ''}` };
-  }
-  if (rr < min) return { status: 'CONFIRMED_LOW_RR', text: `Confirmed — R:R ${floor2(rr).toFixed(2)}R < ${min.toFixed(2)}R` };
-  if (block) return { status: 'BLOCKED', text: `Blocked — R:R ${rr.toFixed(2)}R ≥ ${min.toFixed(2)}R · ${block.code ? `${block.code}: ` : ''}${block.reason}` };
-  return { status: 'ELIGIBLE', text: `Eligible — R:R ${rr.toFixed(2)}R ≥ ${min.toFixed(2)}R` };
+export function rrStatus(rr: number | null, min: number = RR_MIN): { text: string; atMin: boolean | null } {
+  if (rr == null || !Number.isFinite(rr)) return { text: 'Confirmed — R:R not measured', atMin: null };
+  if (rr < min) return { text: `Confirmed — R:R ${floor2(rr).toFixed(2)}R < ${min.toFixed(2)}R`, atMin: false };
+  return { text: `Confirmed — R:R ${rr.toFixed(2)}R ≥ ${min.toFixed(2)}R`, atMin: true };
 }
 
 /** The binding R:R: the lower of the measured ones (null when none is measured). */
@@ -162,6 +159,31 @@ export function keepAliveStep(
   return ka && !ka.ended ? advanceStructureKeepAlive(lc, ka, closedBars, barMs, fillWithinBars) : ka;
 }
 
+/**
+ * Has a SHOWN S1 setup ended — by S1's own genuine rules only (stop traded,
+ * sweep reclaimed, T1 traded before a fill, the fill window)? Re-derived from
+ * the closed bars since it was confirmed, so a refusal by the automatic
+ * paper-trade log (R:R, cooldown, cost…) never ends what is shown. Null =
+ * still confirmed (or never confirmed). Pure; bars ≤ the newest closed bar.
+ */
+export function structureDisplayEnd(
+  lc: Pick<LiveLifecycle, 'stage' | 'stageAt' | 'confirmedAt' | 'keepAlive' | 'direction' | 'entry' | 'zone' | 'stop' | 't1' | 'sweepExtreme'>,
+  closedBars: readonly ClosedBar[],
+  barMs: number,
+  fillWithinBars: number
+): { reason: string; at: number } | null {
+  const since = lc.keepAlive?.since ?? lc.confirmedAt ?? (lc.stage === 'LOW_RR' ? lc.stageAt : null);
+  if (since == null) return null;
+  const fresh: StructureKeepAlive = { since, cause: 'LOW_RR_AT_CONFIRM', lastBarTime: null, lastAttemptBar: null, reference: null, grossRR: null, ended: null };
+  return advanceStructureKeepAlive(lc, fresh, closedBars, barMs, fillWithinBars).ended;
+}
+
+/** A confirmed S1 setup that is shown: it reached CONFIRMED (any R:R), or the engine confirmed it below 1.50R (LOW_RR with a T1). */
+export function isShownStructureSetup(lc: Pick<LiveLifecycle, 'stage' | 'confirmedAt' | 'keepAlive' | 'entry' | 'stop' | 't1'>): boolean {
+  if (lc.entry == null || lc.stop == null || lc.t1 == null) return false;
+  return lc.confirmedAt != null || lc.keepAlive != null || lc.stage === 'LOW_RR';
+}
+
 // ---------------- the per-setup lifecycle record ----------------
 
 export type WatchEventType = 'WATCH_STARTED' | 'REEVALUATED' | 'RR_RECOVERED' | 'STRIKE_CHANGED' | 'OPTION_BUILD_FAILED' | 'WATCH_ENDED';
@@ -179,7 +201,7 @@ export interface WatchUpdate {
   statusRR: number | null;
   grossRR: number | null;
   netRR: number | null;
-  /** The first hard check other than R:R that fails now (null = none). */
+  /** Informational: the first check (other than R:R) that would stop the AUTOMATIC paper-trade log now (null = none). Never hides or ends the setup. */
   block: { code: string | null; reason: string } | null;
   plan: OptionTradePlan | null;
   /** True when the option leg itself could not be built (every strike failed). */
@@ -213,7 +235,7 @@ function snapshotOf(u: WatchUpdate): SetupWatchSnapshot {
  */
 export function applyWatchUpdate(prev: SetupWatchRow | null, u: WatchUpdate, min: number = RR_MIN): { row: SetupWatchRow; events: WatchEventType[] } {
   if (prev?.ended) return { row: prev, events: [] };
-  const { status, text } = rrStatus(u.statusRR, u.block, min);
+  const { text, atMin } = rrStatus(u.statusRR, min);
   const events: WatchEventType[] = [];
   if (!prev) events.push('WATCH_STARTED');
   else if (u.barTime !== prev.lastBarTime) events.push('REEVALUATED');
@@ -231,9 +253,10 @@ export function applyWatchUpdate(prev: SetupWatchRow | null, u: WatchUpdate, min
     source: u.source,
     direction: u.direction,
     parentId: u.parentId,
-    status: u.ended ? 'ENDED' : status,
+    status: u.ended ? 'ENDED' : 'CONFIRMED',
     statusText: u.ended ? `Ended — ${u.ended.reason} (last: ${text})` : text,
     statusRR: u.statusRR,
+    rrAtMin: atMin,
     blockCode: u.block?.code ?? null,
     blockReason: u.block?.reason ?? null,
     plan: u.plan ?? prev?.plan ?? null,
@@ -241,7 +264,7 @@ export function applyWatchUpdate(prev: SetupWatchRow | null, u: WatchUpdate, min
     current: snap,
     startedBelowMin: prev ? prev.startedBelowMin : !(u.statusRR != null && u.statusRR >= min),
     rrRecovered: (prev?.rrRecovered ?? false) || recovered,
-    firstEligibleAt: prev?.firstEligibleAt ?? (status === 'ELIGIBLE' && !u.ended ? u.at : null),
+    firstAtMinAt: prev?.firstAtMinAt ?? (atMin === true && !u.ended ? u.at : null),
     strikeChanges: (prev?.strikeChanges ?? 0) + (strikeChanged ? 1 : 0),
     optionBuildFailures: (prev?.optionBuildFailures ?? 0) + (u.optionBuildFailed ? 1 : 0),
     startedAt: prev?.startedAt ?? u.at,
