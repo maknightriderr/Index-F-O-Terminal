@@ -20,7 +20,10 @@
     "backtest-structure-entry-mode": "tsx src/cli/backtest-structure-entry-mode.ts",
     "backtest-structure-patterns": "tsx src/cli/backtest-structure-patterns.ts",
     "fetch-history": "tsx src/backtest/fetch-history.ts",
-    "diagnose": "tsx src/cli/diagnose.ts"
+    "diagnose": "tsx src/cli/diagnose.ts",
+    "fetch-india-vix": "tsx src/cli/fetch-india-vix.ts",
+    "fetch-option-chain-calibration": "tsx src/cli/fetch-option-chain-calibration.ts",
+    "sweep-close-report": "tsx src/cli/sweep-close-report.ts"
   },
   "dependencies": {
     "@fno/shared": "*",

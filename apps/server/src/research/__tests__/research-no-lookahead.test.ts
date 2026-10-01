@@ -10,6 +10,7 @@ import { prepareMomentumSeries, type MomentumBar } from '@fno/analytics';
 import { BACKTEST_DATA_DIR } from '../../backtest/fetch-history.js';
 import { loadSymbol, sessionMasks, type LoadedSymbol } from '../../backtest/harness.js';
 import { buildContext, trendAt } from '../context.js';
+import { build1hContext, trueTrendAt, trueAdxAt } from '../context-1h.js';
 import { evaluatePullback, evaluateFailedBreakout, evaluateRangeReversal } from '../triggers.js';
 import { buildOppBars } from '../opportunity-census.js';
 
@@ -54,6 +55,26 @@ describe('research no-look-ahead (skips if snapshot data is absent)', () => {
       expect(evaluatePullback(truncated, ctxTrunc, t)).toEqual(evaluatePullback(full, ctxFull, t));
       expect(evaluateFailedBreakout(truncated, ctxTrunc, t)).toEqual(evaluateFailedBreakout(full, ctxFull, t));
       expect(evaluateRangeReversal(truncated, ctxTrunc, t)).toEqual(evaluateRangeReversal(full, ctxFull, t));
+    }
+  });
+
+  it('true 1H context (resampled) at t is unchanged by appending bars after t, INCLUDING within a still-forming hour', () => {
+    // t+1 and t+2 land inside the same still-forming 1H bucket as t in most
+    // cases (buckets are 4 bars); t+4 forces at least one more bucket to
+    // close. All three truncations must agree on bar t's own 1H reading.
+    for (const t of sampleIdx) {
+      const a = truncate(full, t);
+      const b = truncate(full, t + 1);
+      const c = truncate(full, t + 4);
+      const ctxA = build1hContext(a);
+      const ctxB = build1hContext(b);
+      const ctxC = build1hContext(c);
+      expect(ctxB.map15to1h[t]).toBe(ctxA.map15to1h[t]);
+      expect(ctxC.map15to1h[t]).toBe(ctxA.map15to1h[t]);
+      expect(trueTrendAt(a, ctxA, t)).toBe(trueTrendAt(b, ctxB, t));
+      expect(trueTrendAt(a, ctxA, t)).toBe(trueTrendAt(c, ctxC, t));
+      expect(trueAdxAt(ctxA, t)).toBe(trueAdxAt(ctxB, t));
+      expect(trueAdxAt(ctxA, t)).toBe(trueAdxAt(ctxC, t));
     }
   });
 
