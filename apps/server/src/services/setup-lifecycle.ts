@@ -132,6 +132,8 @@ export function recordLifecycleEvents(events: readonly LifecycleEventRow[]): voi
         poolType: e.poolKind,
         poolPrice: e.poolPrice,
         poolRank: e.poolRank ?? null,
+        // Displacement is S1's own condition: structure engine rows are S1; a routed family's mint carries its own id.
+        triggerType: e.triggerId ?? 'S1',
         sweepDepthAtr: e.sweepDepthAtr ?? null,
         entry: e.entry,
         stop: e.stop,

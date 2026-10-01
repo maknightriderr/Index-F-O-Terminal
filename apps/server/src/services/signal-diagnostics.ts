@@ -401,6 +401,57 @@ export async function diagnosticsMajorMoves(q: DiagnosticsQuery) {
   }));
 }
 
+/** Forward trades a SHADOW family needs before it can be considered for PAPER. */
+export const SHADOW_FORWARD_TRADES_REQUIRED = 30;
+
+/**
+ * The forward record of each trigger family running in SHADOW: candidates
+ * seen live, how many passed risk and cost (would have traded), and how
+ * those graded. Per trigger and per segment — INDEX and MCX never pooled.
+ */
+export async function diagnosticsShadow(q: DiagnosticsQuery) {
+  const rows = await sql<{ trigger_type: string | null; exchange: string; time: Date; would_trade: string | null; result_r: string | null; net_result_r: string | null; fill_status: string | null }[]>`
+    SELECT trigger_type, exchange, time, context->'risk'->>'wouldTrade' AS would_trade, result_r::text, net_result_r::text, fill_status
+    FROM setup_events
+    WHERE decision = 'SHADOW'
+      AND (${q.since}::timestamptz IS NULL OR time >= ${q.since})
+      AND (${q.until}::timestamptz IS NULL OR time < ${q.until})
+      AND (${q.instrument}::text IS NULL OR instrument = ${q.instrument})
+    ORDER BY time ASC
+  `;
+  const groups = new Map<string, { triggerId: string; segment: Segment; candidates: number; wouldTrade: number; noFill: number; graded: GradedEventRow[] }>();
+  for (const r of rows) {
+    const triggerId = r.trigger_type ?? '—';
+    const segment = segmentOf(r.exchange);
+    const key = `${triggerId}:${segment}`;
+    const g = groups.get(key) ?? { triggerId, segment, candidates: 0, wouldTrade: 0, noFill: 0, graded: [] };
+    g.candidates++;
+    if (r.would_trade === 'true') {
+      g.wouldTrade++;
+      if (r.fill_status === 'NO_FILL') g.noFill++;
+      if (r.result_r != null)
+        g.graded.push({ time: new Date(r.time).getTime(), resultR: Number(r.result_r), netResultR: numOrNull(r.net_result_r), mfeR: null, maeR: null, costR: null, spreadR: null, slippageR: null, chargesR: null, costQuality: null });
+    }
+    groups.set(key, g);
+  }
+  return [...groups.values()].map((g) => {
+    const p = performanceStats(g.graded);
+    return {
+      triggerId: g.triggerId,
+      segment: g.segment,
+      candidates: g.candidates,
+      wouldTrade: g.wouldTrade,
+      noFill: g.noFill,
+      forwardTrades: p.count,
+      forwardTradesRequired: SHADOW_FORWARD_TRADES_REQUIRED,
+      avgGrossR: p.avgGrossR,
+      avgNetR: p.avgNetR,
+      profitFactor: p.profitFactor,
+      winRate: p.winRate,
+    };
+  });
+}
+
 /** The versions present, for the dashboard's filter. */
 export async function diagnosticsVersions() {
   const rows = await sql<{ strategy_version: string | null; cost_version: string | null }[]>`

@@ -230,8 +230,8 @@ describe('trigger registry', () => {
       expect(['RESEARCH', 'SHADOW', 'PAPER', 'ACTIVE', 'RETIRED']).toContain(t.status);
     }
   });
-  it('nothing is ACTIVE or PAPER, and the SWEEP_CLOSE restatements are RETIRED with their evidence', () => {
-    expect(TRIGGER_REGISTRY.filter((t) => t.status === 'ACTIVE' || t.status === 'PAPER')).toEqual([]);
+  it('only S1 (the live structure engine) is ACTIVE, nothing is PAPER, and the SWEEP_CLOSE restatements are RETIRED with their evidence', () => {
+    expect(TRIGGER_REGISTRY.filter((t) => t.status === 'ACTIVE' || t.status === 'PAPER').map((t) => t.triggerId)).toEqual(['S1']);
     for (const id of ['A1', 'F4']) {
       const t = TRIGGER_REGISTRY.find((x) => x.triggerId === id)!;
       expect(t.status).toBe('RETIRED');
@@ -244,7 +244,7 @@ describe('trigger registry', () => {
 });
 
 describe('isolation from live trading', () => {
-  it('no live decision module reads the event engine or the research triggers', async () => {
+  it('live decision modules reach the event engine only through the trigger router', async () => {
     const { readFileSync } = await import('node:fs');
     const { fileURLToPath } = await import('node:url');
     const engineNames = /\b(TRIGGER_REGISTRY|evaluateTriggersAt|runSessionEvents|buildSeriesContext|diagnoseMajorMove|groupIntoParents|multipath)\b/;

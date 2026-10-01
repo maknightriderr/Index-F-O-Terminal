@@ -152,6 +152,8 @@ export interface LiveLifecycle {
    */
   rejectionFillPrice?: number;
   rejectionPattern?: { shape: string; label: string };
+  /** Set only on a trigger-router candidate minted through this chain (a PAPER-stage family); absent = S1, the structure engine's own setup. */
+  triggerId?: string;
   /** The live outcome at the fill. */
   live: { outcome: 'MINTED' | 'REFUSED'; reason: string | null; code: string | null; at: number; decisionId?: string | null; signalId?: string | null } | null;
 }
@@ -214,6 +216,8 @@ export interface LifecycleEventRow {
   atr?: number | null;
   /** Option cost measured at the fill (ENTRY_MINTED / ENTRY_REFUSED only). Measurement, never read by a decision. */
   cost?: SetupCostMeasurement | null;
+  /** The trigger that produced the row: absent = S1 (the structure engine). */
+  triggerId?: string | null;
 }
 
 const poolView = (p: LiquidityPool | null | undefined): StructurePoolView | null => (p ? { kind: p.kind, price: round2(p.price), rank: p.rank } : null);

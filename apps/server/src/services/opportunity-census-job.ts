@@ -208,6 +208,8 @@ async function censusSession(sym: WatchedSymbol, today: string, oppBars: ReturnT
   const setupRows = await sql<{ time: Date; lifecycle_id: string; direction: string; event_type: string; decision: string; cost_quality: string | null }[]>`
     SELECT time, lifecycle_id, direction, event_type, decision, cost_quality FROM setup_events
     WHERE instrument = ${sym.symbol} AND exchange = ${sym.exchange} AND time >= ${new Date(`${today}T00:00:00+05:30`)} AND time < ${new Date(`${today}T23:59:59+05:30`)}
+      -- What the live engines did: SHADOW trigger-family candidates are measured separately, never counted as a detection.
+      AND decision IS DISTINCT FROM 'SHADOW'
     ORDER BY time ASC
   `;
 

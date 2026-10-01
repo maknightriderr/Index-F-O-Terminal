@@ -424,7 +424,9 @@ export const STRUCTURE_5M_LOGIC_VERSION = '2026-09-29.structure.2';
 // TRIGGER_VERSION stays LEGACY-1.0.
 // ============================================================
 export const STRATEGY_VERSION = 'STRUCTURE-15M-1.0';
-export const TRIGGER_VERSION = 'LEGACY-1.0';
+// FAMILIES-1.0: displacement became trigger-specific (S1's own condition),
+// with the other families evaluated live in SHADOW. LEGACY-1.0 rows predate it.
+export const TRIGGER_VERSION = 'FAMILIES-1.0';
 export const RISK_VERSION = 'RISK-1.0';
 export const OPTION_VERSION = 'OPTION-1.0';
 // COST-2.0: setup_events carry a per-setup cost measured at the fill from the
@@ -437,6 +439,62 @@ export const COST_VERSION = 'COST-2.0';
  * part of the logic stamp — no live decision reads the engine.
  */
 export const EVENT_ENGINE_VERSION = 'EVENT-1.0';
+
+// ---- Trigger-family stages (displacement is trigger-specific, 2026-10-01) ----
+// Every trigger in the registry has its own live stage:
+//   RESEARCH  history only        SHADOW  live, recorded, graded, never traded
+//   PAPER     mints paper trades  ACTIVE  a primary engine      RETIRED  off
+// The default is the registry's own status: S1 (the structure engine) ACTIVE,
+// every other rule SHADOW, A1/F4 RETIRED.
+//
+// PROMOTION IS A CODE CHANGE, NEVER A SETTING. A trigger reaches PAPER or
+// ACTIVE only through an entry here that names its evidence (the
+// pre-registered out-of-sample pass, then ≥ 30 forward SHADOW trades). The
+// TRIGGER_STAGES env var can only DEMOTE (e.g. "B2=RESEARCH,D1=RETIRED");
+// a promotion asked for there is ignored and logged.
+export type LiveTriggerStage = 'RESEARCH' | 'SHADOW' | 'PAPER' | 'ACTIVE' | 'RETIRED';
+const STAGE_RANK: Record<LiveTriggerStage, number> = { RETIRED: 0, RESEARCH: 1, SHADOW: 2, PAPER: 3, ACTIVE: 4 };
+
+export interface TriggerPromotion {
+  stage: 'PAPER' | 'ACTIVE';
+  /** The evidence that earned it: the OOS report and the forward SHADOW record. */
+  evidence: string;
+  approvedOn: string;
+}
+
+/** Empty: no trigger family besides S1 can trade. */
+export const TRIGGER_PROMOTIONS: Readonly<Record<string, TriggerPromotion>> = Object.freeze({});
+
+export function parseTriggerStages(raw: string | undefined): { overrides: Record<string, LiveTriggerStage>; rejected: string[] } {
+  const overrides: Record<string, LiveTriggerStage> = {};
+  const rejected: string[] = [];
+  for (const part of (raw ?? '').split(',').map((s) => s.trim()).filter(Boolean)) {
+    const [id, stage] = part.split('=').map((s) => s.trim().toUpperCase());
+    if (id && stage && stage in STAGE_RANK) overrides[id] = stage as LiveTriggerStage;
+    else rejected.push(part);
+  }
+  return { overrides, rejected };
+}
+
+/**
+ * A trigger's live stage: its registry default, raised only by a code-level
+ * promotion, lowered by a TRIGGER_STAGES demotion. A demotion request above
+ * the earned stage is ignored.
+ */
+export function resolveTriggerStage(
+  triggerId: string,
+  registryStatus: LiveTriggerStage,
+  promotions: Readonly<Record<string, TriggerPromotion>> = TRIGGER_PROMOTIONS,
+  overrides: Readonly<Record<string, LiveTriggerStage>> = parsedTriggerStages.overrides
+): LiveTriggerStage {
+  const earned: LiveTriggerStage = registryStatus === 'RETIRED' ? 'RETIRED' : promotions[triggerId] ? promotions[triggerId].stage : registryStatus;
+  const asked = overrides[triggerId];
+  return asked && STAGE_RANK[asked] < STAGE_RANK[earned] ? asked : earned;
+}
+
+const parsedTriggerStages = parseTriggerStages(process.env.TRIGGER_STAGES);
+/** TRIGGER_STAGES entries that were not "ID=STAGE" — logged at boot. */
+export const TRIGGER_STAGES_REJECTED: readonly string[] = Object.freeze(parsedTriggerStages.rejected);
 
 /** User decision: live now, behind the flag. */
 export const STRUCTURE_DEFAULT = true;
