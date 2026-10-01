@@ -69,5 +69,5 @@ describe('SWEEP_CLOSE no-look-ahead (skips if snapshot data is absent)', () => {
     }
     // Guard against the test silently checking nothing.
     expect(checked).toBeGreaterThan(5);
-  }, 60000);
+  }, 120_000); // ~35s alone; the full suite runs files in parallel and it timed out at 60s under that load.
 });

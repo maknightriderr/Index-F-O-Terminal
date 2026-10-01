@@ -539,6 +539,26 @@ function buildNakedLong(
   let stopWidenedForNoise = false;
 
   const netReward = grossReward - roundTripCost;
+  // `plan: true` (opt-in): an R:R refusal still carries the option levels it
+  // was judged at, so a confirmed setup below the minimum can be SHOWN (never
+  // traded). Absent = the refusal object is exactly as before.
+  const rrPlanAt = (planStopWidth: number): TradeSetup['rrPlan'] => {
+    if (instrument.plan !== true) return undefined;
+    const planStop = round2(entry - planStopWidth);
+    const planRisk = entry - planStop;
+    const absD = Math.abs(leg.delta);
+    return {
+      entry,
+      stopLoss: planStop,
+      target,
+      riskReward: planRisk > 0 ? round2(grossReward / planRisk) : null,
+      riskRewardNet: planRisk + roundTripCost > 0 ? round2(netReward / (planRisk + roundTripCost)) : null,
+      estimatedCostPct: costPct,
+      stopInAtr: atrPoints && atrPoints > 0 && absD > 0 ? round2(planStopWidth / absD / atrPoints) : null,
+      targetInAtr: targetInAtr != null ? round2(targetInAtr) : null,
+      delta: leg.delta,
+    };
+  };
   if (netReward <= 0) {
     return {
       available: false,
@@ -572,6 +592,7 @@ function buildNakedLong(
           `Reward:risk after costs (${impliedRr.toFixed(2)}) is below the ${requiredRr} minimum even at the tightest tradeable stop ` +
           `(${Math.round(MIN_SL_PREMIUM_PCT * 100)}% of premium, ~${costPct}% est. costs). The ${deltaMove.toFixed(2)}-point projected move can't pay for the risk — skip, don't size down.` +
           (richIvActive ? ` IV is rich against realised volatility, so this setup needs ${requiredRr}:1 rather than ${MIN_RISK_REWARD}:1.` : ''),
+        ...(instrument.plan === true ? { rrPlan: rrPlanAt(minStopWidth) } : {}),
       };
     }
     // F&O validation rule 4: widen to the noise floor only as far as both the
@@ -633,6 +654,7 @@ function buildNakedLong(
           (richIvActive ? ` IV is rich against realised volatility, so this setup needs ${requiredRr}:1 rather than ${MIN_RISK_REWARD}:1.` : ''),
         structuralStop: structuralRecord,
         stopBeforeStructure,
+        ...(instrument.plan === true ? { rrPlan: rrPlanAt(Math.max(stopWidth, minStopWidth)) } : {}),
       };
     }
   }
@@ -796,6 +818,13 @@ export interface SetupInstrumentContext {
    * names the strike's real moneyness; strike choice by delta, the IV cap on
    * the target and the expiry fallback are the caller's (they need the chain).
    */
+  /**
+   * Opt-in: an R:R refusal (REWARD_RISK_TOO_LOW) also returns `rrPlan` — the
+   * option levels it was judged at — so a confirmed setup below the minimum
+   * can be displayed and re-checked. Never makes a refused setup available.
+   */
+  plan?: boolean;
+
   fnoValidation?: {
     enabled: boolean;
     /** Overrides MAX_COST_PCT_OF_PREMIUM. */

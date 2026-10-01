@@ -52,9 +52,16 @@ export type SetupEventType =
   /** A trigger-family candidate from the live router (SHADOW: recorded and graded, never traded). */
   | 'CANDIDATE'
   /** One candidate's role in a slot arbitration (rank, criteria, option-build failure). Measurement only: never graded or counted by the census. */
-  | 'ARBITRATION';
+  | 'ARBITRATION'
+  /** A confirmed setup's watch lifecycle (setup-watch.ts): measurement only, decision LIFECYCLE. */
+  | 'WATCH_STARTED'
+  | 'REEVALUATED'
+  | 'RR_RECOVERED'
+  | 'STRIKE_CHANGED'
+  | 'OPTION_BUILD_FAILED'
+  | 'WATCH_ENDED';
 
-export type SetupDecision = 'WATCH' | 'DETECTED' | 'REJECTED' | 'TRADED' | 'SHADOW' | 'ARBITRATION';
+export type SetupDecision = 'WATCH' | 'DETECTED' | 'REJECTED' | 'TRADED' | 'SHADOW' | 'ARBITRATION' | 'LIFECYCLE';
 
 /** The structure engine's lifecycle stage vocabulary -> setup_events' own. */
 const EVENT_TYPE_BY_STAGE: Record<string, SetupEventType> = {
@@ -88,6 +95,12 @@ const DECISION_BY_EVENT_TYPE: Record<SetupEventType, SetupDecision> = {
   CLOSED: 'TRADED',
   CANDIDATE: 'SHADOW',
   ARBITRATION: 'ARBITRATION',
+  WATCH_STARTED: 'LIFECYCLE',
+  REEVALUATED: 'LIFECYCLE',
+  RR_RECOVERED: 'LIFECYCLE',
+  STRIKE_CHANGED: 'LIFECYCLE',
+  OPTION_BUILD_FAILED: 'LIFECYCLE',
+  WATCH_ENDED: 'LIFECYCLE',
 };
 
 /**

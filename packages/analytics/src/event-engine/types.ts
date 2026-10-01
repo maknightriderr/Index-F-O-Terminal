@@ -157,6 +157,8 @@ export interface TriggerCandidate {
   marketState: MarketState;
   movePotential: MovePotential;
   timing: EntryTiming;
+  /** The rule's invalidation extreme the stop sits beyond (before the ATR buffer) — what a later re-check rebuilds from. */
+  stopRef?: number;
 }
 
 export interface ParentSetup {

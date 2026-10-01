@@ -212,6 +212,8 @@ async function censusSession(sym: WatchedSymbol, today: string, oppBars: ReturnT
       AND decision IS DISTINCT FROM 'SHADOW'
       -- Slot-arbitration rows restate candidates that already have their own row.
       AND decision IS DISTINCT FROM 'ARBITRATION'
+      -- Confirmed-setup watch rows (setup-watch.ts) restate the same lifecycle too.
+      AND decision IS DISTINCT FROM 'LIFECYCLE'
     ORDER BY time ASC
   `;
 

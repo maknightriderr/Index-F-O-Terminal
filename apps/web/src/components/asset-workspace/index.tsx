@@ -6,7 +6,7 @@ import { api, ApiError } from '@/lib/api';
 import { useMarketBias } from '@/lib/use-market-bias';
 import { useCorporateActionsForSymbol } from '@/lib/use-corporate-actions';
 import { formatIndianNumber, formatCompact, formatExpiryDate, calculateDTE, isMarketOpen, DEFAULT_RISK_CONFIG, engineBadge } from '@fno/shared';
-import type {
+import type { SetupWatchRow,
   Exchange,
   OptionChain,
   OptionChainLeg,
@@ -69,7 +69,7 @@ export function AssetWorkspace() {
   // Hooks can't be called conditionally, so this runs even before the
   // "no asset selected" early return below — harmless, just polls NIFTY
   // until an asset is actually picked.
-  const { bias, score, tradeSetup, structure, isLive: biasLive } = useMarketBias(selectedSymbol || 'NIFTY', selectedExchange || 'NSE', biasMode);
+  const { bias, score, tradeSetup, structure, setupWatch, isLive: biasLive } = useMarketBias(selectedSymbol || 'NIFTY', selectedExchange || 'NSE', biasMode);
   const { actions: corporateActions } = useCorporateActionsForSymbol(selectedSymbol || 'NIFTY', selectedExchange || 'NSE');
   const [chain, setChain] = useState<OptionChain | null>(null);
   const [futures, setFutures] = useState<FuturesChainResponse | null>(null);
@@ -316,6 +316,7 @@ export function AssetWorkspace() {
                 <PositionMomentumCard momentum={chain.positionMomentum} />
                 <DecayCard decay={chain.decay} />
                 <TradeSetupCard setup={tradeSetup} structure={structure} />
+                {setupWatch.length > 0 && <SetupWatchList rows={setupWatch} />}
               </div>
               <OiShiftCard strikes={chain.strikes} />
             </div>
@@ -790,6 +791,72 @@ function RejectedToday({ rows, outcomes }: { rows: StructureLifecycleView[]; out
         ))}
       </div>
     </details>
+  );
+}
+
+const WATCH_STATUS_STYLE: Record<SetupWatchRow['status'], string> = {
+  ELIGIBLE: 'bg-emerald-500/15 text-emerald-300 light:text-emerald-700',
+  CONFIRMED_LOW_RR: 'bg-amber-500/15 text-amber-300 light:text-amber-700',
+  BLOCKED: 'bg-rose-500/15 text-rose-300 light:text-rose-700',
+  ENDED: 'bg-gray-500/15 text-gray-400 light:text-slate-600',
+};
+
+const rupee = (n: number | null | undefined) => (n == null ? '—' : `₹${n.toFixed(2)}`);
+const lvl = (n: number | null | undefined) => (n == null ? '—' : formatIndianNumber(n, 2));
+const rr = (n: number | null | undefined) => (n == null ? '—' : `${n.toFixed(2)}R`);
+
+/**
+ * Confirmed setups kept alive and re-evaluated on every closed 15m bar
+ * (setup-watch.ts) — the OPTION premium levels first, since this terminal
+ * places no orders: these are the levels to enter by hand. A setup below
+ * 1.50R is shown, never traded; "Eligible" means every hard check passes now.
+ */
+function SetupWatchList({ rows }: { rows: SetupWatchRow[] }) {
+  return (
+    <IntelCard title="Confirmed setups" accent="emerald">
+      <p className="text-[10px] text-gray-400 light:text-slate-600 mb-2 leading-snug">
+        Re-checked on every closed 15m bar under the same setup. Below 1.50R a setup stays visible and is never traded; option levels are premiums (est. when the entry is away from the live price).
+      </p>
+      <div className="space-y-2">
+        {rows.map((r) => {
+          const p = r.plan;
+          return (
+            <div key={r.id} className={`rounded-lg px-2 py-1.5 bg-gray-900/50 light:bg-slate-100 ${r.ended ? 'opacity-60' : ''}`}>
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <span className="text-xs font-semibold text-gray-200 light:text-slate-800">
+                  {r.source === 'INDICATOR' ? 'Indicator' : r.source === 'S1' ? 'Structure S1' : `Paper research · ${r.source}`} · 15m {r.direction === 'BEARISH' ? '▼ Bearish' : '▲ Bullish'}
+                </span>
+                <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${WATCH_STATUS_STYLE[r.status]}`}>{r.status === 'CONFIRMED_LOW_RR' ? 'Confirmed' : r.status === 'ELIGIBLE' ? 'Eligible' : r.status === 'BLOCKED' ? 'Blocked' : 'Ended'}</span>
+              </div>
+              <div className="text-[11px] text-gray-300 light:text-slate-700 mb-1">{r.statusText}</div>
+              {p ? (
+                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px] tabular-nums">
+                  <span className="col-span-2 font-semibold text-gray-100 light:text-slate-900">
+                    {p.strike} {p.side} · {p.expiry}
+                    {p.estimated ? ' · est.' : ''}
+                  </span>
+                  <span>Option Entry: {rupee(p.entryPremium)}</span>
+                  <span>Option SL: {rupee(p.slPremium)}</span>
+                  <span>Option TSL: {rupee(p.tslPremium)}</span>
+                  <span>Option T1: {rupee(p.t1Premium)}</span>
+                  <span>Option T2: {rupee(p.t2Premium)}</span>
+                  <span>Net R:R: {rr(p.netRR)}</span>
+                  <span>Underlying Entry: {lvl(p.underlyingEntry)}</span>
+                  <span>Underlying SL: {lvl(p.underlyingSl)}</span>
+                  <span>Underlying T1: {lvl(p.underlyingT1)}</span>
+                  <span>Underlying T2: {lvl(p.underlyingT2)}</span>
+                  <span>Gross R:R: {rr(p.grossRR)}</span>
+                  <span className="col-span-2 text-[10px] text-gray-400 light:text-slate-600 leading-snug">{p.tslRule}</span>
+                </div>
+              ) : (
+                <div className="text-[11px] text-gray-400 light:text-slate-600">No option leg could be built{r.blockReason ? `: ${r.blockReason}` : '.'}</div>
+              )}
+              {r.blockReason && p && <div className="text-[10px] text-rose-300 light:text-rose-700 mt-1">{r.blockCode ? `${r.blockCode}: ` : ''}{r.blockReason}</div>}
+            </div>
+          );
+        })}
+      </div>
+    </IntelCard>
   );
 }
 

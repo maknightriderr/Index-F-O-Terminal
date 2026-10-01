@@ -389,6 +389,22 @@ export interface TradeSetup {
    */
   strategy?: 'STRUCTURE' | 'MOMENTUM_BREAK' | string;
   /**
+   * Only on an R:R refusal built with `plan: true`: the option levels the
+   * refusal was judged at (premium entry / SL / target, gross and net R:R).
+   * Shown for a confirmed setup below 1.50R; never traded.
+   */
+  rrPlan?: {
+    entry: number;
+    stopLoss: number;
+    target: number;
+    riskReward: number | null;
+    riskRewardNet: number | null;
+    estimatedCostPct: number;
+    stopInAtr: number | null;
+    targetInAtr: number | null;
+    delta: number;
+  };
+  /**
    * Set only on a trigger-family paper-research trade (A2, B1, …): the trigger
    * that decided it. It is minted through the structure chain (strategy
    * 'STRUCTURE') but is NOT S1 — every display labels it "Paper research · <id>".
@@ -457,7 +473,8 @@ export interface TradeSetup {
 export interface TradeSetupFnoValidation {
   /** Rule 1: the strike chosen by |delta| band rather than by rounding spot. */
   strikeSelection: {
-    method: 'DELTA_BAND';
+    /** DELTA_BAND: the strike closest to the target delta. BEST_OF_BAND: every in-band strike built and ranked (rankStrikeBuilds). */
+    method: 'DELTA_BAND' | 'BEST_OF_BAND';
     band: [number, number];
     selectedStrike: number | null;
     /** The chain's rounded ATM strike, for comparison. */
@@ -466,6 +483,8 @@ export interface TradeSetupFnoValidation {
     moneyness: 'ITM' | 'ATM' | 'OTM' | null;
     candidatesEvaluated: number;
     eligible: number;
+    /** BEST_OF_BAND: every in-band strike as built, best first (the first available one is traded). */
+    ranking?: Array<{ strike: number; delta: number | null; spreadPct: number | null; available: boolean; code: string | null; netRR: number | null }>;
   } | null;
   /** Rule 2: IV used for the target's expected move = min(ATM IV, HV × mult). Null when the family's target is structural, not IV-based. */
   ivCap: {
@@ -1937,6 +1956,88 @@ export interface StructureTradePreview {
   /** Epoch ms: the fill window implied by the engine's fillWithinBars, from when this lifecycle first reached CONFIRMED. Null when unknown. */
   validUntil: number | null;
   computedAt: number;
+}
+
+/**
+ * A confirmed setup's executable option plan — OPTION PREMIUM levels first
+ * (the terminal is manual-execution only: these are what the user enters),
+ * with the underlying levels they were derived from. SL / TSL / targets are
+ * premium values from the existing option model (delta × the underlying
+ * distance, the stop's structural / noise / cap rules, the trailing rule),
+ * never underlying prices copied across.
+ */
+export interface OptionTradePlan {
+  side: 'CE' | 'PE';
+  strike: number;
+  expiry: string;
+  dte: number | null;
+  lotSize: number | null;
+  /** Premium at the underlying entry reference (an estimate when that reference is not the live spot). */
+  entryPremium: number;
+  slPremium: number;
+  /** The CURRENT trailing stop in premium (before entry = the initial SL). */
+  tslPremium: number;
+  /** The existing trailing rule in this contract's premium. */
+  tslRule: string;
+  t1Premium: number;
+  t2Premium: number | null;
+  underlyingEntry: number;
+  underlyingSl: number | null;
+  underlyingT1: number | null;
+  underlyingT2: number | null;
+  /** Underlying R:R to T1 at the entry reference (null when the engine has no underlying T1). */
+  grossRR: number | null;
+  /** Premium R:R after the option cost model (spread, slippage, charges, brokerage). */
+  netRR: number | null;
+  estimatedCostPct: number | null;
+  /** True when the premiums are projected to an entry reference away from the live spot. */
+  estimated: boolean;
+  /** Strike selection: every in-band strike, best first (null when F&O validation is off). */
+  strikeRanking: Array<{ strike: number; delta: number | null; spreadPct: number | null; available: boolean; code: string | null; netRR: number | null }> | null;
+}
+
+export interface SetupWatchSnapshot {
+  at: number;
+  underlyingEntry: number | null;
+  underlyingSl: number | null;
+  underlyingT1: number | null;
+  underlyingT2: number | null;
+  side: 'CE' | 'PE' | null;
+  strike: number | null;
+  expiry: string | null;
+  entryPremium: number | null;
+  grossRR: number | null;
+  netRR: number | null;
+  statusRR: number | null;
+}
+
+/** One confirmed setup kept alive and re-evaluated under its SAME id (setup-watch.ts). */
+export interface SetupWatchRow {
+  id: string;
+  /** 'S1', 'INDICATOR', or the trigger id. */
+  source: string;
+  direction: 'BULLISH' | 'BEARISH';
+  parentId: string | null;
+  status: 'CONFIRMED_LOW_RR' | 'ELIGIBLE' | 'BLOCKED' | 'ENDED';
+  /** "Confirmed — R:R 1.40R < 1.50R" / "Eligible — R:R 1.62R ≥ 1.50R" / "Blocked — …". */
+  statusText: string;
+  /** The binding R:R (the lower of the underlying R:R to T1 and the option's net R:R). */
+  statusRR: number | null;
+  blockCode: string | null;
+  blockReason: string | null;
+  plan: OptionTradePlan | null;
+  initial: SetupWatchSnapshot;
+  current: SetupWatchSnapshot;
+  startedBelowMin: boolean;
+  rrRecovered: boolean;
+  firstEligibleAt: number | null;
+  strikeChanges: number;
+  optionBuildFailures: number;
+  startedAt: number;
+  updatedAt: number;
+  lastBarTime: number | null;
+  expiresAt: number | null;
+  ended: { reason: string; at: number } | null;
 }
 
 export interface StructureBlock {
