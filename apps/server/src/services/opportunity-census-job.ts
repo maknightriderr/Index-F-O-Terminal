@@ -210,6 +210,8 @@ async function censusSession(sym: WatchedSymbol, today: string, oppBars: ReturnT
     WHERE instrument = ${sym.symbol} AND exchange = ${sym.exchange} AND time >= ${new Date(`${today}T00:00:00+05:30`)} AND time < ${new Date(`${today}T23:59:59+05:30`)}
       -- What the live engines did: SHADOW trigger-family candidates are measured separately, never counted as a detection.
       AND decision IS DISTINCT FROM 'SHADOW'
+      -- Slot-arbitration rows restate candidates that already have their own row.
+      AND decision IS DISTINCT FROM 'ARBITRATION'
     ORDER BY time ASC
   `;
 

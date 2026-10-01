@@ -74,10 +74,22 @@ export function formatExpiryDate(expiry: string): string {
  * name, e.g. "Bull Call Spread" — anything not exactly 'STRUCTURE' or
  * 'MOMENTUM_BREAK' reads as the indicator/consensus engine).
  */
-export function engineBadge(strategy: string | null | undefined): { key: 'STRUCTURE' | 'MOMENTUM_BREAK' | 'INDICATOR'; label: string } {
+export function engineBadge(
+  strategy: string | null | undefined,
+  researchTrigger?: string | null
+): { key: 'STRUCTURE' | 'MOMENTUM_BREAK' | 'INDICATOR' | 'PAPER_RESEARCH'; label: string } {
+  // A trigger-family paper-research trade is minted through the structure
+  // chain but is not S1: it is never labelled as the structure engine.
+  if (researchTrigger) return { key: 'PAPER_RESEARCH', label: `Paper research · ${researchTrigger}` };
   if (strategy === 'STRUCTURE') return { key: 'STRUCTURE', label: 'Structure · NEW' };
   if (strategy === 'MOMENTUM_BREAK') return { key: 'MOMENTUM_BREAK', label: 'Momentum · off by default' };
   return { key: 'INDICATOR', label: 'Indicator · OLD' };
+}
+
+/** The trigger of a paper-research trade, from its logic version ("…+paper-research.A3" → "A3"); null otherwise. */
+export function researchTriggerOf(logicVersion: string | null | undefined): string | null {
+  const m = /\+paper-research\.([A-Za-z0-9_]+)/.exec(logicVersion ?? '');
+  return m ? m[1] : null;
 }
 
 /**

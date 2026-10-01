@@ -26,7 +26,7 @@ import type {
   LogicVersionBucket,
   StrategyBucket,
 } from '@fno/shared';
-import { minutesSinceSessionOpen, ESTIMATED_ROUND_TRIP_COST_PCT } from '@fno/shared';
+import { minutesSinceSessionOpen, ESTIMATED_ROUND_TRIP_COST_PCT, researchTriggerOf } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 import { summariseIndependentBets } from './independent-bets.js';
@@ -456,8 +456,14 @@ export async function getWinRateAnalytics(modeFilter?: TradingMode | 'ALL', sinc
   };
 }
 
-/** Momentum-break round: which family minted a setup. Everything that is not a momentum-break trigger is the consensus engine. */
-export function strategyFamilyOfSetup(r: Pick<TradeSetupRecord, 'strategy'>): 'MOMENTUM_BREAK' | 'STRUCTURE' | 'CONSENSUS' {
+/**
+ * Which family minted a setup. A trigger-family paper-research trade is minted
+ * through the structure chain but is NOT S1: it is its own bucket, never pooled
+ * with S1's history. Everything else that is not structure or momentum-break
+ * is the consensus engine.
+ */
+export function strategyFamilyOfSetup(r: Pick<TradeSetupRecord, 'strategy'> & Partial<Pick<TradeSetupRecord, 'logicVersion'>>): 'MOMENTUM_BREAK' | 'STRUCTURE' | 'CONSENSUS' | 'PAPER_RESEARCH' {
+  if (researchTriggerOf(r.logicVersion)) return 'PAPER_RESEARCH';
   if (r.strategy === 'STRUCTURE') return 'STRUCTURE';
   return r.strategy === 'MOMENTUM_BREAK' ? 'MOMENTUM_BREAK' : 'CONSENSUS';
 }
