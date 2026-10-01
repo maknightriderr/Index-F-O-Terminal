@@ -213,7 +213,8 @@ describe('flags, stamp and schema', () => {
     expect(on.structure?.consensusSetups).toBe(true);
     const off = logicStamp(TRADING_FLAG_DEFAULTS, TRADING_PARAM_DEFAULTS, COVERAGE_LAG_FLAG_DEFAULTS, COVERAGE_LAG_PARAM_DEFAULTS, [], false, MOMENTUM_BREAK_PARAM_DEFAULTS, [], extras(false));
     expect(off.logicVersion).toBe(LOGIC_VERSION);
-    expect(liveLogicStamp().logicVersion).toBe(STRUCTURE_LOGIC_VERSION);
+    // The live stamp also carries the indicator engine's EVIDENCE mode (2026-10-01).
+    expect(liveLogicStamp().logicVersion).toBe(`${STRUCTURE_LOGIC_VERSION}+indicator-evidence.1`);
   });
   it('CONSENSUS_OFF is classified as not eligible', () => {
     expect(classifyRefusal('CONSENSUS_OFF')).toBe('NOT_ELIGIBLE');

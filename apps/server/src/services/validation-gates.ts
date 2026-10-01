@@ -54,6 +54,22 @@ export function minutesToSessionClose(exchange: Exchange, at: number): number | 
  * engine passes STRUCTURE_CLOSING_GUARD_MIN (chosen by its backtest). The NSE
  * evidence sentence is only cited on NSE/BSE — it was never measured on MCX.
  */
+/**
+ * The indicator engine's confidence gate, by mode. EVIDENCE (the runtime
+ * default): confidence never refuses a setup — the comparison is not even
+ * made. LEGACY (dormant rollback): the old floor, with its exact refusal.
+ * `minConfidence` is market-bias.ts's MIN_SETUP_CONFIDENCE (protected, 75).
+ */
+export function setupConfidenceRefusal(args: { mode: 'EVIDENCE' | 'LEGACY'; confidence: number; minConfidence: number }): { code: 'LOW_SETUP_QUALITY'; reason: string } | null {
+  if (args.mode !== 'LEGACY') return null;
+  return args.confidence < args.minConfidence
+    ? {
+        code: 'LOW_SETUP_QUALITY',
+        reason: `Confidence ${args.confidence}/100 is below the ${args.minConfidence} a setup needs. Below that bar the recorded trades lost 6.6R across 34 of them, and 85% of the weakest band expired without touching either level.`,
+      }
+    : null;
+}
+
 export function closingGuardReason(args: {
   enabled: boolean;
   mode: TradingMode;

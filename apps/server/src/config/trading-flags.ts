@@ -440,6 +440,35 @@ export const COST_VERSION = 'COST-2.0';
  */
 export const EVENT_ENGINE_VERSION = 'EVENT-1.0';
 
+// ---- Indicator (consensus) engine confidence mode (2026-10-01) ----
+// EVIDENCE (default, the only path that runs): confidence is recorded and
+// ranks, it never refuses a setup by itself. The setup still needs a
+// directional bias, a valid stop and target, R:R after costs, the option
+// contract checks, the cost ceiling, the session and post-loss risk rules.
+// LEGACY (dormant rollback): the old confidence >= 75 gate (and the option
+// builder's 65 floor), exactly as before. Set INDICATOR_CONFIDENCE_MODE=LEGACY
+// to roll back; nothing of LEGACY runs while EVIDENCE is selected.
+//
+// Recorded evidence behind the old gate (market-bias.ts, above
+// MIN_SETUP_CONFIDENCE): below 75 the recorded trades lost 6.6R across 34;
+// above it confidence stopped ranking outcomes. Trades taken under EVIDENCE
+// carry the "+indicator-evidence.1" logic-version suffix so they are never
+// pooled with the gated history.
+export type IndicatorConfidenceMode = 'EVIDENCE' | 'LEGACY';
+export const INDICATOR_CONFIDENCE_MODE_DEFAULT: IndicatorConfidenceMode = 'EVIDENCE';
+export const INDICATOR_EVIDENCE_LOGIC_SUFFIX = '+indicator-evidence.1';
+
+export function parseIndicatorConfidenceMode(raw: string | undefined): { value: IndicatorConfidenceMode; rejected: string | null } {
+  if (raw == null || raw.trim() === '') return { value: INDICATOR_CONFIDENCE_MODE_DEFAULT, rejected: null };
+  const v = raw.trim().toUpperCase();
+  if (v === 'EVIDENCE' || v === 'LEGACY') return { value: v, rejected: null };
+  return { value: INDICATOR_CONFIDENCE_MODE_DEFAULT, rejected: raw };
+}
+const parsedIndicatorMode = parseIndicatorConfidenceMode(process.env.INDICATOR_CONFIDENCE_MODE);
+export const INDICATOR_CONFIDENCE_MODE: IndicatorConfidenceMode = parsedIndicatorMode.value;
+/** An INDICATOR_CONFIDENCE_MODE value that was neither EVIDENCE nor LEGACY — logged at boot. */
+export const INDICATOR_CONFIDENCE_MODE_REJECTED: string | null = parsedIndicatorMode.rejected;
+
 // ---- Trigger-family stages (displacement is trigger-specific, 2026-10-01) ----
 // Every trigger in the registry has its own live stage:
 //   RESEARCH  history only        SHADOW  live, recorded, graded, never traded
@@ -700,6 +729,8 @@ export interface LogicStamp {
     optionVersion: string;
     costVersion: string;
   };
+  /** The indicator engine's confidence mode (absent on setups minted before it: the 75 gate). */
+  indicator?: { confidenceMode: IndicatorConfidenceMode };
 }
 
 /**
@@ -727,6 +758,8 @@ export interface LogicStampExtras {
     optionVersion: string;
     costVersion: string;
   };
+  /** Absent = not recorded; the version is decided exactly as before. */
+  indicator?: { confidenceMode: IndicatorConfidenceMode };
 }
 
 /** What gets written onto every setup and decision. */
@@ -744,15 +777,18 @@ export function logicStamp(
   // The structure version is stamped only while its flag is on (the same
   // mechanism as momentum-break), and takes precedence when both are.
   // 5m entries are a different rule set, so they carry their own version.
-  const logicVersion = extras.structure?.enabled
+  const baseVersion = extras.structure?.enabled
     ? extras.structure.entryTimeframe === '5m'
       ? STRUCTURE_5M_LOGIC_VERSION
       : STRUCTURE_LOGIC_VERSION
     : momentumEnabled
       ? MOMENTUM_BREAK_LOGIC_VERSION
       : LOGIC_VERSION;
+  // The indicator engine's confidence mode changes which consensus setups mint, so EVIDENCE gets its own suffix.
+  const logicVersion = extras.indicator?.confidenceMode === 'EVIDENCE' ? `${baseVersion}${INDICATOR_EVIDENCE_LOGIC_SUFFIX}` : baseVersion;
   return {
     logicVersion,
+    ...(extras.indicator ? { indicator: { confidenceMode: extras.indicator.confidenceMode } } : {}),
     flags: { ...flags },
     params: { ...params },
     coverageLag: { flags: { ...lagFlags }, params: { ...lagParams }, backgroundSymbols: backgroundSymbols.map((s) => ({ ...s })) },
@@ -781,5 +817,6 @@ export function liveLogicStamp(): LogicStamp {
     fnoValidation: { enabled: FNO_VALIDATION, params: FNO_VALIDATION_PARAMS },
     structure: { enabled: STRUCTURE, consensusSetups: CONSENSUS_SETUPS, params: STRUCTURE_PARAMS, symbols: STRUCTURE_SYMBOLS, entryTimeframe: STRUCTURE_ENTRY_TF, entryMode: STRUCTURE_ENTRY_MODE },
     versions: { strategyVersion: STRATEGY_VERSION, triggerVersion: TRIGGER_VERSION, riskVersion: RISK_VERSION, optionVersion: OPTION_VERSION, costVersion: COST_VERSION },
+    indicator: { confidenceMode: INDICATOR_CONFIDENCE_MODE },
   });
 }

@@ -128,7 +128,9 @@ import {
   minutesToSessionClose,
   roomGateReason,
   roomV2,
+  setupConfidenceRefusal,
 } from './validation-gates.js';
+import { INDICATOR_CONFIDENCE_MODE } from '../config/trading-flags.js';
 import type { ExposureSnapshot } from './exposure-tracker.js';
 import { stopOvershootPct } from './stop-overshoot.js';
 import type { NoTradeCode, TradeDecision } from '@fno/shared';
@@ -3253,12 +3255,8 @@ async function resolveStickyTradeSetup(
     (riskOff ? { code: 'RISK_OFF' as const, reason: riskOff } : null) ??
     (feedBlock ? { code: 'NO_QUOTE' as const, reason: feedBlock } : null) ??
     sessionGateReason(exchange, mode) ??
-    (confidence < MIN_SETUP_CONFIDENCE
-      ? {
-          code: 'LOW_SETUP_QUALITY' as const,
-          reason: `Confidence ${confidence}/100 is below the ${MIN_SETUP_CONFIDENCE} a setup needs. Below that bar the recorded trades lost 6.6R across 34 of them, and 85% of the weakest band expired without touching either level.`,
-        }
-      : null) ??
+    // INDICATOR_CONFIDENCE_MODE: EVIDENCE (default) never refuses on confidence; LEGACY is the old 75 floor.
+    setupConfidenceRefusal({ mode: INDICATOR_CONFIDENCE_MODE, confidence, minConfidence: MIN_SETUP_CONFIDENCE }) ??
     // Validation review, fix 2 (flags LOCATION_GATE, ROOM_GATE). Null when off.
     locationGateReason({
       enabled: TRADING_FLAGS.LOCATION_GATE,
@@ -3315,6 +3313,7 @@ async function resolveStickyTradeSetup(
           liveRefusalCode: refusal?.code ?? null,
           thresholds: {
             minSetupConfidence: MIN_SETUP_CONFIDENCE,
+            ...(INDICATOR_CONFIDENCE_MODE === 'EVIDENCE' ? { confidenceGateEnforced: false } : {}),
             openingSettleMinutes: SETUP_OPENING_SETTLE_MINUTES,
             openingGuardMinutes: SETUP_OPENING_GUARD_MINUTES,
             postLossSettleMinutes: POST_LOSS_SETTLE_MINUTES,
@@ -3547,6 +3546,8 @@ async function resolveStickyTradeSetup(
           structuralStopBufferAtr: TRADING_PARAMS.STRUCTURAL_STOP_BUFFER_ATR,
           ivVsHv: entryContext?.ivVsHv ?? null,
           richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
+          // EVIDENCE: the builder's own confidence floor is off too — confidence ranks, it does not refuse.
+          ...(INDICATOR_CONFIDENCE_MODE === 'EVIDENCE' ? { confidenceGate: false } : {}),
           ...(FNO_VALIDATION
             ? { fnoValidation: { enabled: true, maxCostPctOfPremium: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM, minOptionStopAtr: FNO_VALIDATION_PARAMS.MIN_OPTION_STOP_ATR } }
             : {}),
