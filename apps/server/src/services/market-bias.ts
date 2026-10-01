@@ -106,7 +106,7 @@ import { notifyTradeSetup } from './telegram.js';
 import { trackSymbolForOiSnapshot } from './oi-close-snapshot.js';
 import { riskOffReason } from './risk-circuit-breaker.js';
 import { assessLocation, assessRoom, type StructuralLevel } from './location-quality.js';
-import { TRADING_FLAGS, TRADING_PARAMS, COVERAGE_LAG_FLAGS, COVERAGE_LAG_PARAMS, liveLogicStamp, FNO_VALIDATION, FNO_VALIDATION_PARAMS, type LogicStamp } from '../config/trading-flags.js';
+import { TRADING_FLAGS, TRADING_PARAMS, COVERAGE_LAG_FLAGS, COVERAGE_LAG_PARAMS, liveLogicStamp, paperResearchStamp, FNO_VALIDATION, FNO_VALIDATION_PARAMS, type LogicStamp } from '../config/trading-flags.js';
 import { bandVote, type Vote } from './vote-bands.js';
 import {
   evaluateIntradayPositioning,
@@ -178,9 +178,10 @@ import {
   type StructureVariant,
 } from '@fno/analytics';
 import type { StructureBlock, StructureLifecycleView, StructureTradePreview } from '@fno/shared';
-import { CONSENSUS_SETUPS, STRUCTURE, STRUCTURE_ENTRY_MODE, STRUCTURE_ENTRY_TF, STRUCTURE_PARAMS, structureEnabledFor, COST_VERSION } from '../config/trading-flags.js';
+import { CONSENSUS_SETUPS, STRUCTURE, STRUCTURE_ENTRY_MODE, STRUCTURE_ENTRY_TF, STRUCTURE_PARAMS, structureEnabledFor, COST_VERSION, PAPER_TRADING_STAGES } from '../config/trading-flags.js';
 import { measureSetupCost, type SetupCostMeasurement } from './setup-cost.js';
 import { routeTriggerFamilies, lifecycleFromCandidate, type RoutedCandidate } from './trigger-router.js';
+import { settleSlot, isDeferred, structureSlotCandidate, routedSlotCandidate, type DeferredSetup, type SlotCandidate } from './slot-arbitration.js';
 import {
   STRUCTURE_SEQUENCE_CONFIDENCE,
   STRUCTURE_SETUP_TYPE,
@@ -2404,6 +2405,8 @@ interface StoredStructureTrade {
   rejectionPattern?: LiveLifecycle['rejectionPattern'] | null;
   /** Present only for a 5m-entry trade (its SWEEP_RECLAIMED exit reads closed 5m bars). */
   timeframe?: '5m';
+  /** Present only for a trigger-family paper trade (A2, B1, …): the trigger that decided it. */
+  triggerId?: string;
 }
 
 /** Staleness of a re-surfaced sticky setup, as shown on the response. Measured only — see signal-freshness.ts. */
@@ -2818,6 +2821,9 @@ function exitValueForPriceHit(stored: StoredTradeSetup, isSpread: boolean, hitTa
   return Math.min(currentValue, stored.target);
 }
 
+/** Routed trigger candidates built per poll (each builds an option leg; normally 0–1 per closed bar). */
+const MAX_ROUTED_BUILDS_PER_POLL = 3;
+
 async function resolveStickyTradeSetup(
   provider: MarketDataProvider,
   underlying: string,
@@ -3090,576 +3096,625 @@ async function resolveStickyTradeSetup(
     if (triggered) return triggered;
   }
 
-  // Structure: a claimed fill runs its own chain (safety gates, the
-  // STRUCTURE_SEQUENCE gate, Part A, the option leg). Minted: that is this
-  // poll's setup. Refused: recorded on the lifecycle, and the consensus chain
-  // below runs as before.
+  // Every engine that may paper-trade builds its setup through its own,
+  // unchanged chain (safety gates, sequence/risk geometry, Part A, the option
+  // leg, cost and liquidity limits) WITHOUT minting it. Refusals are recorded
+  // where they happen, as before. The built candidates are then ranked in
+  // settleSlot — no engine has priority — and only the winner is minted into
+  // this symbol's one slot; every other is recorded NOT_SELECTED.
+  const pending: DeferredSetup[] = [];
+
+  // S1 — the structure engine: a claimed fill.
   if (structureFill && structureFamily) {
     structureFamily.run.handled = true;
     const filled = await resolveStructureSetup({
       provider, underlying, exchange, mode, key, today, setupTtl, chain, lc: structureFill, state: structureFamily.state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId,
     });
-    if (filled) return filled;
+    if (filled) pending.push(filled);
   }
 
-  // A PAPER-stage trigger family (never SHADOW): its newest-bar candidate,
-  // claimed once, runs the structure engine's own chain — the same safety
-  // gates, STRUCTURE_SEQUENCE, option leg, cost limits and exits. Minted: that
-  // is this poll's setup. Refused: recorded with its own trigger id. With no
-  // promotion record (today) this list is always empty.
+  // Trigger families at PAPER_RESEARCH / PAPER / ACTIVE: the router's trading
+  // selection for the bar that just closed (already one per parent move),
+  // each claimed once and built on the structure engine's own chain — the
+  // same safety gates, option leg, cost limits and exits. Paper only: every
+  // setup here is a paper-trade slot entry; nothing reaches a broker.
   const multipathFamily = triggers?.families.find((f): f is MultipathFamilyInput => f.family === 'MULTIPATH');
+  let routedBuilt = 0;
   for (const rc of multipathFamily?.candidates ?? []) {
-    if (rc.stage !== 'PAPER') continue;
+    if (!PAPER_TRADING_STAGES.includes(rc.stage)) continue;
+    if (routedBuilt >= MAX_ROUTED_BUILDS_PER_POLL) break;
     const first = await redis.set(`structure_claimed:${rc.lifecycleId}`, '1', 'EX', 60 * 60 * 24, 'NX').catch(() => null);
     if (first !== 'OK') continue;
-    const minted = await resolveStructureSetup({
+    routedBuilt++;
+    const built = await resolveStructureSetup({
       provider, underlying, exchange, mode, key, today, setupTtl, chain, lc: lifecycleFromCandidate(rc), state: multipathFamily!.state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId,
+      slot: routedSlotCandidate(rc),
     });
-    if (minted) return minted;
-    break; // one routed attempt per poll
+    if (built) pending.push(built);
   }
 
-  // CONSENSUS_SETUPS (default ON — the structure engine's out-of-sample result
-  // did not meet the bar to replace it): OFF keeps the consensus read as
-  // context (bias, votes, reasoning) but it never mints. Held setups above are
-  // still managed to their exits either way.
-  if (!CONSENSUS_SETUPS) {
-    logDecision({
-      at: decisionNow(),
-      symbol: underlying,
-      exchange,
-      mode,
-      decision: 'SKIP',
-      code: 'CONSENSUS_OFF',
-      reason: 'CONSENSUS_SETUPS is off — the consensus engine computes bias as context only.',
-      regime: entryContext?.regime ?? null,
-      bias: direction,
-      setupQuality: confidence,
-      positioningBaseline: entryContext?.positioningBaseline ?? null,
-      regimeSource: entryContext?.regimeSource ?? null,
-    });
-    return {
-      available: false,
-      noTradeCode: 'CONSENSUS_OFF',
-      reason: 'Consensus setups are switched off (CONSENSUS_SETUPS) — the bias read is context only; setups come from the structure engine.',
+  // The indicator engine (consensus): its chain, unchanged, builds a setup or
+  // returns its refusal. A failure in it never loses a candidate built above.
+  let indicator: TradeSetup | DeferredSetup;
+  try {
+    indicator = await indicatorEngine();
+  } catch (err: any) {
+    if (pending.length === 0) throw err;
+    logger.warn({ error: err.message, underlying, exchange }, 'Indicator engine failed — arbitrating the other engines\' candidates');
+    indicator = { available: false, reason: 'Indicator engine failed.' };
+  }
+  if (isDeferred(indicator)) pending.push(indicator);
+  if (pending.length === 0) return indicator as TradeSetup;
+  return settleSlot(underlying, exchange, pending);
+
+  async function indicatorEngine(): Promise<TradeSetup | DeferredSetup> {
+    // CONSENSUS_SETUPS (default ON — the structure engine's out-of-sample result
+    // did not meet the bar to replace it): OFF keeps the consensus read as
+    // context (bias, votes, reasoning) but it never mints. Held setups above are
+    // still managed to their exits either way.
+    if (!CONSENSUS_SETUPS) {
+      logDecision({
+        at: decisionNow(),
+        symbol: underlying,
+        exchange,
+        mode,
+        decision: 'SKIP',
+        code: 'CONSENSUS_OFF',
+        reason: 'CONSENSUS_SETUPS is off — the consensus engine computes bias as context only.',
+        regime: entryContext?.regime ?? null,
+        bias: direction,
+        setupQuality: confidence,
+        positioningBaseline: entryContext?.positioningBaseline ?? null,
+        regimeSource: entryContext?.regimeSource ?? null,
+      });
+      return {
+        available: false,
+        noTradeCode: 'CONSENSUS_OFF',
+        reason: 'Consensus setups are switched off (CONSENSUS_SETUPS) — the bias read is context only; setups come from the structure engine.',
+      };
+    }
+
+    // Everything above only resolves an EXISTING setup, which is safe off-hours
+    // (the frozen last print is the session's real close). Minting a NEW one
+    // needs live quotes and no fresh stop-out in the same direction.
+    const riskOff = await riskOffReason(exchange, mode);
+    const reliability = riskOff ? null : await checkReliabilityFilters(underlying, exchange, direction, mode);
+    // A feed the engine cannot read is not a market view. This sits beside the
+    // risk circuit breaker at the front of the chain, ahead of every rule that
+    // reasons about price, because those rules would otherwise be reasoning
+    // about a stale or broken quote and recording the result as a judgement.
+    const feedBlock = dataQualityBlock(exchange, underlying);
+
+    // chain.expectedMove.points is IV × sqrt(chain.dte / 365) — correct for
+    // "where might price land by THIS OPTION'S expiry" (what the Option Chain
+    // page shows), but an INTRADAY naked long's sticky setup rolls over at
+    // day-end regardless of whether it resolved (see the day !== today check
+    // above) — it realistically has at most the rest of today to hit target
+    // before being forced EXPIRED. Feeding it a target scaled to the full
+    // ~20-30 day chain DTE asks it to cover a multi-week move within a single
+    // session — for CRUDEOIL's ~20-day monthly that's roughly a 4-5x larger
+    // move than sqrt(1/365) implies, which is *why* targets were essentially
+    // never reached (0 WINs across 40 recorded setups). POSITIONAL genuinely
+    // is meant to run toward the chain's full remaining life, so it keeps
+    // using chain.expectedMove.points as-is.
+    //
+    // Even the 1-day figure overstates what's reachable for a setup minted
+    // mid-session — a backtest review found EVERY INTRADAY naked long still
+    // sized off a flat full-day move regardless of when it was generated, so
+    // a 2pm setup was asked to cover the SAME move as one generated at the
+    // 9:15 open with the full 6h15m session ahead of it. Expected move scales
+    // with sqrt(time), so scale the 1-day figure down by sqrt(remaining
+    // session fraction) — a setup with half the session left gets ~71% of
+    // the full-day move as its target, not 100% of it. buildTradeSetup only
+    // ever builds a naked long now (the user is an option buyer, not a
+    // spread trader — see trade-setup/index.ts's file header), so this
+    // applies to every INTRADAY setup, not a fallback case.
+    //
+    // (Computed here, ahead of the refusal chain, only so the corrected room
+    // measure below can see the target actually used. Pure; unchanged.)
+    //
+    // Part A rule 2 (flag FNO_VALIDATION): the IV behind that move is capped at
+    // HV × IV_TARGET_CAP_MULT — an IV of 138% against HV 27% produced the fake
+    // 3.2x target on 29 Sep. Target only; rich IV still raises the R:R bar via
+    // RICH_IV_RR. Per chain, because an expiry fallback prices a second chain.
+    //
+    // Room to target: the move a target may assume is capped at the distance
+    // to the nearest strong OI wall or pivot in the trade's direction. The
+    // target used to be delta × expected move with no regard for what sits in
+    // between, and the further it reached the worse it did: setups projecting
+    // R:R 2.2+ won 0 of 16 (avg -0.37R) vs +0.17R below 1.9. A capped target
+    // that no longer clears the minimum R:R is refused, like any other.
+    const roomPoints = entryContext?.roomToTargetPoints ?? null;
+    const targetMoveFor = (c: OptionChain) => {
+      const atmIvPct = computeAtmIv(c);
+      const uncapped = isPositional
+        ? c.expectedMove.points
+        : (() => {
+            if (atmIvPct <= 0) return c.expectedMove.points;
+            const oneDayMove = calculateExpectedMove(c.spotPrice, atmIvPct / 100, 1, underlying).expectedMove;
+            return oneDayMove * Math.sqrt(remainingSessionFraction(exchange));
+          })();
+      const cap = FNO_VALIDATION
+        ? capExpectedMoveByHv(uncapped, atmIvPct > 0 ? atmIvPct : null, entryContext?.hvPct ?? null, FNO_VALIDATION_PARAMS.IV_TARGET_CAP_MULT)
+        : null;
+      const expected = cap ? cap.points : uncapped;
+      const capped = roomPoints != null && roomPoints < expected;
+      return {
+        targetExpectedMovePoints: expected,
+        targetCapped: capped,
+        targetMovePoints: capped ? roomPoints! : expected,
+        ivCap: cap
+          ? {
+              atmIvPct: atmIvPct > 0 ? round2(atmIvPct) : null,
+              hvPct: entryContext?.hvPct != null ? round2(entryContext.hvPct) : null,
+              mult: FNO_VALIDATION_PARAMS.IV_TARGET_CAP_MULT,
+              ivUsedPct: cap.ivUsedPct != null ? round2(cap.ivUsedPct) : null,
+              capped: cap.capped,
+              uncappedMovePoints: round2(uncapped),
+              cappedMovePoints: round2(cap.points),
+            }
+          : null,
+      };
     };
-  }
+    const primaryMove = targetMoveFor(chain);
+    const targetExpectedMovePoints = primaryMove.targetExpectedMovePoints;
+    const targetCapped = primaryMove.targetCapped;
+    const targetMovePoints = primaryMove.targetMovePoints;
 
-  // Everything above only resolves an EXISTING setup, which is safe off-hours
-  // (the frozen last print is the session's real close). Minting a NEW one
-  // needs live quotes and no fresh stop-out in the same direction.
-  const riskOff = await riskOffReason(exchange, mode);
-  const reliability = riskOff ? null : await checkReliabilityFilters(underlying, exchange, direction, mode);
-  // A feed the engine cannot read is not a market view. This sits beside the
-  // risk circuit breaker at the front of the chain, ahead of every rule that
-  // reasons about price, because those rules would otherwise be reasoning
-  // about a stale or broken quote and recording the result as a judgement.
-  const feedBlock = dataQualityBlock(exchange, underlying);
+    // Validation review, fix 2 — the corrected room measure. The old one (kept
+    // below as roomSufficient) divides the UNCAPPED move by ATR and fails ~94%
+    // of the time; V2 uses the target distance actually used. Recorded on every
+    // decision; refuses only under ROOM_GATE (default off — no outcome data yet).
+    const room2 = roomV2({ availableAtr: entryContext?.locationAheadAtr ?? null, targetMovePoints, atrPoints: entryContext?.atrPoints ?? null });
+    if (entryContext) {
+      entryContext.roomRequiredAtrV2 = room2.requiredAtrV2 != null ? Math.round(room2.requiredAtrV2 * 100) / 100 : null;
+      entryContext.roomSufficientV2 = room2.sufficientV2;
+    }
 
-  // chain.expectedMove.points is IV × sqrt(chain.dte / 365) — correct for
-  // "where might price land by THIS OPTION'S expiry" (what the Option Chain
-  // page shows), but an INTRADAY naked long's sticky setup rolls over at
-  // day-end regardless of whether it resolved (see the day !== today check
-  // above) — it realistically has at most the rest of today to hit target
-  // before being forced EXPIRED. Feeding it a target scaled to the full
-  // ~20-30 day chain DTE asks it to cover a multi-week move within a single
-  // session — for CRUDEOIL's ~20-day monthly that's roughly a 4-5x larger
-  // move than sqrt(1/365) implies, which is *why* targets were essentially
-  // never reached (0 WINs across 40 recorded setups). POSITIONAL genuinely
-  // is meant to run toward the chain's full remaining life, so it keeps
-  // using chain.expectedMove.points as-is.
-  //
-  // Even the 1-day figure overstates what's reachable for a setup minted
-  // mid-session — a backtest review found EVERY INTRADAY naked long still
-  // sized off a flat full-day move regardless of when it was generated, so
-  // a 2pm setup was asked to cover the SAME move as one generated at the
-  // 9:15 open with the full 6h15m session ahead of it. Expected move scales
-  // with sqrt(time), so scale the 1-day figure down by sqrt(remaining
-  // session fraction) — a setup with half the session left gets ~71% of
-  // the full-day move as its target, not 100% of it. buildTradeSetup only
-  // ever builds a naked long now (the user is an option buyer, not a
-  // spread trader — see trade-setup/index.ts's file header), so this
-  // applies to every INTRADAY setup, not a fallback case.
-  //
-  // (Computed here, ahead of the refusal chain, only so the corrected room
-  // measure below can see the target actually used. Pure; unchanged.)
-  //
-  // Part A rule 2 (flag FNO_VALIDATION): the IV behind that move is capped at
-  // HV × IV_TARGET_CAP_MULT — an IV of 138% against HV 27% produced the fake
-  // 3.2x target on 29 Sep. Target only; rich IV still raises the R:R bar via
-  // RICH_IV_RR. Per chain, because an expiry fallback prices a second chain.
-  //
-  // Room to target: the move a target may assume is capped at the distance
-  // to the nearest strong OI wall or pivot in the trade's direction. The
-  // target used to be delta × expected move with no regard for what sits in
-  // between, and the further it reached the worse it did: setups projecting
-  // R:R 2.2+ won 0 of 16 (avg -0.37R) vs +0.17R below 1.9. A capped target
-  // that no longer clears the minimum R:R is refused, like any other.
-  const roomPoints = entryContext?.roomToTargetPoints ?? null;
-  const targetMoveFor = (c: OptionChain) => {
-    const atmIvPct = computeAtmIv(c);
-    const uncapped = isPositional
-      ? c.expectedMove.points
-      : (() => {
-          if (atmIvPct <= 0) return c.expectedMove.points;
-          const oneDayMove = calculateExpectedMove(c.spotPrice, atmIvPct / 100, 1, underlying).expectedMove;
-          return oneDayMove * Math.sqrt(remainingSessionFraction(exchange));
-        })();
-    const cap = FNO_VALIDATION
-      ? capExpectedMoveByHv(uncapped, atmIvPct > 0 ? atmIvPct : null, entryContext?.hvPct ?? null, FNO_VALIDATION_PARAMS.IV_TARGET_CAP_MULT)
-      : null;
-    const expected = cap ? cap.points : uncapped;
-    const capped = roomPoints != null && roomPoints < expected;
-    return {
-      targetExpectedMovePoints: expected,
-      targetCapped: capped,
-      targetMovePoints: capped ? roomPoints! : expected,
-      ivCap: cap
-        ? {
-            atmIvPct: atmIvPct > 0 ? round2(atmIvPct) : null,
-            hvPct: entryContext?.hvPct != null ? round2(entryContext.hvPct) : null,
-            mult: FNO_VALIDATION_PARAMS.IV_TARGET_CAP_MULT,
-            ivUsedPct: cap.ivUsedPct != null ? round2(cap.ivUsedPct) : null,
-            capped: cap.capped,
-            uncappedMovePoints: round2(uncapped),
-            cappedMovePoints: round2(cap.points),
-          }
-        : null,
+    // Validation review, fix 4 (flag CONCURRENCY_CAP, default OFF): how much of
+    // the live paper book already leans this way. The Redis read happens only
+    // when the flag is on.
+    const concurrencyExposure: ExposureSnapshot | null =
+      TRADING_FLAGS.CONCURRENCY_CAP && direction !== 'NEUTRAL'
+        ? await readExposureAtCreation(
+            { key, exchange, underlying, mode, direction, strike: null, side: null, expiry: null, riskAmount: 0 },
+            today
+          )
+        : null;
+
+    const refusal: GateRefusal | null =
+      (riskOff ? { code: 'RISK_OFF' as const, reason: riskOff } : null) ??
+      (feedBlock ? { code: 'NO_QUOTE' as const, reason: feedBlock } : null) ??
+      sessionGateReason(exchange, mode) ??
+      // INDICATOR_CONFIDENCE_MODE: EVIDENCE (default) never refuses on confidence; LEGACY is the old 75 floor.
+      setupConfidenceRefusal({ mode: INDICATOR_CONFIDENCE_MODE, confidence, minConfidence: MIN_SETUP_CONFIDENCE }) ??
+      // Validation review, fix 2 (flags LOCATION_GATE, ROOM_GATE). Null when off.
+      // INDICATOR_LOCATION_MODE: EVIDENCE (default) records the score and never refuses on it;
+      // executable room stays enforced by the target cap and the builder's R:R-after-costs floor.
+      locationGateReason({
+        enabled: locationGateEnforced(),
+        locationScore: entryContext?.locationScore ?? null,
+        minScore: TRADING_PARAMS.LOCATION_GATE_MIN_SCORE,
+        locationReason: entryContext?.locationReason ?? null,
+      }) ??
+      roomGateReason({
+        enabled: TRADING_FLAGS.ROOM_GATE,
+        sufficientV2: room2.sufficientV2,
+        availableAtr: entryContext?.locationAheadAtr ?? null,
+        requiredAtrV2: room2.requiredAtrV2,
+      }) ??
+      positioningConflictReason(direction, voteSnapshot) ??
+      (await losingCloseCooldownReason(underlying, exchange, direction, mode, confidence)) ??
+      (reliability ? { code: 'RELIABILITY_FILTER' as const, reason: reliability } : null) ??
+      // Validation review, fix 4. Null when CONCURRENCY_CAP is off.
+      concurrencyGateReason({ enabled: TRADING_FLAGS.CONCURRENCY_CAP, exposure: concurrencyExposure, max: TRADING_PARAMS.MAX_CONCURRENT_SAME_DIRECTION });
+    const unreliableReason = refusal?.reason ?? null;
+
+    // --- Gate diagnostics (Phase 1, observation only) ---
+    // Computed AFTER `refusal` is fixed, from the same inputs, and never used
+    // to change it: the live chain above is untouched and still decides alone.
+    // Each gate is evaluated on its own so a record shows every gate that
+    // would have refused, not only the first. The pure parts are captured now;
+    // the post-loss reads run lazily, only for a decision that is recorded.
+    const diagnosticsAt = decisionNow();
+    // Part A: set once the contract has been validated below; read lazily by the
+    // FNO_VALIDATION diagnostic row (NOT_EVALUATED when a gate above refused first).
+    let consensusFnoRecord: TradeSetupFnoValidation | null = null;
+    const diagnosticSnapshot = {
+      sessionRefusal: sessionGateReason(exchange, mode),
+      minutesSinceOpen: minutesSinceSessionOpen(exchange),
+      positioningRefusal: positioningConflictReason(direction, voteSnapshot),
+      minutesToClose: minutesToSessionClose(exchange, diagnosticsAt),
     };
-  };
-  const primaryMove = targetMoveFor(chain);
-  const targetExpectedMovePoints = primaryMove.targetExpectedMovePoints;
-  const targetCapped = primaryMove.targetCapped;
-  const targetMovePoints = primaryMove.targetMovePoints;
-
-  // Validation review, fix 2 — the corrected room measure. The old one (kept
-  // below as roomSufficient) divides the UNCAPPED move by ATR and fails ~94%
-  // of the time; V2 uses the target distance actually used. Recorded on every
-  // decision; refuses only under ROOM_GATE (default off — no outcome data yet).
-  const room2 = roomV2({ availableAtr: entryContext?.locationAheadAtr ?? null, targetMovePoints, atrPoints: entryContext?.atrPoints ?? null });
-  if (entryContext) {
-    entryContext.roomRequiredAtrV2 = room2.requiredAtrV2 != null ? Math.round(room2.requiredAtrV2 * 100) / 100 : null;
-    entryContext.roomSufficientV2 = room2.sufficientV2;
-  }
-
-  // Validation review, fix 4 (flag CONCURRENCY_CAP, default OFF): how much of
-  // the live paper book already leans this way. The Redis read happens only
-  // when the flag is on.
-  const concurrencyExposure: ExposureSnapshot | null =
-    TRADING_FLAGS.CONCURRENCY_CAP && direction !== 'NEUTRAL'
-      ? await readExposureAtCreation(
-          { key, exchange, underlying, mode, direction, strike: null, side: null, expiry: null, riskAmount: 0 },
-          today
-        )
-      : null;
-
-  const refusal: GateRefusal | null =
-    (riskOff ? { code: 'RISK_OFF' as const, reason: riskOff } : null) ??
-    (feedBlock ? { code: 'NO_QUOTE' as const, reason: feedBlock } : null) ??
-    sessionGateReason(exchange, mode) ??
-    // INDICATOR_CONFIDENCE_MODE: EVIDENCE (default) never refuses on confidence; LEGACY is the old 75 floor.
-    setupConfidenceRefusal({ mode: INDICATOR_CONFIDENCE_MODE, confidence, minConfidence: MIN_SETUP_CONFIDENCE }) ??
-    // Validation review, fix 2 (flags LOCATION_GATE, ROOM_GATE). Null when off.
-    // INDICATOR_LOCATION_MODE: EVIDENCE (default) records the score and never refuses on it;
-    // executable room stays enforced by the target cap and the builder's R:R-after-costs floor.
-    locationGateReason({
-      enabled: locationGateEnforced(),
-      locationScore: entryContext?.locationScore ?? null,
-      minScore: TRADING_PARAMS.LOCATION_GATE_MIN_SCORE,
-      locationReason: entryContext?.locationReason ?? null,
-    }) ??
-    roomGateReason({
-      enabled: TRADING_FLAGS.ROOM_GATE,
-      sufficientV2: room2.sufficientV2,
-      availableAtr: entryContext?.locationAheadAtr ?? null,
-      requiredAtrV2: room2.requiredAtrV2,
-    }) ??
-    positioningConflictReason(direction, voteSnapshot) ??
-    (await losingCloseCooldownReason(underlying, exchange, direction, mode, confidence)) ??
-    (reliability ? { code: 'RELIABILITY_FILTER' as const, reason: reliability } : null) ??
-    // Validation review, fix 4. Null when CONCURRENCY_CAP is off.
-    concurrencyGateReason({ enabled: TRADING_FLAGS.CONCURRENCY_CAP, exposure: concurrencyExposure, max: TRADING_PARAMS.MAX_CONCURRENT_SAME_DIRECTION });
-  const unreliableReason = refusal?.reason ?? null;
-
-  // --- Gate diagnostics (Phase 1, observation only) ---
-  // Computed AFTER `refusal` is fixed, from the same inputs, and never used
-  // to change it: the live chain above is untouched and still decides alone.
-  // Each gate is evaluated on its own so a record shows every gate that
-  // would have refused, not only the first. The pure parts are captured now;
-  // the post-loss reads run lazily, only for a decision that is recorded.
-  const diagnosticsAt = decisionNow();
-  // Part A: set once the contract has been validated below; read lazily by the
-  // FNO_VALIDATION diagnostic row (NOT_EVALUATED when a gate above refused first).
-  let consensusFnoRecord: TradeSetupFnoValidation | null = null;
-  const diagnosticSnapshot = {
-    sessionRefusal: sessionGateReason(exchange, mode),
-    minutesSinceOpen: minutesSinceSessionOpen(exchange),
-    positioningRefusal: positioningConflictReason(direction, voteSnapshot),
-    minutesToClose: minutesToSessionClose(exchange, diagnosticsAt),
-  };
-  const gateDiagnosticsFor = async (): Promise<GateDiagnostic[]> => {
-    try {
-      const losingClose = await readLosingCloseState(underlying, exchange, direction, mode);
-      const rows = evaluateGateDiagnostics(
-        {
-          direction,
-          mode,
-          confidence,
-          riskOffReason: riskOff,
-          feedBlockReason: feedBlock,
-          sessionRefusal: diagnosticSnapshot.sessionRefusal,
-          minutesSinceOpen: diagnosticSnapshot.minutesSinceOpen,
-          positioningRefusal: diagnosticSnapshot.positioningRefusal,
-          positioningVotes: voteSnapshot?.positioning ?? null,
-          losingClose,
-          // The live chain only runs the reliability check when not RISK_OFF.
-          reliability: { evaluated: riskOff == null, reason: reliability },
-          liveRefusalCode: refusal?.code ?? null,
-          thresholds: {
-            minSetupConfidence: MIN_SETUP_CONFIDENCE,
-            ...(INDICATOR_CONFIDENCE_MODE === 'EVIDENCE' ? { confidenceGateEnforced: false } : {}),
-            openingSettleMinutes: SETUP_OPENING_SETTLE_MINUTES,
-            openingGuardMinutes: SETUP_OPENING_GUARD_MINUTES,
-            postLossSettleMinutes: POST_LOSS_SETTLE_MINUTES,
-            postLossMinConfidence: POST_LOSS_MIN_CONFIDENCE,
-            maxSameDirectionLossesPerDay: MAX_SAME_DIRECTION_LOSSES_PER_DAY,
-          },
-        },
-        diagnosticsAt
-      );
-      // Phase 3 (spec §20) — not part of the live chain (see gate-diagnostics.ts):
-      // logged so a report can tell whether room-to-target ever ran on stale
-      // OI, never read back and never able to refuse anything.
-      rows.push(oiWallFreshnessDiagnostic(entryContext?.roomCheckOiAgeSeconds ?? null, diagnosticsAt));
-      if (FNO_VALIDATION) rows.push(fnoValidationDiagnostic({ enabled: true, record: consensusFnoRecord, params: { ...FNO_VALIDATION_PARAMS }, at: diagnosticsAt }));
-      // Validation-review gates: one row each, enforced or not, so an
-      // unenforced gate's would-refuse rate is measured on live decisions.
-      rows.push(
-        ...evaluateValidationGateDiagnostics(
+    const gateDiagnosticsFor = async (): Promise<GateDiagnostic[]> => {
+      try {
+        const losingClose = await readLosingCloseState(underlying, exchange, direction, mode);
+        const rows = evaluateGateDiagnostics(
           {
+            direction,
             mode,
-            exchange,
+            confidence,
+            riskOffReason: riskOff,
+            feedBlockReason: feedBlock,
+            sessionRefusal: diagnosticSnapshot.sessionRefusal,
+            minutesSinceOpen: diagnosticSnapshot.minutesSinceOpen,
+            positioningRefusal: diagnosticSnapshot.positioningRefusal,
+            positioningVotes: voteSnapshot?.positioning ?? null,
+            losingClose,
+            // The live chain only runs the reliability check when not RISK_OFF.
+            reliability: { evaluated: riskOff == null, reason: reliability },
             liveRefusalCode: refusal?.code ?? null,
-            closing: { enforced: TRADING_FLAGS.CLOSING_GUARD, minutesToClose: diagnosticSnapshot.minutesToClose, guardMinutes: TRADING_PARAMS.SETUP_CLOSING_GUARD_MINUTES },
-            location: { enforced: locationGateEnforced(), score: entryContext?.locationScore ?? null, minScore: TRADING_PARAMS.LOCATION_GATE_MIN_SCORE },
-            room: {
-              enforced: TRADING_FLAGS.ROOM_GATE,
-              availableAtr: entryContext?.locationAheadAtr ?? null,
-              requiredAtrV2: room2.requiredAtrV2,
-              sufficientV2: room2.sufficientV2,
-              requiredAtrV1: entryContext?.roomRequiredAtr ?? null,
-              sufficientV1: entryContext?.roomSufficient ?? null,
+            thresholds: {
+              minSetupConfidence: MIN_SETUP_CONFIDENCE,
+              ...(INDICATOR_CONFIDENCE_MODE === 'EVIDENCE' ? { confidenceGateEnforced: false } : {}),
+              openingSettleMinutes: SETUP_OPENING_SETTLE_MINUTES,
+              openingGuardMinutes: SETUP_OPENING_GUARD_MINUTES,
+              postLossSettleMinutes: POST_LOSS_SETTLE_MINUTES,
+              postLossMinConfidence: POST_LOSS_MIN_CONFIDENCE,
+              maxSameDirectionLossesPerDay: MAX_SAME_DIRECTION_LOSSES_PER_DAY,
             },
-            concurrency: { enforced: TRADING_FLAGS.CONCURRENCY_CAP, exposure: concurrencyExposure, max: TRADING_PARAMS.MAX_CONCURRENT_SAME_DIRECTION },
           },
           diagnosticsAt
-        )
-      );
-      return rows;
-    } catch (err: any) {
-      logger.warn({ error: err.message, underlying }, 'Gate diagnostics: evaluation failed');
-      return [];
-    }
-  };
+        );
+        // Phase 3 (spec §20) — not part of the live chain (see gate-diagnostics.ts):
+        // logged so a report can tell whether room-to-target ever ran on stale
+        // OI, never read back and never able to refuse anything.
+        rows.push(oiWallFreshnessDiagnostic(entryContext?.roomCheckOiAgeSeconds ?? null, diagnosticsAt));
+        if (FNO_VALIDATION) rows.push(fnoValidationDiagnostic({ enabled: true, record: consensusFnoRecord, params: { ...FNO_VALIDATION_PARAMS }, at: diagnosticsAt }));
+        // Validation-review gates: one row each, enforced or not, so an
+        // unenforced gate's would-refuse rate is measured on live decisions.
+        rows.push(
+          ...evaluateValidationGateDiagnostics(
+            {
+              mode,
+              exchange,
+              liveRefusalCode: refusal?.code ?? null,
+              closing: { enforced: TRADING_FLAGS.CLOSING_GUARD, minutesToClose: diagnosticSnapshot.minutesToClose, guardMinutes: TRADING_PARAMS.SETUP_CLOSING_GUARD_MINUTES },
+              location: { enforced: locationGateEnforced(), score: entryContext?.locationScore ?? null, minScore: TRADING_PARAMS.LOCATION_GATE_MIN_SCORE },
+              room: {
+                enforced: TRADING_FLAGS.ROOM_GATE,
+                availableAtr: entryContext?.locationAheadAtr ?? null,
+                requiredAtrV2: room2.requiredAtrV2,
+                sufficientV2: room2.sufficientV2,
+                requiredAtrV1: entryContext?.roomRequiredAtr ?? null,
+                sufficientV1: entryContext?.roomSufficient ?? null,
+              },
+              concurrency: { enforced: TRADING_FLAGS.CONCURRENCY_CAP, exposure: concurrencyExposure, max: TRADING_PARAMS.MAX_CONCURRENT_SAME_DIRECTION },
+            },
+            diagnosticsAt
+          )
+        );
+        return rows;
+      } catch (err: any) {
+        logger.warn({ error: err.message, underlying }, 'Gate diagnostics: evaluation failed');
+        return [];
+      }
+    };
 
-  // Phase 3 (spec §15) — labelled here (not in computeMarketBias) because
-  // this is where a decision is actually recorded; entryContext already
-  // carries the raw ADX/atrZ/breakout readings classifyRegime() used.
-  // SETUP_OPENING_GUARD_MINUTES is the live gate's own window — reused, not
-  // re-picked, so this always agrees with what OPENING_HOUR actually guards.
-  const openingEnvironment = classifyOpeningEnvironment(
-    {
-      minutesSinceOpen: diagnosticSnapshot.minutesSinceOpen,
-      adxValue: entryContext?.adxValue ?? 0,
-      atrZ: entryContext?.atrZ ?? 0,
-      freshBreakoutUp: entryContext?.freshBreakoutUp ?? false,
-      freshBreakoutDown: entryContext?.freshBreakoutDown ?? false,
-    },
-    SETUP_OPENING_GUARD_MINUTES
-  );
-
-  // Phase 3 (spec §16) — recovers elapsed minutes from the exact Redis TTLs
-  // losingCloseCooldownReason() above already read for the gate check. See
-  // the function's own comment for what is and is not recoverable.
-  const minutesSinceLastLoss = await readMinutesSinceLastLoss(underlying, exchange, mode, direction);
-
-  const phase1Context = {
-    strategy: entryContext?.strategyLabels ?? null,
-    confidenceDimensions: entryContext
-      ? {
-          voteContributions: entryContext.voteContributions ?? null,
-          directionScore: entryContext.directionScore ?? null,
-          setupQualityScore: entryContext.setupQualityScore ?? null,
-        }
-      : null,
-    // Phase 3 persistence — see each value's own comment above.
-    openingEnvironment,
-    minutesSinceLastLoss,
-    roomCheckOiAgeSeconds: entryContext?.roomCheckOiAgeSeconds ?? null,
-  };
-
-  if (refusal != null) {
-    logDecision({
-      at: decisionNow(),
-      symbol: underlying,
-      exchange,
-      mode,
-      decision: 'SKIP',
-      code: refusal.code,
-      reason: refusal.reason,
-      regime: entryContext?.regime ?? null,
-      bias: direction,
-      setupQuality: confidence,
-      locationScore: entryContext?.locationScore ?? null,
-      locationReason: entryContext?.locationReason ?? null,
-      roomAvailableAtr: entryContext?.roomAvailableAtr ?? null,
-      roomRequiredAtr: entryContext?.roomRequiredAtr ?? null,
-      roomSufficient: entryContext?.roomSufficient ?? null,
-      positioningBaseline: entryContext?.positioningBaseline ?? null,
-      regimeSource: entryContext?.regimeSource ?? null,
-    });
-    // The refusal, recorded in full. The missed-winner audit grades it later
-    // against what the market actually did, which is the only way to tell
-    // capital protection from having simply stopped trading.
-    const refusedSide = direction === 'BEARISH' ? 'PE' : 'CE';
-    const blocks = snapshotBlocks(chain, entryContext, null, refusedSide);
-    const instrumentation = snapshotInstrumentation(exchange, entryContext, null);
-    recordDecisionSnapshot({
-      ...instrumentation,
-      ...phase1Context,
-      freshness: {
-        timestamps: inputTimestampsFrom(chain, findLeg(chain, chain.atmStrike, refusedSide)),
-        underlyingPriceAtGeneration: chain.spotPrice,
+    // Phase 3 (spec §15) — labelled here (not in computeMarketBias) because
+    // this is where a decision is actually recorded; entryContext already
+    // carries the raw ADX/atrZ/breakout readings classifyRegime() used.
+    // SETUP_OPENING_GUARD_MINUTES is the live gate's own window — reused, not
+    // re-picked, so this always agrees with what OPENING_HOUR actually guards.
+    const openingEnvironment = classifyOpeningEnvironment(
+      {
+        minutesSinceOpen: diagnosticSnapshot.minutesSinceOpen,
+        adxValue: entryContext?.adxValue ?? 0,
+        atrZ: entryContext?.atrZ ?? 0,
+        freshBreakoutUp: entryContext?.freshBreakoutUp ?? false,
+        freshBreakoutDown: entryContext?.freshBreakoutDown ?? false,
       },
-      gateDiagnostics: gateDiagnosticsFor,
-      symbol: underlying,
-      exchange,
-      mode,
-      expiry: chain.expiry,
-      decision: 'REFUSE',
-      reasonCode: refusal.code,
-      reason: refusal.reason,
-      regime: entryContext?.regime ?? null,
-      bias: direction,
-      confidence,
-      pcr: chain.pcrDetail?.oiPCR ?? null,
-      underlyingPrice: chain.spotPrice,
-      atr: entryContext?.atrPoints ?? null,
-      ...blocks,
-    });
-  }
-  if (unreliableReason != null) {
-    try {
-      await redis.del(key);
-    } catch (err: any) {
-      logger.warn({ error: err.message, underlying }, 'Sticky trade setup clear failed');
-    }
-    return { available: false, reason: unreliableReason, noTradeCode: refusal?.code };
-  }
-
-  // Reported, not enforced — see checkCounterToIndex. Attached to the built
-  // setup below so each consumer can apply its own policy.
-  const counterIndex = await checkCounterToIndex(underlying, exchange, direction, mode);
-
-  const vix = await lookupIndiaVix(provider, exchange);
-  const slPremiumPct = isPositional ? POSITIONAL_SL_PREMIUM_PCT : undefined;
-
-  // targetExpectedMovePoints / targetMovePoints are computed above, ahead of
-  // the refusal chain (unchanged; moved so the V2 room measure can use them).
-  //
-  // Room to run (shadow): the space ahead against the move the target needs.
-  // The existing cap already trims the target to the nearest wall or pivot;
-  // this records whether there was ever enough room to be worth taking.
-  const atrForRoom = entryContext?.atrPoints ?? null;
-  const roomCheck = assessRoom(
-    entryContext?.locationAheadAtr ?? null,
-    atrForRoom && atrForRoom > 0 ? targetExpectedMovePoints / atrForRoom : null
-  );
-  if (entryContext) {
-    entryContext.roomAvailableAtr = roomCheck.availableAtr != null ? Math.round(roomCheck.availableAtr * 100) / 100 : null;
-    entryContext.roomRequiredAtr = roomCheck.requiredAtr != null ? Math.round(roomCheck.requiredAtr * 100) / 100 : null;
-    entryContext.roomSufficient = roomCheck.sufficient;
-  }
-  if (roomCheck.sufficient === false) {
-    logger.info(
-      { shadow: 'ROOM_TO_RUN', underlying, exchange, mode, availableAtr: roomCheck.availableAtr, requiredAtr: roomCheck.requiredAtr, locationScore: entryContext?.locationScore ?? null },
-      'Room to run: this setup WOULD be refused for insufficient room (shadow only)'
+      SETUP_OPENING_GUARD_MINUTES
     );
-  }
 
-  const roomNote = targetCapped
-    ? ` Target move capped at ${roomPoints!.toFixed(0)} pts — the room to the ${formatRoomSource(entryContext!.roomLevelSource)} at ${entryContext!.roomLevel!.toFixed(0)} — instead of the ${targetExpectedMovePoints.toFixed(0)}-pt expected move.`
-    : '';
-  const regimeNote =
-    entryContext && entryContext.setupConfidence < entryContext.biasConfidence
-      ? ` Confidence reduced from ${entryContext.biasConfidence} to ${entryContext.setupConfidence}: ${
-          entryContext.regimeAlignment === 'RANGE' ? `a ${entryContext.regime} regime rarely gives an option buyer the move it needs` : `this runs against the ${entryContext.regime} regime`
-        }.`
-      : '';
+    // Phase 3 (spec §16) — recovers elapsed minutes from the exact Redis TTLs
+    // losingCloseCooldownReason() above already read for the gate check. See
+    // the function's own comment for what is and is not recoverable.
+    const minutesSinceLastLoss = await readMinutesSinceLastLoss(underlying, exchange, mode, direction);
 
-  // Option-quality context. The instrument is part of the trade, so the
-  // builder is told what the premium it is about to buy costs in decay and
-  // where its IV sits in its own year — neither of which the chain leg
-  // carries. Expected hold is the session remaining for an intraday setup
-  // and a working week for a positional one, since that is what decides how
-  // much theta actually gets paid.
-  const ivRank = await ivRankFor(underlying, chain.expiry, computeAtmIv(chain)).catch(() => null);
-  const expectedHoldHours = isPositional
-    ? 5 * 6.25
-    : Math.max(0.5, remainingSessionMinutesFrom(exchange, decisionNow()) / 60);
-  // Part A (flag FNO_VALIDATION): the strike is chosen by |delta| band, the
-  // builder enforces the cost ceiling and the stop-outside-noise rule, and a
-  // failing 0-DTE contract falls back to the next expiry. Flag off =
-  // buildTradeSetup on chain.atmStrike exactly as before.
-  const validated = await buildWithFnoValidation({
-    enabled: FNO_VALIDATION,
-    primary: chain,
-    side: direction === 'BEARISH' ? 'PE' : 'CE',
-    params: { deltaMin: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MIN, deltaMax: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MAX, deltaTarget: FNO_VALIDATION_PARAMS.OPTION_DELTA_TARGET },
-    contextFor: (c) => {
-      const move = c === chain ? primaryMove : targetMoveFor(c);
-      return { expectedMovePoints: move.targetMovePoints, expectedHoldHours, ivRank, hvPct: entryContext?.hvPct ?? null, ivCap: move.ivCap };
-    },
-    fetchNextExpiry: (expiry) => buildOptionChain(provider, underlying, exchange, expiry),
-    onError: (stage, err: any) => logger.warn({ error: err?.message ?? String(err), stage, underlying, exchange, mode }, 'F&O validation: next-expiry chain unavailable — no fallback contract'),
-    build: (c, strike, ctx) =>
-      buildTradeSetup(
-        c.strikes,
-        strike,
-        direction,
+    const phase1Context = {
+      strategy: entryContext?.strategyLabels ?? null,
+      confidenceDimensions: entryContext
+        ? {
+            voteContributions: entryContext.voteContributions ?? null,
+            directionScore: entryContext.directionScore ?? null,
+            setupQualityScore: entryContext.setupQualityScore ?? null,
+          }
+        : null,
+      // Phase 3 persistence — see each value's own comment above.
+      openingEnvironment,
+      minutesSinceLastLoss,
+      roomCheckOiAgeSeconds: entryContext?.roomCheckOiAgeSeconds ?? null,
+    };
+
+    if (refusal != null) {
+      logDecision({
+        at: decisionNow(),
+        symbol: underlying,
+        exchange,
+        mode,
+        decision: 'SKIP',
+        code: refusal.code,
+        reason: refusal.reason,
+        regime: entryContext?.regime ?? null,
+        bias: direction,
+        setupQuality: confidence,
+        locationScore: entryContext?.locationScore ?? null,
+        locationReason: entryContext?.locationReason ?? null,
+        roomAvailableAtr: entryContext?.roomAvailableAtr ?? null,
+        roomRequiredAtr: entryContext?.roomRequiredAtr ?? null,
+        roomSufficient: entryContext?.roomSufficient ?? null,
+        positioningBaseline: entryContext?.positioningBaseline ?? null,
+        regimeSource: entryContext?.regimeSource ?? null,
+      });
+      // The refusal, recorded in full. The missed-winner audit grades it later
+      // against what the market actually did, which is the only way to tell
+      // capital protection from having simply stopped trading.
+      const refusedSide = direction === 'BEARISH' ? 'PE' : 'CE';
+      const blocks = snapshotBlocks(chain, entryContext, null, refusedSide);
+      const instrumentation = snapshotInstrumentation(exchange, entryContext, null);
+      recordDecisionSnapshot({
+        ...instrumentation,
+        ...phase1Context,
+        freshness: {
+          timestamps: inputTimestampsFrom(chain, findLeg(chain, chain.atmStrike, refusedSide)),
+          underlyingPriceAtGeneration: chain.spotPrice,
+        },
+        gateDiagnostics: gateDiagnosticsFor,
+        symbol: underlying,
+        exchange,
+        mode,
+        expiry: chain.expiry,
+        decision: 'REFUSE',
+        reasonCode: refusal.code,
+        reason: refusal.reason,
+        regime: entryContext?.regime ?? null,
+        bias: direction,
         confidence,
-        ctx.expectedMovePoints,
-        slPremiumPct,
-        vix,
-        c.dte,
-        c.lotSize,
-        entryContext?.atrPoints ?? null,
-        // 0.05 is the premium tick on NSE/BSE options and the MCX option
-        // contracts this engine trades; the chain leg does not carry its own.
-        {
-          ivRank,
-          hvPct: entryContext?.hvPct ?? null,
-          tickSize: 0.05,
-          expectedHoldHours,
-          // Validation review, fixes 1 and 6. The switches come from the server's
-          // config (trading-flags.ts) so the analytics package stays pure; with
-          // both off the builder ignores every field below.
-          flags: { structuralStop: TRADING_FLAGS.STRUCTURAL_STOP, richIvRr: TRADING_FLAGS.RICH_IV_RR },
-          spot: entryContext?.locationSpot ?? c.spotPrice,
-          nearestBehindLevel: entryContext?.locationBehindLevel ?? null,
-          structuralStopBufferAtr: TRADING_PARAMS.STRUCTURAL_STOP_BUFFER_ATR,
-          ivVsHv: entryContext?.ivVsHv ?? null,
-          richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
-          // EVIDENCE: the builder's own confidence floor is off too — confidence ranks, it does not refuse.
-          ...(INDICATOR_CONFIDENCE_MODE === 'EVIDENCE' ? { confidenceGate: false } : {}),
-          ...(FNO_VALIDATION
-            ? { fnoValidation: { enabled: true, maxCostPctOfPremium: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM, minOptionStopAtr: FNO_VALIDATION_PARAMS.MIN_OPTION_STOP_ATR } }
-            : {}),
-        }
-      ),
-  });
-  const builtRaw = validated.setup;
-  // The contract actually traded (or finally refused) — the next expiry's chain after a fallback.
-  const usedChain = validated.chain;
-  consensusFnoRecord = validated.fnoValidation;
-
-  // --- Phase 2 shadow models (observation only) ---
-  // Computed AFTER builtRaw is fixed, from the same chain and inputs, into a
-  // separate object that is only ever handed to the decision snapshot. None of
-  // it flows back into builtRaw/fresh, the sticky setup, or any gate.
-  const shadowModels = computeShadowModels(builtRaw, usedChain, direction, targetMovePoints, expectedHoldHours, {
-    ivRank,
-    hvPct: entryContext?.hvPct ?? null,
-    underlying,
-  });
-
-  // Record WHICH contract the strike/entry/SL/target belong to. A strike
-  // alone is ambiguous — the same strike exists in every listed expiry at a
-  // different premium — and this is what later tracking prices against.
-  // Monthly stock options carry weeks of time value, so on a one-session
-  // target they rarely clear the reward:risk gate (measured: the target
-  // reaches ~25-29% of premium with a full session left, ~20% by midday).
-  // That's the gate working, not a missing setup — say so, and where a
-  // stock setup can come from instead.
-  const isNseStock = exchange === 'NSE' && !(INDEX_SYMBOLS as readonly string[]).includes(underlying);
-  const stockNote =
-    !builtRaw.available && isNseStock && !isPositional && builtRaw.reason.startsWith('Reward:risk after costs')
-      ? ` Monthly stock options carry weeks of time value, so a one-session move rarely pays for the stop — switch this stock to Positional for a multi-day setup.`
-      : '';
-  const built: TradeSetup = builtRaw.available
-    ? { ...builtRaw, expiry: usedChain.expiry, dte: usedChain.dte, reason: `${builtRaw.reason}${roomNote}${regimeNote}` }
-    : { ...builtRaw, reason: `${builtRaw.reason}${stockNote}${roomNote}${regimeNote}` };
-  const fresh: TradeSetup =
-    built.available && counterIndex
-      ? {
-          ...built,
-          counterIndex,
-          reason: `${built.reason} NOTE: NIFTY is ${counterIndex} — this runs against the broader market, so it stands on this stock's own move alone.`,
-        }
-      : built;
-
-  if (!fresh.available) {
-    // Clear any previously locked setup now that conditions no longer
-    // support one — otherwise a stale setup from earlier today could
-    // resurface with an outdated entry price if direction swings back.
-    try {
-      await redis.del(key);
-    } catch (err: any) {
-      logger.warn({ error: err.message, underlying }, 'Sticky trade setup clear failed');
+        pcr: chain.pcrDetail?.oiPCR ?? null,
+        underlyingPrice: chain.spotPrice,
+        atr: entryContext?.atrPoints ?? null,
+        ...blocks,
+      });
     }
-    // Phase 3 (spec §5) — until now a refusal from buildTradeSetup itself
-    // (poor option quality, cost exceeding the edge, reward:risk too low
-    // after costs, a bad ATM quote, an unrealistic target) returned straight
-    // to the caller with no persisted row — only the gate-level `refusal`
-    // computed above (risk-off, session, confidence, positioning, cooldown,
-    // reliability) got one. That left this whole refusal family queryable
-    // only via whatever sentence the UI happened to show. Recorded exactly
-    // as buildTradeSetup computed it: no new check, nothing here changes
-    // what refuses.
-    const refusedSide: 'CE' | 'PE' = direction === 'BEARISH' ? 'PE' : 'CE';
-    const refusalBlocks = snapshotBlocks(usedChain, entryContext, fresh, refusedSide);
-    const refusalInstrumentation = snapshotInstrumentation(exchange, entryContext, fresh);
-    recordDecisionSnapshot({
-      ...refusalInstrumentation,
-      ...phase1Context,
-      freshness: {
-        timestamps: inputTimestampsFrom(usedChain, findLeg(usedChain, usedChain.atmStrike, refusedSide)),
-        underlyingPriceAtGeneration: usedChain.spotPrice,
-      },
-      gateDiagnostics: gateDiagnosticsFor,
-      contractValidation: fresh.contractValidation ?? null,
-      symbol: underlying,
-      exchange,
-      mode,
-      expiry: usedChain.expiry,
-      decision: 'REFUSE',
-      reasonCode: fresh.noTradeCode ?? null,
-      reason: fresh.reason,
-      regime: entryContext?.regime ?? null,
-      bias: direction,
-      confidence,
-      pcr: chain.pcrDetail?.oiPCR ?? null,
-      underlyingPrice: chain.spotPrice,
-      atr: entryContext?.atrPoints ?? null,
-      ...refusalBlocks,
-    });
-    return fresh;
-  }
+    if (unreliableReason != null) {
+      try {
+        await redis.del(key);
+      } catch (err: any) {
+        logger.warn({ error: err.message, underlying }, 'Sticky trade setup clear failed');
+      }
+      return { available: false, reason: unreliableReason, noTradeCode: refusal?.code };
+    }
 
-  // --- The setup-creating branch ---
-  // Everything from here to the Telegram push mints a NEW setup: a `signals`
-  // row, a TAKE decision row, the sticky slot write and the notification.
-  // Several callers can reach this point for the same slot at once (a browser
-  // poll, the scanners, the trade-setup monitor, the background evaluator), so
-  // with BACKGROUND_BIAS on it runs under a Redis SET NX mint lock: one caller
-  // mints, any other returns the setup that caller minted — no second row, no
-  // second message. Flag off = the unlocked path exactly as before.
-  const mintFresh = (): Promise<StoredTradeSetup> =>
-    mintTradeSetup({
-      underlying, exchange, mode, key, today, setupTtl, chain: usedChain, fresh, direction, confidence, regime, intelligenceScore,
-      voteSnapshot, entryContext, phase1Context, gateDiagnosticsFor, shadowModels,
+    // Reported, not enforced — see checkCounterToIndex. Attached to the built
+    // setup below so each consumer can apply its own policy.
+    const counterIndex = await checkCounterToIndex(underlying, exchange, direction, mode);
+
+    const vix = await lookupIndiaVix(provider, exchange);
+    const slPremiumPct = isPositional ? POSITIONAL_SL_PREMIUM_PCT : undefined;
+
+    // targetExpectedMovePoints / targetMovePoints are computed above, ahead of
+    // the refusal chain (unchanged; moved so the V2 room measure can use them).
+    //
+    // Room to run (shadow): the space ahead against the move the target needs.
+    // The existing cap already trims the target to the nearest wall or pivot;
+    // this records whether there was ever enough room to be worth taking.
+    const atrForRoom = entryContext?.atrPoints ?? null;
+    const roomCheck = assessRoom(
+      entryContext?.locationAheadAtr ?? null,
+      atrForRoom && atrForRoom > 0 ? targetExpectedMovePoints / atrForRoom : null
+    );
+    if (entryContext) {
+      entryContext.roomAvailableAtr = roomCheck.availableAtr != null ? Math.round(roomCheck.availableAtr * 100) / 100 : null;
+      entryContext.roomRequiredAtr = roomCheck.requiredAtr != null ? Math.round(roomCheck.requiredAtr * 100) / 100 : null;
+      entryContext.roomSufficient = roomCheck.sufficient;
+    }
+    if (roomCheck.sufficient === false) {
+      logger.info(
+        { shadow: 'ROOM_TO_RUN', underlying, exchange, mode, availableAtr: roomCheck.availableAtr, requiredAtr: roomCheck.requiredAtr, locationScore: entryContext?.locationScore ?? null },
+        'Room to run: this setup WOULD be refused for insufficient room (shadow only)'
+      );
+    }
+
+    const roomNote = targetCapped
+      ? ` Target move capped at ${roomPoints!.toFixed(0)} pts — the room to the ${formatRoomSource(entryContext!.roomLevelSource)} at ${entryContext!.roomLevel!.toFixed(0)} — instead of the ${targetExpectedMovePoints.toFixed(0)}-pt expected move.`
+      : '';
+    const regimeNote =
+      entryContext && entryContext.setupConfidence < entryContext.biasConfidence
+        ? ` Confidence reduced from ${entryContext.biasConfidence} to ${entryContext.setupConfidence}: ${
+            entryContext.regimeAlignment === 'RANGE' ? `a ${entryContext.regime} regime rarely gives an option buyer the move it needs` : `this runs against the ${entryContext.regime} regime`
+          }.`
+        : '';
+
+    // Option-quality context. The instrument is part of the trade, so the
+    // builder is told what the premium it is about to buy costs in decay and
+    // where its IV sits in its own year — neither of which the chain leg
+    // carries. Expected hold is the session remaining for an intraday setup
+    // and a working week for a positional one, since that is what decides how
+    // much theta actually gets paid.
+    const ivRank = await ivRankFor(underlying, chain.expiry, computeAtmIv(chain)).catch(() => null);
+    const expectedHoldHours = isPositional
+      ? 5 * 6.25
+      : Math.max(0.5, remainingSessionMinutesFrom(exchange, decisionNow()) / 60);
+    // Part A (flag FNO_VALIDATION): the strike is chosen by |delta| band, the
+    // builder enforces the cost ceiling and the stop-outside-noise rule, and a
+    // failing 0-DTE contract falls back to the next expiry. Flag off =
+    // buildTradeSetup on chain.atmStrike exactly as before.
+    const validated = await buildWithFnoValidation({
+      enabled: FNO_VALIDATION,
+      primary: chain,
+      side: direction === 'BEARISH' ? 'PE' : 'CE',
+      params: { deltaMin: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MIN, deltaMax: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MAX, deltaTarget: FNO_VALIDATION_PARAMS.OPTION_DELTA_TARGET },
+      contextFor: (c) => {
+        const move = c === chain ? primaryMove : targetMoveFor(c);
+        return { expectedMovePoints: move.targetMovePoints, expectedHoldHours, ivRank, hvPct: entryContext?.hvPct ?? null, ivCap: move.ivCap };
+      },
+      fetchNextExpiry: (expiry) => buildOptionChain(provider, underlying, exchange, expiry),
+      onError: (stage, err: any) => logger.warn({ error: err?.message ?? String(err), stage, underlying, exchange, mode }, 'F&O validation: next-expiry chain unavailable — no fallback contract'),
+      build: (c, strike, ctx) =>
+        buildTradeSetup(
+          c.strikes,
+          strike,
+          direction,
+          confidence,
+          ctx.expectedMovePoints,
+          slPremiumPct,
+          vix,
+          c.dte,
+          c.lotSize,
+          entryContext?.atrPoints ?? null,
+          // 0.05 is the premium tick on NSE/BSE options and the MCX option
+          // contracts this engine trades; the chain leg does not carry its own.
+          {
+            ivRank,
+            hvPct: entryContext?.hvPct ?? null,
+            tickSize: 0.05,
+            expectedHoldHours,
+            // Validation review, fixes 1 and 6. The switches come from the server's
+            // config (trading-flags.ts) so the analytics package stays pure; with
+            // both off the builder ignores every field below.
+            flags: { structuralStop: TRADING_FLAGS.STRUCTURAL_STOP, richIvRr: TRADING_FLAGS.RICH_IV_RR },
+            spot: entryContext?.locationSpot ?? c.spotPrice,
+            nearestBehindLevel: entryContext?.locationBehindLevel ?? null,
+            structuralStopBufferAtr: TRADING_PARAMS.STRUCTURAL_STOP_BUFFER_ATR,
+            ivVsHv: entryContext?.ivVsHv ?? null,
+            richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
+            // EVIDENCE: the builder's own confidence floor is off too — confidence ranks, it does not refuse.
+            ...(INDICATOR_CONFIDENCE_MODE === 'EVIDENCE' ? { confidenceGate: false } : {}),
+            ...(FNO_VALIDATION
+              ? { fnoValidation: { enabled: true, maxCostPctOfPremium: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM, minOptionStopAtr: FNO_VALIDATION_PARAMS.MIN_OPTION_STOP_ATR } }
+              : {}),
+          }
+        ),
     });
-  return mintUnderLock({ underlying, exchange, mode, key, today, isPositional, priorDecisionId, mintFresh });
+    const builtRaw = validated.setup;
+    // The contract actually traded (or finally refused) — the next expiry's chain after a fallback.
+    const usedChain = validated.chain;
+    consensusFnoRecord = validated.fnoValidation;
+
+    // --- Phase 2 shadow models (observation only) ---
+    // Computed AFTER builtRaw is fixed, from the same chain and inputs, into a
+    // separate object that is only ever handed to the decision snapshot. None of
+    // it flows back into builtRaw/fresh, the sticky setup, or any gate.
+    const shadowModels = computeShadowModels(builtRaw, usedChain, direction, targetMovePoints, expectedHoldHours, {
+      ivRank,
+      hvPct: entryContext?.hvPct ?? null,
+      underlying,
+    });
+
+    // Record WHICH contract the strike/entry/SL/target belong to. A strike
+    // alone is ambiguous — the same strike exists in every listed expiry at a
+    // different premium — and this is what later tracking prices against.
+    // Monthly stock options carry weeks of time value, so on a one-session
+    // target they rarely clear the reward:risk gate (measured: the target
+    // reaches ~25-29% of premium with a full session left, ~20% by midday).
+    // That's the gate working, not a missing setup — say so, and where a
+    // stock setup can come from instead.
+    const isNseStock = exchange === 'NSE' && !(INDEX_SYMBOLS as readonly string[]).includes(underlying);
+    const stockNote =
+      !builtRaw.available && isNseStock && !isPositional && builtRaw.reason.startsWith('Reward:risk after costs')
+        ? ` Monthly stock options carry weeks of time value, so a one-session move rarely pays for the stop — switch this stock to Positional for a multi-day setup.`
+        : '';
+    const built: TradeSetup = builtRaw.available
+      ? { ...builtRaw, expiry: usedChain.expiry, dte: usedChain.dte, reason: `${builtRaw.reason}${roomNote}${regimeNote}` }
+      : { ...builtRaw, reason: `${builtRaw.reason}${stockNote}${roomNote}${regimeNote}` };
+    const fresh: TradeSetup =
+      built.available && counterIndex
+        ? {
+            ...built,
+            counterIndex,
+            reason: `${built.reason} NOTE: NIFTY is ${counterIndex} — this runs against the broader market, so it stands on this stock's own move alone.`,
+          }
+        : built;
+
+    if (!fresh.available) {
+      // Clear any previously locked setup now that conditions no longer
+      // support one — otherwise a stale setup from earlier today could
+      // resurface with an outdated entry price if direction swings back.
+      try {
+        await redis.del(key);
+      } catch (err: any) {
+        logger.warn({ error: err.message, underlying }, 'Sticky trade setup clear failed');
+      }
+      // Phase 3 (spec §5) — until now a refusal from buildTradeSetup itself
+      // (poor option quality, cost exceeding the edge, reward:risk too low
+      // after costs, a bad ATM quote, an unrealistic target) returned straight
+      // to the caller with no persisted row — only the gate-level `refusal`
+      // computed above (risk-off, session, confidence, positioning, cooldown,
+      // reliability) got one. That left this whole refusal family queryable
+      // only via whatever sentence the UI happened to show. Recorded exactly
+      // as buildTradeSetup computed it: no new check, nothing here changes
+      // what refuses.
+      const refusedSide: 'CE' | 'PE' = direction === 'BEARISH' ? 'PE' : 'CE';
+      const refusalBlocks = snapshotBlocks(usedChain, entryContext, fresh, refusedSide);
+      const refusalInstrumentation = snapshotInstrumentation(exchange, entryContext, fresh);
+      recordDecisionSnapshot({
+        ...refusalInstrumentation,
+        ...phase1Context,
+        freshness: {
+          timestamps: inputTimestampsFrom(usedChain, findLeg(usedChain, usedChain.atmStrike, refusedSide)),
+          underlyingPriceAtGeneration: usedChain.spotPrice,
+        },
+        gateDiagnostics: gateDiagnosticsFor,
+        contractValidation: fresh.contractValidation ?? null,
+        symbol: underlying,
+        exchange,
+        mode,
+        expiry: usedChain.expiry,
+        decision: 'REFUSE',
+        reasonCode: fresh.noTradeCode ?? null,
+        reason: fresh.reason,
+        regime: entryContext?.regime ?? null,
+        bias: direction,
+        confidence,
+        pcr: chain.pcrDetail?.oiPCR ?? null,
+        underlyingPrice: chain.spotPrice,
+        atr: entryContext?.atrPoints ?? null,
+        ...refusalBlocks,
+      });
+      return fresh;
+    }
+
+    // --- The setup-creating branch ---
+    // Everything from here to the Telegram push mints a NEW setup: a `signals`
+    // row, a TAKE decision row, the sticky slot write and the notification.
+    // Several callers can reach this point for the same slot at once (a browser
+    // poll, the scanners, the trade-setup monitor, the background evaluator), so
+    // with BACKGROUND_BIAS on it runs under a Redis SET NX mint lock: one caller
+    // mints, any other returns the setup that caller minted — no second row, no
+    // second message. Flag off = the unlocked path exactly as before.
+    const mintFresh = (): Promise<StoredTradeSetup> =>
+      mintTradeSetup({
+        underlying, exchange, mode, key, today, setupTtl, chain: usedChain, fresh, direction, confidence, regime, intelligenceScore,
+        voteSnapshot, entryContext, phase1Context, gateDiagnosticsFor, shadowModels,
+      });
+    // Built — not minted yet: the slot arbitration above commits or declines it.
+    const at = decisionNow();
+    return {
+      kind: 'DEFERRED',
+      setup: fresh,
+      // No anchor, so no entry timing or move potential: neutral, stated as such.
+      // Evidence counts events in a trigger sequence, which this engine has none of.
+      slot: { source: 'INDICATOR', timingClass: null, movePotential: null, remainingMovePct: null, netRR: netRiskReward(fresh), evidence: 0, decisionTime: at },
+      commit: () => mintUnderLock({ underlying, exchange, mode, key, today, isPositional, priorDecisionId, mintFresh }),
+      decline: async (reason: string) => {
+        logDecision({
+          at,
+          symbol: underlying,
+          exchange,
+          mode,
+          decision: 'SKIP',
+          code: 'NOT_SELECTED',
+          reason: `Indicator engine ${direction} ${fresh.side} ${fresh.strike} @ ${fresh.entry}. ${reason}`,
+          regime: entryContext?.regime ?? null,
+          bias: direction,
+          setupQuality: confidence,
+          positioningBaseline: entryContext?.positioningBaseline ?? null,
+          regimeSource: entryContext?.regimeSource ?? null,
+        });
+      },
+    };
+  }
 }
 
 /**
@@ -4267,7 +4322,9 @@ async function resolveStructureSetup(ctx: {
   voteSnapshot: BiasVoteSnapshot | undefined;
   entryContext: SetupEntryContext | undefined;
   priorDecisionId: string | null;
-}): Promise<TradeSetup | null> {
+  /** A routed trigger's rank inputs (timing, move potential, evidence, its decision close); absent = S1, measured here. */
+  slot?: Omit<SlotCandidate, 'netRR'>;
+}): Promise<DeferredSetup | null> {
   const { provider, underlying, exchange, mode, key, today, setupTtl, chain, lc, state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId } = ctx;
   const direction: BiasDirection = lc.direction;
   const confidence = STRUCTURE_SEQUENCE_CONFIDENCE;
@@ -4317,6 +4374,7 @@ async function resolveStructureSetup(ctx: {
     scoreCandle: lc.scoreCandle ?? null,
     rejectionPattern: lc.rejectionPattern ?? null,
     ...(fiveMinute ? { timeframe: '5m' as const } : {}),
+    ...(lc.triggerId ? { triggerId: lc.triggerId } : {}),
   };
   const structureContext: SetupEntryContext | undefined = entryContext
     ? {
@@ -4408,7 +4466,7 @@ async function resolveStructureSetup(ctx: {
     roomCheckOiAgeSeconds: entryContext?.roomCheckOiAgeSeconds ?? null,
   };
   const describe = lc.triggerId
-    ? `Trigger ${lc.triggerId} ${direction} (trigger-family router, PAPER stage): decided at the 15m close ${lc.entry}; stop ${lc.stop} (invalidation beyond ${lc.sweepExtreme}), T1 ${lc.t1?.kind} ${lc.t1?.price} (${lc.rToT1}R)${lc.t2 ? `, T2 ${lc.t2.price}` : ''}. No displacement required by this trigger.`
+    ? `Trigger ${lc.triggerId} ${direction} (trigger-family router, paper research): decided at the 15m close ${lc.entry}; stop ${lc.stop} (invalidation beyond ${lc.sweepExtreme}), T1 ${lc.t1?.kind} ${lc.t1?.price} (${lc.rToT1}R)${lc.t2 ? `, T2 ${lc.t2.price}` : ''}. No displacement required by this trigger.`
     : `Structure ${direction}${fiveMinute ? ' (5m entry, 15m pools)' : ''}:${lc.pool.kind.replace(/_/g, ' ').toLowerCase()} ${lc.pool.price} swept (extreme ${lc.sweepExtreme}), displacement ${lc.displacementBodyAtr ?? '—'} ATR; ` +
     `limit ${lc.entry} (${lc.zone?.kind === 'FVG' ? 'fair-value gap' : 'displacement 50%'}) filled at ${spot}; underlying stop ${lc.stop}, T1 ${lc.t1?.kind} ${lc.t1?.price} (${lc.rToT1}R)` +
     `${lc.t2 ? `, T2 ${lc.t2.price} (shown only — the whole position closes at T1)` : ''}; score ${lc.score ?? '—'}/100 (describes, never gates).` +
@@ -4544,19 +4602,36 @@ async function resolveStructureSetup(ctx: {
       voteSnapshot, entryContext: structureContext, phase1Context, gateDiagnosticsFor, shadowModels,
       structure: stored,
     });
-  const minted = await mintUnderLock({ underlying, exchange, mode, key, today, isPositional: false, priorDecisionId, mintFresh });
-  const ours = minted.available && minted.strategy === STRUCTURE_STRATEGY && (minted as StoredTradeSetup).structure?.lifecycleId === lc.id;
-  await recordStructureOutcome(
-    state,
-    lc,
-    ours
-      ? { outcome: 'MINTED', code: null, reason: `${minted.side} ${minted.strike} @ ${minted.entry}`, at, decisionId: (minted as StoredTradeSetup).decisionId ?? null, signalId: (minted as StoredTradeSetup).signalId ?? null }
-      : { outcome: 'REFUSED', code: 'MINT_LOCK', reason: minted.available ? 'Another evaluation minted a setup into this slot first.' : minted.reason, at },
-    spot,
-    // A MINT_LOCK refusal never traded its contract: priced as the SELECTED leg, not TRADED.
-    measureStructureFillCost(usedChain, lc, side, ours ? fresh : { ...fresh, available: false })
-  );
-  return minted;
+  const commit = async (): Promise<TradeSetup> => {
+    const minted = await mintUnderLock({ underlying, exchange, mode, key, today, isPositional: false, priorDecisionId, mintFresh });
+    const ours = minted.available && minted.strategy === STRUCTURE_STRATEGY && (minted as StoredTradeSetup).structure?.lifecycleId === lc.id;
+    await recordStructureOutcome(
+      state,
+      lc,
+      ours
+        ? { outcome: 'MINTED', code: null, reason: `${minted.side} ${minted.strike} @ ${minted.entry}`, at, decisionId: (minted as StoredTradeSetup).decisionId ?? null, signalId: (minted as StoredTradeSetup).signalId ?? null }
+        : { outcome: 'REFUSED', code: 'MINT_LOCK', reason: minted.available ? 'Another evaluation minted a setup into this slot first.' : minted.reason, at },
+      spot,
+      // A MINT_LOCK refusal never traded its contract: priced as the SELECTED leg, not TRADED.
+      measureStructureFillCost(usedChain, lc, side, ours ? fresh : { ...fresh, available: false })
+    );
+    return minted;
+  };
+  // Built cleanly through every gate — not minted yet. The slot arbitration
+  // in resolveStickyTradeSetup ranks it against every other engine's built
+  // setup and either commits it or declines it (recorded, priced as SELECTED).
+  const decline = async (reason: string): Promise<void> => {
+    await recordRefusal('NOT_SELECTED', `${describe} ${reason}`, { ...fresh, available: false, noTradeCode: 'NOT_SELECTED', reason }, usedChain);
+  };
+  return {
+    kind: 'DEFERRED',
+    setup: fresh,
+    slot: ctx.slot
+      ? { ...ctx.slot, netRR: netRiskReward(fresh) }
+      : structureSlotCandidate(lc, spot, netRiskReward(fresh), at),
+    commit,
+    decline,
+  };
 }
 
 const STRUCTURE_PREVIEW_TTL_SECONDS = 60;
@@ -4805,7 +4880,7 @@ async function mintTradeSetup(ctx: {
   } = ctx;
   // Which rules and flags minted this setup — carried on the sticky setup and
   // written to signals.inputs.logic so pre- and post-review trades are never pooled.
-  const logic = liveLogicStamp();
+  const logic = paperResearchStamp(liveLogicStamp(), ctx.structure?.triggerId);
   const signalId = await recordTradeSetupGenerated(underlying, exchange, fresh, direction, confidence, regime, intelligenceScore, mode, voteSnapshot, entryContext, logic);
 
   logDecision({
