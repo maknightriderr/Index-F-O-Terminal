@@ -114,6 +114,9 @@ export function stageOneLiner(row: Pick<StructureLifecycleView, 'stage' | 'reaso
     case 'ACTIVE':
       return 'Trade open';
     case 'INVALIDATED':
+      // NO_DISPLACEMENT ends only the displacement trigger (S1); the sweep stays open to the other families.
+      if (row.reason === 'NO_DISPLACEMENT') return 'No displacement — the displacement path (S1) ended; other trigger families still evaluate this sweep (shadow)';
+      return row.reason || 'Setup did not complete';
     case 'LATE':
     case 'MISSED':
       return row.reason || 'Setup did not complete';

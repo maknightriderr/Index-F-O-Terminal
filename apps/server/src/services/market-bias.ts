@@ -177,6 +177,7 @@ import {
 import type { StructureBlock, StructureLifecycleView, StructureTradePreview } from '@fno/shared';
 import { CONSENSUS_SETUPS, STRUCTURE, STRUCTURE_ENTRY_MODE, STRUCTURE_ENTRY_TF, STRUCTURE_PARAMS, structureEnabledFor, COST_VERSION } from '../config/trading-flags.js';
 import { measureSetupCost, type SetupCostMeasurement } from './setup-cost.js';
+import { routeTriggerFamilies, lifecycleFromCandidate, type RoutedCandidate } from './trigger-router.js';
 import {
   STRUCTURE_SEQUENCE_CONFIDENCE,
   STRUCTURE_SETUP_TYPE,
@@ -1427,6 +1428,12 @@ async function computeMarketBias(
         }
       : null;
   const structureRun: StructureRun = { claimed: null, handled: false };
+  // --- Trigger-family router (displacement is S1's own condition, not a gate on the engine) ---
+  // Evaluates every other trigger family on the same closed 15m bars, with or
+  // without a displacement; SHADOW families are recorded and graded only.
+  // Only a PAPER-stage family (a code-level promotion; none today) is handed
+  // to the slot below, through the structure engine's own mint chain.
+  const routed = structureOn && !isPositional ? await routeTriggerFamilies({ underlying, exchange, mode, bars: closedNow, chain: chain ?? null, now: decisionNow() }) : null;
   // Regime assist: a qualified trigger in the last BREAKOUT_PERSIST_BARS bars
   // (not since closed back through its level) reads as BREAKOUT/BREAKDOWN, so
   // the consensus side stops calling a crash a weak bull trend. Expiry-day
@@ -2010,6 +2017,7 @@ async function computeMarketBias(
         families: [
           { family: 'MOMENTUM_BREAK', trigger: momentumRead?.trigger ?? null },
           ...(structureState ? [{ family: 'STRUCTURE' as const, state: structureState, run: structureRun, ...(structureLastBar ? { lastClosedBar: structureLastBar } : {}) }] : []),
+          ...(structureState && routed && routed.paper.length > 0 ? [{ family: 'MULTIPATH' as const, state: structureState, candidates: routed.paper }] : []),
         ],
       })
     : { available: false, reason: 'Option chain unavailable for this symbol — cannot size a setup.' };
@@ -3090,6 +3098,23 @@ async function resolveStickyTradeSetup(
     if (filled) return filled;
   }
 
+  // A PAPER-stage trigger family (never SHADOW): its newest-bar candidate,
+  // claimed once, runs the structure engine's own chain — the same safety
+  // gates, STRUCTURE_SEQUENCE, option leg, cost limits and exits. Minted: that
+  // is this poll's setup. Refused: recorded with its own trigger id. With no
+  // promotion record (today) this list is always empty.
+  const multipathFamily = triggers?.families.find((f): f is MultipathFamilyInput => f.family === 'MULTIPATH');
+  for (const rc of multipathFamily?.candidates ?? []) {
+    if (rc.stage !== 'PAPER') continue;
+    const first = await redis.set(`structure_claimed:${rc.lifecycleId}`, '1', 'EX', 60 * 60 * 24, 'NX').catch(() => null);
+    if (first !== 'OK') continue;
+    const minted = await resolveStructureSetup({
+      provider, underlying, exchange, mode, key, today, setupTtl, chain, lc: lifecycleFromCandidate(rc), state: multipathFamily!.state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId,
+    });
+    if (minted) return minted;
+    break; // one routed attempt per poll
+  }
+
   // CONSENSUS_SETUPS (default ON — the structure engine's out-of-sample result
   // did not meet the bar to replace it): OFF keeps the consensus read as
   // context (bias, votes, reasoning) but it never mints. Held setups above are
@@ -3983,9 +4008,15 @@ interface StructureRun {
   claimed: LiveLifecycle | null;
   handled: boolean;
 }
+/** PAPER-stage trigger-family candidates from the router (empty unless a family has a promotion record). */
+interface MultipathFamilyInput {
+  family: 'MULTIPATH';
+  state: LiveState;
+  candidates: RoutedCandidate[];
+}
 interface TriggerFamilies {
   lastClosedBar: { time: number; close: number; open?: number; high?: number; low?: number } | null;
-  families: Array<MomentumFamilyInput | StructureFamilyInput>;
+  families: Array<MomentumFamilyInput | StructureFamilyInput | MultipathFamilyInput>;
 }
 
 /** The live structure variant: the pre-registered one the in-sample run chose (env-overridable). */
@@ -4146,6 +4177,7 @@ async function recordStructureOutcome(
       scoreCandle: lc.scoreCandle ?? null,
       atr: lc.atr,
       cost,
+      triggerId: lc.triggerId ?? null,
     },
   ]);
 }
@@ -4370,8 +4402,9 @@ async function resolveStructureSetup(ctx: {
     minutesSinceLastLoss: await readMinutesSinceLastLoss(underlying, exchange, mode, direction),
     roomCheckOiAgeSeconds: entryContext?.roomCheckOiAgeSeconds ?? null,
   };
-  const describe =
-    `Structure ${direction}${fiveMinute ? ' (5m entry, 15m pools)' : ''}: ${lc.pool.kind.replace(/_/g, ' ').toLowerCase()} ${lc.pool.price} swept (extreme ${lc.sweepExtreme}), displacement ${lc.displacementBodyAtr ?? '—'} ATR; ` +
+  const describe = lc.triggerId
+    ? `Trigger ${lc.triggerId} ${direction} (trigger-family router, PAPER stage): decided at the 15m close ${lc.entry}; stop ${lc.stop} (invalidation beyond ${lc.sweepExtreme}), T1 ${lc.t1?.kind} ${lc.t1?.price} (${lc.rToT1}R)${lc.t2 ? `, T2 ${lc.t2.price}` : ''}. No displacement required by this trigger.`
+    : `Structure ${direction}${fiveMinute ? ' (5m entry, 15m pools)' : ''}:${lc.pool.kind.replace(/_/g, ' ').toLowerCase()} ${lc.pool.price} swept (extreme ${lc.sweepExtreme}), displacement ${lc.displacementBodyAtr ?? '—'} ATR; ` +
     `limit ${lc.entry} (${lc.zone?.kind === 'FVG' ? 'fair-value gap' : 'displacement 50%'}) filled at ${spot}; underlying stop ${lc.stop}, T1 ${lc.t1?.kind} ${lc.t1?.price} (${lc.rToT1}R)` +
     `${lc.t2 ? `, T2 ${lc.t2.price} (shown only — the whole position closes at T1)` : ''}; score ${lc.score ?? '—'}/100 (describes, never gates).` +
     `${lc.patterns ? ` Candles: ${lc.patterns.label}.` : ''}` +

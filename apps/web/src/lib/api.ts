@@ -394,6 +394,10 @@ class ApiClient {
     return this.get<unknown>('/api/diagnostics/triggers');
   }
 
+  async getDiagnosticsShadow(opts: DiagnosticsFilter = {}) {
+    return this.get<unknown>(`/api/diagnostics/shadow${this.diagnosticsQuery(opts)}`);
+  }
+
   async getDiagnosticsVersions() {
     return this.get<unknown>('/api/diagnostics/versions');
   }

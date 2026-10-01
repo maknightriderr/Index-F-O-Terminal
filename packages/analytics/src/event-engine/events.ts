@@ -95,8 +95,9 @@ export function runSessionEvents(ctx: SeriesContext, s: number, endIndex?: numbe
     if (atr == null) continue;
     const closeAt = b.time + ctx.barMs;
     const here: MarketEvent[] = [];
-    const emit = (type: EventType, direction: Dir | null, price: number, extra: { level?: EventLevel | null; parentId?: string | null; measures?: Record<string, number | null> } = {}): string => {
-      const id = `${type}:${direction ?? 'NONE'}:${i}:${extra.level ? levelKey(extra.level) : ''}`;
+    const emit = (type: EventType, direction: Dir | null, price: number, extra: { level?: EventLevel | null; parentId?: string | null; measures?: Record<string, number | null>; ref?: string } = {}): string => {
+      // `ref` keeps two same-type, same-bar events apart when they have no level (a follow-through of two different parents).
+      const id = `${type}:${direction ?? 'NONE'}:${i}:${extra.level ? levelKey(extra.level) : extra.ref ?? ''}`;
       if (byId.has(id)) return id;
       const e: MarketEvent = { id, type, direction, barIndex: i, time: b.time, availableAt: closeAt, price: round2(price), level: extra.level ?? null, parentId: extra.parentId ?? null, measures: extra.measures };
       events.push(e);
@@ -298,7 +299,7 @@ export function runSessionEvents(ctx: SeriesContext, s: number, endIndex?: numbe
     if (prev) {
       for (const e of byIndex.get(i - 1) ?? []) {
         if (!FOLLOWABLE.has(e.type) || !e.direction) continue;
-        if (e.direction === 'BULLISH' ? b.close > prev.high : b.close < prev.low) emit('FOLLOW_THROUGH', e.direction, b.close, { parentId: e.id });
+        if (e.direction === 'BULLISH' ? b.close > prev.high : b.close < prev.low) emit('FOLLOW_THROUGH', e.direction, b.close, { parentId: e.id, ref: e.type });
       }
     }
 

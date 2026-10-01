@@ -9,9 +9,17 @@
 // own nearestOppositePool, from pools built on bars before i); its stop is
 // written in the registry. Nothing after i is read.
 //
-// Status: every trigger starts RESEARCH. None is wired to any live or paper
-// path. A1 and F4 restate SWEEP_CLOSE (and a subset of it), which failed its
-// clean out-of-sample test on 30 Sep 2026, so they are RETIRED baselines.
+// Displacement is a TRIGGER-SPECIFIC condition, never an engine-wide gate:
+// S1 (the live structure engine) requires it; C2 uses a displacement bar as
+// its impulse; no other rule reads it. A sweep that S1 drops for want of a
+// displacement is still evaluated by A2–A6.
+//
+// Status = the default live stage. S1 is ACTIVE (the existing live paper
+// path, kept as the benchmark). Every other rule is SHADOW: evaluated live on
+// each closed bar, recorded and graded forward, never traded, until a
+// promotion record (apps/server config TRIGGER_PROMOTIONS) moves it to
+// PAPER. A1 and F4 restate SWEEP_CLOSE (and a subset of it), which failed
+// its clean out-of-sample test on 30 Sep 2026, so they are RETIRED.
 // ============================================================
 
 import type { MomentumBar } from '../momentum-break/index.js';
@@ -29,16 +37,30 @@ const COMMON = {
   targetRule: 'T1 = the nearest untaken opposite pool beyond the highest high / lowest low since the anchor (nearestOppositePool, pools from bars before the decision bar). T1 < 1.5R → LOW_RR; no T1 → NO_TARGET. Neither is a trade.',
   allowedDataAtDecision: 'Bars up to and including the decision bar; ATR and liquidity pools from bars before it; events confirmed at or before its close.',
   noLookAheadDefinition: 'Appending bars after the decision bar changes neither the trigger, the entry, the stop, nor the target (event-engine.test.ts).',
-  status: 'RESEARCH' as const,
+  status: 'SHADOW' as const,
 };
 
 const SWEEP_CLOSE_EVIDENCE = 'Identical to SWEEP_CLOSE, which failed its pre-registered clean test on 30 Sep 2026 (OOS index −0.12R PF 0.85, MCX −0.38R PF 0.64, 0/4 windows positive). Kept as the reference baseline, not as a candidate.';
 
 export const TRIGGER_REGISTRY: readonly TriggerDefinition[] = [
+  {
+    ...COMMON,
+    triggerId: 'S1',
+    family: 'LIQUIDITY_REVERSAL',
+    name: 'Sweep + displacement + FVG retrace (live structure engine)',
+    exactRule: 'A SWEEP of an untaken pool, then within 3 bars a DISPLACEMENT the other way (body ≥ 1.0 ATR, close in the outer 30% of its range); the zone is the fair-value gap it leaves (or its 50%); a limit there must fill within 8 bars. Displacement is required by THIS trigger only.',
+    decisionBar: 'The bar whose price touches the zone (TOUCH mode).',
+    entryRule: 'The zone price, filled on touch.',
+    stopRule: 'Sweep extreme ± 0.1 ATR.',
+    noLookAheadDefinition: 'The structure engine golden snapshots and its look-ahead tests (structure-engine.test.ts).',
+    status: 'ACTIVE',
+    priorEvidence: 'The live structure engine. Out-of-sample 2026-06-03 → 2026-09-28: 32 trades, avg net R −0.005, PF 0.99 — below the bar, kept live as the benchmark by user decision. Evaluated by the structure engine itself, not by the rules below.',
+  },
   { ...COMMON, triggerId: 'A1', family: 'LIQUIDITY_REVERSAL', name: 'Sweep + reclaim', exactRule: 'A SWEEP of an untaken pool whose bar (1-bar) or next bar (2-bar) closes back inside: RECLAIM.', decisionBar: 'The RECLAIM bar.', stopRule: 'Sweep extreme ± 0.1 ATR.', status: 'RETIRED', priorEvidence: SWEEP_CLOSE_EVIDENCE },
   { ...COMMON, triggerId: 'A2', family: 'LIQUIDITY_REVERSAL', name: 'Sweep + reclaim + micro BOS', exactRule: 'A SWEEP, then within 1–6 bars a MICRO_BOS in the same direction (close through the last confirmed 3-bar swing), with no close beyond the sweep extreme in between.', decisionBar: 'The MICRO_BOS bar.', stopRule: 'The extreme since the sweep ± 0.1 ATR.' },
   { ...COMMON, triggerId: 'A3', family: 'LIQUIDITY_REVERSAL', name: 'Sweep + reclaim + sweep-candle break', exactRule: "A SWEEP, then within 1–4 bars the first close beyond the sweep candle(s)' opposite extreme (below their low for a bearish sweep), with no close beyond the sweep extreme in between.", decisionBar: 'The bar that closes beyond the sweep candle.', stopRule: 'The extreme since the sweep ± 0.1 ATR.' },
   { ...COMMON, triggerId: 'A4', family: 'LIQUIDITY_REVERSAL', name: 'Sweep + failed retest', exactRule: 'A SWEEP, then 2–8 bars later price returns within 0.25 ATR of the swept level and closes back on the reversal side (RETEST_FAIL of the sweep).', decisionBar: 'The RETEST_FAIL bar.', stopRule: 'The extreme since the sweep (retest included) ± 0.1 ATR.' },
+  { ...COMMON, triggerId: 'A6', family: 'LIQUIDITY_REVERSAL', name: 'Sweep + follow-through', exactRule: "A SWEEP + RECLAIM, then the very next bar closes at least 0.3 ATR further in the reversal direction than the reclaim bar's close, with no close beyond the sweep extreme.", decisionBar: 'The bar after the reclaim.', stopRule: 'The extreme since the sweep ± 0.1 ATR.' },
   { ...COMMON, triggerId: 'A5', family: 'LIQUIDITY_REVERSAL', name: 'Failed auction + structure break', exactRule: 'A major-level or opening-range break that fails (FAILED_ACCEPTANCE: a close back inside within 2 bars), then within 0–6 bars a MICRO_BOS in the failure direction.', decisionBar: 'The MICRO_BOS bar.', stopRule: 'The extreme since the break ± 0.1 ATR.' },
   { ...COMMON, triggerId: 'B1', family: 'BREAKOUT_ACCEPTANCE', name: 'Compression + breakout + acceptance', exactRule: 'A COMPRESSION box (6 bars within 1.5 ATR), a COMPRESSION_BREAK (close ≥ 0.1 ATR beyond the box), then the next 2 closes beyond the box edge.', decisionBar: 'The second accepting bar (break + 2).', stopRule: 'The opposite box edge ± 0.1 ATR.' },
   { ...COMMON, triggerId: 'B2', family: 'BREAKOUT_ACCEPTANCE', name: 'Breakout + retest + hold', exactRule: 'An accepted break (MAJOR_LEVEL_BREAK or OPENING_RANGE_BREAK + ACCEPTANCE), then within 8 bars a RETEST_HOLD: price comes within 0.25 ATR of the level and closes beyond it.', decisionBar: 'The RETEST_HOLD bar.', stopRule: "Beyond the retest bar's extreme or the level, whichever is further, ± 0.1 ATR." },
@@ -58,6 +80,9 @@ export const TRIGGER_REGISTRY: readonly TriggerDefinition[] = [
 ];
 
 export const TRIGGERS_BY_ID: ReadonlyMap<string, TriggerDefinition> = new Map(TRIGGER_REGISTRY.map((t) => [t.triggerId, t]));
+
+/** Which triggers' exact requirement includes a displacement candle. Every other rule never reads one as a gate. */
+export const DISPLACEMENT_REQUIRED_BY: readonly string[] = ['S1', 'C2'];
 
 /** What a rule returns at a decision bar: the sequence it saw and where its stop goes. */
 export interface TriggerHit {
@@ -127,6 +152,20 @@ const RULES: Record<string, Rule> = {
       .map((rf) => ({ rf, parent: rf.parentId ? log.byId.get(rf.parentId) : undefined }))
       .filter((x) => x.parent?.type === 'SWEEP')
       .map(({ rf, parent }) => ({ direction: rf.direction!, anchor: parent!, events: [parent!, rf], stopRef: adverse(ctx.series.bars, rf.direction!, parent!.barIndex, i) })),
+  A6: ({ ctx, log, i }) => {
+    const bars = ctx.series.bars;
+    const atr = ctx.atrAt(i);
+    if (atr == null || i - 1 < log.start) return [];
+    return (log.byIndex.get(i - 1) ?? [])
+      .filter((e) => e.type === 'RECLAIM')
+      .flatMap((r) => {
+        const d = r.direction!;
+        const sw = log.byId.get(r.parentId!)!;
+        const extended = (bars[i].close - bars[i - 1].close) * sign(d) >= 0.3 * atr;
+        if (!extended || !heldExtreme(bars, d, Number(sw.measures?.extreme), sw.barIndex, i)) return [];
+        return [{ direction: d, anchor: sw, events: [sw, r], stopRef: adverse(bars, d, sw.barIndex, i) }];
+      });
+  },
   A5: ({ ctx, log, at, known, i }) => {
     const out: TriggerHit[] = [];
     for (const bos of at('MICRO_BOS')) {
@@ -312,6 +351,9 @@ const RULES: Record<string, Rule> = {
       return { direction: r.direction!, anchor: sw, events: [sw, r], stopRef: Number(sw.measures?.extreme) };
     }),
 };
+
+/** Triggers the event engine evaluates (S1 is the structure engine's own, evaluated there). */
+export const EVENT_ENGINE_TRIGGER_IDS: readonly string[] = TRIGGER_REGISTRY.map((t) => t.triggerId).filter((id) => id in RULES);
 
 /** Move potential at the decision bar: room to T1, obstacles, and how much of a typical session range is already used. */
 export function movePotentialAt(ctx: SeriesContext, s: number, i: number, args: { direction: Dir; entry: number; atr: number; t1: number | null; t2: number | null; rToT1: number | null }): MovePotential {

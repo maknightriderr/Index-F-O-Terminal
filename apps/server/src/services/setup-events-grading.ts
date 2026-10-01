@@ -66,7 +66,7 @@ async function runGradingPass(provider: MarketDataProvider): Promise<void> {
     SELECT id, time, instrument, exchange, direction, entry, stop, t1, cost_r
     FROM setup_events
     WHERE graded_at IS NULL
-      AND event_type IN ('TRADED', 'REJECTED', 'LOW_RR', 'LATE')
+      AND event_type IN ('TRADED', 'REJECTED', 'LOW_RR', 'LATE', 'CANDIDATE')
       AND time < ${new Date(now - HORIZON_MS)}
     ORDER BY time ASC
     LIMIT ${MAX_PER_PASS}

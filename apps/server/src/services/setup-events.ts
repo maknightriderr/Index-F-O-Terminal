@@ -48,9 +48,11 @@ export type SetupEventType =
   | 'LATE'
   | 'MISSED'
   | 'TRADED'
-  | 'CLOSED';
+  | 'CLOSED'
+  /** A trigger-family candidate from the live router (SHADOW: recorded and graded, never traded). */
+  | 'CANDIDATE';
 
-export type SetupDecision = 'WATCH' | 'DETECTED' | 'REJECTED' | 'TRADED';
+export type SetupDecision = 'WATCH' | 'DETECTED' | 'REJECTED' | 'TRADED' | 'SHADOW';
 
 /** The structure engine's lifecycle stage vocabulary -> setup_events' own. */
 const EVENT_TYPE_BY_STAGE: Record<string, SetupEventType> = {
@@ -82,6 +84,7 @@ const DECISION_BY_EVENT_TYPE: Record<SetupEventType, SetupDecision> = {
   MISSED: 'REJECTED',
   TRADED: 'TRADED',
   CLOSED: 'TRADED',
+  CANDIDATE: 'SHADOW',
 };
 
 /**
@@ -181,8 +184,12 @@ async function insertSetupEvent(input: SetupEventInput): Promise<void> {
   const decision = DECISION_BY_EVENT_TYPE[eventType] ?? 'DETECTED';
   const grossRr = input.entry != null && input.stop != null && input.t1 != null && Math.abs(input.entry - input.stop) > 0 ? round4(Math.abs(input.t1 - input.entry) / Math.abs(input.entry - input.stop)) : null;
   const grade = gradeFromScore(input.scoreTotal);
-  const rejectionReason = decision === 'REJECTED' ? input.reason : null;
-  const validIf = decision === 'REJECTED' ? wouldBeValidIf({ eventType, reason: input.reason, entry: input.entry, stop: input.stop, t1: input.t1, grossRr }) : null;
+  // A shadow candidate carries its own risk verdict as the reason (e.g. LOW_RR, NO_TARGET); a passing one has none.
+  const rejectionReason = decision === 'REJECTED' || (decision === 'SHADOW' && input.reason) ? input.reason : null;
+  const validIf =
+    rejectionReason != null
+      ? wouldBeValidIf({ eventType: input.reason?.startsWith('LOW_RR') ? 'LOW_RR' : eventType, reason: input.reason, entry: input.entry, stop: input.stop, t1: input.t1, grossRr })
+      : null;
 
   // Descriptive score components — see the module comment for what each one is (and isn't).
   const rankPts: Record<number, number> = { 1: 15, 2: 12, 3: 9, 4: 6, 5: 3 };

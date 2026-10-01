@@ -356,11 +356,22 @@ const STATUS_STYLE: Record<string, string> = {
   RETIRED: 'bg-gray-500/15 text-gray-400 light:text-slate-600',
 };
 
-function RegistryView({ triggers }: { triggers: SignalDiagnosticsData['triggers'] }) {
+function RegistryView({
+  triggers,
+  stages,
+  displacementRequiredBy,
+  shadow,
+}: {
+  triggers: SignalDiagnosticsData['triggers'];
+  stages: Record<string, string>;
+  displacementRequiredBy: string[];
+  shadow: SignalDiagnosticsData['shadow'];
+}) {
+  const forward = (id: string) => shadow.filter((r) => r.triggerId === id);
   return (
     <Card
       title="Trigger registry"
-      subtitle="Every candidate rule, pre-registered before testing. None trades: a rule moves past RESEARCH only after it passes out-of-sample, walk-forward and realistic-cost checks, then forward paper evidence."
+      subtitle="Displacement is a trigger's own condition, not a gate on the engine. Every family runs at its own stage: S1 (the structure engine) trades; SHADOW families are evaluated live on every closed bar, recorded and graded, but never traded; a family reaches PAPER only through a code-level promotion after an out-of-sample pass and 30 forward trades."
     >
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
@@ -368,7 +379,9 @@ function RegistryView({ triggers }: { triggers: SignalDiagnosticsData['triggers'
             <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
               <Th align="left">Trigger</Th>
               <Th align="left">Family</Th>
-              <Th align="left">Status</Th>
+              <Th align="left" def="The trigger's live stage now: ACTIVE/PAPER trade; SHADOW is live but never trades; RETIRED is off.">Live stage</Th>
+              <Th align="left" def="Whether this trigger's own rule requires a displacement candle. No other trigger is gated on one.">Displacement</Th>
+              <Th align="left" def="SHADOW forward record, per segment: candidates seen live · would have traded (valid geometry, session window, cost) · graded so far of the 30 needed · avg R before / after cost · PF.">Forward (shadow)</Th>
               <Th align="left">Exact rule</Th>
               <Th align="left">Stop</Th>
             </tr>
@@ -381,7 +394,17 @@ function RegistryView({ triggers }: { triggers: SignalDiagnosticsData['triggers'
                 </td>
                 <td className="px-2 py-1.5 text-gray-400 light:text-slate-600 whitespace-nowrap">{t.family.toLowerCase().replace(/_/g, ' ')}</td>
                 <td className="px-2 py-1.5">
-                  <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${STATUS_STYLE[t.status] ?? ''}`}>{t.status}</span>
+                  <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${STATUS_STYLE[stages[t.triggerId] ?? t.status] ?? ''}`}>{stages[t.triggerId] ?? t.status}</span>
+                </td>
+                <td className="px-2 py-1.5 text-gray-400 light:text-slate-600 whitespace-nowrap">{displacementRequiredBy.includes(t.triggerId) ? 'required' : 'not required'}</td>
+                <td className="px-2 py-1.5 text-gray-300 light:text-slate-700 tabular-nums whitespace-nowrap">
+                  {forward(t.triggerId).length === 0
+                    ? '—'
+                    : forward(t.triggerId).map((f) => (
+                        <span key={f.segment} className="block">
+                          <SegmentTag segment={f.segment} /> {f.candidates} · {f.wouldTrade} · {f.forwardTrades}/{f.forwardTradesRequired} · {fmt(f.avgGrossR)}/{fmt(f.avgNetR)}R · PF {fmt(f.profitFactor)}
+                        </span>
+                      ))}
                 </td>
                 <td className="px-2 py-1.5 text-gray-300 light:text-slate-700 max-w-md">
                   {t.exactRule}
@@ -838,7 +861,7 @@ export function SignalDiagnosticsPage() {
     strategyVersion: filters.strategyVersion || undefined,
     costVersion: filters.costVersion || undefined,
   });
-  const { loading, error, summary, rejections, census, grades, leakage, performance, opportunity, versions, majorMoves, triggers, refresh } = data;
+  const { loading, error, summary, rejections, census, grades, leakage, performance, opportunity, versions, majorMoves, triggers, triggerStages, displacementRequiredBy, shadow, refresh } = data;
 
   return (
     <div className="p-4 space-y-4">
@@ -879,7 +902,7 @@ export function SignalDiagnosticsPage() {
       {view === 'cost' && <CostView performance={performance} />}
       {view === 'health' && <HealthView leakage={leakage} census={census} />}
       {view === 'moves' && <MajorMovesView rows={majorMoves} />}
-      {view === 'registry' && <RegistryView triggers={triggers} />}
+      {view === 'registry' && <RegistryView triggers={triggers} stages={triggerStages} displacementRequiredBy={displacementRequiredBy} shadow={shadow} />}
     </div>
   );
 }

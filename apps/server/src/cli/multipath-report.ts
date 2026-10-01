@@ -17,7 +17,7 @@
 
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { TRIGGER_REGISTRY, EVENT_RULES, type TriggerCandidate } from '@fno/analytics';
+import { TRIGGER_REGISTRY, EVENT_RULES, EVENT_ENGINE_TRIGGER_IDS, type TriggerCandidate } from '@fno/analytics';
 import { BACKTEST_SYMBOLS, loadSymbol, splitDate } from '../backtest/harness.js';
 import { BACKTEST_DATA_DIR } from '../backtest/fetch-history.js';
 import { runMultiPath, gradeTrigger, gradeCandidate, type MultiPathRun, type GradedCandidate } from '../research/multipath.js';
@@ -91,7 +91,8 @@ async function main() {
   };
 
   // ---- Per trigger ----
-  const triggers = TRIGGER_REGISTRY.map((def) => {
+  // S1 is the structure engine itself (its own backtest: backtest-structure); the rest are event-engine rules.
+  const triggers = TRIGGER_REGISTRY.filter((def) => EVENT_ENGINE_TRIGGER_IDS.includes(def.triggerId)).map((def) => {
     const all: TriggerCandidate[] = runs.flatMap((r) => r.candidates.filter((c) => c.triggerId === def.triggerId));
     const trades: Row[] = [];
     const rejected: Row[] = [];

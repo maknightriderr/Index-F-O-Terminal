@@ -197,7 +197,26 @@ export interface SignalDiagnosticsData {
   versions: { strategyVersions: string[]; costVersions: string[] };
   majorMoves: DiagnosticsMajorMoveRow[];
   triggers: DiagnosticsTrigger[];
+  /** Each trigger's live stage (S1 ACTIVE; others SHADOW unless promoted in code). */
+  triggerStages: Record<string, string>;
+  displacementRequiredBy: string[];
+  shadow: DiagnosticsShadowRow[];
   refresh: () => void;
+}
+
+/** Mirrors signal-diagnostics.ts diagnosticsShadow(). */
+export interface DiagnosticsShadowRow {
+  triggerId: string;
+  segment: DiagnosticsSegment;
+  candidates: number;
+  wouldTrade: number;
+  noFill: number;
+  forwardTrades: number;
+  forwardTradesRequired: number;
+  avgGrossR: number | null;
+  avgNetR: number | null;
+  profitFactor: number | null;
+  winRate: number | null;
 }
 
 export function useSignalDiagnostics(opts: DiagnosticsFilter = {}): SignalDiagnosticsData {
@@ -213,6 +232,9 @@ export function useSignalDiagnostics(opts: DiagnosticsFilter = {}): SignalDiagno
   const [versions, setVersions] = useState<SignalDiagnosticsData['versions']>({ strategyVersions: [], costVersions: [] });
   const [majorMoves, setMajorMoves] = useState<DiagnosticsMajorMoveRow[]>([]);
   const [triggers, setTriggers] = useState<DiagnosticsTrigger[]>([]);
+  const [triggerStages, setTriggerStages] = useState<Record<string, string>>({});
+  const [displacementRequiredBy, setDisplacementRequiredBy] = useState<string[]>([]);
+  const [shadow, setShadow] = useState<DiagnosticsShadowRow[]>([]);
   const [nonce, setNonce] = useState(0);
 
   const refresh = useCallback(() => setNonce((n) => n + 1), []);
@@ -222,7 +244,7 @@ export function useSignalDiagnostics(opts: DiagnosticsFilter = {}): SignalDiagno
     const load = async () => {
       setLoading(true);
       try {
-        const [summaryRes, rejectionsRes, censusRes, gradesRes, leakageRes, performanceRes, opportunityRes, versionsRes, majorMovesRes, triggersRes] = await Promise.all([
+        const [summaryRes, rejectionsRes, censusRes, gradesRes, leakageRes, performanceRes, opportunityRes, versionsRes, majorMovesRes, triggersRes, shadowRes] = await Promise.all([
           api.getDiagnosticsSummary(opts),
           api.getDiagnosticsRejections(opts),
           api.getDiagnosticsCensus(opts),
@@ -233,6 +255,7 @@ export function useSignalDiagnostics(opts: DiagnosticsFilter = {}): SignalDiagno
           api.getDiagnosticsVersions(),
           api.getDiagnosticsMajorMoves(opts),
           api.getDiagnosticsTriggers(),
+          api.getDiagnosticsShadow(opts),
         ]);
         if (cancelled) return;
         setSummary(((summaryRes as any)?.data?.byInstrument ?? []) as DiagnosticsSummaryRow[]);
@@ -248,6 +271,9 @@ export function useSignalDiagnostics(opts: DiagnosticsFilter = {}): SignalDiagno
         setVersions({ strategyVersions: ver?.strategyVersions ?? [], costVersions: ver?.costVersions ?? [] });
         setMajorMoves(((majorMovesRes as any)?.data?.rows ?? []) as DiagnosticsMajorMoveRow[]);
         setTriggers(((triggersRes as any)?.data?.triggers ?? []) as DiagnosticsTrigger[]);
+        setTriggerStages(((triggersRes as any)?.data?.stages ?? {}) as Record<string, string>);
+        setDisplacementRequiredBy(((triggersRes as any)?.data?.displacementRequiredBy ?? []) as string[]);
+        setShadow(((shadowRes as any)?.data?.rows ?? []) as DiagnosticsShadowRow[]);
         setError(null);
       } catch (err: any) {
         if (!cancelled) setError(err?.message ?? 'Failed to load signal diagnostics');
@@ -264,5 +290,5 @@ export function useSignalDiagnostics(opts: DiagnosticsFilter = {}): SignalDiagno
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [opts.from, opts.to, opts.instrument, opts.strategyVersion, opts.costVersion, nonce]);
 
-  return { loading, error, summary, rejections, census, grades, leakage, performance, opportunity, versions, majorMoves, triggers, refresh };
+  return { loading, error, summary, rejections, census, grades, leakage, performance, opportunity, versions, majorMoves, triggers, triggerStages, displacementRequiredBy, shadow, refresh };
 }

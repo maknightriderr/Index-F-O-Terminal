@@ -16,7 +16,8 @@
 //                                    capture rates with numerator/denominator
 //   GET /api/diagnostics/major-moves large moves: what started them, who
 //                                    recognised them, traded / missed / why
-//   GET /api/diagnostics/triggers    the research trigger registry
+//   GET /api/diagnostics/triggers    the trigger registry, live stages, who needs displacement
+//   GET /api/diagnostics/shadow      SHADOW families' forward record
 //   GET /api/diagnostics/versions    strategy/cost versions present
 //   GET /api/diagnostics/setup-outcomes?lifecycleIds=a,b  per-setup measurement
 //                                    for the Trade Setup card
@@ -39,9 +40,11 @@ import {
   diagnosticsVersions,
   diagnosticsSetupOutcomes,
   diagnosticsMajorMoves,
+  diagnosticsShadow,
   type DiagnosticsQuery,
 } from '../services/signal-diagnostics.js';
-import { TRIGGER_REGISTRY } from '@fno/analytics';
+import { TRIGGER_REGISTRY, DISPLACEMENT_REQUIRED_BY } from '@fno/analytics';
+import { liveTriggerStages } from '../services/trigger-router.js';
 import { EVENT_ENGINE_VERSION } from '../config/trading-flags.js';
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -147,9 +150,20 @@ export function createDiagnosticsRoutes(): Router {
     }
   });
 
-  // The research trigger registry: every rule's pre-registered definition and status. Static, read-only.
+  // The trigger registry: every rule's pre-registered definition, its live stage, and which rules need a displacement.
   router.get('/triggers', (_req: Request, res: Response) => {
-    res.json({ success: true, data: { engineVersion: EVENT_ENGINE_VERSION, triggers: TRIGGER_REGISTRY } });
+    res.json({ success: true, data: { engineVersion: EVENT_ENGINE_VERSION, triggers: TRIGGER_REGISTRY, stages: liveTriggerStages(), displacementRequiredBy: DISPLACEMENT_REQUIRED_BY } });
+  });
+
+  // SHADOW families' forward record: live candidates, would-have-traded, graded outcomes.
+  router.get('/shadow', async (req: Request, res: Response) => {
+    try {
+      const q = parseQuery(req);
+      res.json({ success: true, data: { note: SIMULATION_NOTE, rows: await diagnosticsShadow(q) } });
+    } catch (err: any) {
+      logger.error({ error: err.message }, 'Signal diagnostics shadow failed');
+      res.status(500).json({ success: false, error: err.message });
+    }
   });
 
   router.get('/versions', async (_req: Request, res: Response) => {
