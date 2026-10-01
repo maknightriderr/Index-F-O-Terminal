@@ -388,6 +388,12 @@ export interface TradeSetup {
    * 'MOMENTUM_BREAK'; undefined means the indicator/consensus engine (OLD).
    */
   strategy?: 'STRUCTURE' | 'MOMENTUM_BREAK' | string;
+  /**
+   * Set only on a trigger-family paper-research trade (A2, B1, …): the trigger
+   * that decided it. It is minted through the structure chain (strategy
+   * 'STRUCTURE') but is NOT S1 — every display labels it "Paper research · <id>".
+   */
+  researchTrigger?: string | null;
   legs?: SpreadLeg[];
   /** Cost to enter: positive = debit paid, negative = credit received. */
   netPremium?: number;
@@ -1428,6 +1434,8 @@ export type NoTradeCode =
   | 'CONSENSUS_OFF'
   // Slot arbitration: the setup built cleanly, but another engine's candidate ranked higher for the symbol's one slot.
   | 'NOT_SELECTED'
+  // The candidate's parent market move already produced a paper trade today (any engine): one trade per parent.
+  | 'PARENT_ALREADY_TRADED'
   | 'UNKNOWN';
 
 /** A structured account of one entry decision — why it was taken, or why it was not. */

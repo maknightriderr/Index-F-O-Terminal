@@ -50,9 +50,11 @@ export type SetupEventType =
   | 'TRADED'
   | 'CLOSED'
   /** A trigger-family candidate from the live router (SHADOW: recorded and graded, never traded). */
-  | 'CANDIDATE';
+  | 'CANDIDATE'
+  /** One candidate's role in a slot arbitration (rank, criteria, option-build failure). Measurement only: never graded or counted by the census. */
+  | 'ARBITRATION';
 
-export type SetupDecision = 'WATCH' | 'DETECTED' | 'REJECTED' | 'TRADED' | 'SHADOW';
+export type SetupDecision = 'WATCH' | 'DETECTED' | 'REJECTED' | 'TRADED' | 'SHADOW' | 'ARBITRATION';
 
 /** The structure engine's lifecycle stage vocabulary -> setup_events' own. */
 const EVENT_TYPE_BY_STAGE: Record<string, SetupEventType> = {
@@ -85,6 +87,7 @@ const DECISION_BY_EVENT_TYPE: Record<SetupEventType, SetupDecision> = {
   TRADED: 'TRADED',
   CLOSED: 'TRADED',
   CANDIDATE: 'SHADOW',
+  ARBITRATION: 'ARBITRATION',
 };
 
 /**

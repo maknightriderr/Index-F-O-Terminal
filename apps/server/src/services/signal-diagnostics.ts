@@ -320,7 +320,7 @@ export async function diagnosticsOpportunity(q: DiagnosticsQuery) {
   // The setup-level funnel beside the opportunity counts: lifecycles created, CONFIRMED (trade-ready), and graded NO_FILL.
   const funnel = await sql<{ instrument: string; exchange: string; created: string; trade_ready: string; no_fill: string }[]>`
     SELECT instrument, exchange,
-      COUNT(DISTINCT lifecycle_id) FILTER (WHERE event_type <> 'WATCH')::text AS created,
+      COUNT(DISTINCT lifecycle_id) FILTER (WHERE event_type NOT IN ('WATCH', 'ARBITRATION'))::text AS created,
       COUNT(*) FILTER (WHERE event_type = 'CONFIRMED')::text AS trade_ready,
       COUNT(*) FILTER (WHERE fill_status = 'NO_FILL')::text AS no_fill
     FROM setup_events

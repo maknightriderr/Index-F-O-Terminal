@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { DEFAULT_RISK_CONFIG, ESTIMATED_ROUND_TRIP_COST_PCT, TRADE_LOGIC_UPDATED_AT, formatExpiryDate, formatIndianNumber, engineBadge } from '@fno/shared';
+import { DEFAULT_RISK_CONFIG, ESTIMATED_ROUND_TRIP_COST_PCT, TRADE_LOGIC_UPDATED_AT, formatExpiryDate, formatIndianNumber, engineBadge, researchTriggerOf } from '@fno/shared';
 import type { WinRateBucket, TradeSetupRecord, RiskMetrics, ExpiredCloseBreakdown, IndependentBetsSummary, LogicVersionBucket, StrategyBucket } from '@fno/shared';
 import { useBacktesting } from '@/lib/use-backtesting';
 import { useAssetTabsStore } from '@/stores';
@@ -185,7 +185,7 @@ export function BacktestingPage() {
           )}
 
           {analytics.byStrategy && analytics.byStrategy.length > 0 && (
-            <Collapsible title="By Strategy" subtitle="momentum-break, structure and consensus setups — never pooled" count={analytics.byStrategy.length}>
+            <Collapsible title="By Strategy" subtitle="momentum-break, structure, paper-research and consensus setups — never pooled" count={analytics.byStrategy.length}>
               <LogicVersionTable
                 rows={analytics.byStrategy.map((b) => ({ ...b, logicVersion: b.strategy }))}
                 keyLabel="Strategy"
@@ -777,11 +777,13 @@ function TradeSetupHistoryTable({
                   </td>
                   <td className="text-center px-2 py-2">
                     {(() => {
-                      const badge = engineBadge(isSpread ? null : r.strategy);
+                      const badge = engineBadge(isSpread ? null : r.strategy, isSpread ? null : researchTriggerOf(r.logicVersion));
                       return (
                         <span
                           className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold whitespace-nowrap ${
-                            badge.key === 'STRUCTURE' ? 'text-cyan-400 bg-cyan-500/10' : badge.key === 'MOMENTUM_BREAK' ? 'text-violet-300 bg-violet-500/10' : 'text-gray-300 light:text-slate-700 bg-gray-500/10'
+                            badge.key === 'PAPER_RESEARCH'
+                              ? 'text-orange-300 light:text-orange-700 bg-orange-500/10'
+                              : badge.key === 'STRUCTURE' ? 'text-cyan-400 bg-cyan-500/10' : badge.key === 'MOMENTUM_BREAK' ? 'text-violet-300 bg-violet-500/10' : 'text-gray-300 light:text-slate-700 bg-gray-500/10'
                           }`}
                         >
                           {badge.label}

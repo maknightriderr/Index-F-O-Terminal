@@ -180,8 +180,22 @@ import {
 import type { StructureBlock, StructureLifecycleView, StructureTradePreview } from '@fno/shared';
 import { CONSENSUS_SETUPS, STRUCTURE, STRUCTURE_ENTRY_MODE, STRUCTURE_ENTRY_TF, STRUCTURE_PARAMS, structureEnabledFor, COST_VERSION, PAPER_TRADING_STAGES } from '../config/trading-flags.js';
 import { measureSetupCost, type SetupCostMeasurement } from './setup-cost.js';
-import { routeTriggerFamilies, lifecycleFromCandidate, type RoutedCandidate } from './trigger-router.js';
-import { settleSlot, isDeferred, structureSlotCandidate, routedSlotCandidate, type DeferredSetup, type SlotCandidate } from './slot-arbitration.js';
+import { routeTriggerFamilies, lifecycleFromCandidate, linkStructureToParent, type RoutedCandidate, type ParentLinkage } from './trigger-router.js';
+import {
+  settleSlot,
+  isSlotEntry,
+  parentAlreadyTraded,
+  structureSlotCandidate,
+  routedSlotCandidate,
+  indicatorSlotCandidate,
+  NOT_MEASURED,
+  type RefusedCandidate,
+  type SlotArbitrationRecord,
+  type SlotCandidate,
+  type SlotEntry,
+} from './slot-arbitration.js';
+import { recordSetupEvent } from './setup-events.js';
+import { BAR_MS_15M } from '@fno/analytics';
 import {
   STRUCTURE_SEQUENCE_CONFIDENCE,
   STRUCTURE_SETUP_TYPE,
@@ -2022,7 +2036,7 @@ async function computeMarketBias(
         families: [
           { family: 'MOMENTUM_BREAK', trigger: momentumRead?.trigger ?? null },
           ...(structureState ? [{ family: 'STRUCTURE' as const, state: structureState, run: structureRun, ...(structureLastBar ? { lastClosedBar: structureLastBar } : {}) }] : []),
-          ...(structureState && routed && routed.paper.length > 0 ? [{ family: 'MULTIPATH' as const, state: structureState, candidates: routed.paper }] : []),
+          ...(structureState && routed ? [{ family: 'MULTIPATH' as const, state: structureState, candidates: routed.paper, linkage: routed.linkage ?? null }] : []),
         ],
       })
     : { available: false, reason: 'Option chain unavailable for this symbol — cannot size a setup.' };
@@ -2821,8 +2835,64 @@ function exitValueForPriceHit(stored: StoredTradeSetup, isSpread: boolean, hitTa
   return Math.min(currentValue, stored.target);
 }
 
-/** Routed trigger candidates built per poll (each builds an option leg; normally 0–1 per closed bar). */
-const MAX_ROUTED_BUILDS_PER_POLL = 3;
+/**
+ * One setup_events row per candidate of a slot arbitration (event type and
+ * decision ARBITRATION: a measurement record, kept out of the census and the
+ * grading, which already have each candidate's own row). Fire-and-forget.
+ */
+function recordSlotArbitration(underlying: string, exchange: Exchange, records: readonly SlotArbitrationRecord[]): void {
+  const v = liveLogicStamp().versions;
+  for (const r of records) {
+    if (r.slot.direction === 'NEUTRAL') continue;
+    recordSetupEvent({
+      time: new Date(r.slot.decisionTime),
+      instrument: underlying,
+      exchange,
+      timeframe: '15m',
+      lifecycleId: r.slot.candidateId,
+      direction: r.slot.direction,
+      fromStage: null,
+      toStage: 'ARBITRATION',
+      reason: r.reason,
+      poolType: null,
+      poolPrice: null,
+      triggerType: r.slot.source,
+      entry: null,
+      stop: null,
+      t1: null,
+      t2: null,
+      scoreTotal: null,
+      context: {
+        slotArbitration: {
+          role: r.role,
+          rank: r.rank,
+          preBuildRank: r.preBuildRank,
+          parentId: r.slot.parentId,
+          anchorKeys: r.slot.anchorKeys,
+          refusalCode: r.refusalCode,
+          optionBuildFailure: r.optionBuildFailure,
+          criteriaUsed: r.criteriaUsed,
+          criteriaSkipped: r.criteriaSkipped,
+          inputs: {
+            timing: r.slot.timingClass,
+            movePotential: r.slot.movePotential,
+            remainingMovePct: r.slot.remainingMovePct,
+            netRR: r.slot.netRR,
+            evidence: r.slot.evidence,
+            decisionBarClose: r.slot.decisionTime,
+          },
+        },
+      },
+      versions: {
+        strategyVersion: v?.strategyVersion ?? 'unknown',
+        triggerVersion: r.slot.source,
+        riskVersion: v?.riskVersion ?? 'unknown',
+        optionVersion: v?.optionVersion ?? 'unknown',
+        costVersion: v?.costVersion ?? 'unknown',
+      },
+    });
+  }
+}
 
 async function resolveStickyTradeSetup(
   provider: MarketDataProvider,
@@ -3096,58 +3166,107 @@ async function resolveStickyTradeSetup(
     if (triggered) return triggered;
   }
 
-  // Every engine that may paper-trade builds its setup through its own,
-  // unchanged chain (safety gates, sequence/risk geometry, Part A, the option
-  // leg, cost and liquidity limits) WITHOUT minting it. Refusals are recorded
-  // where they happen, as before. The built candidates are then ranked in
-  // settleSlot — no engine has priority — and only the winner is minted into
-  // this symbol's one slot; every other is recorded NOT_SELECTED.
-  const pending: DeferredSetup[] = [];
+  // ALL ENGINES → ALL CANDIDATES → PARENT GROUPING → COMMON ELIGIBILITY →
+  // ARBITRATION → ONE PAPER TRADE (slot-arbitration.ts).
+  // Every engine that may paper-trade hands in every eligible candidate it has
+  // for this decision; each is built through its own, unchanged chain (safety
+  // gates, sequence/risk geometry, Part A, the option leg, cost and liquidity
+  // limits) WITHOUT minting. A refusal is recorded where it happens, as before,
+  // and only removes that candidate — the next-ranked one of the same move is
+  // still in the pool. settleSlot ranks what built (no engine has priority),
+  // mints exactly one and records every candidate's role, rank and reason.
+  // A parent move that already produced a paper trade today (any engine)
+  // never trades again: its candidates are INELIGIBLE (PARENT_ALREADY_TRADED).
+  const entries: SlotEntry[] = [];
+  const multipathFamily = triggers?.families.find((f): f is MultipathFamilyInput => f.family === 'MULTIPATH');
+  const linkage = multipathFamily?.linkage ?? null;
+  // One definition of decision time for every engine: the close of the newest
+  // 15m bar closed at the decision (a family decides at exactly that close).
+  const decisionBarClose = lastClosedBar ? lastClosedBar.time + BAR_MS_15M : decisionNow();
+  const tradedKey = `slot_traded:${exchange}:${underlying}:${mode}:${today}`;
+  const tradedKeys = new Set<string>(JSON.parse((await redis.get(tradedKey).catch(() => null)) ?? '[]') as string[]);
+  const markTraded = async (keys: readonly string[]) => {
+    for (const k of keys) tradedKeys.add(k);
+    await redis.set(tradedKey, JSON.stringify([...tradedKeys]), 'EX', 36 * 60 * 60);
+  };
+  const parentTraded = (keys: readonly string[]) => parentAlreadyTraded(keys, tradedKeys);
+  const parentTradedReason = 'This market move already produced a paper trade today — one trade per parent move.';
 
-  // S1 — the structure engine: a claimed fill.
+  // S1 — the structure engine: a claimed fill, joined to its parent move only
+  // through the canonical sweep event (the event engine's SWEEP on the same
+  // bar, direction and pool — both from the structure engine's own findSweep).
   if (structureFill && structureFamily) {
     structureFamily.run.handled = true;
-    const filled = await resolveStructureSetup({
-      provider, underlying, exchange, mode, key, today, setupTtl, chain, lc: structureFill, state: structureFamily.state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId,
-    });
-    if (filled) pending.push(filled);
+    const link = { ...linkStructureToParent(structureFill, linkage), decisionTime: decisionBarClose };
+    if (parentTraded(link.anchorKeys)) {
+      await recordStructureOutcome(structureFamily.state, structureFill, { outcome: 'REFUSED', code: 'PARENT_ALREADY_TRADED', reason: parentTradedReason, at: decisionNow() }, chain.spotPrice);
+      entries.push({ kind: 'REFUSED', slot: structureSlotCandidate(structureFill, structureFill.rejectionFillPrice ?? chain.spotPrice, null, link), code: 'PARENT_ALREADY_TRADED', reason: parentTradedReason, optionBuild: false });
+    } else {
+      entries.push(
+        await resolveStructureSetup({
+          provider, underlying, exchange, mode, key, today, setupTtl, chain, lc: structureFill, state: structureFamily.state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId,
+          link,
+        })
+      );
+    }
   }
 
-  // Trigger families at PAPER_RESEARCH / PAPER / ACTIVE: the router's trading
-  // selection for the bar that just closed (already one per parent move),
-  // each claimed once and built on the structure engine's own chain — the
-  // same safety gates, option leg, cost limits and exits. Paper only: every
-  // setup here is a paper-trade slot entry; nothing reaches a broker.
-  const multipathFamily = triggers?.families.find((f): f is MultipathFamilyInput => f.family === 'MULTIPATH');
-  let routedBuilt = 0;
+  // Trigger families at PAPER_RESEARCH / PAPER / ACTIVE: EVERY eligible
+  // candidate of the bar that just closed (no pre-selection per parent), each
+  // claimed once and built on the structure engine's own chain — the same
+  // safety gates, option leg, cost limits and exits. Paper only: nothing here
+  // reaches a broker.
   for (const rc of multipathFamily?.candidates ?? []) {
     if (!PAPER_TRADING_STAGES.includes(rc.stage)) continue;
-    if (routedBuilt >= MAX_ROUTED_BUILDS_PER_POLL) break;
     const first = await redis.set(`structure_claimed:${rc.lifecycleId}`, '1', 'EX', 60 * 60 * 24, 'NX').catch(() => null);
     if (first !== 'OK') continue;
-    routedBuilt++;
-    const built = await resolveStructureSetup({
-      provider, underlying, exchange, mode, key, today, setupTtl, chain, lc: lifecycleFromCandidate(rc), state: multipathFamily!.state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId,
-      slot: routedSlotCandidate(rc),
-    });
-    if (built) pending.push(built);
+    const lc = lifecycleFromCandidate(rc);
+    const slot = routedSlotCandidate(rc);
+    if (parentTraded(slot.anchorKeys)) {
+      await recordStructureOutcome(multipathFamily!.state, lc, { outcome: 'REFUSED', code: 'PARENT_ALREADY_TRADED', reason: parentTradedReason, at: decisionNow() }, chain.spotPrice);
+      entries.push({ kind: 'REFUSED', slot, code: 'PARENT_ALREADY_TRADED', reason: parentTradedReason, optionBuild: false });
+      continue;
+    }
+    entries.push(
+      await resolveStructureSetup({
+        provider, underlying, exchange, mode, key, today, setupTtl, chain, lc, state: multipathFamily!.state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId,
+        link: { parentId: slot.parentId, anchorKeys: slot.anchorKeys, decisionTime: slot.decisionTime },
+        slot,
+      })
+    );
   }
 
   // The indicator engine (consensus): its chain, unchanged, builds a setup or
   // returns its refusal. A failure in it never loses a candidate built above.
-  let indicator: TradeSetup | DeferredSetup;
+  const indicatorId = `IND:${exchange}:${underlying}:${mode}:${decisionBarClose}`;
+  let indicator: TradeSetup | SlotEntry;
   try {
     indicator = await indicatorEngine();
   } catch (err: any) {
-    if (pending.length === 0) throw err;
+    if (entries.length === 0) throw err;
     logger.warn({ error: err.message, underlying, exchange }, 'Indicator engine failed — arbitrating the other engines\' candidates');
     indicator = { available: false, reason: 'Indicator engine failed.' };
   }
-  if (isDeferred(indicator)) pending.push(indicator);
-  if (pending.length === 0) return indicator as TradeSetup;
-  return settleSlot(underlying, exchange, pending);
+  const indicatorSetup: TradeSetup | null = isSlotEntry(indicator) ? (indicator.kind === 'REFUSED' ? indicator.setup ?? null : null) : indicator;
+  if (isSlotEntry(indicator)) entries.push(indicator);
+  if (entries.length === 0) return indicatorSetup ?? { available: false, reason: 'No engine produced a candidate this check.' };
+  // Arbitration rows only when something besides the indicator engine took
+  // part (a lone indicator read is already recorded by its own chain every poll).
+  const arbitrated = entries.some((e) => e.slot.source !== 'INDICATOR');
+  const minted = await settleSlot({ underlying, exchange, entries, markTraded, ...(arbitrated ? { record: (r: SlotArbitrationRecord[]) => recordSlotArbitration(underlying, exchange, r) } : {}) });
+  return minted ?? indicatorSetup ?? { available: false, reason: 'No engine built an eligible setup this check.' };
 
-  async function indicatorEngine(): Promise<TradeSetup | DeferredSetup> {
+  async function indicatorEngine(): Promise<TradeSetup | SlotEntry> {
+    // A refusal by this engine's own chain: recorded there as before; here it
+    // is an INELIGIBLE candidate (optionBuild = the option builder refused it).
+    const indicatorRefused = (setup: TradeSetup, optionBuild: boolean): RefusedCandidate => ({
+      kind: 'REFUSED',
+      slot: indicatorSlotCandidate(indicatorId, direction, null, decisionBarClose),
+      code: setup.noTradeCode ?? null,
+      reason: setup.reason,
+      optionBuild,
+      setup,
+    });
     // CONSENSUS_SETUPS (default ON — the structure engine's out-of-sample result
     // did not meet the bar to replace it): OFF keeps the consensus read as
     // context (bias, votes, reasoning) but it never mints. Held setups above are
@@ -3483,7 +3602,7 @@ async function resolveStickyTradeSetup(
       } catch (err: any) {
         logger.warn({ error: err.message, underlying }, 'Sticky trade setup clear failed');
       }
-      return { available: false, reason: unreliableReason, noTradeCode: refusal?.code };
+      return indicatorRefused({ available: false, reason: unreliableReason, noTradeCode: refusal?.code }, false);
     }
 
     // Reported, not enforced — see checkCounterToIndex. Attached to the built
@@ -3672,7 +3791,7 @@ async function resolveStickyTradeSetup(
         atr: entryContext?.atrPoints ?? null,
         ...refusalBlocks,
       });
-      return fresh;
+      return indicatorRefused(fresh, true);
     }
 
     // --- The setup-creating branch ---
@@ -3693,10 +3812,13 @@ async function resolveStickyTradeSetup(
     return {
       kind: 'DEFERRED',
       setup: fresh,
-      // No anchor, so no entry timing or move potential: neutral, stated as such.
-      // Evidence counts events in a trigger sequence, which this engine has none of.
-      slot: { source: 'INDICATOR', timingClass: null, movePotential: null, remainingMovePct: null, netRR: netRiskReward(fresh), evidence: 0, decisionTime: at },
-      commit: () => mintUnderLock({ underlying, exchange, mode, key, today, isPositional, priorDecisionId, mintFresh }),
+      // No anchor event: entry timing, move potential, remaining move and
+      // event evidence are NOT_MEASURED (never an invented neutral value).
+      slot: indicatorSlotCandidate(indicatorId, direction, netRiskReward(fresh), decisionBarClose),
+      commit: async () => {
+        const minted = await mintUnderLock({ underlying, exchange, mode, key, today, isPositional, priorDecisionId, mintFresh });
+        return { setup: minted, minted: minted.available };
+      },
       decline: async (reason: string) => {
         logDecision({
           at,
@@ -4068,11 +4190,12 @@ interface StructureRun {
   claimed: LiveLifecycle | null;
   handled: boolean;
 }
-/** PAPER-stage trigger-family candidates from the router (empty unless a family has a promotion record). */
+/** Every eligible paper-stage trigger-family candidate of the newest bar, and the session's parent linkage (for S1). */
 interface MultipathFamilyInput {
   family: 'MULTIPATH';
   state: LiveState;
   candidates: RoutedCandidate[];
+  linkage: ParentLinkage | null;
 }
 interface TriggerFamilies {
   lastClosedBar: { time: number; close: number; open?: number; high?: number; low?: number } | null;
@@ -4322,9 +4445,11 @@ async function resolveStructureSetup(ctx: {
   voteSnapshot: BiasVoteSnapshot | undefined;
   entryContext: SetupEntryContext | undefined;
   priorDecisionId: string | null;
-  /** A routed trigger's rank inputs (timing, move potential, evidence, its decision close); absent = S1, measured here. */
-  slot?: Omit<SlotCandidate, 'netRR'>;
-}): Promise<DeferredSetup | null> {
+  /** Its parent move, anchor keys and decision-bar close (the same definition for every engine). */
+  link: { parentId: string | null; anchorKeys: readonly string[]; decisionTime: number };
+  /** A routed trigger's rank inputs as the event engine measured them; absent = S1, measured here. */
+  slot?: SlotCandidate;
+}): Promise<SlotEntry> {
   const { provider, underlying, exchange, mode, key, today, setupTtl, chain, lc, state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId } = ctx;
   const direction: BiasDirection = lc.direction;
   const confidence = STRUCTURE_SEQUENCE_CONFIDENCE;
@@ -4465,6 +4590,8 @@ async function resolveStructureSetup(ctx: {
     minutesSinceLastLoss: await readMinutesSinceLastLoss(underlying, exchange, mode, direction),
     roomCheckOiAgeSeconds: entryContext?.roomCheckOiAgeSeconds ?? null,
   };
+  // Pre-build rank inputs (net R:R is NOT_MEASURED until the option leg is built).
+  const baseSlot: SlotCandidate = ctx.slot ?? structureSlotCandidate(lc, spot, null, ctx.link);
   const describe = lc.triggerId
     ? `Trigger ${lc.triggerId} ${direction} (trigger-family router, paper research): decided at the 15m close ${lc.entry}; stop ${lc.stop} (invalidation beyond ${lc.sweepExtreme}), T1 ${lc.t1?.kind} ${lc.t1?.price} (${lc.rToT1}R)${lc.t2 ? `, T2 ${lc.t2.price}` : ''}. No displacement required by this trigger.`
     : `Structure ${direction}${fiveMinute ? ' (5m entry, 15m pools)' : ''}:${lc.pool.kind.replace(/_/g, ' ').toLowerCase()} ${lc.pool.price} swept (extreme ${lc.sweepExtreme}), displacement ${lc.displacementBodyAtr ?? '—'} ATR; ` +
@@ -4520,7 +4647,7 @@ async function resolveStructureSetup(ctx: {
   if (refusal) {
     logger.info({ underlying, exchange, code: refusal.code, lifecycleId: lc.id }, 'Structure: fill refused by its chain');
     await recordRefusal(refusal.code, `${describe} Refused: ${refusal.reason}`, null);
-    return null;
+    return { kind: 'REFUSED', slot: baseSlot, code: refusal.code, reason: refusal.reason, optionBuild: false };
   }
 
   const stopDistance = Math.abs(lc.stop! - spot);
@@ -4586,11 +4713,13 @@ async function resolveStructureSetup(ctx: {
   if (!builtRaw.available) {
     logger.info({ underlying, exchange, code: builtRaw.noTradeCode ?? null, lifecycleId: lc.id }, 'Structure: option leg refused by buildTradeSetup');
     await recordRefusal(builtRaw.noTradeCode ?? null, `${describe} ${builtRaw.reason}`, builtRaw, usedChain);
-    return null;
+    return { kind: 'REFUSED', slot: baseSlot, code: builtRaw.noTradeCode ?? null, reason: builtRaw.reason, optionBuild: true };
   }
   const fresh: TradeSetup = {
     ...builtRaw,
     strategy: STRUCTURE_STRATEGY,
+    // A trigger-family trade is labelled as paper research everywhere, never as S1.
+    ...(lc.triggerId ? { researchTrigger: lc.triggerId } : {}),
     expiry: usedChain.expiry,
     dte: usedChain.dte,
     reason: `${describe} ${builtRaw.reason}`,
@@ -4602,7 +4731,7 @@ async function resolveStructureSetup(ctx: {
       voteSnapshot, entryContext: structureContext, phase1Context, gateDiagnosticsFor, shadowModels,
       structure: stored,
     });
-  const commit = async (): Promise<TradeSetup> => {
+  const commit = async (): Promise<{ setup: TradeSetup; minted: boolean }> => {
     const minted = await mintUnderLock({ underlying, exchange, mode, key, today, isPositional: false, priorDecisionId, mintFresh });
     const ours = minted.available && minted.strategy === STRUCTURE_STRATEGY && (minted as StoredTradeSetup).structure?.lifecycleId === lc.id;
     await recordStructureOutcome(
@@ -4615,7 +4744,7 @@ async function resolveStructureSetup(ctx: {
       // A MINT_LOCK refusal never traded its contract: priced as the SELECTED leg, not TRADED.
       measureStructureFillCost(usedChain, lc, side, ours ? fresh : { ...fresh, available: false })
     );
-    return minted;
+    return { setup: minted, minted: ours };
   };
   // Built cleanly through every gate — not minted yet. The slot arbitration
   // in resolveStickyTradeSetup ranks it against every other engine's built
@@ -4626,9 +4755,7 @@ async function resolveStructureSetup(ctx: {
   return {
     kind: 'DEFERRED',
     setup: fresh,
-    slot: ctx.slot
-      ? { ...ctx.slot, netRR: netRiskReward(fresh) }
-      : structureSlotCandidate(lc, spot, netRiskReward(fresh), at),
+    slot: { ...baseSlot, netRR: netRiskReward(fresh) ?? NOT_MEASURED },
     commit,
     decline,
   };
@@ -5207,6 +5334,7 @@ async function recordTradeSetupOutcome(
     strike: stored.strike ?? null,
     expiry: stored.expiry ?? null,
     strategy: stored.strategy ?? null,
+    researchTrigger: stored.researchTrigger ?? null,
     entry: isSpread ? stored.netPremium ?? null : stored.entry ?? null,
     exitPrice: exitValue,
     returnPercent,

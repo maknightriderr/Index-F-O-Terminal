@@ -140,10 +140,12 @@ describe('stages: research families paper-trade, nothing has earned PAPER', () =
   });
   it('the slot builds a routed candidate only at a paper-trading stage, and before any arbitration', () => {
     const src = readFileSync(fileURLToPath(new URL('../../services/market-bias.ts', import.meta.url)), 'utf8');
-    const loop = src.slice(src.indexOf('const multipathFamily'), src.indexOf('let indicator: TradeSetup | DeferredSetup'));
+    const loop = src.slice(src.indexOf('for (const rc of multipathFamily?.candidates ?? [])'), src.indexOf('let indicator: TradeSetup | SlotEntry'));
     expect(loop).toMatch(/if \(!PAPER_TRADING_STAGES\.includes\(rc\.stage\)\) continue;/);
     expect(loop.indexOf('PAPER_TRADING_STAGES.includes(rc.stage)')).toBeLessThan(loop.indexOf('resolveStructureSetup'));
-    expect(loop).toMatch(/if \(built\) pending\.push\(built\);/);
+    // Every eligible candidate is built (no per-poll cap, no pre-selection) and handed to the slot arbitration.
+    expect(loop).not.toMatch(/break;/);
+    expect(loop).toMatch(/entries\.push\(\s*await resolveStructureSetup\(/);
   });
 });
 

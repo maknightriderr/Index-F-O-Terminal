@@ -15,22 +15,26 @@
 // other family it is only an event in the log.
 //
 // Several families often see the same move. Candidates are grouped into
-// parent setups and ARBITRATED (event-engine arbitration.ts): one selected
-// setup per parent, chosen at the parent's first bar with an eligible
-// candidate from decision-time fields only, then fixed; every other
-// candidate is stored as an ALTERNATIVE or INELIGIBLE with its reason. Two
-// arbitrations run: observation (SHADOW and up — which setup would be
-// chosen) and trading (PAPER and up — the only one that may trade). Different
-// parents stay separate opportunities, subject to the slot and exposure rules.
+// parent setups (event-engine candidates.ts). The OBSERVATION arbitration
+// (event-engine arbitration.ts, SHADOW and up) records which setup each
+// parent would select, for research. The TRADING decision is not made here:
+// every eligible candidate of the bar that just closed at a paper-trading
+// stage (PAPER_RESEARCH / PAPER / ACTIVE) is handed to the slot with its
+// parent id and anchor keys — no pre-selection — where it is built and
+// ranked against S1 and the indicator engine (slot-arbitration.ts). The
+// parent linkage (which sweep event belongs to which parent) is returned so
+// S1 can join the same parent through the canonical event, never by time or
+// price proximity.
 //
 // What happens next depends on the trigger's own live stage
 // (resolveTriggerStage):
-//   SHADOW   recorded to setup_events (decision SHADOW) and graded forward —
-//            never traded. This is the default for every unproven family.
-//   PAPER    returned to the caller, which mints through the structure
-//            engine's own chain (resolveStructureSetup: the same safety gates,
-//            option leg and exits). No trigger is PAPER until a code-level
-//            promotion record exists (TRIGGER_PROMOTIONS is empty).
+//   SHADOW           recorded to setup_events (decision SHADOW) and graded
+//                    forward — never traded.
+//   PAPER_RESEARCH / PAPER / ACTIVE
+//                    an eligible candidate on the newest bar is returned to
+//                    the caller, which builds it through the structure
+//                    engine's own chain (resolveStructureSetup: the same
+//                    safety gates, option leg and exits). Paper only.
 //   RESEARCH / RETIRED  not evaluated live.
 //
 // Every failure is logged and returns null: the router can never block or
@@ -52,6 +56,8 @@ import {
   type TriggerCandidate,
   type ArbitrationDecision,
   type FixedSelection,
+  type MarketEvent,
+  type ParentSetup,
 } from '@fno/analytics';
 import { getSessionWindow, type Exchange, type OptionChain, type TradingMode } from '@fno/shared';
 import { redis } from '../lib/redis.js';
@@ -99,8 +105,88 @@ export interface RoutedCandidate {
   lifecycleId: string;
   /** Observation arbitration (SHADOW and up): which setup this parent move would select, and this candidate's role. */
   arbitration?: ArbitrationDecision | null;
-  /** Trading arbitration (PAPER and up): the one setup per parent that may trade. */
-  tradeArbitration?: ArbitrationDecision | null;
+  /** The parent move this candidate belongs to (groupIntoParents). */
+  parentId?: string | null;
+  /** The parent id plus the canonical events it is anchored on (its anchor and that event's ancestors, e.g. RECLAIM → SWEEP). */
+  anchorKeys?: string[];
+}
+
+/** A sweep event of today's session, as S1 can match it (same findSweep, same bar, same pool). */
+export interface SweepRef {
+  eventId: string;
+  direction: 'BULLISH' | 'BEARISH';
+  /** The confirming bar's open time (= S1's setup id time). */
+  time: number;
+  levelKind: string;
+  levelPrice: number;
+}
+
+/** Which parent each canonical event key belongs to, for today's session. */
+export interface ParentLinkage {
+  session: string;
+  sweeps: SweepRef[];
+  /** Event id (an anchor or one of its ancestors) or parent id → parent id. */
+  parentOfKey: Record<string, string>;
+}
+
+/** An event and its ancestors (RECLAIM → its SWEEP), from the session log. */
+function eventChain(eventId: string, byId: ReadonlyMap<string, MarketEvent>): string[] {
+  const out: string[] = [];
+  let cur: string | null | undefined = eventId;
+  while (cur && !out.includes(cur)) {
+    out.push(cur);
+    cur = byId.get(cur)?.parentId ?? null;
+  }
+  return out;
+}
+
+/**
+ * Pure: the parent linkage of a session — every candidate's anchor event and
+ * its ancestors mapped to the candidate's parent (first parent wins, in
+ * chronological order), and the session's sweep events.
+ */
+export function buildParentLinkage(session: string, parents: readonly Pick<ParentSetup, 'parentId' | 'candidates'>[], all: readonly TriggerCandidate[], events: readonly MarketEvent[]): ParentLinkage {
+  const byId = new Map(events.map((e) => [e.id, e]));
+  const parentOfKey: Record<string, string> = {};
+  for (const p of parents) {
+    parentOfKey[p.parentId] ??= p.parentId;
+    for (const idx of p.candidates) for (const k of eventChain(all[idx].anchorEventId, byId)) parentOfKey[k] ??= p.parentId;
+  }
+  const sweeps: SweepRef[] = events
+    .filter((e) => e.type === 'SWEEP' && e.direction != null && e.level != null)
+    .map((e) => ({ eventId: e.id, direction: e.direction as 'BULLISH' | 'BEARISH', time: e.time, levelKind: e.level!.kind, levelPrice: e.level!.price }));
+  return { session, sweeps, parentOfKey };
+}
+
+/** Pure: a candidate's anchor keys — its parent and the canonical events it stands on. */
+export function anchorKeysOf(parentId: string, c: Pick<TriggerCandidate, 'anchorEventId'>, events: readonly MarketEvent[]): string[] {
+  const byId = new Map(events.map((e) => [e.id, e]));
+  return [parentId, ...eventChain(c.anchorEventId, byId)];
+}
+
+/**
+ * Pure: S1's parent through the canonical sweep event — the event engine's
+ * SWEEP on the same confirming bar, same direction, same pool (both come from
+ * the structure engine's own findSweep). No match (5m mode, a routed
+ * lifecycle, no linkage): S1 stands alone, keyed by its lifecycle.
+ */
+export function linkStructureToParent(
+  lc: Pick<LiveLifecycle, 'id' | 'direction' | 'pool' | 'timeframe' | 'triggerId'>,
+  linkage: ParentLinkage | null
+): { parentId: string; anchorKeys: string[]; linked: boolean } {
+  const alone = { parentId: `S1:${lc.id}`, anchorKeys: [`S1:${lc.id}`], linked: false };
+  if (!linkage || lc.triggerId || lc.timeframe === '5m') return alone;
+  const sweepTime = Number(lc.id.slice(lc.id.lastIndexOf(':') + 1));
+  if (!Number.isFinite(sweepTime)) return alone;
+  const sweep = linkage.sweeps.find((w) => w.direction === lc.direction && w.time === sweepTime && w.levelKind === lc.pool.kind && Math.abs(w.levelPrice - lc.pool.price) < 0.005);
+  if (!sweep) return alone;
+  const parentId = linkage.parentOfKey[sweep.eventId] ?? `${linkage.session}:${lc.direction}:${sweep.eventId}`;
+  return { parentId, anchorKeys: [parentId, sweep.eventId], linked: true };
+}
+
+/** Pure: what the slot receives — every eligible paper-stage candidate decided on the newest closed bar (no pre-selection). */
+export function paperCandidatesForSlot(routed: readonly RoutedCandidate[], newestIndex: number): RoutedCandidate[] {
+  return routed.filter((rc) => rc.candidate.decisionIndex === newestIndex && PAPER_TRADING_STAGES.includes(rc.stage) && rc.risk.wouldTrade);
 }
 
 /** Each trigger's live stage (S1 is the structure engine's own; it is listed for completeness). */
@@ -205,7 +291,7 @@ function costOnChain(c: TriggerCandidate, chain: OptionChain | null): SetupCostM
  * candidates of the newest bar that would trade (normally none), or null on
  * any failure. SHADOW candidates are recorded once each.
  */
-export async function routeTriggerFamilies(args: { underlying: string; exchange: Exchange; mode: TradingMode; bars: MomentumBar[]; chain: OptionChain | null; now: number }): Promise<{ paper: RoutedCandidate[]; evaluated: number } | null> {
+export async function routeTriggerFamilies(args: { underlying: string; exchange: Exchange; mode: TradingMode; bars: MomentumBar[]; chain: OptionChain | null; now: number }): Promise<{ paper: RoutedCandidate[]; evaluated: number; linkage?: ParentLinkage | null } | null> {
   const { underlying, exchange, mode, bars, chain, now } = args;
   try {
     if (mode !== 'INTRADAY' || bars.length < 30) return { paper: [], evaluated: 0 };
@@ -222,13 +308,18 @@ export async function routeTriggerFamilies(args: { underlying: string; exchange:
     if (!window) return { paper: [], evaluated: 0 };
 
     const stateKey = `mp_eval:${exchange}:${underlying}:${mode}`;
+    const linkKey = `mp_link:${exchange}:${underlying}:${session}`;
     const lastDone = Number((await redis.get(stateKey).catch(() => null)) ?? 0);
     const ctx = buildSeriesContext(series);
     const start = series.sessionStarts[s];
     const end = ctx.sessionEnd(s);
     const todo: number[] = [];
     for (let i = Math.max(start, end - MAX_CATCHUP_BARS + 1); i <= end; i++) if (series.bars[i].time > lastDone) todo.push(i);
-    if (todo.length === 0) return { paper: [], evaluated: 0 };
+    if (todo.length === 0) {
+      // No new bar: the linkage written when the newest bar was evaluated is still exact (parents only change on a new bar).
+      const cached = await redis.get(linkKey).catch(() => null);
+      return { paper: [], evaluated: 0, linkage: cached ? (JSON.parse(cached) as ParentLinkage) : null };
+    }
 
     const log = runSessionEvents(ctx, s);
     const closingGuardMs = STRUCTURE_PARAMS.STRUCTURE_CLOSING_GUARD_MIN * 60 * 1000;
@@ -256,6 +347,9 @@ export async function routeTriggerFamilies(args: { underlying: string; exchange:
     //    selection (if any) is persisted, and its other candidates cannot be
     //    re-selected with hindsight.
     const parents = groupIntoParents(all, new Map([[session, log]]));
+    const linkage = buildParentLinkage(session, parents, all, log.events);
+    const parentOf = new Map<number, string>();
+    for (const p of parents) for (const idx of p.candidates) parentOf.set(idx, p.parentId);
     const arbitrate = async (modeKey: 'observe' | 'trade', allowed: LiveTriggerStage[]) => {
       const selKey = `mp_sel:${modeKey}:${exchange}:${underlying}:${session}`;
       const fixed: Record<string, FixedSelection> = JSON.parse((await redis.get(selKey).catch(() => null)) ?? '{}');
@@ -281,28 +375,29 @@ export async function routeTriggerFamilies(args: { underlying: string; exchange:
       return decisions;
     };
     const observed = await arbitrate('observe', ['SHADOW', ...PAPER_TRADING_STAGES]);
-    const traded = await arbitrate('trade', [...PAPER_TRADING_STAGES]);
 
-    // 5. Record every new candidate with its role; hand the slot only the
-    //    trading selection of the bar that just closed (PAPER_RESEARCH and up).
-    const paper: RoutedCandidate[] = [];
+    // 5. Record every new candidate with its observation role and parent; hand
+    //    the slot EVERY eligible paper-stage candidate of the bar that just
+    //    closed — the trading choice is made there, across all engines.
     for (let idx = 0; idx < all.length; idx++) {
       const rc = routed[idx];
+      rc.parentId = parentOf.get(idx) ?? null;
+      rc.anchorKeys = rc.parentId ? anchorKeysOf(rc.parentId, rc.candidate, log.events) : [];
       if (!todoSet.has(rc.candidate.decisionIndex)) continue;
       rc.arbitration = observed.get(idx) ?? null;
-      rc.tradeArbitration = traded.get(idx) ?? null;
-      await recordCandidate(underlying, exchange, rc);
-      if (rc.tradeArbitration?.role === 'SELECTED' && rc.candidate.decisionIndex === end && PAPER_TRADING_STAGES.includes(rc.stage)) paper.push(rc);
+      await recordCandidate(underlying, exchange, rc, rc.candidate.decisionIndex === end);
     }
+    const paper = paperCandidatesForSlot(routed, end);
+    await redis.set(linkKey, JSON.stringify(linkage), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);
     await redis.set(stateKey, String(series.bars[end].time), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);
-    return { paper, evaluated: todo.length };
+    return { paper, evaluated: todo.length, linkage };
   } catch (err: any) {
     logger.warn({ error: err.message, underlying, exchange }, 'Trigger router: evaluation failed — structure and consensus engines unaffected');
     return null;
   }
 }
 
-async function recordCandidate(underlying: string, exchange: Exchange, rc: RoutedCandidate): Promise<void> {
+async function recordCandidate(underlying: string, exchange: Exchange, rc: RoutedCandidate, newestBar: boolean): Promise<void> {
   const claimed = await redis.set(`mp_cand:${rc.lifecycleId}`, '1', 'EX', CANDIDATE_DEDUPE_TTL_SECONDS, 'NX').catch(() => 'OK');
   if (claimed !== 'OK') return;
   const c = rc.candidate;
@@ -341,7 +436,16 @@ async function recordCandidate(underlying: string, exchange: Exchange, rc: Route
       arbitration: rc.arbitration
         ? { parentId: rc.arbitration.parentId, role: rc.arbitration.role, reason: rc.arbitration.reason, rank: rc.arbitration.rank, selectedTriggerId: rc.arbitration.selectedTriggerId }
         : null,
-      tradeArbitration: rc.tradeArbitration ? { role: rc.tradeArbitration.role, reason: rc.tradeArbitration.reason, selectedTriggerId: rc.tradeArbitration.selectedTriggerId } : null,
+      // Trading: no pre-selection here. An eligible paper-stage candidate on the newest bar goes to the
+      // slot arbitration (its final role, rank and any option-build failure land as an ARBITRATION row).
+      trade: {
+        parentId: rc.parentId ?? null,
+        anchorKeys: rc.anchorKeys ?? [],
+        paperStage: PAPER_TRADING_STAGES.includes(rc.stage),
+        eligible: rc.risk.wouldTrade,
+        handedToSlot: newestBar && PAPER_TRADING_STAGES.includes(rc.stage) && rc.risk.wouldTrade,
+        reason: rc.risk.reason,
+      },
     },
     versions: { strategyVersion: EVENT_ENGINE_VERSION, triggerVersion: `${c.triggerId}-${def?.version ?? '1.0'}`, riskVersion: RISK_VERSION, optionVersion: OPTION_VERSION, costVersion: COST_VERSION },
   });

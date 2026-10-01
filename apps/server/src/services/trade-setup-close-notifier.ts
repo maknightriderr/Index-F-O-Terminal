@@ -77,6 +77,8 @@ export interface TradeCloseNotice {
   /** Expiry (YYYY-MM-DD) of the contract the setup was priced from. */
   expiry: string | null;
   strategy: string | null;
+  /** A trigger-family paper-research trade's trigger (labelled "Paper research · <id>", never as S1). */
+  researchTrigger?: string | null;
   entry: number | null;
   exitPrice: number | null;
   returnPercent: number | null;
@@ -142,7 +144,7 @@ function buildMessage(n: TradeCloseNotice, esc: (s: string) => string): string {
 
   const lines = [
     `${icon} PAPER TRADE ${n.outcome} — ${n.underlying} ${instrument} (${modeLabel} · ${n.exchange})`,
-    engineBadge(n.strategy).label,
+    engineBadge(n.strategy, n.researchTrigger).label,
     REASON_TEXT[n.reason],
     'Simulated outcome — no order was placed.',
   ];

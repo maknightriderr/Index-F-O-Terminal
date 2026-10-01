@@ -803,9 +803,9 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
   const runningIds = new Set(running.map((r) => r.id));
   const rejectedToday = structure?.enabled ? structure.lifecycles.filter((l) => isRejectedLifecycle(l) && !runningIds.has(l.id)).slice(0, 5) : [];
   const isCallSide = setup.available ? setup.side === 'CE' : null;
-  // A structure paper trade: the lifecycle it was minted from (newest first), for its candle label and explanation.
+  // An S1 structure paper trade (not a trigger-family paper-research one): the lifecycle it was minted from (newest first), for its candle label and explanation.
   const mintedFrom =
-    setup.available && setup.strategy === 'STRUCTURE' && structure?.enabled
+    setup.available && setup.strategy === 'STRUCTURE' && !setup.researchTrigger && structure?.enabled
       ? structure.lifecycles.find((l) => l.liveOutcome === 'MINTED' && l.direction === (isCallSide ? 'BULLISH' : 'BEARISH')) ?? null
       : null;
   const outcomes = useSetupOutcomes(
@@ -914,7 +914,7 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
   }
 
   const isCall = setup.side === 'CE';
-  const badge = engineBadge(setup.strategy);
+  const badge = engineBadge(setup.strategy, setup.researchTrigger);
   const trailed = setup.initialStopLoss != null && setup.stopLoss != null && Math.abs(setup.stopLoss - setup.initialStopLoss) > 0.005;
   return (
     <IntelCard title="Trade Setup" accent="emerald">
@@ -922,7 +922,9 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
         <span className="text-[10px] font-bold uppercase tracking-wide text-emerald-400 light:text-emerald-700">Active paper trade</span>
         <span
           className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
-            badge.key === 'STRUCTURE' ? 'bg-cyan-500/15 text-cyan-400 light:text-cyan-700' : badge.key === 'MOMENTUM_BREAK' ? 'bg-violet-500/15 text-violet-300 light:text-violet-700' : 'bg-gray-500/15 text-gray-300 light:text-slate-700'
+            badge.key === 'PAPER_RESEARCH'
+              ? 'bg-orange-500/15 text-orange-300 light:text-orange-700'
+              : badge.key === 'STRUCTURE' ? 'bg-cyan-500/15 text-cyan-400 light:text-cyan-700' : badge.key === 'MOMENTUM_BREAK' ? 'bg-violet-500/15 text-violet-300 light:text-violet-700' : 'bg-gray-500/15 text-gray-300 light:text-slate-700'
           }`}
         >
           {badge.label}
