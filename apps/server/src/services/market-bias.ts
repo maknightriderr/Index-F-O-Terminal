@@ -188,7 +188,10 @@ import {
   structureSlotCandidate,
   routedSlotCandidate,
   indicatorSlotCandidate,
+  indicatorGeometry,
+  buildMetricsContext,
   NOT_MEASURED,
+  type MetricsContext,
   type RefusedCandidate,
   type SlotArbitrationRecord,
   type SlotCandidate,
@@ -2033,6 +2036,7 @@ async function computeMarketBias(
   const tradeSetup: TradeSetup = chain
     ? await resolveStickyTradeSetup(provider, underlying, exchange, chain, direction, setupConfidence, regime, overall, mode, voteSnapshot, entryContext, {
         lastClosedBar,
+        bars15m: closedNow,
         families: [
           { family: 'MOMENTUM_BREAK', trigger: momentumRead?.trigger ?? null },
           ...(structureState ? [{ family: 'STRUCTURE' as const, state: structureState, run: structureRun, ...(structureLastBar ? { lastClosedBar: structureLastBar } : {}) }] : []),
@@ -2876,7 +2880,9 @@ function recordSlotArbitration(underlying: string, exchange: Exchange, records: 
           inputs: {
             timing: r.slot.timingClass,
             movePotential: r.slot.movePotential,
-            remainingMovePct: r.slot.remainingMovePct,
+            moveConsumedPct: r.slot.moveConsumedPct,
+            objectiveDistanceAtr: r.slot.objectiveDistanceAtr,
+            entryQuality: r.slot.entryQuality,
             netRR: r.slot.netRR,
             evidence: r.slot.evidence,
             decisionBarClose: r.slot.decisionTime,
@@ -3183,6 +3189,8 @@ async function resolveStickyTradeSetup(
   // One definition of decision time for every engine: the close of the newest
   // 15m bar closed at the decision (a family decides at exactly that close).
   const decisionBarClose = lastClosedBar ? lastClosedBar.time + BAR_MS_15M : decisionNow();
+  // One metric context for every engine: today's closed 15m bars up to the newest closed bar.
+  const metrics = buildMetricsContext(triggers?.bars15m ?? [], today);
   const tradedKey = `slot_traded:${exchange}:${underlying}:${mode}:${today}`;
   const tradedKeys = new Set<string>(JSON.parse((await redis.get(tradedKey).catch(() => null)) ?? '[]') as string[]);
   const markTraded = async (keys: readonly string[]) => {
@@ -3200,12 +3208,13 @@ async function resolveStickyTradeSetup(
     const link = { ...linkStructureToParent(structureFill, linkage), decisionTime: decisionBarClose };
     if (parentTraded(link.anchorKeys)) {
       await recordStructureOutcome(structureFamily.state, structureFill, { outcome: 'REFUSED', code: 'PARENT_ALREADY_TRADED', reason: parentTradedReason, at: decisionNow() }, chain.spotPrice);
-      entries.push({ kind: 'REFUSED', slot: structureSlotCandidate(structureFill, structureFill.rejectionFillPrice ?? chain.spotPrice, null, link), code: 'PARENT_ALREADY_TRADED', reason: parentTradedReason, optionBuild: false });
+      entries.push({ kind: 'REFUSED', slot: structureSlotCandidate(structureFill, structureFill.rejectionFillPrice ?? chain.spotPrice, null, link, metrics), code: 'PARENT_ALREADY_TRADED', reason: parentTradedReason, optionBuild: false });
     } else {
       entries.push(
         await resolveStructureSetup({
           provider, underlying, exchange, mode, key, today, setupTtl, chain, lc: structureFill, state: structureFamily.state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId,
           link,
+          metrics,
         })
       );
     }
@@ -3221,7 +3230,7 @@ async function resolveStickyTradeSetup(
     const first = await redis.set(`structure_claimed:${rc.lifecycleId}`, '1', 'EX', 60 * 60 * 24, 'NX').catch(() => null);
     if (first !== 'OK') continue;
     const lc = lifecycleFromCandidate(rc);
-    const slot = routedSlotCandidate(rc);
+    const slot = routedSlotCandidate(rc, metrics);
     if (parentTraded(slot.anchorKeys)) {
       await recordStructureOutcome(multipathFamily!.state, lc, { outcome: 'REFUSED', code: 'PARENT_ALREADY_TRADED', reason: parentTradedReason, at: decisionNow() }, chain.spotPrice);
       entries.push({ kind: 'REFUSED', slot, code: 'PARENT_ALREADY_TRADED', reason: parentTradedReason, optionBuild: false });
@@ -3232,6 +3241,7 @@ async function resolveStickyTradeSetup(
         provider, underlying, exchange, mode, key, today, setupTtl, chain, lc, state: multipathFamily!.state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId,
         link: { parentId: slot.parentId, anchorKeys: slot.anchorKeys, decisionTime: slot.decisionTime },
         slot,
+        metrics,
       })
     );
   }
@@ -3814,7 +3824,22 @@ async function resolveStickyTradeSetup(
       setup: fresh,
       // No anchor event: entry timing, move potential, remaining move and
       // event evidence are NOT_MEASURED (never an invented neutral value).
-      slot: indicatorSlotCandidate(indicatorId, direction, netRiskReward(fresh), decisionBarClose),
+      // The same metric schema as S1 and the families, from its built leg and decision-time structure.
+      slot: indicatorSlotCandidate(
+        indicatorId,
+        direction,
+        netRiskReward(fresh),
+        decisionBarClose,
+        indicatorGeometry({
+          direction,
+          spot: entryContext?.locationSpot ?? usedChain.spotPrice,
+          builtAtr: entryContext?.atrPoints ?? null,
+          stopInAtr: fresh.stopInAtr,
+          targetInAtr: fresh.targetInAtr,
+          behindLevel: entryContext?.locationBehindLevel,
+        }),
+        metrics
+      ),
       commit: async () => {
         const minted = await mintUnderLock({ underlying, exchange, mode, key, today, isPositional, priorDecisionId, mintFresh });
         return { setup: minted, minted: minted.available };
@@ -4199,6 +4224,8 @@ interface MultipathFamilyInput {
 }
 interface TriggerFamilies {
   lastClosedBar: { time: number; close: number; open?: number; high?: number; low?: number } | null;
+  /** The closed 15m bars of this check — what every candidate's decision metrics are measured on (slot-arbitration.ts). */
+  bars15m?: MomentumBar[];
   families: Array<MomentumFamilyInput | StructureFamilyInput | MultipathFamilyInput>;
 }
 
@@ -4447,8 +4474,10 @@ async function resolveStructureSetup(ctx: {
   priorDecisionId: string | null;
   /** Its parent move, anchor keys and decision-bar close (the same definition for every engine). */
   link: { parentId: string | null; anchorKeys: readonly string[]; decisionTime: number };
-  /** A routed trigger's rank inputs as the event engine measured them; absent = S1, measured here. */
+  /** A routed trigger's slot candidate (decisionMetrics on the rule's geometry); absent = S1, measured here. */
   slot?: SlotCandidate;
+  /** The check's metric context (today's closed 15m bars); null = metrics that need it are NOT_MEASURED. */
+  metrics: MetricsContext | null;
 }): Promise<SlotEntry> {
   const { provider, underlying, exchange, mode, key, today, setupTtl, chain, lc, state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId } = ctx;
   const direction: BiasDirection = lc.direction;
@@ -4591,7 +4620,7 @@ async function resolveStructureSetup(ctx: {
     roomCheckOiAgeSeconds: entryContext?.roomCheckOiAgeSeconds ?? null,
   };
   // Pre-build rank inputs (net R:R is NOT_MEASURED until the option leg is built).
-  const baseSlot: SlotCandidate = ctx.slot ?? structureSlotCandidate(lc, spot, null, ctx.link);
+  const baseSlot: SlotCandidate = ctx.slot ?? structureSlotCandidate(lc, spot, null, ctx.link, ctx.metrics);
   const describe = lc.triggerId
     ? `Trigger ${lc.triggerId} ${direction} (trigger-family router, paper research): decided at the 15m close ${lc.entry}; stop ${lc.stop} (invalidation beyond ${lc.sweepExtreme}), T1 ${lc.t1?.kind} ${lc.t1?.price} (${lc.rToT1}R)${lc.t2 ? `, T2 ${lc.t2.price}` : ''}. No displacement required by this trigger.`
     : `Structure ${direction}${fiveMinute ? ' (5m entry, 15m pools)' : ''}:${lc.pool.kind.replace(/_/g, ' ').toLowerCase()} ${lc.pool.price} swept (extreme ${lc.sweepExtreme}), displacement ${lc.displacementBodyAtr ?? '—'} ATR; ` +

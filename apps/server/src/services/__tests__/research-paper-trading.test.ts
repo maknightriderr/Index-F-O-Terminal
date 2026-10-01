@@ -62,6 +62,12 @@ import {
   structureSlotCandidate,
   routedSlotCandidate,
   indicatorSlotCandidate,
+  indicatorGeometry,
+  decisionMetrics,
+  buildMetricsContext,
+  structureGeometry,
+  MEASURED_CRITERIA,
+  type MetricsContext,
   type DeferredSetup,
   type RefusedCandidate,
   type SlotArbitrationRecord,
@@ -119,6 +125,9 @@ function s1Lifecycle(sr: MomentumSeries = series): LiveLifecycle {
   return { id: lifecycleIdOf('NSE', 'NIFTY', st), direction: 'BEARISH', pool: { kind: st.pool.kind, price: st.pool.price, rank: st.pool.rank }, timeframe: '15m' } as unknown as LiveLifecycle;
 }
 
+/** That S1 lifecycle as a filled trade: its structural stop beyond the sweep extreme (112) and a T1 below. */
+const s1Trade = (): LiveLifecycle => ({ ...s1Lifecycle(), stop: 113.2, t1: { kind: 'PREV_DAY_LOW', price: 80 } }) as LiveLifecycle;
+
 /** A clean, tradeable candidate for any trigger id (TRADE bucket: T1 3R away). */
 const candidate = (triggerId: string, over: Partial<TriggerCandidate> = {}): TriggerCandidate =>
   ({
@@ -162,8 +171,10 @@ const slot = (over: Partial<SlotCandidate>): SlotCandidate => ({
   anchorKeys: ['P1'],
   timingClass: 'ACCEPTABLE',
   movePotential: 'NORMAL',
-  remainingMovePct: 0.5,
+  moveConsumedPct: 0.2,
+  objectiveDistanceAtr: 2,
   netRR: 1.6,
+  entryQuality: 0.6,
   evidence: 2,
   decisionTime: 1_000,
   ...over,
@@ -196,6 +207,8 @@ async function settle(entries: Array<DeferredSetup | RefusedCandidate>) {
   return { out, log, marked, records, role: (src: string) => records.find((r) => r.slot.source === src)! };
 }
 const b = (sl: SlotCandidate) => built(sl, []);
+/** The one slot-candidate schema every engine fills. */
+const SCHEMA = ['anchorKeys', 'candidateId', 'decisionTime', 'direction', 'entryQuality', 'evidence', 'moveConsumedPct', 'movePotential', 'netRR', 'objectiveDistanceAtr', 'parentId', 'source', 'timingClass'];
 
 describe('1. every eligible family candidate of a parent is retained', () => {
   it('the router hands the slot all eligible paper-stage candidates of the newest bar — no pre-selection', () => {
@@ -298,46 +311,48 @@ describe('3–4. S1 joins a family parent only through the canonical sweep event
 });
 
 describe('5. NOT_MEASURED is never ACCEPTABLE / NORMAL / 0', () => {
-  it('the indicator engine and S1 report what they do not measure as NOT_MEASURED', () => {
-    const ind = indicatorSlotCandidate('IND:x', 'BULLISH', 1.4, 1_000);
-    expect([ind.timingClass, ind.movePotential, ind.remainingMovePct, ind.evidence]).toEqual([NOT_MEASURED, NOT_MEASURED, NOT_MEASURED, NOT_MEASURED]);
-    expect(ind.netRR).toBe(1.4);
-    const lc = { id: 'L', direction: 'BULLISH', stop: 190, t1: { kind: 'PDH', price: 230 }, atr: 10, sweepExtreme: 191, displacementBodyAtr: 1.2, zone: { kind: 'FVG' } } as unknown as LiveLifecycle;
-    const s1 = structureSlotCandidate(lc, 194, null, { parentId: 'P', anchorKeys: ['P'], decisionTime: 1 });
-    expect(s1.timingClass).toBe('OPTIMAL');
-    expect([s1.movePotential, s1.remainingMovePct, s1.netRR]).toEqual([NOT_MEASURED, NOT_MEASURED, NOT_MEASURED]);
-    expect(s1.evidence).toBe(3);
+  it('what cannot be measured is NOT_MEASURED: no structural level behind price → no timing; no bars → no move potential', () => {
+    const g = indicatorGeometry({ direction: 'BULLISH', spot: 200, builtAtr: 10, stopInAtr: 1, targetInAtr: 3, behindLevel: null })!;
+    expect(g).toMatchObject({ entry: 200, stop: 190, objective: 230, anchor: null });
+    const m = decisionMetrics(g, null, 1.4);
+    expect(m.timingClass).toBe(NOT_MEASURED);
+    expect(m.moveConsumedPct).toBe(NOT_MEASURED);
+    expect(m.movePotential).toBe(NOT_MEASURED);
+    expect(m.entryQuality).toBe(0.75); // (230 − 200) / (230 − 190): measured from stop and objective alone
+    expect(m.netRR).toBe(1.4);
+    const bare = indicatorSlotCandidate('IND:x', 'BULLISH', null, 1_000);
+    for (const v of [bare.timingClass, bare.moveConsumedPct, bare.movePotential, bare.objectiveDistanceAtr, bare.netRR, bare.entryQuality, bare.evidence]) expect(v).toBe(NOT_MEASURED);
   });
-  it('an unmeasured indicator neither beats a LATE family on timing nor loses to an OPTIMAL one: R:R decides', () => {
-    const ind = indicatorSlotCandidate('IND:x', 'BULLISH', 1.5, 1_000);
+  it('a candidate missing a metric neither beats a LATE one nor loses to an OPTIMAL one on it: the next shared metric decides', () => {
+    const unmeasured = slot({ source: 'INDICATOR', timingClass: NOT_MEASURED, moveConsumedPct: NOT_MEASURED, netRR: 1.5 });
     const late = slot({ source: 'B1', timingClass: 'LATE', netRR: 2.0 });
     const optimal = slot({ source: 'A3', timingClass: 'OPTIMAL', netRR: 1.2 });
-    expect(rankSlotCandidates([ind, late]).winner).toBe(1); // R:R 2.0 > 1.5 — the LATE timing is not held against B1
-    expect(rankSlotCandidates([ind, optimal]).winner).toBe(0); // R:R 1.5 > 1.2 — OPTIMAL is not counted for A3 either
-    expect(rankSlotCandidates([ind, late]).lostOn.get(0)).toBe('net R:R after costs');
+    expect(rankSlotCandidates([unmeasured, late]).winner).toBe(1); // R:R 2.0 > 1.5 — LATE is not held against B1
+    expect(rankSlotCandidates([unmeasured, optimal]).winner).toBe(0); // R:R 1.5 > 1.2 — OPTIMAL is not credited to A3
+    expect(rankSlotCandidates([unmeasured, late]).lostOn.get(0)).toBe('net R:R after costs');
   });
-  it('an unmeasured evidence is not a zero', () => {
-    const ind = indicatorSlotCandidate('IND:x', 'BULLISH', 1.6, 1_000);
-    const fam = slot({ source: 'A2', timingClass: NOT_MEASURED, movePotential: NOT_MEASURED, remainingMovePct: NOT_MEASURED, netRR: 1.6, evidence: 5 });
-    // R:R ties; evidence is NOT compared (the indicator has none measured), so the tie falls to the decision bar, then source.
-    expect(compareSlotCandidates(fam, ind, sharedCriteria([fam, ind]).used).criterion).toBe('source tie-break');
+  it('evidence (not every engine has events) is recorded, never ranked', () => {
+    expect(MEASURED_CRITERIA.map((k) => k.name)).toEqual(['entry timing', 'move potential', 'net R:R after costs', 'entry quality']);
+    const a = slot({ source: 'A2', evidence: 9 });
+    const ind = slot({ source: 'INDICATOR', evidence: NOT_MEASURED });
+    expect(compareSlotCandidates(a, ind, sharedCriteria([a, ind]).used).criterion).toBe('source tie-break');
+    expect(sharedCriteria([a, ind]).skipped).toEqual([]);
   });
 });
 
 describe('6. ranking skips dimensions not measurable for every candidate in the pool', () => {
-  it('S1 + A3: timing, R:R and evidence compared; move potential and remaining move skipped', () => {
-    const s1 = slot({ source: 'S1', movePotential: NOT_MEASURED, remainingMovePct: NOT_MEASURED });
-    expect(sharedCriteria([s1, slot({ source: 'A3' })])).toEqual({ used: ['entry timing', 'net R:R after costs', 'evidence'], skipped: ['move potential', 'remaining move'] });
+  it('a fully measured pool compares all four criteria', () => {
+    expect(sharedCriteria([slot({ source: 'S1' }), slot({ source: 'A3' }), slot({ source: 'INDICATOR' })])).toEqual({ used: ['entry timing', 'move potential', 'net R:R after costs', 'entry quality'], skipped: [] });
   });
-  it('adding the indicator leaves R:R as the only shared measured criterion — recorded on every row', async () => {
+  it('an indicator with no structural level behind price: entry timing is skipped for the whole pool, the rest still decide', async () => {
     const r = await settle([
-      b(slot({ source: 'S1', movePotential: NOT_MEASURED, remainingMovePct: NOT_MEASURED })),
-      b(slot({ source: 'A3' })),
-      b(indicatorSlotCandidate('IND:x', 'BULLISH', 1.9, 1_000)),
+      b(slot({ source: 'S1', timingClass: 'OPTIMAL', netRR: 1.5 })),
+      b(slot({ source: 'A3', timingClass: 'LATE', netRR: 1.7 })),
+      b(slot({ source: 'INDICATOR', timingClass: NOT_MEASURED, moveConsumedPct: NOT_MEASURED, netRR: 1.6 })),
     ]);
-    expect(r.role('INDICATOR').role).toBe('SELECTED');
-    for (const x of r.records) expect(x.criteriaUsed).toEqual(['net R:R after costs']);
-    expect(r.role('A3').reason).toMatch(/Not compared \(NOT_MEASURED by at least one candidate in this check\): entry timing, move potential, remaining move, evidence/);
+    expect(r.role('A3').role).toBe('SELECTED'); // R:R decides; S1's OPTIMAL is not counted while one candidate lacks timing
+    for (const x of r.records) expect(x.criteriaUsed).toEqual(['move potential', 'net R:R after costs', 'entry quality']);
+    expect(r.role('S1').reason).toMatch(/Not compared \(NOT_MEASURED by at least one candidate in this check\): entry timing/);
   });
   it('the order is the same whatever order the candidates arrive in (the pool rule is transitive)', () => {
     // Pairwise skipping would cycle here: A beats B on timing, B beats C on R:R, C beats A on R:R.
@@ -392,14 +407,14 @@ describe('8. one decision-time definition for every engine: the decision bar clo
     const src = readFileSync(fileURLToPath(new URL('../market-bias.ts', import.meta.url)), 'utf8');
     expect(src).toMatch(/const decisionBarClose = lastClosedBar \? lastClosedBar\.time \+ BAR_MS_15M : decisionNow\(\);/);
     expect(src).toMatch(/linkStructureToParent\(structureFill, linkage\), decisionTime: decisionBarClose/);
-    expect(src).toMatch(/indicatorSlotCandidate\(indicatorId, direction, netRiskReward\(fresh\), decisionBarClose\)/);
+    expect(src).toMatch(/indicatorSlotCandidate\(\s*indicatorId,\s*direction,\s*netRiskReward\(fresh\),\s*decisionBarClose,/);
   });
 });
 
 describe('9. one parent move produces exactly one selected trade', () => {
   it('several engines and families on one parent: one mint, the parent marked once, every other candidate recorded', async () => {
     const r = await settle([
-      b(slot({ source: 'S1', anchorKeys: ['P1', 'SWEEP:x'], movePotential: NOT_MEASURED, remainingMovePct: NOT_MEASURED })),
+      b(slot({ source: 'S1', anchorKeys: ['P1', 'SWEEP:x'] })),
       b(slot({ source: 'A2', anchorKeys: ['P1', 'SWEEP:x'] })),
       b(slot({ source: 'A3', anchorKeys: ['P1', 'RECLAIM:x', 'SWEEP:x'], timingClass: 'OPTIMAL' })),
       b(slot({ source: 'D3', anchorKeys: ['P1'] })),
@@ -437,7 +452,19 @@ describe('10. no future bar or outcome influences arbitration', () => {
     expect(linkStructureToParent(s1Lifecycle(), part.linkage)).toEqual(linkStructureToParent(s1Lifecycle(), full.linkage));
   });
   it('a slot candidate holds decision-time fields only (no outcome, MFE, exit or result)', () => {
-    expect(Object.keys(slot({})).sort()).toEqual(['anchorKeys', 'candidateId', 'decisionTime', 'direction', 'evidence', 'movePotential', 'netRR', 'parentId', 'remainingMovePct', 'source', 'timingClass']);
+    expect(Object.keys(slot({})).sort()).toEqual(SCHEMA);
+  });
+  it('S1\'s and the indicator\'s metrics are identical whether or not later bars exist', () => {
+    const i = start + 8;
+    const cutCtx = buildMetricsContext(allBars.slice(0, i + 1), SESSION)!;
+    const fullCtx = buildSeriesContext(series);
+    const atFull: MetricsContext = { ctx: fullCtx, s, i, atr: fullCtx.atrAt(i) };
+    expect(cutCtx.i).toBe(i);
+    const s1g = structureGeometry(s1Trade(), 101);
+    expect(decisionMetrics(s1g, cutCtx, 1.7).movePotential).not.toBe(NOT_MEASURED);
+    expect(decisionMetrics(s1g, cutCtx, 1.7)).toEqual(decisionMetrics(s1g, atFull, 1.7));
+    const indg = indicatorGeometry({ direction: 'BEARISH', spot: 101, builtAtr: 6, stopInAtr: 1, targetInAtr: 2.5, behindLevel: 106 })!;
+    expect(decisionMetrics(indg, cutCtx, 1.5)).toEqual(decisionMetrics(indg, atFull, 1.5));
   });
 });
 
@@ -462,6 +489,60 @@ describe('11. S1 and indicator behaviour otherwise unchanged; research families 
   it('the indicator engine stays in EVIDENCE mode: confidence below 75 does not refuse', () => {
     expect(INDICATOR_CONFIDENCE_MODE).toBe('EVIDENCE');
     expect(setupConfidenceRefusal({ mode: 'EVIDENCE', confidence: 60, minConfidence: 75 })).toBeNull();
+  });
+});
+
+describe('13. one metric schema and one formula for S1, the indicator and every family', () => {
+  const i = start + 7;
+  const m = buildMetricsContext(allBars.slice(0, i + 1), SESSION)!;
+  const part = routeSession(prepareMomentumSeries(allBars.slice(0, i + 1)));
+  const newest = part.all.filter((c) => c.decisionIndex === i && c.t1 != null);
+
+  it('every engine\'s candidate carries exactly the same fields', () => {
+    const fam = routedSlotCandidate(routed(newest[0]), m);
+    const s1 = structureSlotCandidate(s1Trade(), 101, 1.6, { parentId: 'P', anchorKeys: ['P'], decisionTime: 1 }, m);
+    const geometry = indicatorGeometry({ direction: 'BEARISH', spot: 101, builtAtr: m.atr, stopInAtr: 1.2, targetInAtr: 2, behindLevel: 104 });
+    const ind = indicatorSlotCandidate('IND:x', 'BEARISH', 1.6, 1, geometry, m);
+    for (const c of [fam, s1, ind]) expect(Object.keys(c).sort(), c.source).toEqual(SCHEMA);
+    // …and all of them are actually measured here, the indicator included.
+    for (const c of [fam, s1, ind]) {
+      expect(c.timingClass, c.source).not.toBe(NOT_MEASURED);
+      expect(c.movePotential, c.source).not.toBe(NOT_MEASURED);
+      expect(c.entryQuality, c.source).not.toBe(NOT_MEASURED);
+    }
+  });
+
+  it('a family\'s metrics through decisionMetrics equal what the event engine itself recorded at the decision bar', () => {
+    expect(newest.length).toBeGreaterThan(0);
+    for (const c of newest) {
+      const sc = routedSlotCandidate(routed(c), m);
+      expect(sc.timingClass, c.triggerId).toBe(c.timing.class);
+      expect(sc.movePotential, c.triggerId).toBe(c.movePotential.class);
+      expect(sc.moveConsumedPct, c.triggerId).toBe(c.timing.moveConsumedPct ?? NOT_MEASURED);
+    }
+  });
+
+  it('the indicator\'s entry timing comes from price geometry: the further price has run from the level behind, the later the class', () => {
+    const at = (spot: number) =>
+      decisionMetrics({ direction: 'BULLISH', entry: spot, stop: 193, objective: 230, anchor: 195, onAnchorBar: false }, m).timingClass;
+    expect(at(200)).toBe('OPTIMAL');
+    expect(['LATE', 'CHASING']).toContain(at(216));
+  });
+
+  it('no hard-coded engine priority: whichever engine carries the better metrics wins, under any label', () => {
+    const better = { timingClass: 'OPTIMAL' as const, netRR: 1.8 };
+    const worse = { timingClass: 'ACCEPTABLE' as const, netRR: 1.8 };
+    for (const x of ['S1', 'INDICATOR', 'A3']) {
+      for (const y of ['S1', 'INDICATOR', 'A3']) {
+        if (x === y) continue;
+        const pool = [slot({ source: y, ...worse }), slot({ source: x, ...better })];
+        expect(pool[rankSlotCandidates(pool).winner].source, `${x} vs ${y}`).toBe(x);
+      }
+    }
+    // The comparison code names no engine: the source id appears only as the last tie-break.
+    const src = readFileSync(fileURLToPath(new URL('../slot-arbitration.ts', import.meta.url)), 'utf8');
+    const ranking = src.slice(src.indexOf('export const MEASURED_CRITERIA'), src.indexOf('/** The pool\'s order'));
+    expect(ranking).not.toMatch(/'S1'|'INDICATOR'|triggerId/);
   });
 });
 
