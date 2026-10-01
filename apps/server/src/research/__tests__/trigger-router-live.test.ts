@@ -67,6 +67,13 @@ describe('routeTriggerFamilies', () => {
     expect(a2.versions.triggerVersion).toBe('A2-1.0');
     // Recorded at the decision bar's close, never earlier.
     expect(a2.time.getTime()).toBe(today[7].time + M15);
+    // Every recorded candidate carries its parent and role; no parent has two selected setups.
+    expect(a2.context.arbitration).toHaveProperty('parentId');
+    const selectedPerParent = new Map<string, number>();
+    for (const r of recorded) if (r.context.arbitration?.role === 'SELECTED') selectedPerParent.set(r.context.arbitration.parentId, (selectedPerParent.get(r.context.arbitration.parentId) ?? 0) + 1);
+    for (const n of selectedPerParent.values()) expect(n).toBe(1);
+    // Trading arbitration admits PAPER and up only: nothing is selected to trade today.
+    expect(recorded.filter((r) => r.context.tradeArbitration?.role === 'SELECTED')).toEqual([]);
   });
 
   it('evaluates each closed bar once: a second poll on the same bars records nothing new', async () => {
