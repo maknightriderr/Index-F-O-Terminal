@@ -469,6 +469,33 @@ export const INDICATOR_CONFIDENCE_MODE: IndicatorConfidenceMode = parsedIndicato
 /** An INDICATOR_CONFIDENCE_MODE value that was neither EVIDENCE nor LEGACY — logged at boot. */
 export const INDICATOR_CONFIDENCE_MODE_REJECTED: string | null = parsedIndicatorMode.rejected;
 
+// ---- Indicator engine location mode (2026-10-01) ----
+// EVIDENCE (default, the only path that runs): the location score
+// (location-quality.ts assessLocation, unchanged) and every measurement under
+// it are recorded on each decision, but POOR_LOCATION never refuses by
+// itself. Executable room stays a hard control where it already lives: the
+// target is capped at the nearest strong wall or pivot, and the builder
+// refuses a setup whose reward:risk after costs falls below the floor
+// (REWARD_RISK_TOO_LOW / COST_EXCEEDS_EDGE) — so the cramped-entry geometry
+// is not enforced twice.
+// LEGACY (dormant rollback): POOR_LOCATION below LOCATION_GATE_MIN_SCORE (40)
+// while LOCATION_GATE is on, exactly as before.
+//
+// Recorded evidence behind the old gate (validation-gates.ts): setups scored
+// below 40 ran PF 0.93 against 2.35 at 60 and above. Trades taken under
+// EVIDENCE carry "+location-evidence.1" so they are never pooled with it.
+export const INDICATOR_LOCATION_MODE_DEFAULT: IndicatorConfidenceMode = 'EVIDENCE';
+export const LOCATION_EVIDENCE_LOGIC_SUFFIX = '+location-evidence.1';
+const parsedLocationMode = parseIndicatorConfidenceMode(process.env.INDICATOR_LOCATION_MODE);
+export const INDICATOR_LOCATION_MODE: IndicatorConfidenceMode = parsedLocationMode.value;
+/** An INDICATOR_LOCATION_MODE value that was neither EVIDENCE nor LEGACY — logged at boot. */
+export const INDICATOR_LOCATION_MODE_REJECTED: string | null = parsedLocationMode.rejected;
+
+/** Whether POOR_LOCATION refuses: only in LEGACY, and only with LOCATION_GATE on (its old switch). */
+export function locationGateEnforced(mode: IndicatorConfidenceMode = INDICATOR_LOCATION_MODE, locationGateFlag: boolean = TRADING_FLAGS.LOCATION_GATE): boolean {
+  return mode === 'LEGACY' && locationGateFlag;
+}
+
 // ---- Trigger-family stages (displacement is trigger-specific, 2026-10-01) ----
 // Every trigger in the registry has its own live stage:
 //   RESEARCH  history only        SHADOW  live, recorded, graded, never traded
@@ -729,8 +756,8 @@ export interface LogicStamp {
     optionVersion: string;
     costVersion: string;
   };
-  /** The indicator engine's confidence mode (absent on setups minted before it: the 75 gate). */
-  indicator?: { confidenceMode: IndicatorConfidenceMode };
+  /** The indicator engine's confidence and location modes (absent on setups minted before them: the 75 and POOR_LOCATION gates). */
+  indicator?: { confidenceMode: IndicatorConfidenceMode; locationMode?: IndicatorConfidenceMode };
 }
 
 /**
@@ -759,7 +786,7 @@ export interface LogicStampExtras {
     costVersion: string;
   };
   /** Absent = not recorded; the version is decided exactly as before. */
-  indicator?: { confidenceMode: IndicatorConfidenceMode };
+  indicator?: { confidenceMode: IndicatorConfidenceMode; locationMode?: IndicatorConfidenceMode };
 }
 
 /** What gets written onto every setup and decision. */
@@ -785,10 +812,13 @@ export function logicStamp(
       ? MOMENTUM_BREAK_LOGIC_VERSION
       : LOGIC_VERSION;
   // The indicator engine's confidence mode changes which consensus setups mint, so EVIDENCE gets its own suffix.
-  const logicVersion = extras.indicator?.confidenceMode === 'EVIDENCE' ? `${baseVersion}${INDICATOR_EVIDENCE_LOGIC_SUFFIX}` : baseVersion;
+  const logicVersion =
+    baseVersion +
+    (extras.indicator?.confidenceMode === 'EVIDENCE' ? INDICATOR_EVIDENCE_LOGIC_SUFFIX : '') +
+    (extras.indicator?.locationMode === 'EVIDENCE' ? LOCATION_EVIDENCE_LOGIC_SUFFIX : '');
   return {
     logicVersion,
-    ...(extras.indicator ? { indicator: { confidenceMode: extras.indicator.confidenceMode } } : {}),
+    ...(extras.indicator ? { indicator: { confidenceMode: extras.indicator.confidenceMode, ...(extras.indicator.locationMode ? { locationMode: extras.indicator.locationMode } : {}) } } : {}),
     flags: { ...flags },
     params: { ...params },
     coverageLag: { flags: { ...lagFlags }, params: { ...lagParams }, backgroundSymbols: backgroundSymbols.map((s) => ({ ...s })) },
@@ -817,6 +847,6 @@ export function liveLogicStamp(): LogicStamp {
     fnoValidation: { enabled: FNO_VALIDATION, params: FNO_VALIDATION_PARAMS },
     structure: { enabled: STRUCTURE, consensusSetups: CONSENSUS_SETUPS, params: STRUCTURE_PARAMS, symbols: STRUCTURE_SYMBOLS, entryTimeframe: STRUCTURE_ENTRY_TF, entryMode: STRUCTURE_ENTRY_MODE },
     versions: { strategyVersion: STRATEGY_VERSION, triggerVersion: TRIGGER_VERSION, riskVersion: RISK_VERSION, optionVersion: OPTION_VERSION, costVersion: COST_VERSION },
-    indicator: { confidenceMode: INDICATOR_CONFIDENCE_MODE },
+    indicator: { confidenceMode: INDICATOR_CONFIDENCE_MODE, locationMode: INDICATOR_LOCATION_MODE },
   });
 }

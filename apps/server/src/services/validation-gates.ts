@@ -70,6 +70,19 @@ export function setupConfidenceRefusal(args: { mode: 'EVIDENCE' | 'LEGACY'; conf
     : null;
 }
 
+/**
+ * Reward:risk after the round-trip cost, the way the option builder judges
+ * it: (reward − cost) ÷ (risk + cost), with cost = entry × estimatedCostPct.
+ * Naked longs only; null when a price is missing. Measurement, never a gate.
+ */
+export function netRiskReward(s: { structureType?: string; entry?: number | null; stopLoss?: number | null; target?: number | null; estimatedCostPct?: number | null }): number | null {
+  if (s.structureType === 'SPREAD' || s.entry == null || s.stopLoss == null || s.target == null || s.estimatedCostPct == null) return null;
+  const cost = s.entry * (s.estimatedCostPct / 100);
+  const risk = s.entry - s.stopLoss;
+  if (!(risk + cost > 0)) return null;
+  return Math.round(((s.target - s.entry - cost) / (risk + cost)) * 100) / 100;
+}
+
 export function closingGuardReason(args: {
   enabled: boolean;
   mode: TradingMode;

@@ -89,8 +89,8 @@ describe('one runtime path: EVIDENCE', () => {
   });
 
   it('EVIDENCE trades carry their own logic version; positional stamps are unchanged', () => {
-    expect(liveLogicStamp().logicVersion).toBe(`${STRUCTURE_LOGIC_VERSION}${INDICATOR_EVIDENCE_LOGIC_SUFFIX}`);
-    expect(liveLogicStamp().indicator).toEqual({ confidenceMode: 'EVIDENCE' });
+    expect(liveLogicStamp().logicVersion.startsWith(`${STRUCTURE_LOGIC_VERSION}${INDICATOR_EVIDENCE_LOGIC_SUFFIX}`)).toBe(true);
+    expect(liveLogicStamp().indicator?.confidenceMode).toBe('EVIDENCE');
     expect(logicStamp().logicVersion).toBe(LOGIC_VERSION);
   });
 
