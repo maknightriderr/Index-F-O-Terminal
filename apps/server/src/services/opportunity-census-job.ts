@@ -37,18 +37,33 @@
 // ============================================================
 
 import { getSessionWindow, type Exchange } from '@fno/shared';
-import { prepareMomentumSeries, type MomentumSeries, type MomentumBar } from '@fno/analytics';
+import {
+  prepareMomentumSeries,
+  buildSeriesContext,
+  runSessionEvents,
+  evaluateTriggersAt,
+  detectMajorMoves,
+  diagnoseMajorMove,
+  classifySessionCoverage,
+  inRecordingGap,
+  TRIGGER_REGISTRY,
+  type MomentumSeries,
+  type MomentumBar,
+  type SeriesContext,
+  type SessionCoverage,
+} from '@fno/analytics';
+import { decisionAllowed } from '../research/multipath.js';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveSpotToken } from './option-chain.js';
 import { buildOppBars, clusterWindows, type OppWindow } from '../research/opportunity-census.js';
-import { STRATEGY_VERSION, TRIGGER_VERSION } from '../config/trading-flags.js';
+import { STRATEGY_VERSION, TRIGGER_VERSION, LOGIC_VERSION, EVENT_ENGINE_VERSION } from '../config/trading-flags.js';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 
 const TICK_MS = 30 * 60 * 1000;
 const INITIAL_DELAY_MS = 10 * 60 * 1000;
 const BAR_MS_15M = 15 * 60 * 1000;
-const LOOKBACK_DAYS = 30; // enough history for ATR14 plus the previous session
+const LOOKBACK_DAYS = 45; // ATR14, and the 20-session average range the major-move diagnostic needs
 /** How many IST calendar days back a pass looks for sessions not yet censused. */
 const PENDING_DAYS = 4;
 /** Lets the session's final 15m bar land before the census reads it. */
@@ -95,16 +110,40 @@ export function pendingSessions(exchange: Exchange, now: number, done: ReadonlyS
   return out;
 }
 
-/** Of the day's opportunities, the share actually traded. Late and rejected detections are not captures. */
-export function captureRate(opportunities: number, traded: number): number | null {
-  return opportunities > 0 ? traded / opportunities : null;
+/**
+ * Of the day's opportunities the data could judge, the share actually
+ * traded. Late and rejected detections are not captures; opportunities in a
+ * data gap are left out of the denominator.
+ */
+export function captureRate(opportunities: number, traded: number, dataGap = 0): number | null {
+  const covered = opportunities - dataGap;
+  return covered > 0 ? traded / covered : null;
+}
+
+/**
+ * One opportunity window's class. A window nothing matched is NEVER_DETECTED
+ * only when the data was there to detect it: in an uncovered session or a
+ * recording gap it is DATA_GAP. Pure.
+ */
+export function classifyWindow(args: { traded: boolean; detected: boolean; late: boolean; sessionCoverage: SessionCoverage; inGap: boolean }): string {
+  if (args.traded) return 'TRADED';
+  if (args.detected) return 'DETECTED_BUT_REJECTED';
+  if (args.late) return 'DETECTED_LATE';
+  if (args.sessionCoverage === 'UNCOVERED' || args.sessionCoverage === 'DATA_GAP' || args.inGap) return 'DATA_GAP';
+  return 'NEVER_DETECTED';
 }
 
 let started = false;
 
+/** One row per boot: a boot inside a session marks a recording gap for the coverage check. */
+async function recordRecorderBoot(): Promise<void> {
+  await sql`INSERT INTO recorder_boots (boot_at, logic_version) VALUES (NOW(), ${LOGIC_VERSION})`.catch((err: any) => logger.error({ error: err.message }, 'recorder_boots: insert failed'));
+}
+
 export function startOpportunityCensus(provider: MarketDataProvider): void {
   if (started) return;
   started = true;
+  void recordRecorderBoot();
   const tick = () => {
     void runCensusPass(provider).catch((err: any) => logger.warn({ error: err.message }, 'Opportunity census: pass failed'));
   };
@@ -151,21 +190,36 @@ async function censusSymbol(provider: MarketDataProvider, sym: WatchedSymbol, se
   const loaded = { series, masked: new Set<string>() } as unknown as Parameters<typeof buildOppBars>[0];
   const allOppBars = buildOppBars(loaded, BAR_MS_15M);
 
+  const ctx = buildSeriesContext(series);
   for (const session of sessions) {
     // No bars: an unlisted holiday, or the feed hasn't caught up. Retried next pass.
-    if (!series.sessionDates.includes(session)) continue;
-    await censusSession(sym, session, allOppBars.filter((b) => b.session === session));
+    const s = series.sessionDates.indexOf(session);
+    if (s < 0) continue;
+    await censusSession(sym, session, allOppBars.filter((b) => b.session === session), ctx, s);
   }
 }
 
-async function censusSession(sym: WatchedSymbol, today: string, oppBars: ReturnType<typeof buildOppBars>): Promise<void> {
+async function censusSession(sym: WatchedSymbol, today: string, oppBars: ReturnType<typeof buildOppBars>, ctx: SeriesContext, s: number): Promise<void> {
   const windows2R = clusterWindows(sym.symbol, oppBars, 2);
+  const series = ctx.series;
+  const start = series.sessionStarts[s];
+  const end = ctx.sessionEnd(s);
 
-  const setupRows = await sql<{ time: Date; lifecycle_id: string; direction: string; event_type: string; decision: string }[]>`
-    SELECT time, lifecycle_id, direction, event_type, decision FROM setup_events
+  const setupRows = await sql<{ time: Date; lifecycle_id: string; direction: string; event_type: string; decision: string; cost_quality: string | null }[]>`
+    SELECT time, lifecycle_id, direction, event_type, decision, cost_quality FROM setup_events
     WHERE instrument = ${sym.symbol} AND exchange = ${sym.exchange} AND time >= ${new Date(`${today}T00:00:00+05:30`)} AND time < ${new Date(`${today}T23:59:59+05:30`)}
     ORDER BY time ASC
   `;
+
+  // ---- Data quality first: was there valid data and a running recorder? ----
+  const window = getSessionWindow(sym.exchange, today);
+  const boots = window
+    ? (await sql<{ boot_at: Date }[]>`SELECT boot_at FROM recorder_boots WHERE boot_at >= ${new Date(window.open - 30 * 86_400_000)} AND boot_at <= ${new Date(window.close)} ORDER BY boot_at`).map((r) => new Date(r.boot_at).getTime())
+    : [];
+  const cov = window ? classifySessionCoverage({ sessionOpen: window.open, sessionClose: window.close, barMs: BAR_MS_15M, bars: series.bars.slice(start, end + 1), boots }) : null;
+  const sessionCoverage: SessionCoverage = cov?.coverage ?? 'UNCOVERED';
+  const qualities = setupRows.reduce<Record<string, number>>((acc, r) => ((acc[r.cost_quality ?? 'UNAVAILABLE'] = (acc[r.cost_quality ?? 'UNAVAILABLE'] ?? 0) + 1), acc), {});
+  const optionDataStatus = setupRows.length === 0 ? 'NO_SETUPS' : Object.entries(qualities).map(([k, v]) => `${k}:${v}`).join(',');
 
   const batch: { classification: string }[] = [];
   const barTolMs = 2 * BAR_MS_15M;
@@ -179,12 +233,14 @@ async function censusSession(sym: WatchedSymbol, today: string, oppBars: ReturnT
       ? setupRows.find((r) => r.direction === direction && r.time.getTime() > windowStart + barTolMs && r.time.getTime() <= windowStart + barTolMs + 4 * BAR_MS_15M)
       : null;
 
-    let classification: string;
-    let matched: (typeof setupRows)[number] | null | undefined = traded ?? detected ?? lateCandidate;
-    if (traded) classification = 'TRADED';
-    else if (detected) classification = 'DETECTED_BUT_REJECTED';
-    else if (lateCandidate) classification = 'DETECTED_LATE';
-    else classification = 'NEVER_DETECTED';
+    const matched: (typeof setupRows)[number] | null | undefined = traded ?? detected ?? lateCandidate;
+    const classification = classifyWindow({
+      traded: !!traded,
+      detected: !!detected,
+      late: !!lateCandidate,
+      sessionCoverage,
+      inGap: cov ? inRecordingGap(windowStart, cov.gaps, BAR_MS_15M) : true,
+    });
 
     batch.push({ classification });
     await sql`
@@ -207,18 +263,68 @@ async function censusSession(sym: WatchedSymbol, today: string, oppBars: ReturnT
   const rejected = batch.filter((b) => b.classification === 'DETECTED_BUT_REJECTED').length;
   const late = batch.filter((b) => b.classification === 'DETECTED_LATE').length;
   const never = batch.filter((b) => b.classification === 'NEVER_DETECTED').length;
-  const correctlyEmpty = opportunities === 0 && setupRows.length === 0;
+  const dataGap = batch.filter((b) => b.classification === 'DATA_GAP').length;
+  const correctlyEmpty = opportunities === 0 && setupRows.length === 0 && sessionCoverage === 'COVERED';
 
   await sql`
-    INSERT INTO opportunity_census_daily (session_date, instrument, exchange, opportunities, traded, rejected, late, never_detected, capture_rate, correctly_empty)
-    VALUES (${today}, ${sym.symbol}, ${sym.exchange}, ${opportunities}, ${traded}, ${rejected}, ${late}, ${never}, ${captureRate(opportunities, traded)}, ${correctlyEmpty})
+    INSERT INTO opportunity_census_daily (
+      session_date, instrument, exchange, opportunities, traded, rejected, late, never_detected, capture_rate, correctly_empty,
+      coverage, session_start, session_end, recording_start, recording_end, expected_bars, present_bars, missing_bars, stale_bars, data_gap, option_data_status
+    ) VALUES (
+      ${today}, ${sym.symbol}, ${sym.exchange}, ${opportunities}, ${traded}, ${rejected}, ${late}, ${never}, ${captureRate(opportunities, traded, dataGap)}, ${correctlyEmpty},
+      ${sessionCoverage}, ${cov ? new Date(cov.sessionStart) : null}, ${cov ? new Date(cov.sessionEnd) : null},
+      ${cov?.recordingStart != null ? new Date(cov.recordingStart) : null}, ${cov?.recordingEnd != null ? new Date(cov.recordingEnd) : null},
+      ${cov?.expectedBars ?? null}, ${cov?.presentBars ?? null}, ${cov?.missingBars ?? null}, ${cov?.staleBars ?? null}, ${dataGap}, ${optionDataStatus}
+    )
     ON CONFLICT (session_date, instrument, exchange) DO UPDATE SET
       opportunities = EXCLUDED.opportunities, traded = EXCLUDED.traded, rejected = EXCLUDED.rejected,
       late = EXCLUDED.late, never_detected = EXCLUDED.never_detected, capture_rate = EXCLUDED.capture_rate,
-      correctly_empty = EXCLUDED.correctly_empty, computed_at = NOW()
+      correctly_empty = EXCLUDED.correctly_empty, coverage = EXCLUDED.coverage, data_gap = EXCLUDED.data_gap, computed_at = NOW()
   `.catch((err: any) => logger.error({ error: err.message, symbol: sym.symbol }, 'opportunity_census_daily: insert failed'));
 
-  logger.info({ symbol: sym.symbol, exchange: sym.exchange, session: today, opportunities, traded, rejected, late, never, correctlyEmpty }, 'Opportunity census: day computed');
+  logger.info({ symbol: sym.symbol, exchange: sym.exchange, session: today, coverage: sessionCoverage, opportunities, traded, rejected, late, never, dataGap, correctlyEmpty }, 'Opportunity census: day computed');
+
+  await diagnoseMajorMoves(sym, today, ctx, s, sessionCoverage, setupRows).catch((err: any) => logger.error({ error: err.message, symbol: sym.symbol }, 'major_move_diagnostics: failed'));
+}
+
+/**
+ * Post-session, RESEARCH status: the event engine and the research triggers
+ * run over the session to explain any major move — what started it, which
+ * family recognised it, the first actionable point, and whether the live
+ * engine traded it. Written to major_move_diagnostics; read by nothing that
+ * decides a trade.
+ */
+async function diagnoseMajorMoves(sym: WatchedSymbol, today: string, ctx: SeriesContext, s: number, sessionCoverage: SessionCoverage, setupRows: Array<{ time: Date; direction: string; decision: string }>): Promise<void> {
+  const series = ctx.series;
+  const start = series.sessionStarts[s];
+  const end = ctx.sessionEnd(s);
+  const moves = detectMajorMoves(series, s, end, ctx.adrAt(s));
+  if (moves.length === 0) return;
+  const log = runSessionEvents(ctx, s);
+  const research = TRIGGER_REGISTRY.filter((t) => t.status !== 'RETIRED').map((t) => t.triggerId);
+  const candidates = [];
+  for (let i = start; i <= end; i++) if (decisionAllowed(sym.exchange, today, series.bars[i].time)) candidates.push(...evaluateTriggersAt(ctx, log, i, research));
+  for (const move of moves) {
+    const from = series.bars[move.startIndex].time;
+    const to = series.bars[move.endIndex].time + BAR_MS_15M;
+    const traded = setupRows.some((r) => r.decision === 'TRADED' && r.direction === move.direction && r.time.getTime() >= from && r.time.getTime() <= to);
+    const d = diagnoseMajorMove({ move, coverage: sessionCoverage, events: log.events, candidates, traded });
+    await sql`
+      INSERT INTO major_move_diagnostics (
+        session_date, instrument, exchange, direction, start_time, end_time, start_price, end_price, size_adr,
+        classification, coverage, first_event_type, first_event_time, families_recognized, first_actionable, traded, reason, engine_version
+      ) VALUES (
+        ${today}, ${sym.symbol}, ${sym.exchange}, ${move.direction}, ${new Date(from)}, ${new Date(to)}, ${move.startPrice}, ${move.endPrice}, ${move.sizeAdr},
+        ${d.classification}, ${sessionCoverage}, ${d.firstEvent?.type ?? null}, ${d.firstEvent ? new Date(series.bars[d.firstEvent.barIndex].time + BAR_MS_15M) : null},
+        ${sql.json(d.familiesRecognized as never)}, ${d.firstActionable ? sql.json({ ...d.firstActionable, decisionTime: series.bars[d.firstActionable.decisionIndex].time + BAR_MS_15M } as never) : null},
+        ${traded}, ${d.reason}, ${EVENT_ENGINE_VERSION}
+      )
+      ON CONFLICT (session_date, instrument, exchange, direction) DO UPDATE SET
+        classification = EXCLUDED.classification, coverage = EXCLUDED.coverage, families_recognized = EXCLUDED.families_recognized,
+        first_actionable = EXCLUDED.first_actionable, traded = EXCLUDED.traded, reason = EXCLUDED.reason, computed_at = NOW()
+    `;
+    logger.info({ symbol: sym.symbol, session: today, direction: move.direction, sizeAdr: move.sizeAdr, classification: d.classification }, 'Major move diagnosed');
+  }
 }
 
 export type { OppWindow };

@@ -102,6 +102,8 @@ const FILES = [
   '031_census_before_recording.sql',
   // setup_events: per-setup option cost, stop distance and fill status (measurement only).
   '032_setup_event_costs.sql',
+  // Recorder boots, census coverage columns, major-move diagnostics (measurement only).
+  '033_coverage_and_major_moves.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */

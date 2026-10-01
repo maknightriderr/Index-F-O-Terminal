@@ -29,7 +29,7 @@ import {
   type SignalDiagnosticsData,
 } from '@/lib/use-signal-diagnostics';
 
-type View = 'opportunity' | 'decision' | 'performance' | 'cost' | 'health';
+type View = 'opportunity' | 'decision' | 'performance' | 'cost' | 'health' | 'moves' | 'registry';
 
 const VIEW_LABELS: Record<View, string> = {
   opportunity: 'Opportunity',
@@ -37,6 +37,8 @@ const VIEW_LABELS: Record<View, string> = {
   performance: 'Performance',
   cost: 'Cost',
   health: 'Architecture Health',
+  moves: 'Major Moves',
+  registry: 'Trigger Registry',
 };
 
 const INSTRUMENTS = ['NIFTY', 'BANKNIFTY', 'SENSEX', 'CRUDEOIL', 'GOLD'];
@@ -49,8 +51,16 @@ const DEF = {
   traded: 'Traded: a paper trade was minted within ±2 bars of the opportunity window.',
   late: 'Late: the first setup row came 2–6 bars after the window started.',
   never: 'Never detected: no setup_events row in that direction within 6 bars.',
-  detectionRate: 'Detection rate = (traded + rejected + late) ÷ objective opportunities.',
-  captureRate: 'Capture rate = traded ÷ objective opportunities. Late and rejected detections are not captures.',
+  detectionRate: 'Detection rate = (traded + rejected + late) ÷ covered opportunities.',
+  captureRate: 'Capture rate = traded ÷ covered opportunities. Late and rejected detections are not captures.',
+  dataGap: 'Data gap: opportunities in a session that was not fully covered (missing or stale bars, or the recorder was down). They are never called NEVER_DETECTED and are left out of every rate.',
+  missedRate: 'Missed rate = never detected ÷ covered opportunities.',
+  lateRate: 'Late rate = detected late ÷ covered opportunities.',
+  rejectionRate: 'Rejection rate = detected but rejected ÷ covered opportunities.',
+  created: 'Candidates created: setup lifecycles that got past WATCH (setup_events).',
+  tradeReady: 'Trade-ready: lifecycles that reached CONFIRMED (a limit resting at the zone).',
+  noFill: 'No fill: graded setups whose entry price never traded afterwards.',
+  majorMove: 'A major move: the session\'s largest directional leg reached ≥ 1 average session range (previous 20 sessions).',
   cohortTraded: 'TRADED: paper trades the engine took, graded on the underlying path against their own stop and T1.',
   cohortRejected: 'REJECTED: setups the engine refused, graded as if entered — only those whose entry price actually traded afterwards (FILLED).',
   count: 'n: graded rows with a result.',
@@ -214,8 +224,178 @@ function OpportunityView({ opportunity }: { opportunity: SignalDiagnosticsData['
           </table>
         </div>
       </Card>
-      <Definitions keys={['opportunities', 'detected', 'rejected', 'traded', 'late', 'never', 'detectionRate', 'captureRate']} />
+      <Card title="Rates and the setup funnel" subtitle="Every rate is over covered opportunities; data-gap opportunities are counted but never judged.">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+                <Th align="left">Instrument</Th>
+                <Th def={DEF.dataGap}>Data gap</Th>
+                <Th def={DEF.missedRate}>Missed rate</Th>
+                <Th def={DEF.lateRate}>Late rate</Th>
+                <Th def={DEF.rejectionRate}>Rejection rate</Th>
+                <Th def={DEF.created}>Candidates created</Th>
+                <Th def={DEF.tradeReady}>Trade-ready</Th>
+                <Th def={DEF.noFill}>No fill</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {[...opportunity.byInstrument].sort(bySegmentThenName).map((o) => (
+                <tr key={`${o.instrument}:${o.exchange}:rates`} className="border-t border-gray-800/40 light:border-slate-200">
+                  <td className="px-2 py-1.5 font-medium text-gray-200 light:text-slate-800">
+                    <span className="mr-1.5">{o.instrument}</span>
+                    <SegmentTag segment={o.segment} />
+                  </td>
+                  <td className="text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600">{o.dataGap}</td>
+                  <RateCell r={o.missedRate} />
+                  <RateCell r={o.lateRate} />
+                  <RateCell r={o.rejectionRate} />
+                  <td className="text-right px-2 py-1.5 tabular-nums text-gray-300 light:text-slate-700">{o.candidatesCreated}</td>
+                  <td className="text-right px-2 py-1.5 tabular-nums text-gray-300 light:text-slate-700">{o.tradeReady}</td>
+                  <td className="text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600">{o.noFill}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+      <Definitions keys={['opportunities', 'detected', 'rejected', 'traded', 'late', 'never', 'detectionRate', 'captureRate', 'dataGap', 'missedRate', 'lateRate', 'rejectionRate', 'created', 'tradeReady', 'noFill']} />
     </div>
+  );
+}
+
+// ---------------- Major moves ----------------
+
+const MOVE_CLASS_STYLE: Record<string, string> = {
+  TRADED: 'text-emerald-400 light:text-emerald-700',
+  CORRECTLY_UNTRADEABLE: 'text-gray-400 light:text-slate-600',
+  DATA_GAP: 'text-gray-500 light:text-slate-500',
+  LATE_ENTRY: 'text-amber-400 light:text-amber-700',
+  RISK_REJECTED: 'text-amber-400 light:text-amber-700',
+  OPTION_REJECTED: 'text-amber-400 light:text-amber-700',
+};
+
+function MajorMovesView({ rows }: { rows: SignalDiagnosticsData['majorMoves'] }) {
+  const time = (t: number | null) => (t == null ? '—' : new Date(t).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }));
+  return (
+    <div className="space-y-4">
+      <Card
+        title="Major moves: what happened, and why it was or wasn't traded"
+        subtitle="Computed after each session. The research trigger families are run over the session to say which of them saw the move and when it was first actionable; they never trade. A miss is only called when a predefined rule had an actionable setup while the data was covered."
+      >
+        {rows.length === 0 ? (
+          <p className="text-xs text-gray-500 light:text-slate-500 italic py-2">No major moves diagnosed in this window yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+                  <Th align="left">Date</Th>
+                  <Th align="left">Instrument</Th>
+                  <Th align="left" def={DEF.majorMove}>Move</Th>
+                  <Th align="left">Started by</Th>
+                  <Th align="left">Families that saw it</Th>
+                  <Th align="left">First actionable</Th>
+                  <Th align="left">Outcome</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((m) => (
+                  <tr key={`${m.sessionDate}:${m.instrument}:${m.direction}`} className="border-t border-gray-800/40 light:border-slate-200 align-top">
+                    <td className="px-2 py-1.5 text-gray-300 light:text-slate-700 whitespace-nowrap">{m.sessionDate}</td>
+                    <td className="px-2 py-1.5 font-medium text-gray-200 light:text-slate-800 whitespace-nowrap">
+                      <span className="mr-1.5">{m.instrument}</span>
+                      <SegmentTag segment={m.segment} />
+                    </td>
+                    <td className="px-2 py-1.5 tabular-nums text-gray-300 light:text-slate-700 whitespace-nowrap">
+                      {m.direction === 'BULLISH' ? '▲' : '▼'} {fmt(m.startPrice)} → {fmt(m.endPrice)}
+                      <span className="block text-[10px] text-gray-500 light:text-slate-500">
+                        {fmt(m.sizeAdr)}× avg range · {time(m.startTime)}–{time(m.endTime)} · {m.coverage ?? '—'}
+                      </span>
+                    </td>
+                    <td className="px-2 py-1.5 text-gray-400 light:text-slate-600">
+                      {m.firstEventType ?? '—'}
+                      {m.firstEventTime != null && <span className="block text-[10px] text-gray-500 light:text-slate-500">{time(m.firstEventTime)}</span>}
+                    </td>
+                    <td className="px-2 py-1.5 text-gray-400 light:text-slate-600">{m.familiesRecognized.length ? m.familiesRecognized.join(', ').toLowerCase().replace(/_/g, ' ') : 'none'}</td>
+                    <td className="px-2 py-1.5 tabular-nums text-gray-300 light:text-slate-700 whitespace-nowrap">
+                      {m.firstActionable ? (
+                        <>
+                          {m.firstActionable.triggerId} @ {fmt(m.firstActionable.entry)}
+                          <span className="block text-[10px] text-gray-500 light:text-slate-500">
+                            {Math.round(m.firstActionable.remainingMovePct * 100)}% of the move left{m.firstActionable.decisionTime ? ` · ${time(m.firstActionable.decisionTime)}` : ''}
+                          </span>
+                        </>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
+                    <td className="px-2 py-1.5">
+                      <span className={`font-semibold ${MOVE_CLASS_STYLE[m.classification] ?? 'text-red-400 light:text-red-700'}`}>{m.classification}</span>
+                      {m.reason && <span className="block text-[10px] text-gray-500 light:text-slate-500 max-w-xs">{m.reason}</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+      <Definitions keys={['majorMove', 'dataGap']} />
+    </div>
+  );
+}
+
+// ---------------- Trigger registry ----------------
+
+const STATUS_STYLE: Record<string, string> = {
+  RESEARCH: 'bg-sky-500/15 text-sky-300 light:text-sky-700',
+  SHADOW: 'bg-violet-500/15 text-violet-300 light:text-violet-700',
+  PAPER: 'bg-amber-500/15 text-amber-300 light:text-amber-700',
+  ACTIVE: 'bg-emerald-500/15 text-emerald-300 light:text-emerald-700',
+  RETIRED: 'bg-gray-500/15 text-gray-400 light:text-slate-600',
+};
+
+function RegistryView({ triggers }: { triggers: SignalDiagnosticsData['triggers'] }) {
+  return (
+    <Card
+      title="Trigger registry"
+      subtitle="Every candidate rule, pre-registered before testing. None trades: a rule moves past RESEARCH only after it passes out-of-sample, walk-forward and realistic-cost checks, then forward paper evidence."
+    >
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+              <Th align="left">Trigger</Th>
+              <Th align="left">Family</Th>
+              <Th align="left">Status</Th>
+              <Th align="left">Exact rule</Th>
+              <Th align="left">Stop</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {triggers.map((t) => (
+              <tr key={t.triggerId} className="border-t border-gray-800/40 light:border-slate-200 align-top">
+                <td className="px-2 py-1.5 font-medium text-gray-200 light:text-slate-800 whitespace-nowrap">
+                  {t.triggerId} <span className="block text-[10px] font-normal text-gray-400 light:text-slate-600">{t.name} · v{t.version}</span>
+                </td>
+                <td className="px-2 py-1.5 text-gray-400 light:text-slate-600 whitespace-nowrap">{t.family.toLowerCase().replace(/_/g, ' ')}</td>
+                <td className="px-2 py-1.5">
+                  <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${STATUS_STYLE[t.status] ?? ''}`}>{t.status}</span>
+                </td>
+                <td className="px-2 py-1.5 text-gray-300 light:text-slate-700 max-w-md">
+                  {t.exactRule}
+                  <span className="block text-[10px] text-gray-500 light:text-slate-500">Decides: {t.decisionBar}</span>
+                  {t.priorEvidence && <span className="block text-[10px] text-amber-400 light:text-amber-700">{t.priorEvidence}</span>}
+                </td>
+                <td className="px-2 py-1.5 text-gray-400 light:text-slate-600 max-w-xs">{t.stopRule}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {triggers[0] && <p className="text-[11px] text-gray-500 light:text-slate-500 mt-2">Entry: {triggers[0].entryRule} Target: {triggers[0].targetRule}</p>}
+    </Card>
   );
 }
 
@@ -658,7 +838,7 @@ export function SignalDiagnosticsPage() {
     strategyVersion: filters.strategyVersion || undefined,
     costVersion: filters.costVersion || undefined,
   });
-  const { loading, error, summary, rejections, census, grades, leakage, performance, opportunity, versions, refresh } = data;
+  const { loading, error, summary, rejections, census, grades, leakage, performance, opportunity, versions, majorMoves, triggers, refresh } = data;
 
   return (
     <div className="p-4 space-y-4">
@@ -698,6 +878,8 @@ export function SignalDiagnosticsPage() {
       {view === 'performance' && <PerformanceView performance={performance} grades={grades} />}
       {view === 'cost' && <CostView performance={performance} />}
       {view === 'health' && <HealthView leakage={leakage} census={census} />}
+      {view === 'moves' && <MajorMovesView rows={majorMoves} />}
+      {view === 'registry' && <RegistryView triggers={triggers} />}
     </div>
   );
 }

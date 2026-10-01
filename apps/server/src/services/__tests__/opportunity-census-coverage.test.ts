@@ -8,7 +8,7 @@
 // ============================================================
 
 import { describe, it, expect } from 'vitest';
-import { pendingSessions, captureRate, RECORDING_START_MS } from '../opportunity-census-job.js';
+import { pendingSessions, captureRate, classifyWindow, RECORDING_START_MS } from '../opportunity-census-job.js';
 
 const ist = (s: string) => Date.parse(`${s}+05:30`);
 const none = new Set<string>();
@@ -45,5 +45,25 @@ describe('captureRate', () => {
   it('counts traded opportunities only', () => {
     expect(captureRate(0, 0)).toBeNull();
     expect(captureRate(4, 1)).toBe(0.25);
+  });
+  it('leaves data-gap opportunities out of the denominator', () => {
+    expect(captureRate(6, 1, 2)).toBe(0.25);
+    expect(captureRate(3, 0, 3)).toBeNull();
+  });
+});
+
+describe('classifyWindow', () => {
+  const none = { traded: false, detected: false, late: false };
+  it('an unmatched window is NEVER_DETECTED only when the data could have detected it', () => {
+    expect(classifyWindow({ ...none, sessionCoverage: 'COVERED', inGap: false })).toBe('NEVER_DETECTED');
+    expect(classifyWindow({ ...none, sessionCoverage: 'PARTIAL', inGap: false })).toBe('NEVER_DETECTED');
+    expect(classifyWindow({ ...none, sessionCoverage: 'PARTIAL', inGap: true })).toBe('DATA_GAP');
+    expect(classifyWindow({ ...none, sessionCoverage: 'UNCOVERED', inGap: false })).toBe('DATA_GAP');
+    expect(classifyWindow({ ...none, sessionCoverage: 'DATA_GAP', inGap: false })).toBe('DATA_GAP');
+  });
+  it('a match always wins: traded, then rejected, then late', () => {
+    expect(classifyWindow({ traded: true, detected: true, late: false, sessionCoverage: 'UNCOVERED', inGap: true })).toBe('TRADED');
+    expect(classifyWindow({ traded: false, detected: true, late: false, sessionCoverage: 'COVERED', inGap: false })).toBe('DETECTED_BUT_REJECTED');
+    expect(classifyWindow({ traded: false, detected: false, late: true, sessionCoverage: 'COVERED', inGap: false })).toBe('DETECTED_LATE');
   });
 });

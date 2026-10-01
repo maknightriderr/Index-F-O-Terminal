@@ -386,6 +386,14 @@ class ApiClient {
     return this.get<unknown>(`/api/diagnostics/opportunity${this.diagnosticsQuery(opts)}`);
   }
 
+  async getDiagnosticsMajorMoves(opts: DiagnosticsFilter = {}) {
+    return this.get<unknown>(`/api/diagnostics/major-moves${this.diagnosticsQuery(opts)}`);
+  }
+
+  async getDiagnosticsTriggers() {
+    return this.get<unknown>('/api/diagnostics/triggers');
+  }
+
   async getDiagnosticsVersions() {
     return this.get<unknown>('/api/diagnostics/versions');
   }

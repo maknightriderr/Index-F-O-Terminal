@@ -14,6 +14,9 @@
 //                                    cost leakage, per instrument and cohort
 //   GET /api/diagnostics/opportunity objective opportunities, detection and
 //                                    capture rates with numerator/denominator
+//   GET /api/diagnostics/major-moves large moves: what started them, who
+//                                    recognised them, traded / missed / why
+//   GET /api/diagnostics/triggers    the research trigger registry
 //   GET /api/diagnostics/versions    strategy/cost versions present
 //   GET /api/diagnostics/setup-outcomes?lifecycleIds=a,b  per-setup measurement
 //                                    for the Trade Setup card
@@ -35,8 +38,11 @@ import {
   diagnosticsOpportunity,
   diagnosticsVersions,
   diagnosticsSetupOutcomes,
+  diagnosticsMajorMoves,
   type DiagnosticsQuery,
 } from '../services/signal-diagnostics.js';
+import { TRIGGER_REGISTRY } from '@fno/analytics';
+import { EVENT_ENGINE_VERSION } from '../config/trading-flags.js';
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const VERSION = /^[A-Za-z0-9._-]{1,32}$/;
@@ -129,6 +135,21 @@ export function createDiagnosticsRoutes(): Router {
       logger.error({ error: err.message }, 'Signal diagnostics opportunity failed');
       res.status(500).json({ success: false, error: err.message });
     }
+  });
+
+  router.get('/major-moves', async (req: Request, res: Response) => {
+    try {
+      const q = parseQuery(req);
+      res.json({ success: true, data: { note: SIMULATION_NOTE, rows: await diagnosticsMajorMoves(q) } });
+    } catch (err: any) {
+      logger.error({ error: err.message }, 'Signal diagnostics major moves failed');
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // The research trigger registry: every rule's pre-registered definition and status. Static, read-only.
+  router.get('/triggers', (_req: Request, res: Response) => {
+    res.json({ success: true, data: { engineVersion: EVENT_ENGINE_VERSION, triggers: TRIGGER_REGISTRY } });
   });
 
   router.get('/versions', async (_req: Request, res: Response) => {

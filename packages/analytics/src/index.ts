@@ -44,3 +44,5 @@ export {
   type LiquidityMapPool,
   type PoolStatus as LiquidityMapPoolStatus,
 } from './liquidity-map/index.js';
+// Multi-path event engine (RESEARCH / SHADOW only — no live path reads it).
+export * from './event-engine/index.js';
