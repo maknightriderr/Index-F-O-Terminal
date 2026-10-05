@@ -27,6 +27,7 @@ import { cached } from '../lib/cache.js';
 import { redis } from '../lib/redis.js';
 import { stockExpiryInForce, ivClockCorrection } from './iv-history-clock.js';
 import { logger } from '../lib/logger.js';
+import { tapedInput } from '../lib/io-tape.js';
 
 export type { FnoScannerRow };
 
@@ -443,6 +444,11 @@ const IV_SAMPLE_MIN_MINUTES = 30;
  */
 export async function ivRankFor(symbol: string, expiry: string, atmIvPct: number): Promise<number | null> {
   if (!(atmIvPct > 0)) return null;
+  // An input of the decision (IV history lookup + its housekeeping): taped as one value inside a decision scope.
+  return tapedInput('ivRank', [symbol, expiry, atmIvPct], () => ivRankForLive(symbol, expiry, atmIvPct));
+}
+
+async function ivRankForLive(symbol: string, expiry: string, atmIvPct: number): Promise<number | null> {
   const cacheKey = `iv_rank_one:${symbol}:${expiry}:${Math.round(atmIvPct * 10)}`;
   const ranks = await cached(cacheKey, IV_RANK_LOOKUP_TTL_SECONDS, async () => {
     const map = await computeIvRanks([{ symbol, expiry, atmIv: atmIvPct, ceIv: 0, peIv: 0, ivSkew: 0 }]);

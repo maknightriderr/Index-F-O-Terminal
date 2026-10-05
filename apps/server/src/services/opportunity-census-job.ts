@@ -59,6 +59,7 @@ import { buildOppBars, clusterWindows, type OppWindow } from '../research/opport
 import { STRATEGY_VERSION, TRIGGER_VERSION, LOGIC_VERSION, EVENT_ENGINE_VERSION } from '../config/trading-flags.js';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
+import { runForwardValidation } from './forward-validation.js';
 
 const TICK_MS = 30 * 60 * 1000;
 const INITIAL_DELAY_MS = 10 * 60 * 1000;
@@ -146,6 +147,8 @@ export function startOpportunityCensus(provider: MarketDataProvider): void {
   void recordRecorderBoot();
   const tick = () => {
     void runCensusPass(provider).catch((err: any) => logger.warn({ error: err.message }, 'Opportunity census: pass failed'));
+    // The same post-session cadence grades predicted vs actual (forward-validation.ts) — measurement only.
+    void runForwardValidation().catch((err: any) => logger.warn({ error: err.message }, 'Forward validation: pass failed'));
   };
   setTimeout(() => {
     tick();

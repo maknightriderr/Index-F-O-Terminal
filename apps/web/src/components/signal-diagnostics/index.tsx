@@ -29,12 +29,14 @@ import {
   type SignalDiagnosticsData,
 } from '@/lib/use-signal-diagnostics';
 import { DecisionRecordView } from './decision-record-view';
+import { SignalEnginePanel } from './signal-engine-panel';
 
-type View = 'opportunity' | 'decision' | 'record' | 'performance' | 'cost' | 'health' | 'moves' | 'registry';
+type View = 'opportunity' | 'decision' | 'engine' | 'record' | 'performance' | 'cost' | 'health' | 'moves' | 'registry';
 
 const VIEW_LABELS: Record<View, string> = {
   opportunity: 'Opportunity',
   decision: 'Decision',
+  engine: 'Signal Engine',
   record: 'Decision Record',
   performance: 'Performance',
   cost: 'Cost',
@@ -911,6 +913,9 @@ export function SignalDiagnosticsPage() {
 
       {view === 'opportunity' && <OpportunityView opportunity={opportunity} />}
       {view === 'decision' && <DecisionView summary={summary} rejections={rejections} />}
+      {view === 'engine' && (
+        <SignalEnginePanel filter={{ from: filters.from || undefined, to: filters.to || undefined, instrument: filters.instrument || undefined }} />
+      )}
       {view === 'record' && <DecisionRecordView />}
       {view === 'performance' && <PerformanceView performance={performance} grades={grades} />}
       {view === 'cost' && <CostView performance={performance} />}

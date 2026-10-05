@@ -114,6 +114,9 @@ export const FILES = [
   '035_option_plans.sql',
   // Hotfix: logic_version widened to 200 (the live stamp outgrew 64 characters).
   '036_widen_logic_version.sql',
+  // Full replay tapes, slot decisions and forward outcomes (written by the poll
+  // and the forward-validation job), so ensured at boot too.
+  '037_replay_tapes_forward_validation.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */

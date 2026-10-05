@@ -9,12 +9,16 @@
 import postgres from 'postgres';
 import { config } from './config.js';
 import { logger } from './logger.js';
+import { tapedSql } from './io-tape.js';
 
-export const sql = postgres(config.database.url, {
-  max: 10,
-  idle_timeout: 30,
-  onnotice: () => {}, // Suppress NOTICE spam (e.g. "relation already exists")
-});
+// Taped only inside a decision's record / replay scope (io-tape.ts); everywhere else this is the plain client.
+export const sql = tapedSql(
+  postgres(config.database.url, {
+    max: 10,
+    idle_timeout: 30,
+    onnotice: () => {}, // Suppress NOTICE spam (e.g. "relation already exists")
+  })
+);
 
 export async function pingDb(): Promise<{ healthy: boolean; latencyMs?: number; error?: string }> {
   try {

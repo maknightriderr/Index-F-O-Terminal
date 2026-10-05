@@ -71,6 +71,11 @@ export function decisionIstDate(): string {
   return decisionDate().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 }
 
+/** True when a decision instant is already set (a poll's frozen clock, a replay). */
+export function hasDecisionTime(): boolean {
+  return storage.getStore() != null;
+}
+
 /** True while a replay is in progress. Production is always false. */
 export function isReplay(): boolean {
   return storage.getStore()?.replay ?? false;

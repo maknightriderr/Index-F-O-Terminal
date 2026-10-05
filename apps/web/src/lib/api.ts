@@ -417,6 +417,16 @@ class ApiClient {
   async getDecision(snapshotId: string, replay = false) {
     return this.get<import('@fno/shared').DecisionDiagnosticsView>(`/api/diagnostics/decision/${encodeURIComponent(snapshotId)}${replay ? '?replay=1' : ''}`);
   }
+
+  /** Full replay: the whole decision path re-run from the poll's I/O tape, compared with what the live poll did. */
+  async getDecisionFullReplay(snapshotId: string) {
+    return this.get<import('../components/signal-diagnostics/signal-engine-panel').FullReplayReport>(`/api/diagnostics/decision/${encodeURIComponent(snapshotId)}/replay-full`);
+  }
+
+  /** The slot's behaviour (NO TRADE, fallback, rejections) and forward validation. */
+  async getSignalEngineMetrics(opts: DiagnosticsFilter = {}) {
+    return this.get<import('../components/signal-diagnostics/signal-engine-panel').SignalEngineMetrics>(`/api/diagnostics/signal-engine${this.diagnosticsQuery(opts)}`);
+  }
 }
 
 export interface DiagnosticsFilter {

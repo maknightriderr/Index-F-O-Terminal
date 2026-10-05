@@ -6,7 +6,7 @@
 //   2. a consensus reversal never closes a trigger trade; only stop, target,
 //      session end or LEVEL_RECLAIMED do;
 //   3. an opposite-direction consensus setup is closed TRIGGER_REVERSAL
-//      before the trigger mints; a same-direction one is left alone;
+//      before the trigger competes for the slot; a same-direction one is left alone;
 //   4. the post-loss 80 floor applies to the trigger's quality;
 //   5. the premium stop reaches buildTradeSetup through slPremiumPct as
 //      max(0.15, |Δ|·stop distance / mid);

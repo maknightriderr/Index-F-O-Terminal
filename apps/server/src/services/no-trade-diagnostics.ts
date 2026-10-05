@@ -19,11 +19,12 @@ import type { SlotArbitrationRecord } from './slot-arbitration.js';
 const SAFETY = new Set(['RISK_OFF', 'MARKET_CLOSED', 'OPENING_HOUR', 'CLOSING_HOUR', 'POST_LOSS_COOLDOWN', 'CONCURRENT_EXPOSURE', 'RELIABILITY_FILTER', 'POSITIONING_CONFLICT', 'LOW_SETUP_QUALITY', 'DIRECTION_LOCKED', 'SAME_SYMBOL_SIDE', 'CONSENSUS_OFF', 'NEUTRAL_BIAS', 'POOR_LOCATION', 'INSUFFICIENT_ROOM']);
 const SEQUENCE = new Set(['STRUCTURE_SEQUENCE', 'TRIGGER_QUALITY']);
 const OPTION = new Set(['NO_QUOTE', 'WIDE_SPREAD', 'POOR_OPTION_QUALITY', 'LOW_OPTION_LIQUIDITY', 'UNREALISTIC_TARGET', 'COST_EXCEEDS_EDGE', 'COST_TOO_HIGH', 'STOP_INSIDE_NOISE', 'OPTION_DELTA_OUT_OF_BAND', 'REWARD_RISK_TOO_LOW', 'NO_CHAIN']);
-const PRE_MINT = new Set(['STALE_QUOTE', 'MINT_FAILED']);
+const PRE_MINT = new Set(['STALE_QUOTE']);
 
 /** The stage a refusal belongs to. */
 export function noTradeStage(code: string | null, optionBuildFailure: string | null): NoTradeStage {
-  if (code === 'ENGINE_ERROR') return 'ENGINE_ERROR';
+  // A mint that threw is an engine / persistence failure, not a data-quality one.
+  if (code === 'ENGINE_ERROR' || code === 'MINT_FAILED') return 'ENGINE_ERROR';
   if (code === 'PARENT_ALREADY_TRADED') return 'PARENT_ALREADY_TRADED';
   if (code === 'SLOT_OCCUPIED') return 'SLOT_OCCUPIED';
   if (code && PRE_MINT.has(code)) return 'DATA_QUALITY';
@@ -40,7 +41,7 @@ const STAGE_TEXT: Record<NoTradeStage, string> = {
   DATA_QUALITY: 'data quality at mint time (stale or one-sided quote)',
   PARENT_ALREADY_TRADED: 'one trade per market move (this move already traded today)',
   SLOT_OCCUPIED: 'one open trade per symbol (a trade is already open)',
-  ENGINE_ERROR: 'an engine error',
+  ENGINE_ERROR: 'an engine or mint error',
   OTHER: 'another check',
 };
 

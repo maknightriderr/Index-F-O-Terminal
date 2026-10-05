@@ -62,6 +62,7 @@ import {
   structureSlotCandidate,
   routedSlotCandidate,
   indicatorSlotCandidate,
+  momentumSlotCandidate,
   indicatorGeometry,
   decisionMetrics,
   buildMetricsContext,
@@ -209,7 +210,7 @@ async function settle(entries: Array<DeferredSetup | RefusedCandidate>) {
 const b = (sl: SlotCandidate) => built(sl, []);
 /** The one slot-candidate schema every engine fills. */
 // ARB-2.0 (2026-10-05): every engine's candidate also carries its confirmation count and detail.
-const SCHEMA = ['anchorKeys', 'candidateId', 'confirmationDetail', 'confirmations', 'decisionTime', 'direction', 'entryQuality', 'evidence', 'moveConsumedPct', 'movePotential', 'netRR', 'objectiveDistanceAtr', 'parentId', 'source', 'timingClass'];
+const SCHEMA = ['anchorKeys', 'candidateId', 'confirmationDetail', 'confirmations', 'decisionTime', 'direction', 'entryQuality', 'evidence', 'geometry', 'moveConsumedPct', 'movePotential', 'netRR', 'objectiveDistanceAtr', 'parentId', 'source', 'timingClass'];
 
 describe('1. every eligible family candidate of a parent is retained', () => {
   it('the router hands the slot all eligible paper-stage candidates of the newest bar — no pre-selection', () => {
@@ -514,7 +515,9 @@ describe('13. one metric schema and one formula for S1, the indicator and every 
     const s1 = structureSlotCandidate(s1Trade(), 101, 1.6, { parentId: 'P', anchorKeys: ['P'], decisionTime: 1 }, m);
     const geometry = indicatorGeometry({ direction: 'BEARISH', spot: 101, builtAtr: m.atr, stopInAtr: 1.2, targetInAtr: 2, behindLevel: 104 });
     const ind = indicatorSlotCandidate('IND:x', 'BEARISH', 1.6, 1, geometry, m);
-    for (const c of [fam, s1, ind]) expect(Object.keys(c).sort(), c.source).toEqual(SCHEMA);
+    // The momentum break competes on the same schema (2026-10-05).
+    const mb = momentumSlotCandidate({ direction: 'BEARISH', levelKind: 'PDL', levelPrice: 102, entry: 101, stop: 103, target: 97, targetKind: 'S1', rUnderlying: 2, volMult: 2, rangeMult: 1.5, closeLocation: 0.1, atr: m.atr ?? 1, quality: 80, barTime: 0, variantId: 'V' } as any, 101, null, { parentId: 'MB:x', decisionTime: 1 }, m);
+    for (const c of [fam, s1, ind, mb]) expect(Object.keys(c).sort(), c.source).toEqual(SCHEMA);
     // …and all of them are actually measured here, the indicator included.
     for (const c of [fam, s1, ind]) {
       expect(c.timingClass, c.source).not.toBe(NOT_MEASURED);

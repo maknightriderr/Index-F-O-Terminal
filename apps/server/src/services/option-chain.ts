@@ -40,6 +40,7 @@ import { computeChangeOiDetailed } from '../lib/oi-baseline.js';
 import type { ChangeOiResult } from '../lib/oi-baseline.js';
 import { cached } from '../lib/cache.js';
 import { logger } from '../lib/logger.js';
+import { tapedInput } from '../lib/io-tape.js';
 
 export interface BuildOptionChainOptions {
   strikeRange?: number; // strikes above/below ATM to include
@@ -66,6 +67,17 @@ export async function buildOptionChain(
   requestedExpiry?: string,
   options: BuildOptionChainOptions = {}
 ): Promise<OptionChain> {
+  // An input of the decision: taped as a whole inside a decision scope (io-tape.ts) — a replay gets this exact chain.
+  return tapedInput('optionChain', [underlying, exchange, requestedExpiry ?? null, options.strikeRange ?? null], () => buildOptionChainLive(provider, underlying, exchange, requestedExpiry, options));
+}
+
+async function buildOptionChainLive(
+  provider: MarketDataProvider,
+  underlying: string,
+  exchange: Exchange,
+  requestedExpiry?: string,
+  options: BuildOptionChainOptions = {}
+): Promise<OptionChain> {
   const strikeRange = options.strikeRange ?? DEFAULT_STRIKE_RANGE;
 
   // A narrower window is a DISPLAY choice, not a different chain. Building
@@ -75,7 +87,7 @@ export async function buildOptionChain(
   // what the bias votes on). Build the default chain — shared cache with
   // the bias engine — and trim only the strike rows.
   if (strikeRange < DEFAULT_STRIKE_RANGE) {
-    const full = await buildOptionChain(provider, underlying, exchange, requestedExpiry, { strikeRange: DEFAULT_STRIKE_RANGE });
+    const full = await buildOptionChainLive(provider, underlying, exchange, requestedExpiry, { strikeRange: DEFAULT_STRIKE_RANGE });
     return { ...full, strikes: sliceStrikesAroundAtm(full.strikes, full.atmStrike, strikeRange) };
   }
 
