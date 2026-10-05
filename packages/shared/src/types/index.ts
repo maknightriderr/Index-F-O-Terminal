@@ -464,6 +464,11 @@ export interface TradeSetup {
    * from stopLoss vs initialStopLoss, never itself a trading decision. Null
    * for a spread or a setup with no initialStopLoss recorded.
    */
+  /**
+   * OPTION-2.0: how the target premium was projected — delta's gain, gamma's
+   * convexity and the theta paid over the hold (absent on delta-only builds).
+   */
+  projectedPayoff?: { deltaGain: number; gammaGain: number; thetaDecay: number; netGain: number; holdHours: number; sessionHours: number };
   trailState?: {
     state: 'INITIAL' | 'BREAKEVEN' | 'LOCKED_PROFIT';
     breakevenAtR: number;
@@ -500,6 +505,8 @@ export interface OptionCandidate {
   targetPotential: number | null;
   /** Net R:R after the cost model — ranking / display only. */
   netRR: number | null;
+  /** Net R:R against the trade's common underlying invalidation — what strikes are ranked on when known. */
+  comparableRR?: number | null;
   status: 'SELECTED' | 'RANKED' | 'REJECTED';
   /** 1 = selected; null when rejected. */
   rank: number | null;

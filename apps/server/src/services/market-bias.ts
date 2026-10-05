@@ -135,7 +135,7 @@ import { INDICATOR_CONFIDENCE_MODE, locationGateEnforced } from '../config/tradi
 import type { ExposureSnapshot } from './exposure-tracker.js';
 import { stopOvershootPct } from './stop-overshoot.js';
 import type { NoTradeCode, TradeDecision } from '@fno/shared';
-import { decisionBarCloseAt, type FuturesChainResponse } from '@fno/shared';
+import { decisionBarCloseAt, getLatestSessionWindow, type FuturesChainResponse } from '@fno/shared';
 import { assessTradeHealth, emptyExcursion, updateExcursion, mfeInAtr, deadTradeMarker, type TradeExcursion, type TradeHealthAssessment } from './trade-health.js';
 import { notifyTradeSetupClosed } from './trade-setup-close-notifier.js';
 import type { TradeCloseReason } from './trade-setup-close-notifier.js';
@@ -3911,7 +3911,12 @@ async function resolveStickyTradeSetup(
       params: { deltaMin: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MIN, deltaMax: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MAX, deltaTarget: FNO_VALIDATION_PARAMS.OPTION_DELTA_TARGET },
       contextFor: (c) => {
         const move = c === chain ? primaryMove : targetMoveFor(c);
-        return { expectedMovePoints: move.targetMovePoints, expectedHoldHours, ivRank, hvPct: entryContext?.hvPct ?? null, ivCap: move.ivCap };
+        // The structural stop's underlying distance: to the level behind price plus the stop buffer (null when unknown).
+        const behind = entryContext?.locationBehindLevel ?? null;
+        const spotRef = entryContext?.locationSpot ?? chain.spotPrice;
+        const atrPts = entryContext?.atrPoints ?? null;
+        const underlyingStopPoints = behind != null && atrPts != null ? Math.abs(spotRef - behind) + TRADING_PARAMS.STRUCTURAL_STOP_BUFFER_ATR * atrPts : null;
+        return { expectedMovePoints: move.targetMovePoints, expectedHoldHours, ivRank, hvPct: entryContext?.hvPct ?? null, ivCap: move.ivCap, underlyingStopPoints };
       },
       fetchNextExpiry: (expiry) => buildOptionChain(provider, underlying, exchange, expiry),
       onError: (stage, err: any) => logger.warn({ error: err?.message ?? String(err), stage, underlying, exchange, mode }, 'F&O validation: next-expiry chain unavailable — no fallback contract'),
@@ -3945,6 +3950,8 @@ async function resolveStickyTradeSetup(
             richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
             // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
             rrGate: false,
+            // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
+            realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
             // EVIDENCE: the builder's own confidence floor is off too — confidence ranks, it does not refuse.
             ...(INDICATOR_CONFIDENCE_MODE === 'EVIDENCE' ? { confidenceGate: false } : {}),
           // An R:R refusal still carries its option levels (shown for a confirmed setup; never traded).
@@ -4374,7 +4381,7 @@ async function resolveMomentumBreakSetup(ctx: {
     primary: chain,
     side,
     params: { deltaMin: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MIN, deltaMax: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MAX, deltaTarget: FNO_VALIDATION_PARAMS.OPTION_DELTA_TARGET },
-    contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: entryContext?.hvPct ?? null, ivCap: null }),
+    contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: entryContext?.hvPct ?? null, ivCap: null, underlyingStopPoints: stopDistance }),
     fetchNextExpiry: (expiry) => buildOptionChain(provider, underlying, exchange, expiry),
     onError: (stage, err: any) => logger.warn({ error: err?.message ?? String(err), stage, underlying, exchange }, 'Momentum break: next-expiry chain unavailable — no fallback contract'),
     build: (c, strike) => {
@@ -4403,6 +4410,8 @@ async function resolveMomentumBreakSetup(ctx: {
           richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
           // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
           rrGate: false,
+          // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
+          realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
           ...(FNO_VALIDATION
             ? { fnoValidation: { enabled: true, maxCostPctOfPremium: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM, minOptionStopAtr: FNO_VALIDATION_PARAMS.MIN_OPTION_STOP_ATR } }
             : {}),
@@ -4650,6 +4659,13 @@ async function advanceStructureLifecycle(
     logger.warn({ error: err.message, underlying, exchange }, 'Structure: lifecycle read failed — no structure setups this poll');
     return null;
   }
+}
+
+/** Trading hours in this exchange's current session (the exchange calendar) — what a day's theta is spent over. */
+function sessionHoursFor(exchange: Exchange): number {
+  const w = getLatestSessionWindow(exchange, decisionNow());
+  const h = w ? (w.close - w.open) / 3_600_000 : null;
+  return h != null && h > 0 ? h : 6.25;
 }
 
 /** Records what the live engine did at a fill, on the lifecycle and as a lifecycle row. */
@@ -5001,7 +5017,7 @@ async function resolveStructureSetup(ctx: {
     primary: chain,
     side,
     params: { deltaMin: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MIN, deltaMax: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MAX, deltaTarget: FNO_VALIDATION_PARAMS.OPTION_DELTA_TARGET },
-    contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: entryContext?.hvPct ?? null, ivCap: null }),
+    contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: entryContext?.hvPct ?? null, ivCap: null, underlyingStopPoints: stopDistance }),
     fetchNextExpiry: (expiry) => buildOptionChain(provider, underlying, exchange, expiry),
     onError: (stage, err: any) => logger.warn({ error: err?.message ?? String(err), stage, underlying, exchange }, 'Structure: next-expiry chain unavailable — no fallback contract'),
     build: (c, strike) => {
@@ -5032,6 +5048,8 @@ async function resolveStructureSetup(ctx: {
           richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
           // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
           rrGate: false,
+          // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
+          realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
           ...(FNO_VALIDATION
             ? {
                 fnoValidation: {
@@ -5159,6 +5177,8 @@ async function planForLifecycle(
       richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
       // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
       rrGate: false,
+      // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
+      realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
       plan: true,
       ...(FNO_VALIDATION
         ? { fnoValidation: { enabled: true, maxCostPctOfPremium: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM, minOptionStopAtr: FNO_VALIDATION_PARAMS.MIN_OPTION_STOP_ATR, ...(fiveMinute ? { noiseAtrPoints: lc.atr } : {}) } }
@@ -5170,7 +5190,7 @@ async function planForLifecycle(
     primary: chain,
     side,
     params: { deltaMin: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MIN, deltaMax: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MAX, deltaTarget: FNO_VALIDATION_PARAMS.OPTION_DELTA_TARGET },
-    contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: null, ivCap: null }),
+    contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: null, ivCap: null, underlyingStopPoints: stopDistance }),
     fetchNextExpiry: (expiry) => buildOptionChain(provider, underlying, exchange, expiry),
     onError: (stage, err: any) => logger.warn({ error: err?.message ?? String(err), stage, underlying, exchange }, 'Setup watch: next-expiry chain unavailable — no fallback contract'),
     build: (c, strike, ctx) => build(c, strike, ctx.expectedMovePoints),
@@ -5418,7 +5438,7 @@ async function buildStructurePreview(
     primary: chain,
     side,
     params: { deltaMin: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MIN, deltaMax: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MAX, deltaTarget: FNO_VALIDATION_PARAMS.OPTION_DELTA_TARGET },
-    contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: null, ivCap: null }),
+    contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: null, ivCap: null, underlyingStopPoints: stopDistance }),
     fetchNextExpiry: (expiry) => buildOptionChain(provider, underlying, exchange, expiry),
     onError: (stage, err: any) => logger.warn({ error: err?.message ?? String(err), stage, underlying, exchange }, 'Structure preview: next-expiry chain unavailable — no fallback contract'),
     build: (c, strike) => {
@@ -5447,6 +5467,8 @@ async function buildStructurePreview(
           richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
           // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
           rrGate: false,
+          // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
+          realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
           ...(FNO_VALIDATION
             ? {
                 fnoValidation: {

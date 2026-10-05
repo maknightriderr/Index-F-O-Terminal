@@ -432,7 +432,11 @@ export const TRIGGER_VERSION = 'FAMILIES-1.0';
 // sequence gate, the family buckets, the option builder, the sticky slot's
 // plausibility read). Genuine geometry / stop / safety checks are unchanged.
 export const RISK_VERSION = 'RISK-2.0';
-export const OPTION_VERSION = 'OPTION-1.0';
+// OPTION-2.0 (2026-10-05): the target premium is the realistic payoff of the
+// expected move — delta + ½·gamma·move² − theta over the hold (trading time) —
+// not delta alone; costs on top as before. A contract whose decay eats the
+// move projects no target (UNREALISTIC_TARGET).
+export const OPTION_VERSION = 'OPTION-2.0';
 // COST-2.0: setup_events carry a per-setup cost measured at the fill from the
 // leg's live quote (setup-cost.ts; spread observed, slippage/charges modelled
 // from TRADING_COST_MODEL). COST-1.0 rows carry no cost at all.
@@ -463,7 +467,10 @@ export const ANALYTICS_VERSION = '0.1.0';
  * unchanged from OPTION-1.0's ranking (the token is only a final tie-break
  * between identical strikes, which a chain side never has).
  */
-export const OPTION_SELECTION_VERSION = 'OPTSEL-1.0';
+// OPTSEL-2.0 (2026-10-05): strikes are compared on net R:R against the common
+// underlying invalidation (comparableNetRR) — percentage-of-premium stop rules
+// no longer let a cheap OTM contract outrank the ATM one.
+export const OPTION_SELECTION_VERSION = 'OPTSEL-2.0';
 
 // ---- Indicator (consensus) engine confidence mode (2026-10-01) ----
 // EVIDENCE (default, the only path that runs): confidence is recorded and
