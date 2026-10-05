@@ -30,6 +30,9 @@
 import { Router, type Request, type Response } from 'express';
 import { logger } from '../lib/logger.js';
 import { redis, scanKeys } from '../lib/redis.js';
+import { decisionDiagnostics, listDecisions } from '../services/decision-diagnostics.js';
+
+const SNAPSHOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import {
   diagnosticsSummary,
   diagnosticsRejections,
@@ -183,6 +186,37 @@ export function createDiagnosticsRoutes(): Router {
       res.json({ success: true, data: { rows: await diagnosticsSetupOutcomes(ids) } });
     } catch (err: any) {
       logger.error({ error: err.message }, 'Signal diagnostics setup outcomes failed');
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Phase 8: the DecisionRecord research view.
+  router.get('/decisions', async (req: Request, res: Response) => {
+    try {
+      const symbol = typeof req.query.symbol === 'string' && /^[A-Z0-9&_-]{1,30}$/.test(req.query.symbol) ? req.query.symbol : undefined;
+      const limit = Number(req.query.limit);
+      res.json({ success: true, data: { rows: await listDecisions({ symbol, limit: Number.isFinite(limit) ? limit : undefined }) } });
+    } catch (err: any) {
+      logger.error({ error: err.message }, 'Signal diagnostics decisions failed');
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  router.get('/decision/:snapshotId', async (req: Request, res: Response) => {
+    const id = req.params.snapshotId;
+    if (!SNAPSHOT_ID.test(id)) {
+      res.status(400).json({ success: false, error: 'snapshotId must be a UUID.' });
+      return;
+    }
+    try {
+      const view = await decisionDiagnostics(id, { replay: req.query.replay === '1' });
+      if (!view) {
+        res.status(404).json({ success: false, error: 'No decision snapshot with this id.' });
+        return;
+      }
+      res.json({ success: true, data: view });
+    } catch (err: any) {
+      logger.error({ error: err.message, snapshotId: id }, 'Signal diagnostics decision failed');
       res.status(500).json({ success: false, error: err.message });
     }
   });

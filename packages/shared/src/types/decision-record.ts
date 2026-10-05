@@ -224,3 +224,81 @@ export interface DecisionRecord {
   /** Parts of the live poll the record does not re-derive (their rows carry the snapshot id). */
   notReplayed: string[];
 }
+
+// ---------------- the research view (Phase 8) ----------------
+
+export interface DecisionListRow {
+  snapshotId: string;
+  symbol: string;
+  exchange: string;
+  mode: string;
+  decisionBarTime: number;
+  polledAt: number;
+  captureReason: string;
+  degraded: boolean;
+  finalStatus: DecisionRecord['finalStatus'] | null;
+  selectedCandidateId: string | null;
+  hasOutcome: boolean;
+}
+
+export interface DecisionDiagnosticsView {
+  snapshot: {
+    snapshotId: string;
+    schemaVersion: string;
+    symbol: string;
+    exchange: string;
+    mode: string;
+    decisionBarTime: number;
+    polledAt: number;
+    captureReason: string;
+    inputs: {
+      ohlcv15m: { bars: number; firstBarTime: number | null; lastBarTime: number | null; lastClose: number | null };
+      ohlcv5m: { bars: number; lastBarTime: number | null } | null;
+      spot: number | null;
+      optionChain: { expiry: string | null; atmStrike: number | null; strikes: number; timestamp: number | null } | null;
+      futures: { price: number | null; oi: number | null; changeOi: number | null; interpretation: string | null } | null;
+      optionMetrics: SignalDecisionSnapshot['inputs']['optionMetrics'];
+      marketRegime: SignalDecisionSnapshot['inputs']['marketRegime'];
+      liquidityPools: number;
+      corporateActions: SignalDecisionSnapshot['inputs']['corporateActions'];
+      slotTradedKeys: number;
+    };
+    dataQuality: SnapshotDataQuality;
+    versions: SnapshotVersions;
+    config: SnapshotConfig;
+  };
+  record: DecisionRecord | null;
+  recordHash: string | null;
+  storedOutcome: unknown;
+  /** The live slot's rows for this decision (setup_events ARBITRATION). */
+  arbitration: Array<{
+    candidateId: string;
+    source: string;
+    direction: string;
+    parentId: string | null;
+    role: string | null;
+    rank: number | null;
+    preBuildRank: number | null;
+    refusalCode: string | null;
+    /** For a loser, names the criterion it lost on. */
+    reason: string | null;
+    optionBuildFailure: string | null;
+    slotDecision: { slot: string; decision: string; heldSignalId: string | null } | null;
+    criteriaUsed: string[];
+    inputs: Record<string, unknown> | null;
+  }>;
+  optionPlans: Array<{
+    planId: string;
+    signalId: string | null;
+    source: string;
+    candidateId: string | null;
+    option: { side: string | null; strike: number | null; expiry: string | null; entry: number | null; sl: number | null; tsl: number | null; t1: number | null; t2: number | null };
+    underlying: { entry: number | null; stop: number | null; t1: number | null; t2: number | null };
+    selectedStrike: number | null;
+    candidates: unknown[];
+    optionSelectionVersion: string;
+  }>;
+  /** Grading of the setup_events rows this snapshot produced (setupEventsGrading). */
+  outcomes: Array<{ candidateId: string; eventType: string; source: string | null; decision: string | null; resultR: number | null; mfeR: number | null; maeR: number | null; exitReason: string | null; gradedAt: number | null }>;
+  replay: { status: string; diff: string[]; hash: string | null } | null;
+}
