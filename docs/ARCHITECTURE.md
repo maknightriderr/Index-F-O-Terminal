@@ -123,8 +123,14 @@ Step 4 — Slot arbitration (slot-arbitration.ts) — ONE paper trade per symbol
   Ranking (pre-registered, identical for every engine; first difference wins):
     1. entry timing / remaining move   2. move potential   3. net R:R after costs
     4. entry quality                   5. decision-bar close → source id → candidate id
-  ONE winner minted → trade_setup:* (Redis) + signals (Postgres); others recorded with rank and
-  the criterion they lost on (setup_events ARBITRATION rows).
+  ONE winner minted → trade_setup:* (Redis) + signals (Postgres) + option_plans; others recorded
+  with rank and the criterion they lost on (setup_events ARBITRATION rows).
+  OptionCandidate pipeline (Phase 3, fno-validation.ts): every strike of the side passes
+    availability → liquidity → spread → delta → premium risk → target potential → net R:R after
+    cost → deterministic rank (rankStrikeBuilds; ties: strike, then token). The first four (and a
+    stop inside the noise / no reward after cost) are the only rejections; net R:R only ranks.
+    Rank #1 failing its build → #2, #3 … until one passes. Every strike is recorded
+    (strikeSelection.optionCandidates): SELECTED / RANKED / REJECTED + stage + reason.
   ▼
 Step 5 — Setup Watch (setup-watch-core.ts / setup-watch.ts) — DISPLAY ONLY
   Every CONFIRMED setup (any R:R) is shown under its SAME id and re-measured on every closed bar:
@@ -215,6 +221,10 @@ PostgreSQL + TimescaleDB
 ├── signal_decision_snapshots  ← Phase 2 immutable INPUT snapshots (034; chain compressed)
 ├── decision_records           ← Phase 2 DecisionRecord per snapshot (+ record_hash, later outcome)
 ├── decision_trigger_events    ← candidate → event ids (insert-only)
+├── option_plans               ← Phase 3: each minted trade's option plan WITH its underlying plan —
+│                                 underlying Entry/SL/T1/T2, option leg + premium Entry/SL/TSL/T1/T2,
+│                                 selected strike, every strike evaluated (+ rejected reasons), snapshot_id
+├── option_plan_events         ← plan evolution: CREATED · TSL_MOVED (trailing stop) · CLOSED (insert-only)
 │   setup_events.snapshot_id / signals.snapshot_id — the snapshot a row was decided from (logical reference)
 ├── alerts, learning_events, learning_findings, capture_* tables
 Redis
@@ -263,3 +273,4 @@ Observation only: `startSystemLearningAudit` → `learningDetectors.ts` → `lea
 
 - **2026-10-05 — Phase 1: 1.50R display-only (RISK-2.0, `+rr-display-only.1`).** Removed every live R:R gate (structure confirmation via `liveStructureRulesFor`, the fill's sequence gate, family LOW_RR rejection, the option builder via `rrGate: false` incl. the RICH-IV bar, the sticky-slot plausibility floor, Setup Watch keep-alive / RR_RECOVERED, the `rr-recovery` endpoint). Setup Watch tracks only INVALIDATION / EXPIRY / FILLED; status "Confirmed — R:R x" with a display-only rrBand. Audit: `docs/phase1-rr-classification.md`.
 - **2026-10-05 — Phase 2: immutable input snapshot + DecisionRecord.** Migration `034_decision_records.sql` (signal_decision_snapshots, decision_records, decision_trigger_events; snapshot_id on setup_events / signals; validated on PGlite against the full boot schema, applied twice). Pure cores `advanceStructureCore` (structure-live.ts) and `evaluateFamiliesCore` (trigger-router.ts) — the live shells now read state, call the core, write state (behaviour unchanged). `decision-record.ts` (snapshot, data quality, record, canonical form, replay), `decision-record-store.ts` (persistence, `replay(snapshotId)`), `snapshot-context.ts` (snapshot id on every row of the poll, only once 034 applied). Versions `PARENT-1.0`, `ARB-1.0`.
+- **2026-10-05 — Phase 3: option selection contract + option plans (`OPTSEL-1.0`).** The OptionCandidate record (`optionCandidatesOf`, every strike with stage / reason; pipeline order availability → liquidity → spread → delta → premium risk → target potential → net R:R → rank), a final token tie-break in `rankStrikeBuilds` (the chosen strike is unchanged — a side never has two equal strikes), migration `035_option_plans.sql` (option_plans immutable, option_plan_events insert-only; PGlite-validated), `option-plans.ts` (plan row at the mint incl. option T2 = T1 + |Δ| × the underlying move T1→T2; TSL_MOVED on each trailing-stop ratchet; CLOSED at the exit).

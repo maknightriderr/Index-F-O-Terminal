@@ -20,8 +20,8 @@
 // broker. Flag off = build(primary, primary.atmStrike), exactly the old call.
 // ============================================================
 
-import { selectStrikeByDelta } from '@fno/analytics';
-import type { OptionChain, OptionType, TradeSetup, TradeSetupFnoValidation } from '@fno/shared';
+import { selectStrikeByDelta, MAX_ATM_SPREAD_PCT, type StrikeCandidate } from '@fno/analytics';
+import type { OptionCandidate, OptionCandidateStage, OptionChain, OptionType, TradeSetup, TradeSetupFnoValidation } from '@fno/shared';
 import type { GateDiagnostic } from './gate-diagnostics.js';
 
 export const FNO_REFUSAL_CODES = ['OPTION_DELTA_OUT_OF_BAND', 'COST_TOO_HIGH', 'STOP_INSIDE_NOISE'] as const;
@@ -98,6 +98,8 @@ export interface StrikeBuild {
   delta: number | null;
   spreadPct: number | null;
   setup: TradeSetup;
+  /** The contract's instrument token — the last tie-break (absent in older callers: ''). */
+  token?: string | null;
 }
 
 /** Net R:R after costs of a built (or R:R-planned) leg: (target − entry − cost) / (entry − SL + cost). */
@@ -121,7 +123,8 @@ export function strikeNetRR(setup: TradeSetup): number | null {
  *   4. sensitivity — |delta| nearest the target delta
  *   5. premium risk — entry − SL per unit, smaller first
  *   6. target potential — (target − entry) / entry, larger first
- *   7. strike nearest the rounded ATM, then the lower strike
+ *   7. strike nearest the rounded ATM, then the lower strike, then the
+ *      instrument token (a total order: the input order never matters)
  * Never "nearest ATM", "cheapest" or "highest delta" on its own.
  */
 export function rankStrikeBuilds(builds: readonly StrikeBuild[], deltaTarget: number, atmStrike: number): StrikeBuild[] {
@@ -143,9 +146,122 @@ export function rankStrikeBuilds(builds: readonly StrikeBuild[], deltaTarget: nu
       nz(la ? la.entry! - la.stopLoss! : null, Infinity) - nz(lb ? lb.entry! - lb.stopLoss! : null, Infinity) ||
       nz(lb && lb.entry! > 0 ? (lb.target! - lb.entry!) / lb.entry! : null, -Infinity) - nz(la && la.entry! > 0 ? (la.target! - la.entry!) / la.entry! : null, -Infinity) ||
       Math.abs(a.strike - atmStrike) - Math.abs(b.strike - atmStrike) ||
-      a.strike - b.strike
+      a.strike - b.strike ||
+      (a.token ?? '').localeCompare(b.token ?? '')
     );
   });
+}
+
+// ---------------- the OptionCandidate pipeline record (Phase 3) ----------------
+
+const r2 = (n: number) => Math.round(n * 100) / 100;
+
+/** The pipeline stage a builder refusal belongs to (NET_RR only for a caller that keeps the research R:R gate). */
+export function stageOfRefusal(code: string | null | undefined): OptionCandidateStage {
+  switch (code) {
+    case 'NO_QUOTE':
+    case 'NO_CHAIN':
+      return 'AVAILABILITY';
+    case 'LOW_OPTION_LIQUIDITY':
+    case 'POOR_OPTION_QUALITY':
+      return 'LIQUIDITY';
+    case 'WIDE_SPREAD':
+    case 'COST_TOO_HIGH':
+      return 'SPREAD';
+    case 'OPTION_DELTA_OUT_OF_BAND':
+      return 'DELTA';
+    case 'STOP_INSIDE_NOISE':
+      return 'PREMIUM_RISK';
+    case 'UNREALISTIC_TARGET':
+    case 'COST_EXCEEDS_EDGE':
+      return 'TARGET_POTENTIAL';
+    case 'REWARD_RISK_TOO_LOW':
+      return 'NET_RR';
+    default:
+      return 'BUILD';
+  }
+}
+
+/**
+ * The first stage a strike failed before any build, in pipeline order
+ * (availability → liquidity → spread → delta → target potential). The
+ * selector short-circuits in its own order, so the stage is read from what it
+ * measured: a wide-spread strike whose liquidity also failed is reported at
+ * LIQUIDITY (the earlier stage).
+ */
+export function preBuildRejection(c: Pick<StrikeCandidate, 'rejectedReason' | 'grade' | 'spreadPct'>): { stage: OptionCandidateStage; reason: string } | null {
+  const r = c.rejectedReason;
+  if (r == null) return null;
+  if (r === 'NO_QUOTE') return { stage: 'AVAILABILITY', reason: 'No live quote (no LTP) for this contract.' };
+  if (c.grade === 'UNTRADEABLE' || r.startsWith('UNTRADEABLE')) return { stage: 'LIQUIDITY', reason: r };
+  if (r === 'WIDE_SPREAD') return { stage: 'SPREAD', reason: `Bid-ask spread ${c.spreadPct ?? '?'}% of mid is above the ${MAX_ATM_SPREAD_PCT}% ceiling.` };
+  if (r === 'DELTA_OUT_OF_RANGE') return { stage: 'DELTA', reason: 'Delta missing or outside ±1 — unreliable Greeks.' };
+  if (r.startsWith('OUT_OF_BAND')) return { stage: 'DELTA', reason: r };
+  if (r === 'NO_PROJECTED_RESPONSE') return { stage: 'TARGET_POTENTIAL', reason: 'No projected premium response to the expected move.' };
+  return { stage: 'BUILD', reason: r };
+}
+
+/**
+ * Pure: EVERY strike of the side through the pipeline, best first — the
+ * ranked builds (the first available one SELECTED, other available ones
+ * RANKED, refusals REJECTED at their stage), then the pre-build rejections in
+ * strike order. Net R:R is recorded and ranks; it never rejects.
+ */
+export function optionCandidatesOf(args: { chain: OptionChain; side: OptionType; candidates: readonly StrikeCandidate[]; ranked: readonly StrikeBuild[] }): OptionCandidate[] {
+  const { chain, side, candidates, ranked } = args;
+  const legOf = (strike: number) => {
+    const row = chain.strikes.find((s) => s.strike === strike);
+    return side === 'CE' ? row?.call ?? null : row?.put ?? null;
+  };
+  const out: OptionCandidate[] = [];
+  let rank = 0;
+  let selected = false;
+  for (const b of ranked) {
+    const leg = legOf(b.strike);
+    const levels = b.setup.available ? b.setup : b.setup.rrPlan ?? null;
+    const entry = levels?.entry ?? null;
+    const sel = b.setup.available && !selected;
+    if (sel) selected = true;
+    const rejected = !b.setup.available;
+    out.push({
+      side,
+      strike: b.strike,
+      token: b.token ?? leg?.token ?? null,
+      expiry: chain.expiry ?? null,
+      delta: b.delta,
+      spreadPct: b.spreadPct,
+      premium: entry,
+      premiumRisk: levels && levels.entry != null && levels.stopLoss != null ? r2(levels.entry - levels.stopLoss) : null,
+      targetPotential: levels && levels.entry != null && levels.target != null && levels.entry > 0 ? r2((levels.target - levels.entry) / levels.entry) : null,
+      netRR: strikeNetRR(b.setup),
+      status: rejected ? 'REJECTED' : sel ? 'SELECTED' : 'RANKED',
+      rank: rejected ? null : ++rank,
+      rejectedAt: rejected ? stageOfRefusal(b.setup.noTradeCode) : null,
+      rejectionReason: rejected ? `${b.setup.noTradeCode ?? 'REFUSED'}: ${b.setup.reason}` : null,
+    });
+  }
+  const built = new Set(ranked.map((b) => b.strike));
+  const pre = candidates.filter((c) => !built.has(c.strike) && c.rejectedReason != null).sort((a, b) => a.strike - b.strike);
+  for (const c of pre) {
+    const rej = preBuildRejection(c)!;
+    out.push({
+      side,
+      strike: c.strike,
+      token: legOf(c.strike)?.token ?? null,
+      expiry: chain.expiry ?? null,
+      delta: c.delta,
+      spreadPct: c.spreadPct,
+      premium: c.entryPremium,
+      premiumRisk: null,
+      targetPotential: null,
+      netRR: null,
+      status: 'REJECTED',
+      rank: null,
+      rejectedAt: rej.stage,
+      rejectionReason: rej.reason,
+    });
+  }
+  return out;
 }
 
 /**
@@ -178,8 +294,12 @@ export function validateOnChain(args: {
   });
   // Every in-band strike, built through the family's own builder, ranked.
   const inBand = sel.candidates.filter((c) => c.rejectedReason == null);
+  const tokenOf = (strike: number) => {
+    const row = chain.strikes.find((s) => s.strike === strike);
+    return (side === 'CE' ? row?.call?.token : row?.put?.token) ?? null;
+  };
   const ranked = rankStrikeBuilds(
-    inBand.map((c) => ({ strike: c.strike, delta: c.delta ?? null, spreadPct: c.spreadPct ?? null, setup: build(chain, c.strike, context) })),
+    inBand.map((c) => ({ strike: c.strike, delta: c.delta ?? null, spreadPct: c.spreadPct ?? null, setup: build(chain, c.strike, context), token: tokenOf(c.strike) })),
     params.deltaTarget,
     chain.atmStrike
   );
@@ -196,6 +316,7 @@ export function validateOnChain(args: {
     candidatesEvaluated: sel.candidates.length,
     eligible: sel.eligible,
     ranking: ranked.map((r) => ({ strike: r.strike, delta: r.delta, spreadPct: r.spreadPct, available: r.setup.available, code: r.setup.available ? null : r.setup.noTradeCode ?? null, netRR: strikeNetRR(r.setup) })),
+    optionCandidates: optionCandidatesOf({ chain, side, candidates: sel.candidates, ranked }),
   };
 
   let setup: TradeSetup;

@@ -471,6 +471,38 @@ export interface TradeSetup {
 }
 
 /** Part A — F&O trade validation. Every field is what the rule saw, so a refusal or a pass can be audited. */
+/**
+ * The OptionCandidate pipeline's stages, in order (Phase 3). AVAILABILITY,
+ * LIQUIDITY, SPREAD and DELTA are genuine pass / fail checks; PREMIUM_RISK
+ * and TARGET_POTENTIAL fail only on genuine validity (a stop inside the noise,
+ * no reward left after cost); NET_RR never rejects — it ranks.
+ */
+export const OPTION_CANDIDATE_STAGES = ['AVAILABILITY', 'LIQUIDITY', 'SPREAD', 'DELTA', 'PREMIUM_RISK', 'TARGET_POTENTIAL', 'NET_RR'] as const;
+export type OptionCandidateStage = (typeof OPTION_CANDIDATE_STAGES)[number] | 'BUILD';
+
+export interface OptionCandidate {
+  side: OptionType;
+  strike: number;
+  token: string | null;
+  expiry: string | null;
+  delta: number | null;
+  spreadPct: number | null;
+  /** Entry premium (mid, else LTP); null without a quote. */
+  premium: number | null;
+  /** Premium entry − SL per unit (null before a build). */
+  premiumRisk: number | null;
+  /** (premium target − entry) / entry (null before a build). */
+  targetPotential: number | null;
+  /** Net R:R after the cost model — ranking / display only. */
+  netRR: number | null;
+  status: 'SELECTED' | 'RANKED' | 'REJECTED';
+  /** 1 = selected; null when rejected. */
+  rank: number | null;
+  /** The first stage that failed, in pipeline order (null when not rejected). */
+  rejectedAt: OptionCandidateStage | null;
+  rejectionReason: string | null;
+}
+
 export interface TradeSetupFnoValidation {
   /** Rule 1: the strike chosen by |delta| band rather than by rounding spot. */
   strikeSelection: {
@@ -486,6 +518,8 @@ export interface TradeSetupFnoValidation {
     eligible: number;
     /** BEST_OF_BAND: every in-band strike as built, best first (the first available one is traded). */
     ranking?: Array<{ strike: number; delta: number | null; spreadPct: number | null; available: boolean; code: string | null; netRR: number | null }>;
+    /** Phase 3: EVERY strike of the chain through the OptionCandidate pipeline — selected, ranked, or rejected with its stage and reason. */
+    optionCandidates?: OptionCandidate[];
   } | null;
   /** Rule 2: IV used for the target's expected move = min(ATM IV, HV × mult). Null when the family's target is structural, not IV-based. */
   ivCap: {

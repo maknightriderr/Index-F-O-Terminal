@@ -225,6 +225,7 @@ import { recordSetupEvent } from './setup-events.js';
 import { currentSnapshotId, runInSnapshotScope, setScopeSnapshotId } from './snapshot-context.js';
 import { buildSignalDecisionSnapshot, currentVersions, decisionConfig, deriveDecisionRecord } from './decision-record.js';
 import { persistDecisionRecord, persistSnapshot } from './decision-record-store.js';
+import { buildOptionPlanRow, optionLevelsOf, persistOptionPlan, planIdFor, recordOptionPlanEvent, type UnderlyingPlan } from './option-plans.js';
 import { BAR_MS_15M } from '@fno/analytics';
 import {
   STRUCTURE_SEQUENCE_CONFIDENCE,
@@ -3133,11 +3134,16 @@ async function resolveStickyTradeSetup(
               newStopLoss >= stored!.entry + initialRisk
                 ? `SL trailed to ${newStopLoss.toFixed(2)} — 1x initial risk locked in.`
                 : `SL trailed to breakeven (${newStopLoss.toFixed(2)}).`;
+            const beforeTrail = stored!;
             stored = { ...stored!, stopLoss: newStopLoss, reason: `${stored!.reason} ${trailNote}` };
             try {
               await redis.set(key, JSON.stringify(stored), 'EX', setupTtl);
             } catch (err: any) {
               logger.warn({ error: err.message, underlying }, 'Sticky trade setup trailing-stop write failed');
+            }
+            // Phase 3: the plan's evolution — the trailing stop moved (T2 stays as planned).
+            if (stored.signalId) {
+              void recordOptionPlanEvent({ planId: planIdFor(stored.signalId), at: decisionNow(), type: 'TSL_MOVED', before: optionLevelsOf(beforeTrail, null), after: optionLevelsOf(stored, null), reason: trailNote, snapshotId: currentSnapshotId() });
             }
           }
         }
@@ -5442,6 +5448,29 @@ async function buildStructurePreview(
  * slot write and the Telegram push. Split out of resolveStickyTradeSetup
  * (unchanged line for line) so the mint lock can wrap it.
  */
+/**
+ * The underlying plan a minted setup was built on: S1 / a family — its fill,
+ * structural stop, T1 and T2; momentum break — its trigger's entry, stop and
+ * target; the indicator — the spot it was built at with its stop / target
+ * moves (stopInAtr / targetInAtr × the ATR it was built with). Unknown parts
+ * stay null.
+ */
+function underlyingPlanOf(ctx: { structure?: StoredStructureTrade; momentumBreak?: StoredMomentumBreak; entryContext: SetupEntryContext | undefined; fresh: TradeSetup }, chain: OptionChain, direction: BiasDirection): UnderlyingPlan {
+  if (ctx.structure) return { entry: ctx.structure.fillSpot ?? ctx.structure.entry, stop: ctx.structure.stop, t1: ctx.structure.t1.price, t2: ctx.structure.t2?.price ?? null };
+  if (ctx.momentumBreak) return { entry: ctx.momentumBreak.entry, stop: ctx.momentumBreak.stop, t1: ctx.momentumBreak.target, t2: null };
+  const spot = ctx.entryContext?.locationSpot ?? chain.spotPrice;
+  const atr = ctx.entryContext?.atrPoints ?? null;
+  const sg = direction === 'BEARISH' ? -1 : 1;
+  const stopInAtr = ctx.fresh.stopInAtr ?? null;
+  const targetInAtr = ctx.fresh.targetInAtr ?? null;
+  return {
+    entry: spot,
+    stop: atr != null && stopInAtr != null ? round2(spot - sg * stopInAtr * atr) : null,
+    t1: atr != null && targetInAtr != null ? round2(spot + sg * targetInAtr * atr) : null,
+    t2: null,
+  };
+}
+
 async function mintTradeSetup(ctx: {
   underlying: string;
   exchange: Exchange;
@@ -5571,6 +5600,19 @@ async function mintTradeSetup(ctx: {
     await redis.set(key, JSON.stringify(toStore), 'EX', setupTtl);
   } catch (err: any) {
     logger.warn({ error: err.message, underlying }, 'Sticky trade setup write failed');
+  }
+
+  // Phase 3: the option plan, persisted with its underlying plan, every strike
+  // evaluated and the decision snapshot (option_plans). Never blocks the mint.
+  if (signalId && fresh.available && (fresh.structureType ?? 'NAKED_LONG') === 'NAKED_LONG') {
+    const source = ctx.structure ? ctx.structure.triggerId ?? 'S1' : ctx.momentumBreak ? 'MOMENTUM_BREAK' : 'INDICATOR';
+    void persistOptionPlan(
+      buildOptionPlanRow({
+        signalId, snapshotId: currentSnapshotId(), symbol: underlying, exchange, mode, source,
+        candidateId: ctx.structure?.lifecycleId ?? null, direction, underlying: underlyingPlanOf(ctx, chain, direction), setup: fresh, chain,
+      }),
+      toStore.generatedAt ?? decisionNow()
+    );
   }
 
   // Push exactly here and nowhere else. This branch is the ONLY one that
@@ -5724,6 +5766,15 @@ async function recordTradeSetupOutcome(
     } catch (err: any) {
       logger.warn({ error: err.message, signalId: stored.signalId }, 'Backtesting: failed to record trade setup outcome');
     }
+    // Phase 3: the plan's last event — closed at these levels (the exit is in the reason).
+    void recordOptionPlanEvent({
+      planId: planIdFor(stored.signalId),
+      at: decisionNow(),
+      type: 'CLOSED',
+      before: null,
+      after: optionLevelsOf(stored, null),
+      reason: `${outcome} (${close.reason})${exitValue != null ? ` at ${exitValue}` : ''}`,
+    });
   }
 
   // A stop, recorded with the state that explains it, at the instant it

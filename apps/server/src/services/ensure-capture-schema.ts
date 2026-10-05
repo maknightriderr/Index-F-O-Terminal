@@ -108,6 +108,10 @@ export const FILES = [
   // and snapshot_id on setup_events / signals. The snapshot writer and both
   // event writers use them, so they are ensured at boot too.
   '034_decision_records.sql',
+  // Phase 3: option_plans (immutable plan of every minted paper trade, with every
+  // strike evaluated) and option_plan_events (its level changes). Written at the
+  // mint and on each trailing-stop move, so ensured at boot too.
+  '035_option_plans.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */

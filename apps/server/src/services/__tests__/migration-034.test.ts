@@ -36,7 +36,7 @@ beforeAll(async () => {
   await db.exec('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
   expect(await apply(db, '002_schema.sql')).toEqual([]);
   for (const f of FILES) {
-    if (f === '034_decision_records.sql') continue;
+    if (f >= '034') continue;
     const errs = await apply(db, f);
     if (!BEST_EFFORT.has(f)) expect(errs, f).toEqual([]);
   }
@@ -51,8 +51,8 @@ const columns = async (table: string) =>
   )).rows;
 
 describe('migration 034 (decision records)', () => {
-  it('is registered last in the boot runner', () => {
-    expect(FILES[FILES.length - 1]).toBe('034_decision_records.sql');
+  it('is registered in the boot runner (after 033)', () => {
+    expect(FILES.indexOf('034_decision_records.sql')).toBe(FILES.indexOf('033_coverage_and_major_moves.sql') + 1);
     expect(BEST_EFFORT.has('034_decision_records.sql')).toBe(false);
   });
 

@@ -451,6 +451,13 @@ export const PARENTING_VERSION = 'PARENT-1.0';
 export const ARBITRATION_VERSION = 'ARB-1.0';
 /** @fno/analytics package version (packages/analytics/package.json) — kept equal by a test. */
 export const ANALYTICS_VERSION = '0.1.0';
+/**
+ * Phase 3 (2026-10-05): the OptionCandidate pipeline record (every strike with
+ * its stage / rejection) and the persisted option plan. The strike CHOSEN is
+ * unchanged from OPTION-1.0's ranking (the token is only a final tie-break
+ * between identical strikes, which a chain side never has).
+ */
+export const OPTION_SELECTION_VERSION = 'OPTSEL-1.0';
 
 // ---- Indicator (consensus) engine confidence mode (2026-10-01) ----
 // EVIDENCE (default, the only path that runs): confidence is recorded and
