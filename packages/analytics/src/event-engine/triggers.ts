@@ -474,7 +474,32 @@ export function rebuildCandidateAt(ctx: SeriesContext, log: SessionEventLog, c: 
  * Every candidate of the given triggers at decision bar i, from the log as it
  * stood at i's close. `allowDecision` lets the caller apply session guards.
  */
-export function evaluateTriggersAt(ctx: SeriesContext, log: SessionEventLog, i: number, triggerIds: readonly string[] = TRIGGER_REGISTRY.map((t) => t.triggerId)): TriggerCandidate[] {
+/** The rule behind each trigger id (read-only view; the isolation tests exercise it). */
+export const TRIGGER_RULES: Readonly<Record<string, Rule>> = RULES;
+
+/** A trigger that failed at a bar: recorded, and never allowed to stop another trigger. */
+export interface TriggerFailure {
+  triggerId: string;
+  decisionIndex: number;
+  /** LOOKAHEAD: the rule read an event confirmed after its decision bar (its candidates are discarded). */
+  kind: 'ERROR' | 'LOOKAHEAD';
+  message: string;
+}
+
+/**
+ * Every trigger, independently, at bar i. Each rule runs in isolation: a rule
+ * (or its candidate build) that throws, or that reads an event confirmed after
+ * bar i, loses only its own candidates — it is reported in `failures` and the
+ * other triggers still produce theirs. Without a `failures` array a look-ahead
+ * read still throws (research callers keep the hard tripwire).
+ */
+export function evaluateTriggersAt(
+  ctx: SeriesContext,
+  log: SessionEventLog,
+  i: number,
+  triggerIds: readonly string[] = TRIGGER_REGISTRY.map((t) => t.triggerId),
+  failures?: TriggerFailure[]
+): TriggerCandidate[] {
   const known = (from: number, to: number, type: MarketEvent['type'], dir?: Dir) =>
     log.events.filter((e) => e.barIndex >= Math.max(from, log.start) && e.barIndex <= Math.min(to, i) && e.type === type && (dir == null || e.direction === dir));
   const at = (type: MarketEvent['type'], dir?: Dir) => known(i, i, type, dir);
@@ -483,12 +508,26 @@ export function evaluateTriggersAt(ctx: SeriesContext, log: SessionEventLog, i: 
     const def = TRIGGERS_BY_ID.get(id);
     const rule = RULES[id];
     if (!def || !rule) continue;
-    for (const hit of rule({ ctx, log, i, at, known })) {
-      // A rule may never read an event confirmed after its decision bar.
-      if (hit.events.some((e) => e.barIndex > i)) throw new Error(`Trigger ${id} read an event after its decision bar ${i}`);
-      const c = buildCandidate(ctx, log, def, hit, i);
-      if (c) out.push(c);
+    const mine: TriggerCandidate[] = [];
+    try {
+      for (const hit of rule({ ctx, log, i, at, known })) {
+        // A rule may never read an event confirmed after its decision bar.
+        if (hit.events.some((e) => e.barIndex > i)) {
+          const message = `Trigger ${id} read an event after its decision bar ${i}`;
+          if (!failures) throw new Error(message);
+          failures.push({ triggerId: id, decisionIndex: i, kind: 'LOOKAHEAD', message });
+          mine.length = 0;
+          break;
+        }
+        const c = buildCandidate(ctx, log, def, hit, i);
+        if (c) mine.push(c);
+      }
+    } catch (err) {
+      if (!failures) throw err;
+      failures.push({ triggerId: id, decisionIndex: i, kind: 'ERROR', message: (err as Error)?.message ?? String(err) });
+      continue;
     }
+    out.push(...mine);
   }
   return out;
 }

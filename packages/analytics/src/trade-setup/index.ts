@@ -415,7 +415,24 @@ function buildNakedLong(
   // Mid-price entry — more realistic than LTP, which can be stale on a thin
   // book and far from where an order would actually fill.
   const entry = round2(mid);
-  const target = round2(entry + deltaMove);
+  // Realistic payoff (opt-in, every live caller — OPTION-2.0): what the expected
+  // move actually pays this contract over the hold — delta, plus gamma's
+  // convexity, minus the theta decay over the hold (charged on trading time:
+  // a day's theta is spent over a session, so a 3 h intraday hold burns
+  // 3 / sessionHours of it). Costs are charged on top, as before. Absent =
+  // delta-only, byte-identical to before (golden snapshots, research).
+  const payoff = instrument.realisticPayoff ? realisticPayoff({ delta: leg.delta, gamma: leg.gamma, theta: leg.theta, movePoints: Math.max(expectedMovePoints, 0), holdHours: instrument.expectedHoldHours ?? (dte != null && dte <= 1 ? 3 : 5), sessionHours: instrument.realisticPayoff.sessionHours }) : null;
+  if (payoff && !(payoff.netGain > 0)) {
+    return {
+      available: false,
+      noTradeCode: 'UNREALISTIC_TARGET',
+      reason:
+        `The expected ${round2(expectedMovePoints)}-point move pays the ${side} ${atmStrike} only ${payoff.deltaGain.toFixed(2)} (delta) + ${payoff.gammaGain.toFixed(2)} (gamma), ` +
+        `against ${payoff.thetaDecay.toFixed(2)} of time decay over the ${payoff.holdHours.toFixed(1)} h hold — no realistic target.`,
+      projectedPayoff: payoff,
+    };
+  }
+  const target = round2(entry + (payoff ? payoff.netGain : deltaMove));
 
   // ---- Option quality ----
   // The instrument is part of the trade, not a detail of it: a correct
@@ -726,6 +743,7 @@ function buildNakedLong(
 
   return {
     available: true,
+    ...(payoff ? { projectedPayoff: payoff } : {}),
     structureType: 'NAKED_LONG',
     side,
     strike: atmStrike,
@@ -841,6 +859,14 @@ export interface SetupInstrumentContext {
   rrGate?: boolean;
 
   /**
+   * Every live caller (OPTION-2.0): the target premium is the realistic payoff
+   * of the expected move — delta + ½·gamma·move² − theta over the hold
+   * (trading time, `sessionHours` per day) — not delta alone. Absent = the
+   * delta-only target (golden snapshots, research, backtests).
+   */
+  realisticPayoff?: { sessionHours: number };
+
+  /**
    * Opt-in: an R:R refusal (REWARD_RISK_TOO_LOW) also returns `rrPlan` — the
    * option levels it was judged at — so a confirmed setup below the minimum
    * can be displayed and re-checked. Never makes a refused setup available.
@@ -899,4 +925,37 @@ export function evaluateSpreadProgress(
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/** The realistic premium change for an expected underlying move over a hold. */
+export interface ProjectedPayoff {
+  deltaGain: number;
+  gammaGain: number;
+  thetaDecay: number;
+  /** deltaGain + gammaGain − thetaDecay. */
+  netGain: number;
+  holdHours: number;
+  sessionHours: number;
+}
+
+/**
+ * Pure: delta's linear gain, gamma's convexity (½·Γ·move²) and the theta paid
+ * over the hold — theta is per day, spent over the trading session, so the
+ * hold pays holdHours / sessionHours of it (capped at one day per started
+ * session-day of hold). A far-OTM contract with a high theoretical %-return
+ * but little delta and heavy decay projects little or nothing here.
+ */
+export function realisticPayoff(args: { delta: number; gamma: number | null | undefined; theta: number | null | undefined; movePoints: number; holdHours: number; sessionHours: number }): ProjectedPayoff {
+  const move = Math.max(0, args.movePoints);
+  const absDelta = Number.isFinite(args.delta) ? Math.abs(args.delta) : 0;
+  const gamma = args.gamma != null && Number.isFinite(args.gamma) ? Math.abs(args.gamma) : 0;
+  const thetaPerDay = args.theta != null && Number.isFinite(args.theta) ? Math.abs(args.theta) : 0;
+  const session = args.sessionHours > 0 ? args.sessionHours : 6.25;
+  const days = Math.max(0, args.holdHours) / session;
+  const deltaGain = absDelta * move;
+  // Convexity is bounded: delta cannot pass 1, so gamma never adds more than (1 − |Δ|) × move.
+  const gammaGain = Math.min(0.5 * gamma * move * move, Math.max(0, 1 - absDelta) * move);
+  const thetaDecay = thetaPerDay * days;
+  const r = (n: number) => Math.round(n * 100) / 100;
+  return { deltaGain: r(deltaGain), gammaGain: r(gammaGain), thetaDecay: r(thetaDecay), netGain: r(deltaGain + gammaGain - thetaDecay), holdHours: r(Math.max(0, args.holdHours)), sessionHours: session };
 }

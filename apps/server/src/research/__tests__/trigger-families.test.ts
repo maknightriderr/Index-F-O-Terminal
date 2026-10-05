@@ -146,7 +146,8 @@ describe('stages: research families paper-trade, nothing has earned PAPER', () =
     expect(loop.indexOf('PAPER_TRADING_STAGES.includes(rc.stage)')).toBeLessThan(loop.indexOf('resolveStructureSetup'));
     // Every eligible candidate is built (no per-poll cap, no pre-selection) and handed to the slot arbitration.
     expect(loop).not.toMatch(/break;/);
-    expect(loop).toMatch(/entries\.push\(\s*await resolveStructureSetup\(/);
+    // Since 2026-10-05 each build is isolated (one candidate's failure never loses the others).
+    expect(loop).toMatch(/entries\.push\(\s*await isolatedCandidate\(slot, \(\) =>\s*resolveStructureSetup\(/);
   });
 });
 

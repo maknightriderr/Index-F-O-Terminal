@@ -18,6 +18,8 @@ import type { SetupWatchRow,
   OiTrapAnalysis,
   DecayAnalysis,
   TradeSetup,
+  NoTradeDiagnostics,
+  NoTradeStage,
   StructureBlock,
   StructureLifecycleView,
 } from '@fno/shared';
@@ -874,6 +876,48 @@ function SetupWatchList({ rows }: { rows: SetupWatchRow[] }) {
   );
 }
 
+const NO_TRADE_STAGE_LABEL: Record<NoTradeStage, string> = {
+  SAFETY_GATE: 'Safety gate',
+  SEQUENCE: 'Setup sequence',
+  OPTION_COST_LIQUIDITY: 'Option cost / liquidity',
+  DATA_QUALITY: 'Data quality',
+  PARENT_ALREADY_TRADED: 'Move already traded',
+  SLOT_OCCUPIED: 'Trade already open',
+  ENGINE_ERROR: 'Engine error',
+  OTHER: 'Other',
+};
+
+/** Why there is no paper trade: the limiting factor, what was missing, the best rejected candidate and every candidate evaluated. */
+function NoTradePanel({ d }: { d: NoTradeDiagnostics }) {
+  const b = d.bestRejected;
+  return (
+    <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/5 light:bg-amber-50 px-2 py-1.5 space-y-1">
+      <div className="text-[10px] font-bold uppercase tracking-wide text-amber-400 light:text-amber-700">Why no trade</div>
+      <p className="text-[11px] text-gray-300 light:text-slate-700"><span className="text-gray-500 light:text-slate-500">Limiting factor:</span> {d.limitingFactor.summary}</p>
+      {d.missingConfirmation && <p className="text-[11px] text-gray-300 light:text-slate-700"><span className="text-gray-500 light:text-slate-500">Missing:</span> {d.missingConfirmation}</p>}
+      {b && (
+        <p className="text-[11px] text-gray-300 light:text-slate-700">
+          <span className="text-gray-500 light:text-slate-500">Best rejected:</span> {b.source} {b.direction === 'BULLISH' ? '▲' : '▼'} — {NO_TRADE_STAGE_LABEL[b.stage]}: {b.reason}
+          {b.metrics.confirmations != null && <span className="text-gray-500 light:text-slate-500"> · {b.metrics.confirmations} confirmation(s)</span>}
+        </p>
+      )}
+      <details className="text-[10px] text-gray-400 light:text-slate-600">
+        <summary className="cursor-pointer">{d.candidatesEvaluated} candidate(s) evaluated · engines</summary>
+        <ul className="mt-1 space-y-0.5">
+          {d.candidates.map((c) => (
+            <li key={c.candidateId}>
+              #{c.preBuildRank} {c.source} {c.direction === 'BULLISH' ? '▲' : '▼'} — <span className="text-amber-400 light:text-amber-700">{c.code ?? NO_TRADE_STAGE_LABEL[c.stage]}</span>: {c.reason}
+            </li>
+          ))}
+          <li>Structure: {d.engines.structure}</li>
+          <li>Families: {d.engines.families}</li>
+          <li>Indicator: {d.engines.indicator}</li>
+        </ul>
+      </details>
+    </div>
+  );
+}
+
 function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: StructureBlock | null }) {
   // Structure lifecycles, computed up front so the measurement lookup below runs on every render.
   const running = structure?.enabled
@@ -933,6 +977,7 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
           </div>
         )}
         <RejectedToday rows={rejectedToday} outcomes={outcomes} />
+        {setup.noTradeDiagnostics && <NoTradePanel d={setup.noTradeDiagnostics} />}
         <div>
           <div className="text-[10px] font-bold uppercase tracking-wide text-gray-400 light:text-slate-600 mb-1">Indicator engine · OLD</div>
           <p className="text-[11px] text-gray-400 light:text-slate-600 leading-snug">{setup.reason}</p>
