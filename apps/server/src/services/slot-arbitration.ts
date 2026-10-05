@@ -45,7 +45,13 @@
 //   2. move potential                  (the class above)
 //   3. net R:R after costs
 //   4. entry quality
-//   5. tie-break: earlier decision bar close (the same definition for every
+//   5. confirmations (ARB-2.0, 2026-10-05): how many independent pieces of
+//      evidence stand behind the candidate — a liquidity sweep, a
+//      displacement, an FVG / zone / SMC structure shift, and option-chain
+//      positioning (futures OI + PCR + option OI flow) agreeing with its
+//      direction. A count, not a weighted score; supporting evidence, never a
+//      gate; consulted only after 1–4 tie.
+//   6. tie-break: earlier decision bar close (the same definition for every
 //      engine), then source id, then candidate id
 //
 // NOT_MEASURED. A metric that cannot be measured (no structural level behind
@@ -70,7 +76,8 @@ import {
   type MomentumBar,
   type SeriesContext,
 } from '@fno/analytics';
-import type { BiasDirection, TradeSetup } from '@fno/shared';
+import type { BiasDirection, OptionChain, TradeSetup } from '@fno/shared';
+import { strikeNetRR } from './fno-validation.js';
 import type { LiveLifecycle } from './structure-live.js';
 import type { RoutedCandidate } from './trigger-router.js';
 import { logger } from '../lib/logger.js';
@@ -95,6 +102,26 @@ export interface DecisionMetrics {
   entryQuality: Measured<number>;
 }
 
+/** The evidence behind a candidate, each component counted once (null = not measurable for it). */
+export interface Confirmations {
+  liquiditySweep: boolean;
+  displacement: boolean;
+  /** An FVG / zone, or an SMC structure shift (micro BOS / retest hold) in its sequence. */
+  structureZone: boolean;
+  /** Option-chain positioning agrees with the direction (null when no positioning read). */
+  optionChain: boolean | null;
+}
+
+export function confirmationCount(c: Confirmations): number {
+  return (c.liquiditySweep ? 1 : 0) + (c.displacement ? 1 : 0) + (c.structureZone ? 1 : 0) + (c.optionChain ? 1 : 0);
+}
+
+/** Option-chain agreement: the net positioning vote (futures OI + PCR + option OI flow) has the candidate's sign. */
+export function chainAgrees(direction: BiasDirection, positioningNet: number | null | undefined): boolean | null {
+  if (positioningNet == null || !Number.isFinite(positioningNet)) return null;
+  return direction === 'BULLISH' ? positioningNet > 0 : direction === 'BEARISH' ? positioningNet < 0 : false;
+}
+
 export interface SlotCandidate extends DecisionMetrics {
   /** 'S1', 'INDICATOR', or a trigger id ('A3', 'B2', …). */
   source: string;
@@ -109,6 +136,9 @@ export interface SlotCandidate extends DecisionMetrics {
   evidence: Measured<number>;
   /** Close (epoch ms) of the newest 15m bar closed at the decision — one definition for every engine. */
   decisionTime: number;
+  /** Ranking criterion 5: the confirmation count (absent on candidates built before ARB-2.0 = not measured). */
+  confirmations?: Measured<number>;
+  confirmationDetail?: Confirmations | null;
 }
 
 /** An engine's decision geometry on the underlying — the only input decisionMetrics reads. */
@@ -130,10 +160,12 @@ export interface MetricsContext {
   s: number;
   i: number;
   atr: number | null;
+  /** The poll's net option-chain positioning vote (null / absent when unknown). */
+  positioningNet?: number | null;
 }
 
 /** The metrics context for today's session from closed 15m bars only (null without today's bars). */
-export function buildMetricsContext(closedBars: readonly MomentumBar[], today: string): MetricsContext | null {
+export function buildMetricsContext(closedBars: readonly MomentumBar[], today: string, positioningNet: number | null = null): MetricsContext | null {
   if (closedBars.length < 2) return null;
   const series = prepareMomentumSeries([...closedBars]);
   const s = series.sessionStarts.length - 1;
@@ -141,7 +173,7 @@ export function buildMetricsContext(closedBars: readonly MomentumBar[], today: s
   const ctx = buildSeriesContext(series);
   const i = ctx.sessionEnd(s);
   const atr = ctx.atrAt(i);
-  return { ctx, s, i, atr: atr != null && atr > 0 ? atr : null };
+  return { ctx, s, i, atr: atr != null && atr > 0 ? atr : null, positioningNet };
 }
 
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
@@ -189,6 +221,7 @@ export const MEASURED_CRITERIA: readonly Criterion[] = [
   { name: 'move potential', value: (c) => ranked(c.movePotential, POTENTIAL_RANK) },
   { name: 'net R:R after costs', value: (c) => num(c.netRR, -1) },
   { name: 'entry quality', value: (c) => num(c.entryQuality, -1) },
+  { name: 'confirmations', value: (c) => num(c.confirmations ?? NOT_MEASURED, -1) },
 ];
 
 /** Which of criteria 1–4 every candidate in the pool actually measured. */
@@ -238,6 +271,11 @@ export function structureGeometry(lc: Pick<LiveLifecycle, 'direction' | 'stop' |
   return { direction: lc.direction, entry: spot, stop: lc.stop, objective: lc.t1?.price ?? null, anchor: lc.pool?.price ?? null, onAnchorBar: false };
 }
 
+/** Event types read as each confirmation (from a family candidate's event ids, `${type}:…`). */
+const SWEEP_EVENTS = new Set(['SWEEP', 'RECLAIM', 'OPENING_RANGE_REJECTION', 'FAILED_ACCEPTANCE']);
+const ZONE_EVENTS = new Set(['MICRO_BOS', 'RETEST_HOLD', 'COMPRESSION_BREAK']);
+const withConfirmations = (c: Confirmations): Pick<SlotCandidate, 'confirmations' | 'confirmationDetail'> => ({ confirmations: confirmationCount(c), confirmationDetail: c });
+
 /** S1's slot candidate. Evidence (recorded only) = the Tier-1 events the sequence holds (sweep, displacement, zone). */
 export function structureSlotCandidate(
   lc: LiveLifecycle,
@@ -255,6 +293,8 @@ export function structureSlotCandidate(
     ...decisionMetrics(structureGeometry(lc, spot), metrics, netRR),
     evidence: 1 + (lc.displacementBodyAtr != null ? 1 : 0) + (lc.zone ? 1 : 0),
     decisionTime: link.decisionTime,
+    // S1's sequence is a sweep by definition; displacement and its zone (FVG / 50%) as recorded.
+    ...withConfirmations({ liquiditySweep: true, displacement: lc.displacementBodyAtr != null, structureZone: lc.zone != null, optionChain: chainAgrees(lc.direction, metrics?.positioningNet) }),
   };
 }
 
@@ -276,6 +316,15 @@ export function routedSlotCandidate(rc: RoutedCandidate, metrics: MetricsContext
     ...decisionMetrics(routedGeometry(rc), metrics),
     evidence: Array.isArray(c.eventIds) ? c.eventIds.length : NOT_MEASURED,
     decisionTime: c.decisionTime + BAR_MS_15M,
+    ...(() => {
+      const types = new Set((c.eventIds ?? []).map((id) => id.split(':')[0]));
+      return withConfirmations({
+        liquiditySweep: [...types].some((t) => SWEEP_EVENTS.has(t)),
+        displacement: types.has('DISPLACEMENT'),
+        structureZone: [...types].some((t) => ZONE_EVENTS.has(t)),
+        optionChain: chainAgrees(c.direction, metrics?.positioningNet),
+      });
+    })(),
   };
 }
 
@@ -329,6 +378,8 @@ export function indicatorSlotCandidate(
     ...measured,
     evidence: NOT_MEASURED,
     decisionTime,
+    // No event sequence behind it: only the option-chain component can confirm it.
+    ...withConfirmations({ liquiditySweep: false, displacement: false, structureZone: false, optionChain: chainAgrees(direction, metrics?.positioningNet) }),
   };
 }
 
@@ -423,10 +474,17 @@ export interface SlotArbitrationRecord {
   slotDecision: SlotDecision;
 }
 
+/** A final check on a built candidate just before it is minted (data quality, edge after costs). Null = passes. */
+export type PreMintCheck = (entry: DeferredSetup) => Promise<{ code: string; reason: string } | null> | { code: string; reason: string } | null;
+
 /**
- * One paper trade per symbol: rank the built candidates, mint the best, record
- * every candidate (selected, alternative with its rank, ineligible with its
- * reason). Returns the minted setup, or null when nothing built.
+ * One paper trade per symbol: rank the built candidates and mint the best
+ * one that still passes — walking DOWN the ranking: a candidate that fails
+ * the pre-mint check (stale data, no edge after costs) or whose mint throws
+ * is recorded INELIGIBLE with its reason, and the next-best is tried. Every
+ * candidate is recorded (selected, alternative with its rank and the
+ * criterion it lost on, ineligible with its reason). Returns the minted
+ * setup, or null when no candidate survives — NO TRADE only then.
  */
 export async function settleSlot(args: {
   underlying: string;
@@ -437,6 +495,8 @@ export async function settleSlot(args: {
   markTraded?: (anchorKeys: readonly string[]) => Promise<void>;
   /** Called with the winner once it is the slot's trade (e.g. to end its watch row). */
   onSelected?: (slot: SlotCandidate) => Promise<void>;
+  /** Final check before each mint attempt, best first. */
+  preMint?: PreMintCheck;
 }): Promise<TradeSetup | null> {
   const { underlying, exchange, entries } = args;
   const pre = rankSlotCandidates(entries.map((e) => ({ ...e.slot, netRR: NOT_MEASURED })));
@@ -444,66 +504,153 @@ export async function settleSlot(args: {
   const built = entries.map((e, i) => ({ e, i })).filter((x): x is { e: DeferredSetup; i: number } => x.e.kind === 'DEFERRED');
 
   const records: SlotArbitrationRecord[] = [];
+  const ineligible = (slot: SlotCandidate, i: number, code: string | null, reason: string, optionBuildFailure: string | null): SlotArbitrationRecord => ({
+    slot,
+    role: 'INELIGIBLE',
+    rank: null,
+    preBuildRank: preBuildRank.get(i)!,
+    reason: code ? `${code}: ${reason}` : reason,
+    refusalCode: code,
+    optionBuildFailure,
+    criteriaUsed: [],
+    criteriaSkipped: [],
+    slotDecision: { slot: 'FREE', decision: code === 'PARENT_ALREADY_TRADED' ? 'PARENT_ALREADY_TRADED' : 'INELIGIBLE', heldSignalId: null },
+  });
   for (const [i, e] of entries.entries()) {
     if (e.kind !== 'REFUSED') continue;
-    records.push({
-      slot: e.slot,
-      role: 'INELIGIBLE',
-      rank: null,
-      preBuildRank: preBuildRank.get(i)!,
-      reason: e.code ? `${e.code}: ${e.reason}` : e.reason,
-      refusalCode: e.code,
-      optionBuildFailure: e.optionBuild ? e.reason : null,
-      criteriaUsed: [],
-      criteriaSkipped: [],
-      slotDecision: { slot: 'FREE', decision: e.code === 'PARENT_ALREADY_TRADED' ? 'PARENT_ALREADY_TRADED' : 'INELIGIBLE', heldSignalId: null },
-    });
+    records.push(ineligible(e.slot, i, e.code, e.reason, e.optionBuild ? e.reason : null));
   }
   if (built.length === 0) {
     args.record?.(records);
     return null;
   }
 
+  // Walk the ranking: the best candidate that passes the pre-mint check and mints.
   const r = rankSlotCandidates(built.map((x) => x.e.slot));
-  const chosen = built[r.winner].e;
+  let chosenPos = -1;
+  let result: { setup: TradeSetup; minted: boolean } | null = null;
+  for (let pos = 0; pos < r.order.length && result == null; pos++) {
+    const x = built[r.order[pos]];
+    let failed: { code: string; reason: string } | null = null;
+    try {
+      failed = args.preMint ? await args.preMint(x.e) : null;
+    } catch (err: any) {
+      failed = { code: 'ENGINE_ERROR', reason: `Pre-mint check failed: ${err?.message ?? String(err)}` };
+    }
+    if (!failed) {
+      try {
+        result = await x.e.commit();
+        chosenPos = pos;
+        break;
+      } catch (err: any) {
+        failed = { code: 'MINT_FAILED', reason: `The mint failed: ${err?.message ?? String(err)}` };
+      }
+    }
+    logger.warn({ underlying, exchange, source: x.e.slot.source, candidateId: x.e.slot.candidateId, ...failed }, 'Slot arbitration: ranked candidate failed its final check — trying the next-best');
+    records.push(ineligible(x.e.slot, x.i, failed.code, failed.reason, null));
+    await x.e.decline(`${failed.code}: ${failed.reason}`).catch(() => undefined);
+  }
+  if (result == null) {
+    logger.info({ underlying, exchange, candidates: entries.length }, 'Slot arbitration: every candidate failed — NO TRADE');
+    args.record?.(records);
+    return null;
+  }
+
+  const chosen = built[r.order[chosenPos]].e;
+  const rest = r.order.slice(chosenPos + 1);
   logger.info(
     {
       underlying,
       exchange,
       selected: chosen.slot.source,
+      fellThrough: chosenPos,
       criteriaUsed: r.used,
       criteriaSkipped: r.skipped,
-      ranking: r.order.map((k) => ({ source: built[k].e.slot.source, parentId: built[k].e.slot.parentId, lostOn: r.lostOn.get(k) ?? null })),
+      ranking: r.order.map((k) => ({ source: built[k].e.slot.source, parentId: built[k].e.slot.parentId })),
       ineligible: records.map((x) => ({ source: x.slot.source, reason: x.reason })),
     },
     'Slot arbitration: one paper trade selected across engines'
   );
-  const result = await chosen.commit();
   if (result.minted && chosen.slot.anchorKeys.length > 0) {
     await args.markTraded?.(chosen.slot.anchorKeys).catch((err: any) => logger.warn({ error: err.message, underlying }, 'Slot arbitration: traded-parent mark failed'));
   }
   if (result.minted) await args.onSelected?.(chosen.slot).catch((err: any) => logger.warn({ error: err.message, underlying }, 'Slot arbitration: on-selected hook failed'));
-  r.order.forEach((k, pos) => {
+  const lostOn = (k: number) => compareSlotCandidates(chosen.slot, built[k].e.slot, r.used).criterion;
+  records.push({
+    slot: chosen.slot,
+    role: 'SELECTED',
+    rank: chosenPos + 1,
+    preBuildRank: preBuildRank.get(built[r.order[chosenPos]].i)!,
+    reason: chosenPos === 0 ? `Best of ${built.length} eligible` : `Best of ${built.length} eligible that passed its final check (${chosenPos} ranked above it failed)`,
+    refusalCode: null,
+    optionBuildFailure: null,
+    criteriaUsed: r.used,
+    criteriaSkipped: r.skipped,
+    slotDecision: { slot: 'FREE', decision: result.minted ? 'MINTED' : 'MINT_LOST', heldSignalId: null },
+  });
+  rest.forEach((k, j) => {
     const x = built[k];
     records.push({
       slot: x.e.slot,
-      role: pos === 0 ? 'SELECTED' : 'ALTERNATIVE',
-      rank: pos + 1,
+      role: 'ALTERNATIVE',
+      rank: chosenPos + 2 + j,
       preBuildRank: preBuildRank.get(x.i)!,
-      reason: pos === 0 ? `Best of ${built.length} eligible` : notSelectedReason(x.e.slot, chosen.slot, r.lostOn.get(k)!, r.skipped),
-      refusalCode: pos === 0 ? null : 'NOT_SELECTED',
+      reason: notSelectedReason(x.e.slot, chosen.slot, lostOn(k), r.skipped),
+      refusalCode: 'NOT_SELECTED',
       optionBuildFailure: null,
       criteriaUsed: r.used,
       criteriaSkipped: r.skipped,
-      slotDecision: { slot: 'FREE', decision: pos === 0 ? (result.minted ? 'MINTED' : 'MINT_LOST') : 'NOT_SELECTED', heldSignalId: null },
+      slotDecision: { slot: 'FREE', decision: 'NOT_SELECTED', heldSignalId: null },
     });
   });
-  for (const k of r.order.slice(1)) {
+  for (const k of rest) {
     const loser = built[k].e;
-    await loser.decline(notSelectedReason(loser.slot, chosen.slot, r.lostOn.get(k)!, r.skipped)).catch((err: any) =>
+    await loser.decline(notSelectedReason(loser.slot, chosen.slot, lostOn(k), r.skipped)).catch((err: any) =>
       logger.warn({ error: err.message, underlying, source: loser.slot.source }, 'Slot arbitration: NOT_SELECTED record failed')
     );
   }
   args.record?.(records);
   return result.setup;
+}
+
+// ---------------- isolation and the pre-mint check (2026-10-05) ----------------
+
+/**
+ * One candidate's chain, isolated: an exception building it (a bug, a broker
+ * error) refuses only that candidate (ENGINE_ERROR) — every other candidate
+ * of the check is still built and arbitrated.
+ */
+export async function isolatedCandidate(slot: SlotCandidate, build: () => Promise<SlotEntry>): Promise<SlotEntry> {
+  try {
+    return await build();
+  } catch (err: any) {
+    logger.error({ error: err.message, source: slot.source, candidateId: slot.candidateId }, 'Slot: one candidate failed to build — refused, the others continue');
+    return { kind: 'REFUSED', slot, code: 'ENGINE_ERROR', reason: `Its chain failed: ${err.message}`, optionBuild: false };
+  }
+}
+
+/** A built candidate's quote must be this fresh when it is minted. */
+export const PRE_MINT_MAX_QUOTE_AGE_MS = 2 * 60 * 1000;
+
+/**
+ * The final check on a built candidate just before it is minted (best first —
+ * a failure moves the slot to the next-best): the chain it was priced on is
+ * fresh, its contract still has a two-sided quote, and there is reward left
+ * after costs. Net R:R is otherwise a ranking input — this is not a threshold.
+ */
+export function preMintCheck(setup: TradeSetup, chain: OptionChain, now: number): { code: string; reason: string } | null {
+  const age = chain.timestamp ? now - chain.timestamp : null;
+  if (age != null && age > PRE_MINT_MAX_QUOTE_AGE_MS) {
+    return { code: 'STALE_QUOTE', reason: `The option chain it was priced on is ${Math.round(age / 1000)} s old (limit ${PRE_MINT_MAX_QUOTE_AGE_MS / 1000} s).` };
+  }
+  if (setup.strike != null && setup.side && setup.expiry === chain.expiry) {
+    const row = chain.strikes.find((s) => s.strike === setup.strike);
+    const leg = row ? (setup.side === 'CE' ? row.call : row.put) : null;
+    if (!leg || !(leg.ltp > 0) || !(leg.bid > 0 && leg.ask > leg.bid)) {
+      return { code: 'NO_QUOTE', reason: `${setup.side} ${setup.strike} has no two-sided quote at mint time.` };
+    }
+  }
+  const net = strikeNetRR(setup);
+  if (net != null && net <= 0) return { code: 'COST_EXCEEDS_EDGE', reason: `No reward left after costs (net R:R ${net}).` };
+  return null;
 }

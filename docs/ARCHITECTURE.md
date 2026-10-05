@@ -153,7 +153,22 @@ Step 4 — Slot arbitration (slot-arbitration.ts) — ONE OPEN paper trade per s
     beyond the cap, bad quote, illiquid contract, safety gates).
   Ranking (pre-registered, identical for every engine; first difference wins):
     1. entry timing / remaining move   2. move potential   3. net R:R after costs
-    4. entry quality                   5. decision-bar close → source id → candidate id
+    4. entry quality                   5. confirmations (ARB-2.0): liquidity sweep + displacement +
+       FVG/zone/SMC shift + option-chain positioning agreement — a count, never a gate
+    6. decision-bar close → source id → candidate id
+  Isolation: a trigger rule that throws / reads past its bar loses only its own candidates; a
+    candidate whose chain throws is refused alone (ENGINE_ERROR); an indicator failure is one more
+    refused candidate.
+  Next-best: the slot walks down the ranking — a candidate failing the pre-mint check (stale chain,
+    no two-sided quote, no reward after costs; no R:R threshold) or whose mint throws is recorded and
+    the next one is tried. NO TRADE only when every candidate fails, and it carries
+    noTradeDiagnostics: every candidate evaluated (stage, code, reason), the best rejected one, the
+    limiting factor, the missing confirmation, and what each engine produced (Trade Setup card →
+    "Why no trade").
+  Option leg (OPTION-2.0 / OPTSEL-2.0): target premium = entry + |Δ|·move + ½|Γ|·move² − |θ| over the
+    hold on trading time; costs on top; decay that eats the move → UNREALISTIC_TARGET. Strikes are
+    compared on net R:R against the common underlying invalidation, so premium-% stop rules cannot
+    make a cheap OTM contract outrank the ATM one.
   ONE winner minted → trade_setup:* (Redis) + signals (Postgres) + option_plans; others recorded
   with rank and the criterion they lost on (setup_events ARBITRATION rows).
   OptionCandidate pipeline (Phase 3, fno-validation.ts): every strike of the side passes
@@ -342,3 +357,4 @@ Observation only: `startSystemLearningAudit` → `learningDetectors.ts` → `lea
 - **2026-10-05 — Phase 6: ServiceSupervisor, clean shutdown, state recovery.** All 18 services + 2 components supervised (critical: tradeSetupPriceMonitor, signalEngine, setupLifecycle); health DEGRADED on a critical failure; shutdown order supervisor-first; Redis rebuilt from PostgreSQL at boot (PG wins); setup-watch LIFECYCLE rows carry the whole row; request-priority max-wait cap.
 - **2026-10-05 — Phase 7: AI assistant read-only + /ws hardening.** ESLint import boundary for the assistant (+ graph test), untrusted-text delimiting in its prompt, `/ws` origin / token check, payload cap, target validation and per-client subscription limit.
 - **2026-10-05 — Phase 8: DecisionRecord research view.** `/api/diagnostics/decisions`, `/api/diagnostics/decision/:snapshotId` (`decision-diagnostics.ts`), Signal Diagnostics "Decision Record" tab.
+- **2026-10-05 — Signal engine fallback + realistic options + NO TRADE diagnostics.** Per-trigger and per-candidate isolation, next-best slot walk with a pre-mint check, confirmations criterion (ARB-2.0), realistic payoff (OPTION-2.0), strike comparison on the common underlying risk (OPTSEL-2.0), `noTradeDiagnostics` on every NO TRADE.

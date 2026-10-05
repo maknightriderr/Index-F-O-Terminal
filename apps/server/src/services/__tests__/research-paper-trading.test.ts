@@ -208,7 +208,8 @@ async function settle(entries: Array<DeferredSetup | RefusedCandidate>) {
 }
 const b = (sl: SlotCandidate) => built(sl, []);
 /** The one slot-candidate schema every engine fills. */
-const SCHEMA = ['anchorKeys', 'candidateId', 'decisionTime', 'direction', 'entryQuality', 'evidence', 'moveConsumedPct', 'movePotential', 'netRR', 'objectiveDistanceAtr', 'parentId', 'source', 'timingClass'];
+// ARB-2.0 (2026-10-05): every engine's candidate also carries its confirmation count and detail.
+const SCHEMA = ['anchorKeys', 'candidateId', 'confirmationDetail', 'confirmations', 'decisionTime', 'direction', 'entryQuality', 'evidence', 'moveConsumedPct', 'movePotential', 'netRR', 'objectiveDistanceAtr', 'parentId', 'source', 'timingClass'];
 
 describe('1. every eligible family candidate of a parent is retained', () => {
   it('the router hands the slot all eligible paper-stage candidates of the newest bar — no pre-selection', () => {
@@ -333,17 +334,21 @@ describe('5. NOT_MEASURED is never ACCEPTABLE / NORMAL / 0', () => {
     expect(rankSlotCandidates([unmeasured, late]).lostOn.get(0)).toBe('net R:R after costs');
   });
   it('evidence (not every engine has events) is recorded, never ranked', () => {
-    expect(MEASURED_CRITERIA.map((k) => k.name)).toEqual(['entry timing', 'move potential', 'net R:R after costs', 'entry quality']);
+    // ARB-2.0: criterion 5 is the confirmation count (a separate measure); the raw `evidence` count is still never ranked.
+    expect(MEASURED_CRITERIA.map((k) => k.name)).toEqual(['entry timing', 'move potential', 'net R:R after costs', 'entry quality', 'confirmations']);
     const a = slot({ source: 'A2', evidence: 9 });
     const ind = slot({ source: 'INDICATOR', evidence: NOT_MEASURED });
     expect(compareSlotCandidates(a, ind, sharedCriteria([a, ind]).used).criterion).toBe('source tie-break');
-    expect(sharedCriteria([a, ind]).skipped).toEqual([]);
+    // These fixtures carry no confirmation count: it is skipped, never invented.
+    expect(sharedCriteria([a, ind]).skipped).toEqual(['confirmations']);
   });
 });
 
 describe('6. ranking skips dimensions not measurable for every candidate in the pool', () => {
   it('a fully measured pool compares all four criteria', () => {
-    expect(sharedCriteria([slot({ source: 'S1' }), slot({ source: 'A3' }), slot({ source: 'INDICATOR' })])).toEqual({ used: ['entry timing', 'move potential', 'net R:R after costs', 'entry quality'], skipped: [] });
+    expect(sharedCriteria([slot({ source: 'S1' }), slot({ source: 'A3' }), slot({ source: 'INDICATOR' })])).toEqual({ used: ['entry timing', 'move potential', 'net R:R after costs', 'entry quality'], skipped: ['confirmations'] });
+    // With the ARB-2.0 confirmation count measured on every candidate, all five are compared.
+    expect(sharedCriteria([slot({ source: 'S1', confirmations: 3 }), slot({ source: 'A3', confirmations: 1 }), slot({ source: 'INDICATOR', confirmations: 0 })])).toEqual({ used: ['entry timing', 'move potential', 'net R:R after costs', 'entry quality', 'confirmations'], skipped: [] });
   });
   it('an indicator with no structural level behind price: entry timing is skipped for the whole pool, the rest still decide', async () => {
     const r = await settle([
@@ -453,7 +458,12 @@ describe('10. no future bar or outcome influences arbitration', () => {
     expect(linkStructureToParent(s1Lifecycle(), part.linkage)).toEqual(linkStructureToParent(s1Lifecycle(), full.linkage));
   });
   it('a slot candidate holds decision-time fields only (no outcome, MFE, exit or result)', () => {
-    expect(Object.keys(slot({})).sort()).toEqual(SCHEMA);
+    // The fixture predates ARB-2.0's confirmation fields; every key it has is a schema field
+    // (the exact schema of real candidates is pinned in 13) and none is an outcome.
+    const keys = Object.keys(slot({})).sort();
+    for (const k of keys) expect(SCHEMA).toContain(k);
+    expect(keys.filter((k) => /outcome|mfe|mae|exit|result/i.test(k))).toEqual([]);
+    expect(SCHEMA.filter((k) => /outcome|mfe|mae|exit|result/i.test(k))).toEqual([]);
   });
   it('S1\'s and the indicator\'s metrics are identical whether or not later bars exist', () => {
     const i = start + 8;

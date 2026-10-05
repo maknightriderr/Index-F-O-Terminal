@@ -135,7 +135,7 @@ import { INDICATOR_CONFIDENCE_MODE, locationGateEnforced } from '../config/tradi
 import type { ExposureSnapshot } from './exposure-tracker.js';
 import { stopOvershootPct } from './stop-overshoot.js';
 import type { NoTradeCode, TradeDecision } from '@fno/shared';
-import { decisionBarCloseAt, type FuturesChainResponse } from '@fno/shared';
+import { decisionBarCloseAt, getLatestSessionWindow, type FuturesChainResponse } from '@fno/shared';
 import { assessTradeHealth, emptyExcursion, updateExcursion, mfeInAtr, deadTradeMarker, type TradeExcursion, type TradeHealthAssessment } from './trade-health.js';
 import { notifyTradeSetupClosed } from './trade-setup-close-notifier.js';
 import type { TradeCloseReason } from './trade-setup-close-notifier.js';
@@ -207,6 +207,8 @@ import {
 import { strikeNetRR } from './fno-validation.js';
 import {
   settleSlot,
+  isolatedCandidate,
+  preMintCheck,
   isSlotEntry,
   parentAlreadyTraded,
   structureSlotCandidate,
@@ -224,6 +226,7 @@ import {
 import { recordSetupEvent } from './setup-events.js';
 import { currentSnapshotId, runInSnapshotScope, setScopeSnapshotId } from './snapshot-context.js';
 import { serviceFailure, serviceHeartbeat } from '../lib/service-supervisor.js';
+import { buildNoTradeDiagnostics } from './no-trade-diagnostics.js';
 import { buildSignalDecisionSnapshot, currentVersions, decisionConfig, deriveDecisionRecord } from './decision-record.js';
 import { persistDecisionRecord, persistSnapshot } from './decision-record-store.js';
 import { buildOptionPlanRow, optionLevelsOf, persistOptionPlan, planIdFor, recordOptionPlanEvent, type UnderlyingPlan } from './option-plans.js';
@@ -1478,7 +1481,7 @@ async function computeMarketBias(
         provider, underlying, exchange, mode, bars15m: closedNow, bars5m: structureTimeframe === '5m' ? structureClosed5m : null,
         structureRuns: structureTimeframe !== '5m' || structureClosed5m != null,
         candles1h, chain: chain ?? null, futures, lastClosedBar,
-        optionMetrics: { pcr: chain ? pcr : null, atmIvPct: atmIvPct > 0 ? atmIvPct : null, hvPct: hvPct ?? null, ivVsHv: atmIvPct > 0 ? ivVsHv.reading : null },
+        optionMetrics: { pcr: chain ? pcr : null, atmIvPct: atmIvPct > 0 ? atmIvPct : null, hvPct: hvPct ?? null, ivVsHv: atmIvPct > 0 ? ivVsHv.reading : null, positioningNet: voteSnapshot.positioningNet },
         marketRegime: { regime: fastRegime.regime, source: fastRegime.source },
       }).catch((err: any) => {
         logger.warn({ error: err.message, underlying, exchange }, 'Decision snapshot: capture failed — engines run on their own reads, poll not snapshotted');
@@ -2104,7 +2107,7 @@ async function computeMarketBias(
         families: [
           { family: 'MOMENTUM_BREAK', trigger: momentumRead?.trigger ?? null },
           ...(structureState ? [{ family: 'STRUCTURE' as const, state: structureState, run: structureRun, ...(structureLastBar ? { lastClosedBar: structureLastBar } : {}) }] : []),
-          ...(structureState && routed ? [{ family: 'MULTIPATH' as const, state: structureState, candidates: routed.paper, linkage: routed.linkage ?? null, run: familyRun }] : []),
+          ...(structureState && routed ? [{ family: 'MULTIPATH' as const, state: structureState, candidates: routed.paper, linkage: routed.linkage ?? null, run: familyRun, evaluatedBars: routed.evaluated, triggerFailures: routed.triggerFailures ?? 0 }] : []),
         ],
       })
     : { available: false, reason: 'Option chain unavailable for this symbol — cannot size a setup.' };
@@ -2117,7 +2120,7 @@ async function computeMarketBias(
     const occupied = routed.paper.filter((rc) => PAPER_TRADING_STAGES.includes(rc.stage) && !familyRun.reached.has(rc.lifecycleId));
     if (occupied.length > 0) {
       const heldSignalId = (tradeSetup as StoredTradeSetup).signalId ?? null;
-      const metrics = buildMetricsContext(closedNow, decisionIstDate());
+      const metrics = buildMetricsContext(closedNow, decisionIstDate(), voteSnapshot.positioningNet);
       recordSlotArbitration(
         underlying,
         exchange,
@@ -2151,7 +2154,7 @@ async function computeMarketBias(
     const link = { ...linkStructureToParent(claimed, routed?.linkage ?? null), decisionTime: lastClosedBar ? lastClosedBar.time + BAR_MS_15M : decisionNow() };
     recordSlotArbitration(underlying, exchange, [
       {
-        slot: structureSlotCandidate(claimed, claimed.rejectionFillPrice ?? chain?.spotPrice ?? claimed.entry ?? 0, null, link, buildMetricsContext(closedNow, decisionIstDate())),
+        slot: structureSlotCandidate(claimed, claimed.rejectionFillPrice ?? chain?.spotPrice ?? claimed.entry ?? 0, null, link, buildMetricsContext(closedNow, decisionIstDate(), voteSnapshot.positioningNet)),
         role: 'INELIGIBLE',
         rank: null,
         preBuildRank: 0,
@@ -3315,7 +3318,7 @@ async function resolveStickyTradeSetup(
   // 15m bar closed at the decision (a family decides at exactly that close).
   const decisionBarClose = lastClosedBar ? lastClosedBar.time + BAR_MS_15M : decisionNow();
   // One metric context for every engine: today's closed 15m bars up to the newest closed bar.
-  const metrics = buildMetricsContext(triggers?.bars15m ?? [], today);
+  const metrics = buildMetricsContext(triggers?.bars15m ?? [], today, voteSnapshot?.positioningNet ?? null);
   const tradedKey = `slot_traded:${exchange}:${underlying}:${mode}:${today}`;
   const tradedKeys = new Set<string>(JSON.parse((await redis.get(tradedKey).catch(() => null)) ?? '[]') as string[]);
   const markTraded = async (keys: readonly string[]) => {
@@ -3335,12 +3338,15 @@ async function resolveStickyTradeSetup(
       await recordStructureOutcome(structureFamily.state, structureFill, { outcome: 'REFUSED', code: 'PARENT_ALREADY_TRADED', reason: parentTradedReason, at: decisionNow() }, chain.spotPrice);
       entries.push({ kind: 'REFUSED', slot: structureSlotCandidate(structureFill, structureFill.rejectionFillPrice ?? chain.spotPrice, null, link, metrics), code: 'PARENT_ALREADY_TRADED', reason: parentTradedReason, optionBuild: false });
     } else {
+      const s1Slot = structureSlotCandidate(structureFill, structureFill.rejectionFillPrice ?? chain.spotPrice, null, link, metrics);
       entries.push(
-        await resolveStructureSetup({
-          provider, underlying, exchange, mode, key, today, setupTtl, chain, lc: structureFill, state: structureFamily.state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId,
-          link,
-          metrics,
-        })
+        await isolatedCandidate(s1Slot, () =>
+          resolveStructureSetup({
+            provider, underlying, exchange, mode, key, today, setupTtl, chain, lc: structureFill, state: structureFamily.state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId,
+            link,
+            metrics,
+          })
+        )
       );
     }
   }
@@ -3365,12 +3371,14 @@ async function resolveStickyTradeSetup(
       continue;
     }
     entries.push(
-      await resolveStructureSetup({
-        provider, underlying, exchange, mode, key, today, setupTtl, chain, lc, state: multipathFamily!.state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId,
-        link: { parentId: slot.parentId, anchorKeys: slot.anchorKeys, decisionTime: slot.decisionTime },
-        slot,
-        metrics,
-      })
+      await isolatedCandidate(slot, () =>
+        resolveStructureSetup({
+          provider, underlying, exchange, mode, key, today, setupTtl, chain, lc, state: multipathFamily!.state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId,
+          link: { parentId: slot.parentId, anchorKeys: slot.anchorKeys, decisionTime: slot.decisionTime },
+          slot,
+          metrics,
+        })
+      )
     );
   }
 
@@ -3382,14 +3390,27 @@ async function resolveStickyTradeSetup(
   try {
     indicator = await indicatorEngine();
   } catch (err: any) {
-    if (entries.length === 0) throw err;
+    // Never blocks the other engines' candidates: it is one more refused candidate.
     logger.warn({ error: err.message, underlying, exchange }, 'Indicator engine failed — arbitrating the other engines\' candidates');
-    indicator = { available: false, reason: 'Indicator engine failed.' };
+    const reason = `The indicator engine failed: ${err.message}`;
+    indicator = { kind: 'REFUSED', slot: indicatorSlotCandidate(indicatorId, direction, null, decisionBarClose), code: 'ENGINE_ERROR', reason, optionBuild: false, setup: { available: false, noTradeCode: 'ENGINE_ERROR', reason } };
   }
   const indicatorSetup: TradeSetup | null = isSlotEntry(indicator) ? (indicator.kind === 'REFUSED' ? indicator.setup ?? null : null) : indicator;
   await updateIndicatorWatch(indicator).catch((err: any) => logger.warn({ error: err.message, underlying, exchange }, 'Setup watch: indicator update failed'));
   if (isSlotEntry(indicator)) entries.push(indicator);
-  if (entries.length === 0) return indicatorSetup ?? { available: false, reason: 'No engine produced a candidate this check.' };
+  // NO TRADE: why, candidate by candidate (no-trade-diagnostics.ts).
+  let slotRecords: SlotArbitrationRecord[] = [];
+  const noTrade = (base: TradeSetup): TradeSetup => {
+    const indicatorRefusal = isSlotEntry(indicator) && indicator.kind === 'REFUSED' ? indicator : null;
+    const diagnostics = buildNoTradeDiagnostics(slotRecords, {
+      structure: structureFamily ? { enabled: true, lifecycles: structureFamily.state.lifecycles.map((l) => ({ stage: l.stage, direction: l.direction })), fillClaimed: structureFill != null } : null,
+      families: multipathFamily ? { paperCandidates: multipathFamily.candidates.length, triggerFailures: multipathFamily.triggerFailures ?? 0, evaluated: (multipathFamily.evaluatedBars ?? 0) > 0 } : null,
+      indicator: { direction, code: indicatorRefusal?.code ?? indicatorSetup?.noTradeCode ?? null, reason: indicatorRefusal?.reason ?? (indicatorSetup && !indicatorSetup.available ? indicatorSetup.reason : null) },
+    });
+    logger.info({ underlying, exchange, mode, candidates: diagnostics.candidatesEvaluated, limitingFactor: diagnostics.limitingFactor, best: diagnostics.bestRejected?.candidateId ?? null }, 'Signal engine: NO TRADE');
+    return { ...base, available: false, noTradeDiagnostics: diagnostics };
+  };
+  if (entries.length === 0) return noTrade(indicatorSetup ?? { available: false, reason: 'No engine produced a candidate this check.' });
   // Arbitration rows only when something besides the indicator engine took
   // part (a lone indicator read is already recorded by its own chain every poll).
   const arbitrated = entries.some((e) => e.slot.source !== 'INDICATOR');
@@ -3398,14 +3419,21 @@ async function resolveStickyTradeSetup(
     exchange,
     entries,
     markTraded,
+    // Best first: a candidate that fails this is recorded and the next-best is tried.
+    preMint: (entry) => preMintCheck(entry.setup, chain, decisionNow()),
     // The traded setup's watch ends here (TRADED) — under the same id it was watched with.
     onSelected: async (slot) => {
       await endWatchRow(setupWatchKey(exchange, underlying, mode, today), { exchange, underlying }, slot.candidateId, 'FILLED', decisionNow());
       if (slot.source !== 'S1' && slot.source !== 'INDICATOR') await endFamilyWatch(exchange, underlying, today, slot.candidateId, 'FILLED', decisionNow());
     },
-    ...(arbitrated ? { record: (r: SlotArbitrationRecord[]) => recordSlotArbitration(underlying, exchange, r) } : {}),
+    record: (r: SlotArbitrationRecord[]) => {
+      slotRecords = r;
+      if (arbitrated) recordSlotArbitration(underlying, exchange, r);
+    },
   });
-  return minted ?? indicatorSetup ?? { available: false, reason: 'No engine built an eligible setup this check.' };
+
+  if (minted) return minted;
+  return noTrade(indicatorSetup ?? { available: false, reason: 'No engine built an eligible setup this check.' });
 
   /**
    * The indicator engine's confirmed read — it reached the option build
@@ -3896,7 +3924,12 @@ async function resolveStickyTradeSetup(
       params: { deltaMin: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MIN, deltaMax: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MAX, deltaTarget: FNO_VALIDATION_PARAMS.OPTION_DELTA_TARGET },
       contextFor: (c) => {
         const move = c === chain ? primaryMove : targetMoveFor(c);
-        return { expectedMovePoints: move.targetMovePoints, expectedHoldHours, ivRank, hvPct: entryContext?.hvPct ?? null, ivCap: move.ivCap };
+        // The structural stop's underlying distance: to the level behind price plus the stop buffer (null when unknown).
+        const behind = entryContext?.locationBehindLevel ?? null;
+        const spotRef = entryContext?.locationSpot ?? chain.spotPrice;
+        const atrPts = entryContext?.atrPoints ?? null;
+        const underlyingStopPoints = behind != null && atrPts != null ? Math.abs(spotRef - behind) + TRADING_PARAMS.STRUCTURAL_STOP_BUFFER_ATR * atrPts : null;
+        return { expectedMovePoints: move.targetMovePoints, expectedHoldHours, ivRank, hvPct: entryContext?.hvPct ?? null, ivCap: move.ivCap, underlyingStopPoints };
       },
       fetchNextExpiry: (expiry) => buildOptionChain(provider, underlying, exchange, expiry),
       onError: (stage, err: any) => logger.warn({ error: err?.message ?? String(err), stage, underlying, exchange, mode }, 'F&O validation: next-expiry chain unavailable — no fallback contract'),
@@ -3930,6 +3963,8 @@ async function resolveStickyTradeSetup(
             richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
             // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
             rrGate: false,
+            // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
+            realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
             // EVIDENCE: the builder's own confidence floor is off too — confidence ranks, it does not refuse.
             ...(INDICATOR_CONFIDENCE_MODE === 'EVIDENCE' ? { confidenceGate: false } : {}),
           // An R:R refusal still carries its option levels (shown for a confirmed setup; never traded).
@@ -4359,7 +4394,7 @@ async function resolveMomentumBreakSetup(ctx: {
     primary: chain,
     side,
     params: { deltaMin: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MIN, deltaMax: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MAX, deltaTarget: FNO_VALIDATION_PARAMS.OPTION_DELTA_TARGET },
-    contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: entryContext?.hvPct ?? null, ivCap: null }),
+    contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: entryContext?.hvPct ?? null, ivCap: null, underlyingStopPoints: stopDistance }),
     fetchNextExpiry: (expiry) => buildOptionChain(provider, underlying, exchange, expiry),
     onError: (stage, err: any) => logger.warn({ error: err?.message ?? String(err), stage, underlying, exchange }, 'Momentum break: next-expiry chain unavailable — no fallback contract'),
     build: (c, strike) => {
@@ -4388,6 +4423,8 @@ async function resolveMomentumBreakSetup(ctx: {
           richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
           // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
           rrGate: false,
+          // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
+          realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
           ...(FNO_VALIDATION
             ? { fnoValidation: { enabled: true, maxCostPctOfPremium: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM, minOptionStopAtr: FNO_VALIDATION_PARAMS.MIN_OPTION_STOP_ATR } }
             : {}),
@@ -4449,6 +4486,9 @@ interface MultipathFamilyInput {
   linkage: ParentLinkage | null;
   /** Filled by resolveStickyTradeSetup: candidates that reached the slot path (absent = none — the slot held an open trade). */
   run?: { reached: Set<string> };
+  /** Bars the router evaluated this check (0 = no new bar), and triggers that failed on them. */
+  evaluatedBars?: number;
+  triggerFailures?: number;
 }
 interface TriggerFamilies {
   lastClosedBar: { time: number; close: number; open?: number; high?: number; low?: number } | null;
@@ -4517,7 +4557,7 @@ async function captureDecisionSnapshot(args: {
   chain: OptionChain | null;
   futures: FuturesChainResponse | null;
   lastClosedBar: { time: number } | null;
-  optionMetrics: { pcr: number | null; atmIvPct: number | null; hvPct: number | null; ivVsHv: string | null };
+  optionMetrics: { pcr: number | null; atmIvPct: number | null; hvPct: number | null; ivVsHv: string | null; positioningNet?: number | null };
   marketRegime: { regime: string; source: string } | null;
 }): Promise<{ polledAt: number; structureInputs: StructureInputs | null; familyRouterState: FamilyRouterState | null; chain: OptionChain | null; snapshotId: string | null }> {
   const { provider, underlying, exchange, mode, bars15m, bars5m, chain } = args;
@@ -4635,6 +4675,13 @@ async function advanceStructureLifecycle(
     logger.warn({ error: err.message, underlying, exchange }, 'Structure: lifecycle read failed — no structure setups this poll');
     return null;
   }
+}
+
+/** Trading hours in this exchange's current session (the exchange calendar) — what a day's theta is spent over. */
+function sessionHoursFor(exchange: Exchange): number {
+  const w = getLatestSessionWindow(exchange, decisionNow());
+  const h = w ? (w.close - w.open) / 3_600_000 : null;
+  return h != null && h > 0 ? h : 6.25;
 }
 
 /** Records what the live engine did at a fill, on the lifecycle and as a lifecycle row. */
@@ -4986,7 +5033,7 @@ async function resolveStructureSetup(ctx: {
     primary: chain,
     side,
     params: { deltaMin: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MIN, deltaMax: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MAX, deltaTarget: FNO_VALIDATION_PARAMS.OPTION_DELTA_TARGET },
-    contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: entryContext?.hvPct ?? null, ivCap: null }),
+    contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: entryContext?.hvPct ?? null, ivCap: null, underlyingStopPoints: stopDistance }),
     fetchNextExpiry: (expiry) => buildOptionChain(provider, underlying, exchange, expiry),
     onError: (stage, err: any) => logger.warn({ error: err?.message ?? String(err), stage, underlying, exchange }, 'Structure: next-expiry chain unavailable — no fallback contract'),
     build: (c, strike) => {
@@ -5017,6 +5064,8 @@ async function resolveStructureSetup(ctx: {
           richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
           // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
           rrGate: false,
+          // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
+          realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
           ...(FNO_VALIDATION
             ? {
                 fnoValidation: {
@@ -5144,6 +5193,8 @@ async function planForLifecycle(
       richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
       // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
       rrGate: false,
+      // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
+      realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
       plan: true,
       ...(FNO_VALIDATION
         ? { fnoValidation: { enabled: true, maxCostPctOfPremium: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM, minOptionStopAtr: FNO_VALIDATION_PARAMS.MIN_OPTION_STOP_ATR, ...(fiveMinute ? { noiseAtrPoints: lc.atr } : {}) } }
@@ -5155,7 +5206,7 @@ async function planForLifecycle(
     primary: chain,
     side,
     params: { deltaMin: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MIN, deltaMax: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MAX, deltaTarget: FNO_VALIDATION_PARAMS.OPTION_DELTA_TARGET },
-    contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: null, ivCap: null }),
+    contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: null, ivCap: null, underlyingStopPoints: stopDistance }),
     fetchNextExpiry: (expiry) => buildOptionChain(provider, underlying, exchange, expiry),
     onError: (stage, err: any) => logger.warn({ error: err?.message ?? String(err), stage, underlying, exchange }, 'Setup watch: next-expiry chain unavailable — no fallback contract'),
     build: (c, strike, ctx) => build(c, strike, ctx.expectedMovePoints),
@@ -5403,7 +5454,7 @@ async function buildStructurePreview(
     primary: chain,
     side,
     params: { deltaMin: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MIN, deltaMax: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MAX, deltaTarget: FNO_VALIDATION_PARAMS.OPTION_DELTA_TARGET },
-    contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: null, ivCap: null }),
+    contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: null, ivCap: null, underlyingStopPoints: stopDistance }),
     fetchNextExpiry: (expiry) => buildOptionChain(provider, underlying, exchange, expiry),
     onError: (stage, err: any) => logger.warn({ error: err?.message ?? String(err), stage, underlying, exchange }, 'Structure preview: next-expiry chain unavailable — no fallback contract'),
     build: (c, strike) => {
@@ -5432,6 +5483,8 @@ async function buildStructurePreview(
           richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
           // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
           rrGate: false,
+          // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
+          realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
           ...(FNO_VALIDATION
             ? {
                 fnoValidation: {

@@ -127,7 +127,8 @@ export interface SignalDecisionSnapshot {
     futures: FuturesChainResponse | null;
     /** Stored compressed (gzip + base64) in the database. */
     optionChain: OptionChain | null;
-    optionMetrics: { pcr: number | null; atmIvPct: number | null; hvPct: number | null; ivVsHv: string | null };
+    /** positioningNet: the net option-chain positioning vote (futures OI + PCR + option OI flow); absent on SNAP-1.0 rows before ARB-2.0. */
+    optionMetrics: { pcr: number | null; atmIvPct: number | null; hvPct: number | null; ivVsHv: string | null; positioningNet?: number | null };
     marketRegime: { regime: string; source: string } | null;
     /** The liquidity map of today's session on the closed 15m bars (diagnostic; the engines build their own pools from the same bars). */
     liquidityMap: readonly unknown[];
@@ -201,6 +202,8 @@ export interface DecisionRecord {
     events: unknown[];
     linkage: unknown | null;
     watch: Array<{ lifecycleId: string; lastIndex: number; ended: { reason: string; at: number } | null }>;
+    /** Triggers that failed on a bar (error / look-ahead): only their own candidates were lost. */
+    triggerFailures?: Array<{ triggerId: string; decisionIndex: number; kind: string; message: string }>;
   };
   /** Every trigger candidate decided this time (families) and the S1 fill. */
   candidates: DecisionCandidateRecord[];

@@ -66,6 +66,14 @@ export interface FnoChainContext {
   hvPct: number | null;
   /** Rule 2's record for this chain; null when the family's target is structural. */
   ivCap: TradeSetupFnoValidation['ivCap'];
+  /**
+   * The trade's invalidation distance on the UNDERLYING (points). When known,
+   * strikes are compared on the R:R each would have against this same move
+   * (comparableRR) — so percentage-of-premium stop rules (floors, caps,
+   * expiry-day widening) cannot make a cheap OTM contract look better than
+   * the ATM one. The trade itself keeps its own built stop.
+   */
+  underlyingStopPoints?: number | null;
 }
 
 export interface ValidatedBuild {
@@ -100,6 +108,22 @@ export interface StrikeBuild {
   setup: TradeSetup;
   /** The contract's instrument token — the last tie-break (absent in older callers: ''). */
   token?: string | null;
+  /** Net R:R against the common underlying invalidation (comparableNetRR); ranks in place of netRR when present. */
+  comparableRR?: number | null;
+}
+
+/**
+ * Net R:R of a built leg measured against the trade's UNDERLYING
+ * invalidation: (target − entry − cost) / (|Δ| × underlyingStop + cost).
+ * Every strike faces the same underlying risk, so only what the move really
+ * pays each contract (delta, gamma, theta, cost) separates them.
+ */
+export function comparableNetRR(setup: TradeSetup, delta: number | null, underlyingStopPoints: number | null | undefined): number | null {
+  if (!setup.available || setup.entry == null || setup.target == null || setup.estimatedCostPct == null) return null;
+  if (delta == null || !Number.isFinite(delta) || !(underlyingStopPoints != null && underlyingStopPoints > 0)) return null;
+  const cost = setup.entry * (setup.estimatedCostPct / 100);
+  const risk = Math.abs(delta) * underlyingStopPoints + cost;
+  return risk > 0 ? Math.round(((setup.target - setup.entry - cost) / risk) * 100) / 100 : null;
 }
 
 /** Net R:R after costs of a built (or R:R-planned) leg: (target − entry − cost) / (entry − SL + cost). */
@@ -118,7 +142,10 @@ export function strikeNetRR(setup: TradeSetup): number | null {
  *   1. tradeable — the builder accepted it (every hard check passed); among
  *      refusals, an R:R-only refusal (it still has a plan) first, then the
  *      most specific refusal
- *   2. net R:R after the option cost model, higher first (2 dp)
+ *   2. net R:R after the option cost model, higher first (2 dp) — measured
+ *      against the common underlying invalidation (comparableRR, OPTSEL-2.0)
+ *      when the caller knows it, so premium-% stop rules cannot favour a
+ *      cheap OTM contract
  *   3. execution quality — bid-ask spread % of mid, tighter first
  *   4. sensitivity — |delta| nearest the target delta
  *   5. premium risk — entry − SL per unit, smaller first
@@ -140,7 +167,7 @@ export function rankStrikeBuilds(builds: readonly StrikeBuild[], deltaTarget: nu
     return (
       tier(a) - tier(b) ||
       (tier(a) === 2 ? refusalSpecificity(b.setup.noTradeCode) - refusalSpecificity(a.setup.noTradeCode) : 0) ||
-      nz(strikeNetRR(b.setup), -Infinity) - nz(strikeNetRR(a.setup), -Infinity) ||
+      nz(b.comparableRR ?? strikeNetRR(b.setup), -Infinity) - nz(a.comparableRR ?? strikeNetRR(a.setup), -Infinity) ||
       nz(a.spreadPct, Infinity) - nz(b.spreadPct, Infinity) ||
       Math.abs(Math.abs(nz(a.delta, 0)) - deltaTarget) - Math.abs(Math.abs(nz(b.delta, 0)) - deltaTarget) ||
       nz(la ? la.entry! - la.stopLoss! : null, Infinity) - nz(lb ? lb.entry! - lb.stopLoss! : null, Infinity) ||
@@ -234,6 +261,7 @@ export function optionCandidatesOf(args: { chain: OptionChain; side: OptionType;
       premiumRisk: levels && levels.entry != null && levels.stopLoss != null ? r2(levels.entry - levels.stopLoss) : null,
       targetPotential: levels && levels.entry != null && levels.target != null && levels.entry > 0 ? r2((levels.target - levels.entry) / levels.entry) : null,
       netRR: strikeNetRR(b.setup),
+      comparableRR: b.comparableRR ?? null,
       status: rejected ? 'REJECTED' : sel ? 'SELECTED' : 'RANKED',
       rank: rejected ? null : ++rank,
       rejectedAt: rejected ? stageOfRefusal(b.setup.noTradeCode) : null,
@@ -255,6 +283,7 @@ export function optionCandidatesOf(args: { chain: OptionChain; side: OptionType;
       premiumRisk: null,
       targetPotential: null,
       netRR: null,
+      comparableRR: null,
       status: 'REJECTED',
       rank: null,
       rejectedAt: rej.stage,
@@ -299,7 +328,10 @@ export function validateOnChain(args: {
     return (side === 'CE' ? row?.call?.token : row?.put?.token) ?? null;
   };
   const ranked = rankStrikeBuilds(
-    inBand.map((c) => ({ strike: c.strike, delta: c.delta ?? null, spreadPct: c.spreadPct ?? null, setup: build(chain, c.strike, context), token: tokenOf(c.strike) })),
+    inBand.map((c) => {
+      const setup = build(chain, c.strike, context);
+      return { strike: c.strike, delta: c.delta ?? null, spreadPct: c.spreadPct ?? null, setup, token: tokenOf(c.strike), comparableRR: comparableNetRR(setup, c.delta ?? null, context.underlyingStopPoints) };
+    }),
     params.deltaTarget,
     chain.atmStrike
   );
