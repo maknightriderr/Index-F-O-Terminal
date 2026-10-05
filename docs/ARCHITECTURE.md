@@ -201,7 +201,35 @@ replay(snapshotId)   (decision-record-store.ts)
 - **Immutability**: Postgres rules make an UPDATE of a snapshot or of a record's decision columns a no-op (only `outcome` / `outcome_at` may be written later); trigger-event links are insert-only.
 - **Snapshot id**: a UUID-shaped sha256 of exchange / symbol / mode / T / polledAt (deterministic).
 
-## 8. Background services (18)
+## 8. Background services (18) — supervised (Phase 6)
+
+`ServiceSupervisor` (lib/service-supervisor.ts) starts, watches and stops every service. Each registers
+{name, critical, startupTimeoutMs, heartbeatIntervalMs}. States STARTING → RUNNING ⇄ DEGRADED → FAILED →
+RESTARTING → RUNNING; STOPPED at shutdown. TIMER services keep their own code: the supervisor captures the
+timers each creates (incl. an interval set by a delayed first tick) — every completed run is a heartbeat, a
+throw / rejection a failure; 3 consecutive failures or > 4 missed intervals → FAILED → restart with
+exponential backoff (5 s × 2ⁿ, max 5 restarts). COMPONENTS report `serviceHeartbeat` / `serviceFailure`.
+Critical: tradeSetupPriceMonitor, signalEngine, setupLifecycle — any not RUNNING → `/api/health` DEGRADED
+(`supervisor` block lists every service with state, lastSuccessAt, failureCount, restarts).
+
+| Registration | Critical | Kind | Notes |
+|---|---|---|---|
+| alertScanner, patternScanner, institutionalFlowScanner, marketScanner, fiiDiiTracker, abandonedSetupSweep, oiCloseSnapshot, cacheWarmer, strategyTracker, positionalStockScan, backgroundBiasEvaluator, holidayCalendarCheck, systemLearningAudit | no | TIMER | heartbeat = own interval |
+| marketStateCapture, missedWinnerAudit, setupEventsGrading, opportunityCensus | no | TIMER | start after the capture schema check |
+| tradeSetupPriceMonitor | **yes** | TIMER | starts after Redis is rebuilt from PostgreSQL; its sweep reports its own outcome |
+| signalEngine (extra) | **yes** | COMPONENT | the bias / signal computation has no single service among the 18 (browser polls, marketScanner, backgroundBiasEvaluator all run it); heartbeat = a completed computation, expected only in session (10 min) |
+| setupLifecycle (extra) | **yes** | COMPONENT | the structure lifecycle advance runs inside the signal computation; heartbeat = a completed advance (20 min, in session) |
+
+Recovery (services/state-recovery.ts): PostgreSQL is the source of truth; on boot Redis is rebuilt from it
+before the monitor starts — trade_setup:* (open signals rows + the trailing stop from option_plan_events;
+closed-in-PG removed), structure_outcome / structure_claimed / structure_event dedupe keys
+(setup_lifecycle_events), slot_traded (minted ARBITRATION rows, union), setup_watch rows (the latest
+LIFECYCLE row carries the whole row). Where they disagree, PostgreSQL wins (the trailing stop only when PG
+recorded one; a cached trade with no PG row yet is kept for the existing backfill).
+
+Shutdown: supervisor + every service timer → server.close → WS disconnect → logout → sql.end → redis.disconnect.
+
+The 18 services:
 
 | Service | Frequency | Role |
 |---|---|---|
@@ -268,7 +296,7 @@ Redis
 
 ## 13. Request priority
 
-`apps/server/src/lib/request-priority.ts`: interactive `/api/*` requests run before background jobs on Angel One's rate-limited endpoints (`runInteractive` / `runBackground`).
+`apps/server/src/lib/request-priority.ts`: interactive `/api/*` requests run before background jobs on Angel One's rate-limited endpoints (`runInteractive`). Max-wait cap (Phase 6, `nextLane`): a background request waiting ≥ `REQUEST_MAX_WAIT_MS` (default 30 s) is promoted ahead of the interactive queue.
 
 ## 14. AI assistant
 
@@ -276,7 +304,7 @@ Redis
 
 ## 15. Angel One authentication
 
-Boot: `ANGEL_ONE_API_KEY + CLIENT_ID + PASSWORD + TOTP_SECRET` → `provider.authenticate()` → `subscriptionManager.connect()`. Every 8 h: `refreshAuth()` or full TOTP re-login. Shutdown (SIGTERM/SIGINT): `server.close()` → `subscriptionManager.disconnect()` → `provider.logout()` → `sql.end()` → `redis.disconnect()`.
+Boot: `ANGEL_ONE_API_KEY + CLIENT_ID + PASSWORD + TOTP_SECRET` → `provider.authenticate()` → `subscriptionManager.connect()`. Every 8 h: `refreshAuth()` or full TOTP re-login. Shutdown (SIGTERM/SIGINT): `serviceSupervisor.stopAll()` (+ the re-auth timer) → `server.close()` → `subscriptionManager.disconnect()` → `provider.logout()` → `sql.end()` → `redis.disconnect()`.
 
 ## 16. Learning system (EOD self-audit)
 
@@ -305,3 +333,4 @@ Observation only: `startSystemLearningAudit` → `learningDetectors.ts` → `lea
 - **2026-10-05 — Phase 3: option selection contract + option plans (`OPTSEL-1.0`).** The OptionCandidate record (`optionCandidatesOf`, every strike with stage / reason; pipeline order availability → liquidity → spread → delta → premium risk → target potential → net R:R → rank), a final token tie-break in `rankStrikeBuilds` (the chosen strike is unchanged — a side never has two equal strikes), migration `035_option_plans.sql` (option_plans immutable, option_plan_events insert-only; PGlite-validated), `option-plans.ts` (plan row at the mint incl. option T2 = T1 + |Δ| × the underlying move T1→T2; TSL_MOVED on each trailing-stop ratchet; CLOSED at the exit).
 - **2026-10-05 — Phase 4: parent identity + slot semantics (PARENT-2.0, `+parent-identity.1`).** `groupIntoParents` groups by origin event / origin level within a fixed window (no time-proximity merge), with a stable hashed `parentId` (`parentIdFor`); the linkage maps every sweep to its move (S1 joins by the same rule); `slotRuleFor` + `slotDecision` on every arbitration row (incl. SLOT_OCCUPIED rows for family candidates and S1 fills that met an open trade). Live stamps carry `+parent-identity.1`.
 - **2026-10-05 — Phase 5: data freshness and gap protection.** `feed-freshness.ts` (FeedTracker states, `resolveGapTouch`), SubscriptionManager filtering / partial batches / gap + RECOVERING transitions / `refreshConnection`, exchange timestamp + sequence parsed from the binary feed, `feed-gap-check.ts` (no assumed fills: FILL_UNCERTAIN / MISSED_TOUCH_POSSIBLE), `auth-refresh.ts` (retry + alert + feed reconnect), `/api/health` feed states, `/api/diagnostics/feed-gaps`, System Health "Data feed" table.
+- **2026-10-05 — Phase 6: ServiceSupervisor, clean shutdown, state recovery.** All 18 services + 2 components supervised (critical: tradeSetupPriceMonitor, signalEngine, setupLifecycle); health DEGRADED on a critical failure; shutdown order supervisor-first; Redis rebuilt from PostgreSQL at boot (PG wins); setup-watch LIFECYCLE rows carry the whole row; request-priority max-wait cap.

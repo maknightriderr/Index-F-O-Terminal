@@ -223,6 +223,7 @@ import {
 } from './slot-arbitration.js';
 import { recordSetupEvent } from './setup-events.js';
 import { currentSnapshotId, runInSnapshotScope, setScopeSnapshotId } from './snapshot-context.js';
+import { serviceFailure, serviceHeartbeat } from '../lib/service-supervisor.js';
 import { buildSignalDecisionSnapshot, currentVersions, decisionConfig, deriveDecisionRecord } from './decision-record.js';
 import { persistDecisionRecord, persistSnapshot } from './decision-record-store.js';
 import { buildOptionPlanRow, optionLevelsOf, persistOptionPlan, planIdFor, recordOptionPlanEvent, type UnderlyingPlan } from './option-plans.js';
@@ -347,8 +348,11 @@ export async function buildMarketBias(
 
   try {
     // One snapshot scope per poll: rows written by this poll carry its decision snapshot id (snapshot-context.ts).
-    return await runInSnapshotScope(() => computeMarketBias(provider, underlying, exchange, cacheKey, mode));
+    const result = await runInSnapshotScope(() => computeMarketBias(provider, underlying, exchange, cacheKey, mode));
+    serviceHeartbeat('signalEngine');
+    return result;
   } catch (err: any) {
+    serviceFailure('signalEngine', err);
     // Fresh computation failed — try to return the last successful result
     // from Redis so the frontend stays on real data instead of falling back
     // to mocks and showing the "signal engine unreachable" banner.
@@ -4624,8 +4628,10 @@ async function advanceStructureLifecycle(
       }
     }
     await writeLiveState(state);
+    serviceHeartbeat('setupLifecycle');
     return state;
   } catch (err: any) {
+    serviceFailure('setupLifecycle', err);
     logger.warn({ error: err.message, underlying, exchange }, 'Structure: lifecycle read failed — no structure setups this poll');
     return null;
   }

@@ -23,3 +23,30 @@ export function runInteractive<T>(fn: () => T): T {
 export function isInteractiveRequest(): boolean {
   return context.getStore() === 'interactive';
 }
+
+// ---------------- fairness: the background max-wait cap (Phase 6) ----------------
+// Interactive work still goes first — but a background request that has
+// waited longer than REQUEST_MAX_WAIT_MS is promoted ahead of the interactive
+// queue, so a busy terminal can never starve the scanners and monitors.
+
+const DEFAULT_MAX_WAIT_MS = 30_000;
+
+/** REQUEST_MAX_WAIT_MS (ms, > 0); anything else is the default (30 s). */
+export function parseMaxWaitMs(raw: string | undefined): number {
+  const n = raw == null ? NaN : Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_WAIT_MS;
+}
+
+export const BACKGROUND_MAX_WAIT_MS = parseMaxWaitMs(process.env.REQUEST_MAX_WAIT_MS);
+
+/**
+ * Which queue is served next: interactive first, unless the oldest
+ * background request has waited at least `maxWaitMs`.
+ */
+export function nextLane(args: { highWaiting: number; normalWaiting: number; oldestNormalEnqueuedAt: number | null; now: number; maxWaitMs?: number }): 'high' | 'normal' | null {
+  const { highWaiting, normalWaiting, oldestNormalEnqueuedAt, now } = args;
+  const maxWait = args.maxWaitMs ?? BACKGROUND_MAX_WAIT_MS;
+  if (normalWaiting > 0 && oldestNormalEnqueuedAt != null && now - oldestNormalEnqueuedAt >= maxWait) return 'normal';
+  if (highWaiting > 0) return 'high';
+  return normalWaiting > 0 ? 'normal' : null;
+}

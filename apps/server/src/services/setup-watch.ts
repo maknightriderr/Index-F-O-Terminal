@@ -84,6 +84,8 @@ export async function writeSetupWatch(
             strikeChanges: row.strikeChanges,
             optionBuildFailures: row.optionBuildFailures,
             ended: row.ended,
+            // Phase 6: the whole row as written — PostgreSQL is the source the Redis watch is rebuilt from.
+            row,
           },
         },
         versions: {

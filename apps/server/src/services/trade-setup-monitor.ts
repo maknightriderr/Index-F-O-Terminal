@@ -46,6 +46,7 @@ import type { LockedSetupWatch } from './market-bias.js';
 import type { MarketDataProvider } from '../providers/interface.js';
 import type { FeedGap, SubscriptionManager, SubscriptionTarget } from '../lib/subscription-manager.js';
 import { istMinute, runGapCheck } from './feed-gap-check.js';
+import { serviceFailure, TICK_FAILED } from '../lib/service-supervisor.js';
 
 // Tighter than the institutional scanner's 15 minutes, and independent of
 // whether any browser happens to be polling — still comfortably clear of
@@ -78,9 +79,13 @@ export function startTradeSetupPriceMonitor(provider: MarketDataProvider, subscr
   if (monitorStarted) return;
   monitorStarted = true;
 
-  const tick = () => {
-    runMonitor(provider, subscriptions).catch((err) => logger.error({ error: err.message }, 'Trade setup price monitor tick failed'));
-  };
+  // Phase 6: the sweep's outcome is the supervisor's heartbeat / failure (never a rejected promise).
+  const tick = () =>
+    runMonitor(provider, subscriptions).catch((err) => {
+      logger.error({ error: err.message }, 'Trade setup price monitor tick failed');
+      serviceFailure('tradeSetupPriceMonitor', err);
+      return TICK_FAILED;
+    });
 
   if (subscriptions) {
     subscriptions.onTick((ticks) => onTicks(provider, subscriptions, ticks));

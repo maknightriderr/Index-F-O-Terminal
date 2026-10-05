@@ -13,6 +13,9 @@ import { redis, pingRedis } from './lib/redis.js';
 import { sql, pingDb } from './lib/db.js';
 import { SubscriptionManager } from './lib/subscription-manager.js';
 import { refreshAuthWithRetry } from './lib/auth-refresh.js';
+import { serviceSupervisor, type ServiceSpec } from './lib/service-supervisor.js';
+import { rehydrateFromPostgres } from './services/state-recovery.js';
+import { isMarketOpen } from '@fno/shared';
 import { notifyOperationalAlert } from './services/telegram.js';
 import { runInteractive } from './lib/request-priority.js';
 import { startHolidayCalendarCheck } from './services/holiday-calendar-check.js';
@@ -170,9 +173,12 @@ app.get('/api/health', async (_req, res) => {
     },
   };
 
-  // The feed counts only while it is down in session (a token gap is shown per token, not as an outage).
+  // Phase 6: every supervised service, and the critical ones that are not RUNNING.
+  const supervisor = { services: serviceSupervisor.snapshot(), degradedCritical: serviceSupervisor.degradedCritical().map((s) => s.name) };
+  // The feed counts only while it is down in session (a token gap is shown per token, not as an outage);
+  // a critical service that is not RUNNING degrades the whole system.
   const overall =
-    services.redis.status === 'HEALTHY' && services.database.status === 'HEALTHY' && !feed.upstreamDown
+    services.redis.status === 'HEALTHY' && services.database.status === 'HEALTHY' && !feed.upstreamDown && supervisor.degradedCritical.length === 0
       ? 'HEALTHY'
       : 'DEGRADED';
 
@@ -184,6 +190,7 @@ app.get('/api/health', async (_req, res) => {
       timestamp: Date.now(),
       services,
       feed,
+      supervisor,
       version: '0.1.0',
     },
   });
@@ -268,54 +275,63 @@ async function authenticateOnBoot(): Promise<void> {
 }
 
 authenticateOnBoot();
-startAlertScanner(provider);
-startPatternScanner(provider);
-startInstitutionalFlowScanner(provider);
-startTradeSetupPriceMonitor(provider, subscriptionManager);
-startMarketScanner(provider);
-startFiiDiiTracker();
-startAbandonedSetupSweep();
-startOiCloseSnapshot(provider);
-startCacheWarmer(provider);
-startStrategyTracker(provider);
-startPositionalStockScan(provider);
-// Non-NSE dashboard symbols (SENSEX, CRUDEOIL, GOLD by default) evaluated on a
-// timer with no browser open — flag BACKGROUND_BIAS, see the service header.
-startBackgroundBiasEvaluator(provider);
-// The historical market-state record. Until these ran, the five capture
-// tables had never had a row written to them, which is what made the
-// chain-dependent half of the engine unreplayable and left every shadow rule
-// without the forward observations it needs to be promoted.
+// --- Background services: started, watched and stopped by the ServiceSupervisor (Phase 6) ---
+// The 18 existing start*() jobs, unchanged, each registered with its
+// criticality and timeouts (heartbeat 0 = derived from the job's own
+// interval). Plus two COMPONENT registrations for work that is not one of the
+// 18 (see their notes). Critical: tradeSetupPriceMonitor, signalEngine,
+// setupLifecycle — any of them not RUNNING makes /api/health DEGRADED.
 //
-// The schema has to be ensured first, and it cannot be assumed: the deploy
-// start command is `node dist/index.js` and runs no migration, so without
-// this the capture writers would insert into tables that do not exist,
-// swallow the error (every capture write is fire-and-forget by design), and
-// record nothing while the service reported itself healthy.
-void ensureCaptureSchema()
-  .then(() => {
-    startMarketStateCapture(provider);
-    startMissedWinnerAudit(provider);
-    startSetupEventsGrading(provider);
-    startOpportunityCensus(provider);
-  })
-  .catch((err: any) => {
-    // Capture is instrumentation. It must never keep the engine down.
-    logger.error({ error: err.message }, 'Capture schema check failed — starting capture anyway');
-    startMarketStateCapture(provider);
-    startMissedWinnerAudit(provider);
-    startSetupEventsGrading(provider);
-    startOpportunityCensus(provider);
-  });
-startHolidayCalendarCheck();
-// The self-audit. Runs after the day's capture is in, feeds the failures the
-// existing audits already report into a durable learning record, and re-runs
-// the standing regression cases. It can change what the system NOTICES; it
-// cannot change what it DOES — every trading-path finding stops at a
-// proposal awaiting human approval.
-startSystemLearningAudit(provider);
+// The schema has to be ensured first for the four capture jobs, and it cannot
+// be assumed: the deploy start command is `node dist/index.js` and runs no
+// migration. Capture is instrumentation — a failed check still starts them.
+// PostgreSQL is the source of truth: Redis is rebuilt from it (state-recovery)
+// before the trade-setup monitor starts.
+const schemaReady = ensureCaptureSchema().catch((err: any) => {
+  logger.error({ error: err.message }, 'Capture schema check failed — starting capture anyway');
+});
+const recoveryReady = schemaReady
+  .then(() => Promise.race([rehydrateFromPostgres(), new Promise((r) => setTimeout(r, 20_000).unref())]))
+  .catch((err: any) => logger.error({ error: err.message }, 'State recovery failed — Redis left as it was'));
+const anySession = (now: number) => isMarketOpen('NSE', now) || isMarketOpen('BSE', now) || isMarketOpen('MCX', now);
 
-setInterval(() => {
+serviceSupervisor.setLogger(logger);
+const timerService = (name: string, start: () => unknown, opts: Partial<ServiceSpec> = {}): ServiceSpec => ({
+  name, critical: false, startupTimeoutMs: 30_000, heartbeatIntervalMs: 0, kind: 'TIMER', start, ...opts,
+});
+for (const spec of [
+  timerService('alertScanner', () => startAlertScanner(provider)),
+  timerService('patternScanner', () => startPatternScanner(provider)),
+  timerService('institutionalFlowScanner', () => startInstitutionalFlowScanner(provider)),
+  timerService('tradeSetupPriceMonitor', () => startTradeSetupPriceMonitor(provider, subscriptionManager), { critical: true, ready: () => recoveryReady }),
+  timerService('marketScanner', () => startMarketScanner(provider)),
+  timerService('fiiDiiTracker', () => startFiiDiiTracker()),
+  timerService('abandonedSetupSweep', () => startAbandonedSetupSweep()),
+  timerService('oiCloseSnapshot', () => startOiCloseSnapshot(provider)),
+  timerService('cacheWarmer', () => startCacheWarmer(provider)),
+  timerService('strategyTracker', () => startStrategyTracker(provider)),
+  timerService('positionalStockScan', () => startPositionalStockScan(provider)),
+  // Non-NSE dashboard symbols (SENSEX, CRUDEOIL, GOLD by default) evaluated on a timer — flag BACKGROUND_BIAS.
+  timerService('backgroundBiasEvaluator', () => startBackgroundBiasEvaluator(provider)),
+  timerService('marketStateCapture', () => startMarketStateCapture(provider), { ready: () => schemaReady }),
+  timerService('missedWinnerAudit', () => startMissedWinnerAudit(provider), { ready: () => schemaReady }),
+  timerService('setupEventsGrading', () => startSetupEventsGrading(provider), { ready: () => schemaReady }),
+  timerService('opportunityCensus', () => startOpportunityCensus(provider), { ready: () => schemaReady }),
+  timerService('holidayCalendarCheck', () => startHolidayCalendarCheck()),
+  // The self-audit: it can change what the system NOTICES, never what it DOES.
+  timerService('systemLearningAudit', () => startSystemLearningAudit(provider)),
+  {
+    name: 'signalEngine', critical: true, startupTimeoutMs: 5_000, heartbeatIntervalMs: 10 * 60_000, kind: 'COMPONENT' as const, start: () => undefined, activeWhen: anySession,
+    note: 'Extra: the bias / signal computation (computeMarketBias) runs from browser polls, marketScanner and backgroundBiasEvaluator — no single one of the 18 represents it. Heartbeat = a completed computation.',
+  },
+  {
+    name: 'setupLifecycle', critical: true, startupTimeoutMs: 5_000, heartbeatIntervalMs: 20 * 60_000, kind: 'COMPONENT' as const, start: () => undefined, activeWhen: (now: number) => isMarketOpen('NSE', now) || isMarketOpen('MCX', now),
+    note: 'Extra: the structure lifecycle advance runs inside the signal computation, not as one of the 18. Heartbeat = a completed advance.',
+  },
+] satisfies ServiceSpec[]) serviceSupervisor.register(spec);
+void serviceSupervisor.startAll();
+
+const authRefreshTimer = setInterval(() => {
   const { apiKey, clientId, password, totpSecret } = config.angelOne;
   if (!apiKey || !clientId || !password) return;
 
@@ -339,6 +355,11 @@ setInterval(() => {
 
 const shutdown = async (signal: string) => {
   logger.info({ signal }, 'Shutting down...');
+
+  // Phase 6 order: the supervisor and every service timer first, then the
+  // HTTP server, the upstream WS, the broker session, Postgres, Redis.
+  serviceSupervisor.stopAll();
+  clearInterval(authRefreshTimer);
 
   server.close(() => {
     logger.info('HTTP server closed');

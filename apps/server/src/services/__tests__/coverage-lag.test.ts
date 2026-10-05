@@ -227,7 +227,8 @@ describe('background bias evaluator — targets and gating', () => {
   it('is started from index.ts next to the other background services', () => {
     const src = readFileSync(path.join(REPO_ROOT, 'apps/server/src/index.ts'), 'utf-8');
     expect(src).toContain("import { startBackgroundBiasEvaluator } from './services/background-bias-evaluator.js';");
-    expect(src).toContain('startBackgroundBiasEvaluator(provider);');
+    // Since Phase 6 every background service is started through the ServiceSupervisor.
+    expect(src).toContain("timerService('backgroundBiasEvaluator', () => startBackgroundBiasEvaluator(provider))");
   });
 });
 
