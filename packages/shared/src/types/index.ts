@@ -328,9 +328,39 @@ export interface SpreadLeg {
   premium: number;
 }
 
+/** Where a NO TRADE candidate failed. */
+export type NoTradeStage = 'SAFETY_GATE' | 'SEQUENCE' | 'OPTION_COST_LIQUIDITY' | 'DATA_QUALITY' | 'PARENT_ALREADY_TRADED' | 'SLOT_OCCUPIED' | 'ENGINE_ERROR' | 'OTHER';
+
+export interface NoTradeCandidate {
+  candidateId: string;
+  source: string;
+  direction: string;
+  parentId: string | null;
+  /** Rank among all candidates on the pre-build criteria (1 = best). */
+  preBuildRank: number;
+  stage: NoTradeStage;
+  code: string | null;
+  reason: string;
+  metrics: { timing: string; movePotential: string; entryQuality: number | null; netRR: number | null; confirmations: number | null };
+  confirmationDetail: { liquiditySweep: boolean; displacement: boolean; structureZone: boolean; optionChain: boolean | null } | null;
+}
+
+/** Why there is no trade: every candidate evaluated, the best rejected one, the limiting factor, what was missing. */
+export interface NoTradeDiagnostics {
+  candidatesEvaluated: number;
+  candidates: NoTradeCandidate[];
+  bestRejected: (NoTradeCandidate & { why: string }) | null;
+  limitingFactor: { code: string | null; stage: NoTradeStage | null; summary: string };
+  missingConfirmation: string | null;
+  /** What each engine contributed this check. */
+  engines: { structure: string; families: string; indicator: string };
+}
+
 export interface TradeSetup {
   available: boolean;
   reason: string;
+  /** Present on a NO TRADE from the signal engine: why, candidate by candidate. */
+  noTradeDiagnostics?: NoTradeDiagnostics;
   /** When this setup was locked in — stays fixed across polls until SL/target is hit, the day rolls over, or bias reverses. Absent when unavailable. */
   generatedAt?: number;
 

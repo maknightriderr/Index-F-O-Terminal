@@ -595,7 +595,7 @@ export function evaluateFamiliesCore(args: {
  * is evaluateFamiliesCore; this shell reads the router's state (unless the
  * caller already read it — the decision snapshot does) and writes it back.
  */
-export async function routeTriggerFamilies(args: { underlying: string; exchange: Exchange; mode: TradingMode; bars: MomentumBar[]; chain: OptionChain | null; now: number; state?: FamilyRouterState | null }): Promise<{ paper: RoutedCandidate[]; evaluated: number; linkage?: ParentLinkage | null; watch?: FamilyWatchEntry[] } | null> {
+export async function routeTriggerFamilies(args: { underlying: string; exchange: Exchange; mode: TradingMode; bars: MomentumBar[]; chain: OptionChain | null; now: number; state?: FamilyRouterState | null }): Promise<{ paper: RoutedCandidate[]; evaluated: number; linkage?: ParentLinkage | null; watch?: FamilyWatchEntry[]; triggerFailures?: number } | null> {
   const { underlying, exchange, mode, bars, chain, now } = args;
   try {
     const stages = liveTriggerStages();
@@ -616,7 +616,7 @@ export async function routeTriggerFamilies(args: { underlying: string; exchange:
     await redis.set(familyWatchKey(exchange, underlying, session), JSON.stringify(out.watch), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);
     await redis.set(`mp_link:${exchange}:${underlying}:${session}`, JSON.stringify(out.linkage), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);
     await redis.set(`mp_eval:${exchange}:${underlying}:${mode}`, String(out.newestBarTime), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);
-    return { paper: out.paper, evaluated: out.todo.length, linkage: out.linkage, watch: out.watch };
+    return { paper: out.paper, evaluated: out.todo.length, linkage: out.linkage, watch: out.watch, triggerFailures: out.triggerFailures.length };
   } catch (err: any) {
     logger.warn({ error: err.message, underlying, exchange }, 'Trigger router: evaluation failed — structure and consensus engines unaffected');
     return null;

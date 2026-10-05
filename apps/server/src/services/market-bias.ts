@@ -226,6 +226,7 @@ import {
 import { recordSetupEvent } from './setup-events.js';
 import { currentSnapshotId, runInSnapshotScope, setScopeSnapshotId } from './snapshot-context.js';
 import { serviceFailure, serviceHeartbeat } from '../lib/service-supervisor.js';
+import { buildNoTradeDiagnostics } from './no-trade-diagnostics.js';
 import { buildSignalDecisionSnapshot, currentVersions, decisionConfig, deriveDecisionRecord } from './decision-record.js';
 import { persistDecisionRecord, persistSnapshot } from './decision-record-store.js';
 import { buildOptionPlanRow, optionLevelsOf, persistOptionPlan, planIdFor, recordOptionPlanEvent, type UnderlyingPlan } from './option-plans.js';
@@ -2106,7 +2107,7 @@ async function computeMarketBias(
         families: [
           { family: 'MOMENTUM_BREAK', trigger: momentumRead?.trigger ?? null },
           ...(structureState ? [{ family: 'STRUCTURE' as const, state: structureState, run: structureRun, ...(structureLastBar ? { lastClosedBar: structureLastBar } : {}) }] : []),
-          ...(structureState && routed ? [{ family: 'MULTIPATH' as const, state: structureState, candidates: routed.paper, linkage: routed.linkage ?? null, run: familyRun }] : []),
+          ...(structureState && routed ? [{ family: 'MULTIPATH' as const, state: structureState, candidates: routed.paper, linkage: routed.linkage ?? null, run: familyRun, evaluatedBars: routed.evaluated, triggerFailures: routed.triggerFailures ?? 0 }] : []),
         ],
       })
     : { available: false, reason: 'Option chain unavailable for this symbol — cannot size a setup.' };
@@ -3397,11 +3398,22 @@ async function resolveStickyTradeSetup(
   const indicatorSetup: TradeSetup | null = isSlotEntry(indicator) ? (indicator.kind === 'REFUSED' ? indicator.setup ?? null : null) : indicator;
   await updateIndicatorWatch(indicator).catch((err: any) => logger.warn({ error: err.message, underlying, exchange }, 'Setup watch: indicator update failed'));
   if (isSlotEntry(indicator)) entries.push(indicator);
-  if (entries.length === 0) return indicatorSetup ?? { available: false, reason: 'No engine produced a candidate this check.' };
+  // NO TRADE: why, candidate by candidate (no-trade-diagnostics.ts).
+  let slotRecords: SlotArbitrationRecord[] = [];
+  const noTrade = (base: TradeSetup): TradeSetup => {
+    const indicatorRefusal = isSlotEntry(indicator) && indicator.kind === 'REFUSED' ? indicator : null;
+    const diagnostics = buildNoTradeDiagnostics(slotRecords, {
+      structure: structureFamily ? { enabled: true, lifecycles: structureFamily.state.lifecycles.map((l) => ({ stage: l.stage, direction: l.direction })), fillClaimed: structureFill != null } : null,
+      families: multipathFamily ? { paperCandidates: multipathFamily.candidates.length, triggerFailures: multipathFamily.triggerFailures ?? 0, evaluated: (multipathFamily.evaluatedBars ?? 0) > 0 } : null,
+      indicator: { direction, code: indicatorRefusal?.code ?? indicatorSetup?.noTradeCode ?? null, reason: indicatorRefusal?.reason ?? (indicatorSetup && !indicatorSetup.available ? indicatorSetup.reason : null) },
+    });
+    logger.info({ underlying, exchange, mode, candidates: diagnostics.candidatesEvaluated, limitingFactor: diagnostics.limitingFactor, best: diagnostics.bestRejected?.candidateId ?? null }, 'Signal engine: NO TRADE');
+    return { ...base, available: false, noTradeDiagnostics: diagnostics };
+  };
+  if (entries.length === 0) return noTrade(indicatorSetup ?? { available: false, reason: 'No engine produced a candidate this check.' });
   // Arbitration rows only when something besides the indicator engine took
   // part (a lone indicator read is already recorded by its own chain every poll).
   const arbitrated = entries.some((e) => e.slot.source !== 'INDICATOR');
-  let slotRecords: SlotArbitrationRecord[] = [];
   const minted = await settleSlot({
     underlying,
     exchange,
@@ -3419,8 +3431,9 @@ async function resolveStickyTradeSetup(
       if (arbitrated) recordSlotArbitration(underlying, exchange, r);
     },
   });
-  void slotRecords;
-  return minted ?? indicatorSetup ?? { available: false, reason: 'No engine built an eligible setup this check.' };
+
+  if (minted) return minted;
+  return noTrade(indicatorSetup ?? { available: false, reason: 'No engine built an eligible setup this check.' });
 
   /**
    * The indicator engine's confirmed read — it reached the option build
@@ -4473,6 +4486,9 @@ interface MultipathFamilyInput {
   linkage: ParentLinkage | null;
   /** Filled by resolveStickyTradeSetup: candidates that reached the slot path (absent = none — the slot held an open trade). */
   run?: { reached: Set<string> };
+  /** Bars the router evaluated this check (0 = no new bar), and triggers that failed on them. */
+  evaluatedBars?: number;
+  triggerFailures?: number;
 }
 interface TriggerFamilies {
   lastClosedBar: { time: number; close: number; open?: number; high?: number; low?: number } | null;
