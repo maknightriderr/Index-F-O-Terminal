@@ -13,6 +13,7 @@ import type { MarketDataProvider } from '../providers/interface.js';
 import { computeChangeOi } from '../lib/oi-baseline.js';
 import { cached } from '../lib/cache.js';
 import { getSpotQuote } from './option-chain.js';
+import { tapedInput } from '../lib/io-tape.js';
 
 const EXPIRY_LABELS: Array<'current' | 'next' | 'far'> = ['current', 'next', 'far'];
 const FUTURES_CACHE_TTL_SECONDS = 10;
@@ -23,7 +24,8 @@ export async function buildFuturesData(
   exchange: Exchange
 ): Promise<FuturesChainResponse> {
   const cacheKey = `futures:${exchange}:${underlying}`;
-  return cached(cacheKey, FUTURES_CACHE_TTL_SECONDS, () => buildFuturesDataUncached(provider, underlying, exchange));
+  // An input of the decision: taped as a whole inside a decision scope (io-tape.ts).
+  return tapedInput('futures', [underlying, exchange], () => cached(cacheKey, FUTURES_CACHE_TTL_SECONDS, () => buildFuturesDataUncached(provider, underlying, exchange)));
 }
 
 async function buildFuturesDataUncached(

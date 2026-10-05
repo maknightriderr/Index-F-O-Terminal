@@ -76,7 +76,7 @@ import { cached } from '../lib/cache.js';
 import { redis } from '../lib/redis.js';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
-import { decisionNow, decisionDate, decisionIstDate, assertNoFutureData } from './decision-clock.js';
+import { decisionNow, decisionDate, decisionIstDate, assertNoFutureData, hasDecisionTime, withDecisionTime } from './decision-clock.js';
 import { ivRankFor } from './fno-scanner.js';
 import { randomUUID } from 'node:crypto';
 import type { DecisionSnapshotInput } from './decision-snapshot.js';
@@ -212,6 +212,8 @@ import {
   isSlotEntry,
   parentAlreadyTraded,
   structureSlotCandidate,
+  momentumSlotCandidate,
+  momentumParentId,
   routedSlotCandidate,
   indicatorSlotCandidate,
   indicatorGeometry,
@@ -227,6 +229,10 @@ import { recordSetupEvent } from './setup-events.js';
 import { currentSnapshotId, runInSnapshotScope, setScopeSnapshotId } from './snapshot-context.js';
 import { serviceFailure, serviceHeartbeat } from '../lib/service-supervisor.js';
 import { buildNoTradeDiagnostics } from './no-trade-diagnostics.js';
+import { recordSlotDecision, slotDecisionRow } from './slot-decisions.js';
+import { ARBITRATION_VERSION, OPTION_SELECTION_VERSION, OPTION_VERSION } from '../config/trading-flags.js';
+import { isReplaying, runRecording, tapedInput, tapedProvider, tapedValue, tapeMode } from '../lib/io-tape.js';
+import { persistTape, DECISION_TAPE_ENABLED } from './decision-record-store.js';
 import { buildSignalDecisionSnapshot, currentVersions, decisionConfig, deriveDecisionRecord } from './decision-record.js';
 import { persistDecisionRecord, persistSnapshot } from './decision-record-store.js';
 import { buildOptionPlanRow, optionLevelsOf, persistOptionPlan, planIdFor, recordOptionPlanEvent, type UnderlyingPlan } from './option-plans.js';
@@ -350,12 +356,11 @@ export async function buildMarketBias(
   const cacheKey = `bias_result:${exchange}:${underlying}:${mode}`;
 
   try {
-    // One snapshot scope per poll: rows written by this poll carry its decision snapshot id (snapshot-context.ts).
-    const result = await runInSnapshotScope(() => computeMarketBias(provider, underlying, exchange, cacheKey, mode));
-    serviceHeartbeat('signalEngine');
+    const result = await pollWithTape(provider, underlying, exchange, mode, cacheKey);
+    if (!isReplaying()) serviceHeartbeat('signalEngine');
     return result;
   } catch (err: any) {
-    serviceFailure('signalEngine', err);
+    if (!isReplaying()) serviceFailure('signalEngine', err);
     // Fresh computation failed — try to return the last successful result
     // from Redis so the frontend stays on real data instead of falling back
     // to mocks and showing the "signal engine unreachable" banner.
@@ -373,6 +378,28 @@ export async function buildMarketBias(
     // No cached fallback either — propagate the original error
     throw err;
   }
+}
+
+/**
+ * One poll: the decision clock frozen at its start (one instant for the whole
+ * decision — what a replay re-runs at), one snapshot scope, and — for a live
+ * poll — the I/O tape recorded around it and stored with the snapshot the
+ * poll persisted (full replay, io-tape.ts). Inside a replay or an existing
+ * decision clock the poll just runs.
+ */
+async function pollWithTape(provider: MarketDataProvider, underlying: string, exchange: Exchange, mode: TradingMode, cacheKey: string): Promise<MarketBiasResult> {
+  const compute = async (p: MarketDataProvider) => {
+    const run = () =>
+      runInSnapshotScope(async () => {
+        const r = await computeMarketBias(p, underlying, exchange, cacheKey, mode);
+        return { r, snapshotId: currentSnapshotId() };
+      });
+    return hasDecisionTime() ? run() : withDecisionTime(Date.now(), run);
+  };
+  if (tapeMode() != null || !DECISION_TAPE_ENABLED) return (await compute(provider)).r;
+  const { result, tape } = await runRecording(() => compute(tapedProvider(provider)));
+  if (result.snapshotId) void persistTape(result.snapshotId, tape, result.r);
+  return result.r;
 }
 
 /**
@@ -2209,7 +2236,7 @@ async function computeMarketBias(
     ...(structureBlockResult ? { structure: structureBlockResult } : {}),
     ...(setupWatch.length ? { setupWatch } : {}),
   };
-  biasComputedAt.set(`${exchange}:${underlying}:${mode}`, Date.now());
+  if (!isReplaying()) biasComputedAt.set(`${exchange}:${underlying}:${mode}`, Date.now());
 
   // Persist the successful result as a fallback for future failures
   try {
@@ -2441,7 +2468,8 @@ async function checkReliabilityFilters(
   // technical signal, and reads as a false breakout/breakdown either way.
   if (isNseStock) {
     try {
-      const actions = await getCorporateActionsForSymbol(underlying);
+      // Network-backed (NSE): taped, so a replay never calls out.
+      const actions = await tapedInput('corporateActions', [underlying], () => getCorporateActionsForSymbol(underlying));
       const today = decisionIstDate();
       const tomorrow = new Date(decisionNow() + 24 * 60 * 60 * 1000).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
       const upcoming = actions.find((a) => a.exDate === today || a.exDate === tomorrow);
@@ -3007,6 +3035,9 @@ function recordSlotArbitration(underlying: string, exchange: Exchange, records: 
             entryQuality: r.slot.entryQuality,
             netRR: r.slot.netRR,
             evidence: r.slot.evidence,
+            confirmations: r.slot.confirmations ?? null,
+            confirmationDetail: r.slot.confirmationDetail ?? null,
+            geometry: r.slot.geometry ?? null,
             decisionBarClose: r.slot.decisionTime,
           },
         },
@@ -3289,17 +3320,6 @@ async function resolveStickyTradeSetup(
     await recordTradeSetupOutcome(stored!, 'EXPIRED', currentExitValue(storedChain, stored!), { underlying, exchange, mode, reason: 'SETUP_INVALIDATED' });
   }
 
-  // Momentum break: the slot is empty now (nothing held, or it was just
-  // closed above). A claimed trigger runs its own chain first — the safety
-  // gates plus TRIGGER_QUALITY. Minted: that is this poll's setup. Refused:
-  // the refusal is recorded and the consensus chain below runs as before.
-  if (trigger) {
-    const triggered = await resolveMomentumBreakSetup({
-      provider, underlying, exchange, mode, key, today, setupTtl, chain, trigger, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId,
-    });
-    if (triggered) return triggered;
-  }
-
   // ALL ENGINES → ALL CANDIDATES → PARENT GROUPING → COMMON ELIGIBILITY →
   // ARBITRATION → ONE PAPER TRADE (slot-arbitration.ts).
   // Every engine that may paper-trade hands in every eligible candidate it has
@@ -3327,6 +3347,27 @@ async function resolveStickyTradeSetup(
   };
   const parentTraded = (keys: readonly string[]) => parentAlreadyTraded(keys, tradedKeys);
   const parentTradedReason = 'This market move already produced a paper trade today — one trade per parent move.';
+
+  // Momentum break (flag MOMENTUM_BREAK): a claimed trigger is evaluated and
+  // validated by its own chain (the safety gates plus TRIGGER_QUALITY, then
+  // the option leg) WITHOUT minting, and competes in the same ranking as every
+  // other engine's candidate. It never mints on its own and has no priority.
+  if (trigger) {
+    const mbLink = { parentId: momentumParentId(exchange, underlying, trigger, today), decisionTime: trigger.barTime + BAR_MS_15M };
+    const mbSlot = momentumSlotCandidate(trigger, chain.spotPrice, null, mbLink, metrics);
+    if (parentTraded(mbSlot.anchorKeys)) {
+      entries.push({ kind: 'REFUSED', slot: mbSlot, code: 'PARENT_ALREADY_TRADED', reason: parentTradedReason, optionBuild: false });
+    } else {
+      entries.push(
+        await isolatedCandidate(mbSlot, () =>
+          resolveMomentumBreakSetup({
+            provider, underlying, exchange, mode, key, today, setupTtl, chain, trigger, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId,
+            slot: mbSlot,
+          })
+        )
+      );
+    }
+  }
 
   // S1 — the structure engine: a claimed fill, joined to its parent move only
   // through the canonical sweep event (the event engine's SWEEP on the same
@@ -3410,7 +3451,26 @@ async function resolveStickyTradeSetup(
     logger.info({ underlying, exchange, mode, candidates: diagnostics.candidatesEvaluated, limitingFactor: diagnostics.limitingFactor, best: diagnostics.bestRejected?.candidateId ?? null }, 'Signal engine: NO TRADE');
     return { ...base, available: false, noTradeDiagnostics: diagnostics };
   };
-  if (entries.length === 0) return noTrade(indicatorSetup ?? { available: false, reason: 'No engine produced a candidate this check.' });
+  // Measurement only (slot-decisions.ts): what the free slot did on this bar.
+  const logSlotDecision = (minted: boolean, out: TradeSetup | null) =>
+    recordSlotDecision(
+      slotDecisionRow({
+        at: decisionNow(),
+        symbol: underlying,
+        exchange,
+        mode,
+        decisionBarTime: decisionBarClose,
+        records: slotRecords,
+        minted,
+        noTrade: out?.noTradeDiagnostics ?? null,
+        versions: { option: OPTION_VERSION, arbitration: ARBITRATION_VERSION, optionSelection: OPTION_SELECTION_VERSION },
+      })
+    );
+  if (entries.length === 0) {
+    const none = noTrade(indicatorSetup ?? { available: false, reason: 'No engine produced a candidate this check.' });
+    await logSlotDecision(false, none);
+    return none;
+  }
   // Arbitration rows only when something besides the indicator engine took
   // part (a lone indicator read is already recorded by its own chain every poll).
   const arbitrated = entries.some((e) => e.slot.source !== 'INDICATOR');
@@ -3432,8 +3492,14 @@ async function resolveStickyTradeSetup(
     },
   });
 
-  if (minted) return minted;
-  return noTrade(indicatorSetup ?? { available: false, reason: 'No engine built an eligible setup this check.' });
+  if (minted) {
+    // MINT_LOST (another caller minted this slot first) is that caller's decision, recorded by it.
+    if (slotRecords.some((r) => r.role === 'SELECTED' && r.slotDecision.decision === 'MINTED')) await logSlotDecision(true, null);
+    return minted;
+  }
+  const none = noTrade(indicatorSetup ?? { available: false, reason: 'No engine built an eligible setup this check.' });
+  await logSlotDecision(false, none);
+  return none;
 
   /**
    * The indicator engine's confirmed read — it reached the option build
@@ -4160,6 +4226,8 @@ async function mintUnderLock(args: {
       del: (k) => redis.del(k),
     },
     lockKey: mintLockKey(exchange, underlying, mode),
+    // Taped so a full replay releases the lock it recorded taking.
+    token: tapedValue('mintLockToken', [exchange, underlying, mode], () => randomUUID()),
     ttlSeconds: COVERAGE_LAG_PARAMS.SETUP_MINT_LOCK_TTL_SECONDS,
     waitMs: COVERAGE_LAG_PARAMS.SETUP_MINT_LOCK_WAIT_MS,
     readExisting: readMintedByOther,
@@ -4206,7 +4274,8 @@ async function claimMomentumTrigger(exchange: Exchange, underlying: string, mode
  * trigger's target, premium stop = max(15%, |Δ|·stop distance / mid) through
  * the unprotected slPremiumPct argument, the broken level as the structure
  * behind, confidence = quality — so its R:R minimums (1.5, or 2.0 on rich IV)
- * apply unchanged. Returns the minted setup, or null when refused (recorded).
+ * apply unchanged. Never mints: returns the built setup DEFERRED (the slot
+ * arbitration commits or declines it) or the refusal (recorded here).
  */
 async function resolveMomentumBreakSetup(ctx: {
   provider: MarketDataProvider;
@@ -4223,8 +4292,10 @@ async function resolveMomentumBreakSetup(ctx: {
   voteSnapshot: BiasVoteSnapshot | undefined;
   entryContext: SetupEntryContext | undefined;
   priorDecisionId: string | null;
-}): Promise<TradeSetup | null> {
-  const { provider, underlying, exchange, mode, key, today, setupTtl, chain, trigger, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId } = ctx;
+  /** Its slot candidate (metrics measured before the build; net R:R filled in once built). */
+  slot: SlotCandidate;
+}): Promise<SlotEntry> {
+  const { provider, underlying, exchange, mode, key, today, setupTtl, chain, trigger, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId, slot } = ctx;
   const direction: BiasDirection = trigger.direction;
   const quality = trigger.quality;
   const at = decisionNow();
@@ -4377,7 +4448,7 @@ async function resolveMomentumBreakSetup(ctx: {
   if (refusal) {
     logger.info({ underlying, exchange, code: refusal.code }, 'Momentum break: trigger refused by its chain');
     recordRefusal(refusal.code, `${describe} Refused: ${refusal.reason}`, null);
-    return null;
+    return { kind: 'REFUSED', slot, code: refusal.code, reason: refusal.reason, optionBuild: false };
   }
 
   const stopDistance = Math.abs(trigger.stop - spot);
@@ -4440,7 +4511,7 @@ async function resolveMomentumBreakSetup(ctx: {
     // option cannot pay for a stop where the break is wrong. Recorded, honest.
     logger.info({ underlying, exchange, code: builtRaw.noTradeCode ?? null }, 'Momentum break: option leg refused by buildTradeSetup');
     recordRefusal(builtRaw.noTradeCode ?? null, `${describe} ${builtRaw.reason}`, builtRaw);
-    return null;
+    return { kind: 'REFUSED', slot, code: builtRaw.noTradeCode ?? null, reason: builtRaw.reason, optionBuild: true };
   }
   const fresh: TradeSetup = {
     ...builtRaw,
@@ -4456,7 +4527,17 @@ async function resolveMomentumBreakSetup(ctx: {
       voteSnapshot, entryContext: triggerContext, phase1Context, gateDiagnosticsFor, shadowModels,
       momentumBreak: storedMomentumBreak(trigger),
     });
-  return mintUnderLock({ underlying, exchange, mode, key, today, isPositional: false, priorDecisionId, mintFresh });
+  const commit = async (): Promise<{ setup: TradeSetup; minted: boolean }> => {
+    const minted = await mintUnderLock({ underlying, exchange, mode, key, today, isPositional: false, priorDecisionId, mintFresh });
+    const ours = minted.available && minted.strategy === MOMENTUM_BREAK_STRATEGY && (minted as StoredTradeSetup).momentumBreak?.barTime === trigger.barTime;
+    return { setup: minted, minted: ours };
+  };
+  // Built cleanly through its chain — the slot arbitration ranks it against
+  // every other engine's candidate and commits or declines it (recorded).
+  const decline = async (reason: string): Promise<void> => {
+    recordRefusal('NOT_SELECTED', `${describe} ${reason}`, { ...fresh, available: false, noTradeCode: 'NOT_SELECTED', reason });
+  };
+  return { kind: 'DEFERRED', setup: fresh, slot: { ...slot, netRR: netRiskReward(fresh) ?? NOT_MEASURED }, commit, decline };
 }
 
 // --- Structure family (flag STRUCTURE) ---
@@ -4571,7 +4652,7 @@ async function captureDecisionSnapshot(args: {
   const slotTradedKeys = JSON.parse((await redis.get(`slot_traded:${exchange}:${underlying}:${mode}:${istDay}`).catch(() => null)) ?? '[]') as string[];
   const decisionBarTime = decisionBarCloseAt(exchange, polledAt, BAR_MS_15M) ?? (args.lastClosedBar ? args.lastClosedBar.time + BAR_MS_15M : polledAt);
   const key = `${exchange}:${underlying}:${mode}`;
-  const newBar = lastSnapshotBar.get(key) !== decisionBarTime;
+  const newBar = tapedValue('lastSnapshotBar', [key], () => lastSnapshotBar.get(key) ?? null) !== decisionBarTime;
   const last1h = args.candles1h.length ? Date.parse(args.candles1h[args.candles1h.length - 1].timestamp) : NaN;
   const snapshot = buildSignalDecisionSnapshot({
     symbol: underlying,
@@ -4601,7 +4682,7 @@ async function captureDecisionSnapshot(args: {
   if (newBar || record.structure.fill?.kind === 'FILL') {
     if (await persistSnapshot(snapshot)) {
       snapshotId = snapshot.snapshotId;
-      lastSnapshotBar.set(key, decisionBarTime);
+      if (!isReplaying()) lastSnapshotBar.set(key, decisionBarTime);
       setScopeSnapshotId(snapshotId);
       await persistDecisionRecord(record);
       if (record.degraded) logger.info({ underlying, exchange, snapshotId, reasons: record.degradedReasons }, 'Decision snapshot: inputs not all as of T — candidates marked degraded');
@@ -4668,10 +4749,10 @@ async function advanceStructureLifecycle(
       }
     }
     await writeLiveState(state);
-    serviceHeartbeat('setupLifecycle');
+    if (!isReplaying()) serviceHeartbeat('setupLifecycle');
     return state;
   } catch (err: any) {
-    serviceFailure('setupLifecycle', err);
+    if (!isReplaying()) serviceFailure('setupLifecycle', err);
     logger.warn({ error: err.message, underlying, exchange }, 'Structure: lifecycle read failed — no structure setups this poll');
     return null;
   }
@@ -5797,6 +5878,8 @@ async function recordTradeSetupGenerated(
             breakevenUpper: fresh.breakevenUpper,
             expiry: fresh.expiry ?? null,
             dte: fresh.dte ?? null,
+            // OPTION-2.0: the projected premium gain (delta + gamma − theta) — graded by forward validation.
+            projectedPayoff: fresh.projectedPayoff ?? null,
             estimatedCostPct: fresh.estimatedCostPct ?? null,
             // Part A (flag FNO_VALIDATION): strike-by-delta, IV cap, cost, stop-noise and expiryFallback — present only when the flag was on.
             ...(fresh.fnoValidation ? { fnoValidation: fresh.fnoValidation } : {}),

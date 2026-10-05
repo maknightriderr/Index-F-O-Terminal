@@ -74,6 +74,7 @@ import {
   type EntryTimingClass,
   type MovePotentialClass,
   type MomentumBar,
+  type MomentumBreakSignal,
   type SeriesContext,
 } from '@fno/analytics';
 import type { BiasDirection, OptionChain, TradeSetup } from '@fno/shared';
@@ -139,6 +140,8 @@ export interface SlotCandidate extends DecisionMetrics {
   /** Ranking criterion 5: the confirmation count (absent on candidates built before ARB-2.0 = not measured). */
   confirmations?: Measured<number>;
   confirmationDetail?: Confirmations | null;
+  /** The decision geometry it was measured on — recorded for forward validation, never ranked. */
+  geometry?: DecisionGeometry | null;
 }
 
 /** An engine's decision geometry on the underlying — the only input decisionMetrics reads. */
@@ -291,10 +294,53 @@ export function structureSlotCandidate(
     parentId: link.parentId,
     anchorKeys: link.anchorKeys,
     ...decisionMetrics(structureGeometry(lc, spot), metrics, netRR),
+    geometry: structureGeometry(lc, spot),
     evidence: 1 + (lc.displacementBodyAtr != null ? 1 : 0) + (lc.zone ? 1 : 0),
     decisionTime: link.decisionTime,
     // S1's sequence is a sweep by definition; displacement and its zone (FVG / 50%) as recorded.
     ...withConfirmations({ liquiditySweep: true, displacement: lc.displacementBodyAtr != null, structureZone: lc.zone != null, optionChain: chainAgrees(lc.direction, metrics?.positioningNet) }),
+  };
+}
+
+/**
+ * A momentum break's geometry: entry = the spot it is built at; stop and
+ * objective = the trigger's own underlying stop and target; anchor = the
+ * broken level. It is decided on the trigger bar's close (its anchor bar).
+ */
+export function momentumGeometry(t: Pick<MomentumBreakSignal, 'direction' | 'stop' | 'target' | 'levelPrice'>, spot: number): DecisionGeometry {
+  return { direction: t.direction, entry: spot, stop: t.stop, objective: t.target, anchor: t.levelPrice, onAnchorBar: true };
+}
+
+/** The parent move of a momentum break: the level it broke, in its direction, on its session day. */
+export function momentumParentId(exchange: string, underlying: string, t: Pick<MomentumBreakSignal, 'direction' | 'levelKind' | 'levelPrice'>, day: string): string {
+  return `MB:${exchange}:${underlying}:${day}:${t.direction}:${t.levelKind}:${t.levelPrice}`;
+}
+
+/**
+ * The momentum break's slot candidate (MOMENTUM_BREAK competes like every
+ * other engine — it never mints on its own). Confirmations: the trigger bar is
+ * a displacement by construction (its range and volume multiples are the
+ * trigger); no sweep or zone sits in its sequence; option-chain agreement as
+ * for every candidate.
+ */
+export function momentumSlotCandidate(
+  t: MomentumBreakSignal,
+  spot: number,
+  netRR: number | null,
+  link: { parentId: string; decisionTime: number },
+  metrics: MetricsContext | null = null
+): SlotCandidate {
+  return {
+    source: 'MOMENTUM_BREAK',
+    candidateId: `${link.parentId}:${t.barTime}`,
+    direction: t.direction,
+    parentId: link.parentId,
+    anchorKeys: [link.parentId],
+    ...decisionMetrics(momentumGeometry(t, spot), metrics, netRR),
+    geometry: momentumGeometry(t, spot),
+    evidence: 1,
+    decisionTime: link.decisionTime,
+    ...withConfirmations({ liquiditySweep: false, displacement: true, structureZone: false, optionChain: chainAgrees(t.direction, metrics?.positioningNet) }),
   };
 }
 
@@ -314,6 +360,7 @@ export function routedSlotCandidate(rc: RoutedCandidate, metrics: MetricsContext
     parentId: rc.parentId ?? null,
     anchorKeys: rc.anchorKeys ?? [],
     ...decisionMetrics(routedGeometry(rc), metrics),
+    geometry: routedGeometry(rc),
     evidence: Array.isArray(c.eventIds) ? c.eventIds.length : NOT_MEASURED,
     decisionTime: c.decisionTime + BAR_MS_15M,
     ...(() => {
@@ -376,6 +423,7 @@ export function indicatorSlotCandidate(
     parentId: null,
     anchorKeys: [],
     ...measured,
+    geometry,
     evidence: NOT_MEASURED,
     decisionTime,
     // No event sequence behind it: only the option-chain component can confirm it.
@@ -472,6 +520,8 @@ export interface SlotArbitrationRecord {
   criteriaSkipped: string[];
   /** Phase 4: what the slot decided for this candidate (with its parentId on slot.parentId). */
   slotDecision: SlotDecision;
+  /** Built, ranked, then failed the pre-mint check or the mint (the ranking fell through it). */
+  finalCheck?: boolean;
 }
 
 /** A final check on a built candidate just before it is minted (data quality, edge after costs). Null = passes. */
@@ -547,7 +597,7 @@ export async function settleSlot(args: {
       }
     }
     logger.warn({ underlying, exchange, source: x.e.slot.source, candidateId: x.e.slot.candidateId, ...failed }, 'Slot arbitration: ranked candidate failed its final check — trying the next-best');
-    records.push(ineligible(x.e.slot, x.i, failed.code, failed.reason, null));
+    records.push({ ...ineligible(x.e.slot, x.i, failed.code, failed.reason, null), finalCheck: true });
     await x.e.decline(`${failed.code}: ${failed.reason}`).catch(() => undefined);
   }
   if (result == null) {

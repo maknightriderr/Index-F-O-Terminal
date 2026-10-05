@@ -14,6 +14,7 @@
 import React, { useEffect, useState } from 'react';
 import type { DecisionDiagnosticsView, DecisionListRow } from '@fno/shared';
 import { api } from '@/lib/api';
+import { FullReplayResult, type FullReplayReport } from './signal-engine-panel';
 
 const INSTRUMENTS = ['', 'NIFTY', 'BANKNIFTY', 'SENSEX', 'CRUDEOIL', 'GOLD'];
 
@@ -214,6 +215,8 @@ export function DecisionRecordView() {
   const [selected, setSelected] = useState<string | null>(null);
   const [view, setView] = useState<DecisionDiagnosticsView | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [full, setFull] = useState<FullReplayReport | null>(null);
+  const [fullBusy, setFullBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -227,6 +230,7 @@ export function DecisionRecordView() {
   }, [symbol]);
 
   const open = (id: string, replay = false) => {
+    if (id !== selected) setFull(null);
     setSelected(id);
     api
       .getDecision(id, replay)
@@ -246,6 +250,22 @@ export function DecisionRecordView() {
             Replay offline
           </button>
         )}
+        {selected && (
+          <button
+            disabled={fullBusy}
+            onClick={() => {
+              setFullBusy(true);
+              api
+                .getDecisionFullReplay(selected)
+                .then((r) => (setFull(r), setError(null)))
+                .catch((e) => setError(e?.message ?? 'Full replay failed.'))
+                .finally(() => setFullBusy(false));
+            }}
+            className="text-xs px-2 py-1 rounded border border-gray-700 light:border-slate-300 text-gray-300 light:text-slate-700 hover:bg-gray-800/60 light:hover:bg-slate-100 disabled:opacity-50"
+          >
+            {fullBusy ? 'Replaying…' : 'Full replay'}
+          </button>
+        )}
       </div>
       {error && <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded px-3 py-2">{error}</div>}
       <Panel title="Recent decisions" subtitle="One snapshot per new closed bar (and per spot fill). Pick one to see its record.">
@@ -258,6 +278,7 @@ export function DecisionRecordView() {
           ])}
         />
       </Panel>
+      {full && full.snapshotId === selected && <FullReplayResult report={full} />}
       {view && <DecisionDetail view={view} />}
     </div>
   );

@@ -4,6 +4,8 @@
 import type { DecisionRecord, SignalDecisionSnapshot } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { insertOnce } from '../lib/insert-once.js';
+import { gzipSync, gunzipSync } from 'node:zlib';
+import { TAPE_VERSION, decode, encode, type TapeEntry } from '../lib/io-tape.js';
 import { logger } from '../lib/logger.js';
 import { schemaFileReady } from './ensure-capture-schema.js';
 import { DECISION_RECORDS_MIGRATION } from './snapshot-context.js';
@@ -96,4 +98,46 @@ export async function replay(snapshotId: string): Promise<ReplayReport> {
   if (!stored) return { status: 'NO_STORED_RECORD', snapshotId, hash: out.hash, storedHash: null, diff: [], record: out.record };
   const diff = recordDiff(stored.record, out.record);
   return { status: diff.length === 0 && stored.hash === out.hash ? 'MATCH' : 'DIFFERENT', snapshotId, hash: out.hash, storedHash: stored.hash, diff, record: out.record };
+}
+
+// ---------------- full replay tapes (037) ----------------
+
+/** DECISION_TAPE (default on): record each snapshotted poll's I/O tape for full replay. */
+export const DECISION_TAPE_ENABLED = !/^(0|false|off|no)$/i.test(process.env.DECISION_TAPE ?? '');
+/** Tapes are kept this many days (DECISION_TAPE_RETENTION_DAYS, default 7), then removed by the forward-validation job. */
+export const DECISION_TAPE_RETENTION_DAYS = (() => {
+  const n = Number(process.env.DECISION_TAPE_RETENTION_DAYS);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 7;
+})();
+/** A tape larger than this (compressed) is not stored — the snapshot and its DecisionRecord still are. */
+export const MAX_TAPE_BYTES = 8 * 1024 * 1024;
+export const TAPES_MIGRATION = '037_replay_tapes_forward_validation.sql';
+
+const gz = (v: unknown) => gzipSync(Buffer.from(JSON.stringify(v))).toString('base64');
+const gunz = (b64: string) => JSON.parse(gunzipSync(Buffer.from(b64, 'base64')).toString('utf8'));
+
+/** Stores the poll's tape and the result it returned. Never throws. */
+export async function persistTape(snapshotId: string, tape: readonly TapeEntry[], liveResult: unknown): Promise<void> {
+  if (!schemaFileReady(TAPES_MIGRATION)) return;
+  try {
+    const tapeGz = gz(tape);
+    if (tapeGz.length > MAX_TAPE_BYTES) {
+      logger.warn({ snapshotId, bytes: tapeGz.length, entries: tape.length }, 'Decision tape: too large — not stored (snapshot and record are)');
+      return;
+    }
+    await insertOnce(sql`
+      INSERT INTO decision_tapes (snapshot_id, tape_version, tape_gz, entries, bytes, live_result_gz)
+      VALUES (${snapshotId}, ${TAPE_VERSION}, ${tapeGz}, ${tape.length}, ${tapeGz.length}, ${gz(encode(liveResult))})
+    `);
+  } catch (err: any) {
+    logger.error({ error: err.message, snapshotId }, 'Decision tape: insert failed — this decision has no full replay');
+  }
+}
+
+export async function loadTape(snapshotId: string): Promise<{ tape: TapeEntry[]; liveResult: unknown; entries: number; bytes: number } | null> {
+  const rows = await sql<{ tape_gz: string; live_result_gz: string; entries: number; bytes: number }[]>`
+    SELECT tape_gz, live_result_gz, entries, bytes FROM decision_tapes WHERE snapshot_id = ${snapshotId}
+  `;
+  if (!rows[0]) return null;
+  return { tape: gunz(rows[0].tape_gz), liveResult: decode(gunz(rows[0].live_result_gz)), entries: rows[0].entries, bytes: rows[0].bytes };
 }

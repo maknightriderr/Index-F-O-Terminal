@@ -31,6 +31,7 @@ import type { Exchange } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 import { decisionNow } from './decision-clock.js';
+import { tapedValue } from '../lib/io-tape.js';
 
 export type DataQualityIssue =
   | 'STALE_TIMESTAMP'
@@ -126,7 +127,12 @@ export function recordDataQuality(event: DataQualityEvent): void {
  * The refusal reason for a symbol whose feed is currently unusable, or null.
  * Read by the setup gate, first alongside the other hard refusals.
  */
+/** In-process state, so it is taped: a replay sees exactly the block the live poll saw. */
 export function dataQualityBlock(exchange: Exchange, symbol: string): string | null {
+  return tapedValue('dataQualityBlock', [exchange, symbol], () => liveDataQualityBlock(exchange, symbol));
+}
+
+function liveDataQualityBlock(exchange: Exchange, symbol: string): string | null {
   const entry = blocked.get(blockKey(exchange, symbol));
   if (!entry) return null;
   if (decisionNow() > entry.until) {

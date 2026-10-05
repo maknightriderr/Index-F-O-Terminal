@@ -50,6 +50,11 @@ import {
 import { TRIGGER_REGISTRY, DISPLACEMENT_REQUIRED_BY } from '@fno/analytics';
 import { liveTriggerStages } from '../services/trigger-router.js';
 import { EVENT_ENGINE_VERSION } from '../config/trading-flags.js';
+import { signalEngineMetrics } from '../services/signal-engine-metrics.js';
+import { replayFull } from '../services/full-replay.js';
+
+/** One full replay at a time: it re-runs the whole decision path in this process. */
+let fullReplayRunning = false;
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const VERSION = /^[A-Za-z0-9._-]{1,32}$/;
@@ -217,6 +222,41 @@ export function createDiagnosticsRoutes(): Router {
       res.json({ success: true, data: view });
     } catch (err: any) {
       logger.error({ error: err.message, snapshotId: id }, 'Signal diagnostics decision failed');
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Full replay (io-tape.ts): the unchanged decision path re-run at the poll's
+  // own instant with every read served from its tape — no network, no writes
+  // (writes are compared as effects). Read-only; one at a time.
+  router.get('/decision/:snapshotId/replay-full', async (req: Request, res: Response) => {
+    const id = req.params.snapshotId;
+    if (!SNAPSHOT_ID.test(id)) {
+      res.status(400).json({ success: false, error: 'snapshotId must be a UUID.' });
+      return;
+    }
+    if (fullReplayRunning) {
+      res.status(429).json({ success: false, error: 'A full replay is already running — try again shortly.' });
+      return;
+    }
+    fullReplayRunning = true;
+    try {
+      const report = await replayFull(id);
+      res.status(report.status === 'NOT_FOUND' ? 404 : 200).json({ success: report.status !== 'NOT_FOUND', data: report });
+    } catch (err: any) {
+      logger.error({ error: err.message, snapshotId: id }, 'Full replay failed');
+      res.status(500).json({ success: false, error: err.message });
+    } finally {
+      fullReplayRunning = false;
+    }
+  });
+
+  // The slot's behaviour and forward validation (signal-engine-metrics.ts).
+  router.get('/signal-engine', async (req: Request, res: Response) => {
+    try {
+      res.json({ success: true, data: { note: SIMULATION_NOTE, ...(await signalEngineMetrics(parseQuery(req))) } });
+    } catch (err: any) {
+      logger.error({ error: err.message }, 'Signal diagnostics signal-engine metrics failed');
       res.status(500).json({ success: false, error: err.message });
     }
   });

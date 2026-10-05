@@ -49,6 +49,8 @@ export interface MintOnceOptions<T, E> {
   readExisting: () => Promise<E | null>;
   mint: () => Promise<T>;
   onError?: (stage: 'ACQUIRE' | 'RELEASE', err: unknown) => void;
+  /** The lock owner's token (default: a random UUID). */
+  token?: string;
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -59,7 +61,7 @@ const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(r
 
 export async function mintOnce<T, E>(opts: MintOnceOptions<T, E>): Promise<MintOutcome<T, E>> {
   const sleep = opts.sleep ?? defaultSleep;
-  const token = randomUUID();
+  const token = opts.token ?? randomUUID();
 
   let acquired: boolean;
   try {

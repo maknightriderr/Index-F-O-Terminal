@@ -80,7 +80,8 @@ describe('NO TRADE diagnostics', () => {
     expect(noTradeStage(null, 'cost')).toBe('OPTION_COST_LIQUIDITY');
     expect(noTradeStage('UNREALISTIC_TARGET', null)).toBe('OPTION_COST_LIQUIDITY');
     expect(noTradeStage('STALE_QUOTE', null)).toBe('DATA_QUALITY');
-    expect(noTradeStage('MINT_FAILED', null)).toBe('DATA_QUALITY');
+    // A mint that threw is an engine / persistence failure (it was mislabelled DATA_QUALITY before 2026-10-05's forward-validation round).
+    expect(noTradeStage('MINT_FAILED', null)).toBe('ENGINE_ERROR');
     expect(noTradeStage('STRUCTURE_SEQUENCE', null)).toBe('SEQUENCE');
     expect(noTradeStage('POST_LOSS_COOLDOWN', null)).toBe('SAFETY_GATE');
     expect(noTradeStage('PARENT_ALREADY_TRADED', null)).toBe('PARENT_ALREADY_TRADED');
@@ -94,8 +95,9 @@ describe('NO TRADE diagnostics', () => {
 
   it('the signal engine returns its NO TRADE through the diagnostics (both exits)', () => {
     const src = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../market-bias.ts'), 'utf8');
-    expect(src).toMatch(/if \(entries\.length === 0\) return noTrade\(/);
-    expect(src).toMatch(/if \(minted\) return minted;\s*return noTrade\(/);
+    // Both exits return through noTrade(...) (each also records its slot decision first — slot-decisions.ts).
+    expect(src).toMatch(/if \(entries\.length === 0\) \{\s*const none = noTrade\(/);
+    expect(src).toMatch(/if \(minted\) \{[\s\S]*?return minted;\s*\}\s*const none = noTrade\([\s\S]*?return none;/);
     expect(src).not.toMatch(/return minted \?\? indicatorSetup/);
   });
 });

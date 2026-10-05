@@ -5,12 +5,16 @@
 import { Redis } from 'ioredis';
 import { config } from './config.js';
 import { logger } from './logger.js';
+import { tapedRedis } from './io-tape.js';
 
-export const redis = new Redis(config.redis.url, {
-  maxRetriesPerRequest: 2,
-  lazyConnect: false,
-  retryStrategy: (attempt: number) => Math.min(attempt * 500, 5000),
-});
+// Taped only inside a decision's record / replay scope (io-tape.ts); everywhere else this is the plain client.
+export const redis = tapedRedis(
+  new Redis(config.redis.url, {
+    maxRetriesPerRequest: 2,
+    lazyConnect: false,
+    retryStrategy: (attempt: number) => Math.min(attempt * 500, 5000),
+  })
+);
 
 redis.on('connect', () => logger.info('Redis connected'));
 redis.on('error', (err: Error) => logger.error({ error: err.message }, 'Redis error'));

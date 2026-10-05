@@ -145,7 +145,13 @@ Step 4 — Slot arbitration (slot-arbitration.ts) — ONE OPEN paper trade per s
     again (PARENT_ALREADY_TRADED). Nothing blocks the whole day.
   Every candidate's ARBITRATION row carries its parentId and slotDecision
     {slot FREE|OCCUPIED, decision MINTED|MINT_LOST|NOT_SELECTED|INELIGIBLE|PARENT_ALREADY_TRADED|SLOT_OCCUPIED}.
-  Every engine (S1 + indicator + every paper-stage family) hands in every eligible candidate.
+  Every engine (S1 + indicator + every paper-stage family + the momentum break when its flag is
+    on) hands in every eligible candidate. The momentum break is evaluated and validated by its
+    own chain (safety gates + TRIGGER_QUALITY → option leg) WITHOUT minting and competes in the
+    same ranking (momentumSlotCandidate: entry = spot, stop / objective = the trigger's, anchor =
+    the broken level, parent = MB:<level, direction, day>, displacement confirmed by construction).
+    It never mints on its own and has no priority; a fresh opposite trigger may still close a
+    held trade (TRIGGER_REVERSAL) — an exit, not a mint.
   Each is built through its own chain: safety gates → option leg (every in-band strike built and
     ranked; a failing strike falls through to the next) → cost model.
   NO R:R GATE anywhere in these chains (RISK-2.0): every live buildTradeSetup call passes
@@ -177,6 +183,11 @@ Step 4 — Slot arbitration (slot-arbitration.ts) — ONE OPEN paper trade per s
     stop inside the noise / no reward after cost) are the only rejections; net R:R only ranks.
     Rank #1 failing its build → #2, #3 … until one passes. Every strike is recorded
     (strikeSelection.optionCandidates): SELECTED / RANKED / REJECTED + stage + reason.
+  Slot decision (slot-decisions.ts; measurement only): one slot_decisions row per decision bar
+    whose slot was free — MINTED / NO_TRADE / NO_CANDIDATE, fall-through depth, final-check
+    failures, every rejection's code + stage + category (THETA_COST: COST_EXCEEDS_EDGE,
+    COST_TOO_HIGH, UNREALISTIC_TARGET · LIQUIDITY: NO_QUOTE, WIDE_SPREAD, LOW_OPTION_LIQUIDITY,
+    POOR_OPTION_QUALITY), each candidate's geometry and confirmation count.
   ▼
 Step 5 — Setup Watch (setup-watch-core.ts / setup-watch.ts) — DISPLAY ONLY
   Every CONFIRMED setup (any R:R) is shown under its SAME id and re-measured on every closed bar:
@@ -214,9 +225,41 @@ replay(snapshotId)   (decision-record-store.ts)
 - **Snapshot** (`SignalDecisionSnapshot`, `@fno/shared`): inputs only — nothing the decision derives. Version fields: gitCommit, analyticsVersion, signalEngineVersion (+ logic flag hash), optionModelVersion, parentingVersion (`PARENT-1.0`), arbitrationVersion (`ARB-1.0`), ruleVersion, strategyVersion, trigger versions, riskVersion, costModelVersion, snapshotSchemaVersion (`SNAP-1.0`). Config: trigger stages, structure on / timeframe / entry mode, STRUCTURE_PARAMS + FNO_VALIDATION_PARAMS, configHash.
 - **Data quality** (`decision-quality.ts`): status OK · STALE_INPUT (older than its tolerance) · FUTURE_INPUT (as of after T) · MISSING. Tolerances: closed bars 0 (the bar that closed at T must be there), 1h bars 1 h, chain / futures 2 min. A FUTURE_INPUT / STALE_INPUT / MISSING input is never used silently: the record is `degraded` with one reason per input, and every candidate / option candidate that read it carries `degraded: true`. Polls run after T, so the chain is normally FUTURE_INPUT — its candidates are marked degraded; the build is not skipped (skipping would stop every paper trade).
 - **DecisionRecord** (`DR-1.0`): S1 lifecycle advance + transitions + fill; family status, events, linkage, watch; every candidate decided (parentId, anchor keys, eligibility, reason, observation role, degraded); candidate → event ids; common decision metrics of every slot candidate; option candidates (each newest-bar family leg's cost on the snapshot chain); the pre-build slot ranking (order, criteria used / skipped, criterion each loser lost on, parents already traded); final status (NO_CANDIDATE / NO_ELIGIBLE_CANDIDATE / CANDIDATES_TO_SLOT) and the top-ranked candidate.
-- **Not re-derived** (`NOT_REPLAYED`; their rows carry the snapshot id): the indicator engine, the safety gates, the option-leg build, the slot settlement (its ARBITRATION rows), the setup-watch refresh.
+- **Not re-derived** by `replay` (`NOT_REPLAYED`; their rows carry the snapshot id): the indicator engine, the safety gates, the option-leg build, the slot settlement (its ARBITRATION rows), the setup-watch refresh. **Full replay** (below) re-derives all of them.
+
+### 6b. Full replay — the whole decision path from an I/O tape
+
+```
+live poll: buildMarketBias → pollWithTape (DECISION_TAPE, default on)
+  decision clock frozen at the poll instant (withDecisionTime)
+  runRecording: every read at the boundaries is taped with its result —
+    redis (tapedRedis) · sql (tapedSql, recorded on execution) · broker (tapedProvider) ·
+    in-process state (tapedValue: dataQualityBlock, lastSnapshotBar, the mint-lock token) ·
+    whole inputs (tapedInput: option chain, futures, IV rank, corporate actions)
+  writes: matched on target + a SHA-1 of the payload (the payload itself is not stored)
+  persisted beside the snapshot: decision_tapes (gzip; ≤ 8 MB; kept DECISION_TAPE_RETENTION_DAYS, default 7)
+replayFull(snapshotId)   (full-replay.ts; GET /api/diagnostics/decision/:id/replay-full)
+  runReplay at the snapshot's polledAt: the UNCHANGED buildMarketBias — indicators, safety gates,
+    option build, arbitration, pre-mint, settlement / lifecycle — with every read served from the
+    tape (FIFO per key); Date.now is the poll instant inside the replay scope only; every network
+    call (fetch / axios) is refused; writes become effects, never reach Redis / Postgres
+  a read the tape does not hold = a divergence (never answered with current data)
+  status: MATCH · DIFFERENT (result paths) · DIVERGED · NO_TAPE · NOT_FOUND;
+    the result is compared outside FULL_REPLAY_VOLATILE_KEYS (wall-clock stamps and random ids),
+    the writes as a multiset of targets (live vs replay)
+```
 - **Immutability**: Postgres rules make an UPDATE of a snapshot or of a record's decision columns a no-op (only `outcome` / `outcome_at` may be written later); trigger-event links are insert-only.
 - **Snapshot id**: a UUID-shaped sha256 of exchange / symbol / mode / T / polledAt (deterministic).
+
+### 6c. Forward validation (forward-validation.ts) — measurement only
+
+Runs on the opportunity census's post-session tick (no new service); grades only sessions that have ended, from stored data (decision snapshots, option plans, closed paper signals, slot decisions) — never the broker, and nothing it writes is read by a decision. `forward_outcomes` (one row per kind + subject):
+
+- **OPTION_PAYOFF** (OPTION-2.0): the theta-adjusted target premium and the delta + gamma − theta projection (stored on the signal as `projectedPayoff`) vs the contract's marks on the recorded chains until the exit — best / worst mark, target reached, share of the projection captured, realised %.
+- **STRIKE_SELECTION** (OPTSEL-2.0): every strike of the plan marked at the exit — was the selected strike best, selected vs best R, how the rejected strikes did, rank agreement (−Spearman of rank vs realised R).
+- **EVIDENCE_RANK** (ARB-2.0): every arbitrated candidate on its own stop / objective over the rest of its session (closed 15m bars opening at or after its decision; a bar touching both counts the stop) — R by confirmation count, top-ranked was best, rank and confirmation agreement.
+
+`GET /api/diagnostics/signal-engine?from=&to=&instrument=` (signal-engine-metrics.ts) aggregates: NO TRADE rate, fallback success (bars whose #1 failed its final check that still minted), candidates and strikes rejected for theta / cost and for liquidity, missed opportunities (opportunity census), and the three forward measurements. Signal Diagnostics → "Signal Engine"; Decision Record → "Full replay".
 
 ## 8. Background services (18) — supervised (Phase 6)
 
@@ -358,3 +401,4 @@ Observation only: `startSystemLearningAudit` → `learningDetectors.ts` → `lea
 - **2026-10-05 — Phase 7: AI assistant read-only + /ws hardening.** ESLint import boundary for the assistant (+ graph test), untrusted-text delimiting in its prompt, `/ws` origin / token check, payload cap, target validation and per-client subscription limit.
 - **2026-10-05 — Phase 8: DecisionRecord research view.** `/api/diagnostics/decisions`, `/api/diagnostics/decision/:snapshotId` (`decision-diagnostics.ts`), Signal Diagnostics "Decision Record" tab.
 - **2026-10-05 — Signal engine fallback + realistic options + NO TRADE diagnostics.** Per-trigger and per-candidate isolation, next-best slot walk with a pre-mint check, confirmations criterion (ARB-2.0), realistic payoff (OPTION-2.0), strike comparison on the common underlying risk (OPTSEL-2.0), `noTradeDiagnostics` on every NO TRADE.
+- **2026-10-05 — Full replay, momentum in arbitration, forward validation.** Migration `037_replay_tapes_forward_validation.sql` (decision_tapes, slot_decisions, forward_outcomes). `io-tape.ts` + `full-replay.ts`: the whole decision path replayed from the poll's I/O tape (no network, no writes, no current data). The momentum break builds a DEFERRED slot entry and competes in the arbitration (never mints on its own). `slot-decisions.ts`, `forward-validation.ts`, `signal-engine-metrics.ts`; API `/api/diagnostics/signal-engine`, `/api/diagnostics/decision/:id/replay-full`; Signal Diagnostics "Signal Engine" tab. No threshold, weight, gate or protected constant changed.
