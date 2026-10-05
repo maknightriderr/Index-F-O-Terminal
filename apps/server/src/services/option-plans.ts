@@ -13,6 +13,7 @@
 import { createHash } from 'node:crypto';
 import type { OptionCandidate, OptionChain, TradeSetup } from '@fno/shared';
 import { sql } from '../lib/db.js';
+import { insertOnce } from '../lib/insert-once.js';
 import { logger } from '../lib/logger.js';
 import { schemaFileReady } from './ensure-capture-schema.js';
 import { OPTION_SELECTION_VERSION } from '../config/trading-flags.js';
@@ -131,7 +132,7 @@ export const optionPlansReady = (): boolean => schemaFileReady(OPTION_PLANS_MIGR
 export async function persistOptionPlan(row: OptionPlanRow, at: number): Promise<void> {
   if (!optionPlansReady()) return;
   try {
-    await sql`
+    await insertOnce(sql`
       INSERT INTO option_plans (
         plan_id, signal_id, snapshot_id, symbol, exchange, mode, source, candidate_id, direction,
         underlying_entry, underlying_stop, underlying_t1, underlying_t2,
@@ -145,8 +146,7 @@ export async function persistOptionPlan(row: OptionPlanRow, at: number): Promise
         ${row.levels.entry}, ${row.levels.sl}, ${row.levels.tsl}, ${row.levels.t1}, ${row.levels.t2},
         ${row.selectedStrike}, ${sql.json(row.candidates as never)}, ${sql.json(row.rejectedStrikes as never)}, ${row.optionSelectionVersion}
       )
-      ON CONFLICT (plan_id) DO NOTHING
-    `;
+    `);
   } catch (err: any) {
     logger.error({ error: err.message, planId: row.planId, signalId: row.signalId }, 'option_plans: insert failed');
     return;
@@ -158,12 +158,11 @@ export async function persistOptionPlan(row: OptionPlanRow, at: number): Promise
 export async function recordOptionPlanEvent(e: { planId: string; at: number; type: OptionPlanEventType; before: OptionLevels | null; after: OptionLevels; reason: string | null; snapshotId?: string | null }): Promise<void> {
   if (!optionPlansReady()) return;
   try {
-    await sql`
+    await insertOnce(sql`
       INSERT INTO option_plan_events (event_id, plan_id, at, event_type, levels_before, levels_after, reason, snapshot_id)
       VALUES (${hashUuid('option-plan-event', e.planId, e.type, e.at, JSON.stringify(e.after))}, ${e.planId}, ${new Date(e.at).toISOString()}, ${e.type},
               ${e.before ? sql.json(e.before as never) : null}, ${sql.json(e.after as never)}, ${e.reason}, ${e.snapshotId ?? null})
-      ON CONFLICT (event_id) DO NOTHING
-    `;
+    `);
   } catch (err: any) {
     logger.error({ error: err.message, planId: e.planId, type: e.type }, 'option_plan_events: insert failed');
   }
