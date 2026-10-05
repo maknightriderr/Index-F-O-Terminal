@@ -56,6 +56,7 @@ export type SetupEventType =
   /** A confirmed setup's watch lifecycle (setup-watch.ts): measurement only, decision LIFECYCLE. */
   | 'WATCH_STARTED'
   | 'REEVALUATED'
+  /** Historical only: emitted until 2026-10-05, when net R:R stopped being a gate (nothing "recovers" any more). */
   | 'RR_RECOVERED'
   | 'STRIKE_CHANGED'
   | 'OPTION_BUILD_FAILED'

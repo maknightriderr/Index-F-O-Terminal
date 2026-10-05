@@ -794,27 +794,34 @@ function RejectedToday({ rows, outcomes }: { rows: StructureLifecycleView[]; out
   );
 }
 
-/** The chip: Confirmed (tinted by whether R:R is at 1.50R — information only) or Ended. */
+/** The chip: Confirmed or Ended — never coloured by R:R (status does not depend on it). */
 function watchChipStyle(r: SetupWatchRow): string {
-  if (r.status === 'ENDED') return 'bg-gray-500/15 text-gray-400 light:text-slate-600';
-  return r.rrAtMin ? 'bg-emerald-500/15 text-emerald-300 light:text-emerald-700' : 'bg-amber-500/15 text-amber-300 light:text-amber-700';
+  return r.status === 'ENDED' ? 'bg-gray-500/15 text-gray-400 light:text-slate-600' : 'bg-emerald-500/15 text-emerald-300 light:text-emerald-700';
 }
+
+/** The display-only R:R band chip (< 1.0 / 1.0–1.5 / ≥ 1.5). Information, not a gate. */
+const RR_BAND_STYLE: Record<string, string> = {
+  '<1.0': 'bg-rose-500/10 text-rose-300 light:text-rose-700',
+  '1.0-1.5': 'bg-amber-500/10 text-amber-300 light:text-amber-700',
+  '>=1.5': 'bg-emerald-500/10 text-emerald-300 light:text-emerald-700',
+};
+const RR_BAND_LABEL: Record<string, string> = { '<1.0': 'R:R < 1.0', '1.0-1.5': 'R:R 1.0–1.5', '>=1.5': 'R:R ≥ 1.5' };
 
 const rupee = (n: number | null | undefined) => (n == null ? '—' : `₹${n.toFixed(2)}`);
 const lvl = (n: number | null | undefined) => (n == null ? '—' : formatIndianNumber(n, 2));
 const rr = (n: number | null | undefined) => (n == null ? '—' : `${n.toFixed(2)}R`);
 
 /**
- * Confirmed setups kept alive and re-evaluated on every closed 15m bar
- * (setup-watch.ts) — the OPTION premium levels first, since this terminal
- * places no orders: these are the levels to enter by hand. A setup below
- * 1.50R is shown, never traded; "Eligible" means every hard check passes now.
+ * Every confirmed setup, re-evaluated on every closed 15m bar (setup-watch.ts)
+ * — the OPTION premium levels first, since this terminal places no orders:
+ * these are the levels to enter by hand. Net R:R is shown (with a display-only
+ * band) and ranks candidates; it never hides, blocks or ends a setup.
  */
 function SetupWatchList({ rows }: { rows: SetupWatchRow[] }) {
   return (
     <IntelCard title="Confirmed setups" accent="emerald">
       <p className="text-[10px] text-gray-400 light:text-slate-600 mb-2 leading-snug">
-        Every confirmed setup, re-checked on every closed 15m bar under the same setup. R:R against 1.50R is information, not a gate — execution is yours. Option levels are premiums (est. when the entry is away from the live price).
+        Every confirmed setup, re-checked on every closed 15m bar under the same setup until it is invalidated, expires or fills. R:R is display and ranking only — execution is yours. Option levels are premiums (est. when the entry is away from the live price).
       </p>
       <div className="space-y-2">
         {rows.map((r) => {
@@ -827,7 +834,10 @@ function SetupWatchList({ rows }: { rows: SetupWatchRow[] }) {
                 </span>
                 <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${watchChipStyle(r)}`}>{r.status === 'ENDED' ? 'Ended' : 'Confirmed'}</span>
               </div>
-              <div className="text-[11px] text-gray-300 light:text-slate-700 mb-1">{r.statusText}</div>
+              <div className="flex items-center gap-2 text-[11px] text-gray-300 light:text-slate-700 mb-1">
+                <span>{r.statusText}</span>
+                {r.rrBand && <span className={`text-[10px] px-1.5 py-0.5 rounded ${RR_BAND_STYLE[r.rrBand]}`}>{RR_BAND_LABEL[r.rrBand]}</span>}
+              </div>
               {p ? (
                 <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px] tabular-nums">
                   <span className="col-span-2 font-semibold text-gray-100 light:text-slate-900">

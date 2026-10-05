@@ -83,7 +83,8 @@ describe('a setup exists before displacement is checked', () => {
     expect(c.timing.class).toMatch(/EARLY|OPTIMAL|ACCEPTABLE|LATE|CHASING/);
     const risk = validateCandidateRisk(c, { sessionOk: true, costPct: 3, maxCostPct: 5 });
     expect(risk.bucket).toBe(c.bucket);
-    expect(risk.wouldTrade).toBe(c.bucket === 'TRADE');
+    // Since 2026-10-05 net R:R is not a gate: TRADE and LOW_RR (valid geometry) both trade; only NO_TARGET / INVALID_STOP do not.
+    expect(risk.wouldTrade).toBe(c.bucket === 'TRADE' || c.bucket === 'LOW_RR');
   });
 });
 
@@ -186,7 +187,10 @@ describe('risk validation and the PAPER adapter', () => {
     expect(lc).toMatchObject({ id: `NSE:NIFTY:MP:B2:BULLISH:${c.decisionTime}`, triggerId: 'B2', entry: 200, rejectionFillPrice: 200, stop: 190, sweepExtreme: 191, zone: null });
     // The structure chain's own sequence gate accepts it at the decision close …
     expect(structureSequenceRefusal(lc, 200)).toBeNull();
-    // … and refuses it if price has already run to within 1.5R of T1.
-    expect(structureSequenceRefusal(lc, 225)?.code).toBe('STRUCTURE_SEQUENCE');
+    // … still accepts it close to T1 (low R:R is display only since 2026-10-05) …
+    expect(structureSequenceRefusal(lc, 225)).toBeNull();
+    // … and refuses it only once price is at / through T1 or the stop (genuine geometry).
+    expect(structureSequenceRefusal(lc, 230)?.code).toBe('STRUCTURE_SEQUENCE');
+    expect(structureSequenceRefusal(lc, 189)?.code).toBe('STRUCTURE_SEQUENCE');
   });
 });

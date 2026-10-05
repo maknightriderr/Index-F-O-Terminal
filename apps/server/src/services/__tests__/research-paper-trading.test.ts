@@ -217,10 +217,11 @@ describe('1. every eligible family candidate of a parent is retained', () => {
       routed(candidate('A2'), 'P1'),
       routed(candidate('A3', { timing: { class: 'OPTIMAL' } } as any), 'P1'),
       routed(candidate('B1', { timing: { class: 'LATE' } } as any), 'P1'),
-      routed(candidate('D3', { bucket: 'LOW_RR', rToT1: 0.8 } as any), 'P1'), // ineligible: never handed over
+      routed(candidate('D3', { bucket: 'LOW_RR', rToT1: 0.8 } as any), 'P1'), // 0.8R: low R:R is display only (2026-10-05) — still handed over
+      routed(candidate('C1', { bucket: 'NO_TARGET', t1: null, rToT1: null } as any), 'P1'), // no target: genuinely ineligible
       routed(candidate('B2', { decisionIndex: 99 } as any), 'P1'), // an earlier bar: never handed over (no hindsight)
     ];
-    expect(paperCandidatesForSlot(pool, newest).map((r) => r.candidate.triggerId)).toEqual(['A2', 'A3', 'B1']);
+    expect(paperCandidatesForSlot(pool, newest).map((r) => r.candidate.triggerId)).toEqual(['A2', 'A3', 'B1', 'D3']);
   });
   it('all three are recorded with role and rank; exactly one is selected', async () => {
     const r = await settle([b(slot({ source: 'A2' })), b(slot({ source: 'A3', timingClass: 'OPTIMAL' })), b(slot({ source: 'B1', timingClass: 'LATE' }))]);

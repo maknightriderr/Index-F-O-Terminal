@@ -11,14 +11,14 @@
 //   - which CONFIRMED lifecycle has just been FILLED — its limit touched by
 //     the live price between bar closes, or by the bar that just closed;
 //   - the STRUCTURE_SEQUENCE gate at the fill (price still between the stop
-//     and T1, and T1 still ≥ 1.5R away from where it fills);
+//     and T1 — the genuine geometry check; net R:R is display/ranking only
+//     since 2026-10-05, never a gate);
 //   - the rows for setup_lifecycle_events and the API/UI view.
 //
 // Only a fill (ENTRY) can mint a paper trade; before it the lifecycle is
 // display and record only.
 // ============================================================
 
-import { grossRRFrom, type StructureKeepAlive } from './setup-watch-core.js';
 import { rejectionCloseFill, STRUCTURE_RULES, STRUCTURE_RULES_5M, TERMINAL_STAGES, type LiquidityPool, type StructureEvaluation, type StructureScore, type StructureSetup, type StructureStage } from '@fno/analytics';
 import type { Exchange, StructureBlock, StructureCandleScoreView, StructureLifecycleView, StructurePatternsView, StructurePoolView, StructureTimeframe, TradingMode } from '@fno/shared';
 import type { GateDiagnostic } from './gate-diagnostics.js';
@@ -36,6 +36,18 @@ export const STRUCTURE_TF_BAR_MS: Record<StructureTimeframe, number> = { '15m': 
 /** The engine rules for a timeframe (5m: restated in time — STRUCTURE_RULES_5M). */
 export function structureRulesFor(timeframe: StructureTimeframe) {
   return timeframe === '5m' ? STRUCTURE_RULES_5M : STRUCTURE_RULES;
+}
+
+/**
+ * The rules the LIVE engine runs with: the pre-registered ones, except that
+ * net R:R is no longer a gate (2026-10-05). minT1R = 0 leaves only the
+ * genuine geometry check at confirmation — a T1 must exist strictly beyond
+ * the entry (nearestOppositePool) and the risk must be positive — so a
+ * confirmed setup at 1.20R is CONFIRMED, not LOW_RR. Research and backtests
+ * keep STRUCTURE_RULES (1.5R) unchanged.
+ */
+export function liveStructureRulesFor(timeframe: StructureTimeframe) {
+  return { ...structureRulesFor(timeframe), minT1R: 0 };
 }
 
 /**
@@ -157,14 +169,6 @@ export interface LiveLifecycle {
   triggerId?: string;
   /** The live outcome at the fill. */
   live: { outcome: 'MINTED' | 'REFUSED'; reason: string | null; code: string | null; at: number; decisionId?: string | null; signalId?: string | null } | null;
-  /**
-   * A CONFIRMED setup kept alive below 1.50R (setup-watch.ts): the engine's
-   * LOW_RR at confirmation, or an R:R-only refusal at the fill. Re-measured on
-   * every closed bar; offered to the fill chain again only once its R:R at the
-   * live price is back at the minimum, at most once per closed bar. Absent = a
-   * normal lifecycle (unchanged behaviour).
-   */
-  keepAlive?: StructureKeepAlive;
 }
 
 export interface LiveState {
@@ -315,7 +319,6 @@ export function advanceLiveState(args: {
         (args.entryMode === 'REJECTION_CLOSE' && setup.history.some((h) => h.stage === 'CONFIRMED') && (old?.live ?? null) == null ? 'waiting for rejection candle at zone' : null),
       engineFillBarTime: setup.fill?.barTime ?? null,
       live: old?.live ?? null,
-      ...(old?.keepAlive ? { keepAlive: old.keepAlive } : {}),
     };
     for (let k = lc.recorded; k < setup.history.length; k++) {
       const t = setup.history[k];
@@ -416,16 +419,6 @@ export function fillCandidate(state: LiveState, spot: number | null, lastClosedB
     if (l.live != null || l.entry == null || l.stop == null || l.t1 == null) return false;
     const bear = l.direction === 'BEARISH';
     const touched = bear ? spot >= l.entry : spot <= l.entry;
-    // A kept-alive setup (below 1.50R when confirmed or at an earlier fill):
-    // offered again only when touched, still between stop and T1, its R:R at
-    // the live price back at the minimum, and not already tried on this bar.
-    if (l.keepAlive) {
-      const ka = l.keepAlive;
-      if (ka.ended || (lastClosedBarTime != null && ka.lastAttemptBar === lastClosedBarTime) || !touched) return false;
-      if (!(bear ? spot < l.stop && spot > l.t1.price : spot > l.stop && spot < l.t1.price)) return false;
-      const rr = grossRRFrom(l, spot);
-      return rr != null && rr >= STRUCTURE_RULES.minT1R;
-    }
     const freshEngineFill = l.stage === 'ENTRY' && l.engineFillBarTime != null && lastClosedBarTime != null && l.engineFillBarTime === lastClosedBarTime;
     if (!(l.stage === 'CONFIRMED' && touched) && !freshEngineFill) return false;
     return bear ? spot < l.stop && spot > l.t1.price : spot > l.stop && spot < l.t1.price;
@@ -485,12 +478,9 @@ export function rejectionCloseCandidate(state: LiveState, lastClosedBar: ClosedB
   if (!lastClosedBar) return null;
   const barCloseAt = lastClosedBar.time + barMs;
   const candidates = state.lifecycles.filter((l) => {
-    if (l.live != null || l.entry == null || l.stop == null || l.t1 == null || !l.zone) return false;
-    // A kept-alive setup's window runs from when it was kept alive; at most one attempt per closed bar.
-    const anchorAt = l.keepAlive ? (l.keepAlive.ended || l.keepAlive.lastAttemptBar === lastClosedBar.time ? null : l.keepAlive.since) : l.confirmedAt;
-    if (anchorAt == null) return false;
-    if (barCloseAt <= anchorAt) return false; // only bars that closed strictly after CONFIRMED
-    return barCloseAt - anchorAt <= fillWithinBars * barMs;
+    if (l.live != null || l.entry == null || l.stop == null || l.t1 == null || !l.zone || l.confirmedAt == null) return false;
+    if (barCloseAt <= l.confirmedAt) return false; // only bars that closed strictly after CONFIRMED
+    return barCloseAt - l.confirmedAt <= fillWithinBars * barMs;
   });
   const orderScore = (l: LiveLifecycle) => (l.scoreBase !== undefined ? l.scoreBase ?? 0 : l.score ?? 0);
   candidates.sort((a, b) => orderScore(b) - orderScore(a));
@@ -505,20 +495,16 @@ export function rejectionCloseCandidate(state: LiveState, lastClosedBar: ClosedB
 }
 
 /**
- * STRUCTURE_SEQUENCE at the fill: the hard gate the sequence itself imposes.
- * Price still between stop and T1, and T1 still ≥ 1.5R from the fill price.
+ * STRUCTURE_SEQUENCE at the fill: the genuine geometry the sequence imposes —
+ * the levels exist and the fill price is still strictly between the stop and
+ * T1 (positive risk, positive reward, target on the right side). Net R:R is
+ * NOT checked here (display / ranking only since 2026-10-05).
  */
-export function structureSequenceRefusal(lc: LiveLifecycle, spot: number): { code: 'STRUCTURE_SEQUENCE'; reason: string; rrOnly?: true } | null {
+export function structureSequenceRefusal(lc: LiveLifecycle, spot: number): { code: 'STRUCTURE_SEQUENCE'; reason: string } | null {
   if (lc.entry == null || lc.stop == null || lc.t1 == null) return { code: 'STRUCTURE_SEQUENCE', reason: 'The setup has no zone, stop or T1 — the sequence never completed.' };
   const bear = lc.direction === 'BEARISH';
   if (bear ? spot >= lc.stop : spot <= lc.stop) return { code: 'STRUCTURE_SEQUENCE', reason: `Price (${spot}) is already through the stop at ${lc.stop}.` };
   if (bear ? spot <= lc.t1.price : spot >= lc.t1.price) return { code: 'STRUCTURE_SEQUENCE', reason: `Price (${spot}) has already reached T1 (${lc.t1.kind} ${lc.t1.price}).` };
-  const risk = Math.abs(lc.stop - spot);
-  const reward = Math.abs(lc.t1.price - spot);
-  if (risk > 0 && reward / risk < STRUCTURE_RULES.minT1R) {
-    // R:R alone: the setup is still valid, just not at the minimum here — it is kept alive, not forgotten.
-    return { code: 'STRUCTURE_SEQUENCE', reason: `From the fill at ${spot}, T1 is only ${round2(reward / risk)}R away (needs ${STRUCTURE_RULES.minT1R}R).`, rrOnly: true };
-  }
   return null;
 }
 

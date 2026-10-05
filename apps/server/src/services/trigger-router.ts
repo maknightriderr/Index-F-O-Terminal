@@ -89,7 +89,13 @@ const CANDIDATE_DEDUPE_TTL_SECONDS = 3 * 24 * 60 * 60;
 const SETTLE_MS = 5 * 60 * 1000;
 
 export interface RiskValidation {
-  /** TRADE = valid stop, a real untaken target ≥ 1.5R; anything else is the reason it would not trade. */
+  /**
+   * The event engine's own label (TRADE / LOW_RR / NO_TARGET / INVALID_STOP).
+   * TRADE and LOW_RR both have valid geometry (a stop with positive risk and a
+   * real untaken target beyond the entry) and both are tradeable: since
+   * 2026-10-05 net R:R is ranking / display only, so LOW_RR (< 1.5R) is a
+   * label, never a rejection. NO_TARGET / INVALID_STOP are genuine rejections.
+   */
   bucket: TriggerCandidate['bucket'];
   /** Inside the session guards: not in the first 5 minutes, not within the structure closing guard. */
   sessionOk: boolean;
@@ -188,25 +194,26 @@ export function linkStructureToParent(
   return { parentId, anchorKeys: [parentId, sweep.eventId], linked: true };
 }
 
-// ---------------- keep-alive: a confirmed family candidate below 1.50R ----------------
+// ---------------- the family watch: every confirmed candidate, shown until it ends ----------------
 
-/** How many closed bars a kept-alive family candidate stays re-checkable: S1's own fill window (user decision 2026-10-01). */
+/** How many closed bars a confirmed family candidate stays on the watch: S1's own fill window (user decision 2026-10-01). */
 export const FAMILY_WATCH_BARS: number = STRUCTURE_RULES.fillWithinBars;
 
-/** A confirmed family candidate kept alive under its ORIGINAL lifecycle id. */
+/**
+ * A confirmed family candidate on the watch under its ORIGINAL lifecycle id —
+ * DISPLAY only: re-measured on every closed bar and shown with its option
+ * plan until it is INVALIDATED / EXPIRES / is FILLED. It went to the slot at
+ * its own decision bar like every eligible candidate; the watch never hands
+ * it again (with no R:R gate there is nothing to "recover" from).
+ */
 export interface FamilyWatchEntry {
   lifecycleId: string;
   /** The candidate as the rule decided it (its hit: anchor, events, stopRef). */
   original: TriggerCandidate;
   parentId: string | null;
   anchorKeys: string[];
-  /**
-   * LOW_RR_AT_DECISION / RR_REFUSED_AT_FILL: kept alive for the paper-trade log
-   * too (handed to the slot again once it clears 1.50R). DISPLAY: a confirmed
-   * candidate that is only SHOWN and re-measured (it already went to the slot
-   * at its own bar, or its parent move traded) — never handed again.
-   */
-  cause: 'LOW_RR_AT_DECISION' | 'RR_REFUSED_AT_FILL' | 'DISPLAY';
+  /** Always DISPLAY (entries written before 2026-10-05 may carry an older cause; it is ignored). */
+  cause: 'DISPLAY' | string;
   /** The candidate as re-measured on the newest evaluated bar (null before the first re-check). */
   current: TriggerCandidate | null;
   lastIndex: number;
@@ -256,43 +263,12 @@ export function advanceFamilyWatch(
   });
 }
 
-/** Pure: a new watch entry for a confirmed candidate below 1.50R. */
-export function newFamilyWatch(rc: RoutedCandidate, cause: FamilyWatchEntry['cause']): FamilyWatchEntry {
-  return { lifecycleId: rc.lifecycleId, original: rc.candidate, parentId: rc.parentId ?? null, anchorKeys: rc.anchorKeys ?? [], cause, current: null, lastIndex: rc.candidate.decisionIndex, ended: null };
+/** Pure: a new (display) watch entry for a confirmed candidate. */
+export function newFamilyWatch(rc: RoutedCandidate): FamilyWatchEntry {
+  return { lifecycleId: rc.lifecycleId, original: rc.candidate, parentId: rc.parentId ?? null, anchorKeys: rc.anchorKeys ?? [], cause: 'DISPLAY', current: null, lastIndex: rc.candidate.decisionIndex, ended: null };
 }
 
-/** Keeps a family candidate the slot refused for R:R alone (it was confirmed): re-checked from the next closed bar. */
-export async function keepFamilyAlive(exchange: Exchange, underlying: string, rc: RoutedCandidate): Promise<void> {
-  const key = familyWatchKey(exchange, underlying, rc.candidate.session);
-  try {
-    const list: FamilyWatchEntry[] = JSON.parse((await redis.get(key)) ?? '[]');
-    const existing = list.find((w) => w.lifecycleId === rc.lifecycleId);
-    if (existing) {
-      // Already watched: it stays under its id; the refusal only means "not yet".
-      existing.lastIndex = Math.max(existing.lastIndex, rc.candidate.decisionIndex);
-      if (existing.cause === 'DISPLAY') existing.cause = 'RR_REFUSED_AT_FILL';
-    } else list.push(newFamilyWatch(rc, 'RR_REFUSED_AT_FILL'));
-    await redis.set(key, JSON.stringify(list), 'EX', EVAL_STATE_TTL_SECONDS);
-  } catch (err: any) {
-    logger.warn({ error: err.message, underlying, exchange, lifecycleId: rc.lifecycleId }, 'Trigger router: keep-alive write failed');
-  }
-}
-
-/** A watched family candidate whose parent move already traded: still shown and re-measured, never handed to the slot again. */
-export async function displayOnlyFamilyWatch(exchange: Exchange, underlying: string, session: string, lifecycleId: string): Promise<void> {
-  const key = familyWatchKey(exchange, underlying, session);
-  try {
-    const list: FamilyWatchEntry[] = JSON.parse((await redis.get(key)) ?? '[]');
-    const w = list.find((x) => x.lifecycleId === lifecycleId);
-    if (!w || w.ended || w.cause === 'DISPLAY') return;
-    w.cause = 'DISPLAY';
-    await redis.set(key, JSON.stringify(list), 'EX', EVAL_STATE_TTL_SECONDS);
-  } catch (err: any) {
-    logger.warn({ error: err.message, underlying, exchange, lifecycleId }, 'Trigger router: display-only write failed');
-  }
-}
-
-/** Ends a watched family candidate (it was paper-traded). No-op when it was never watched. */
+/** Ends a watched family candidate (FILLED — it became the paper trade). No-op when it was never watched. */
 export async function endFamilyWatch(exchange: Exchange, underlying: string, session: string, lifecycleId: string, reason: string, at: number): Promise<void> {
   const key = familyWatchKey(exchange, underlying, session);
   try {
@@ -302,32 +278,8 @@ export async function endFamilyWatch(exchange: Exchange, underlying: string, ses
     w.ended = { reason, at };
     await redis.set(key, JSON.stringify(list), 'EX', EVAL_STATE_TTL_SECONDS);
   } catch (err: any) {
-    logger.warn({ error: err.message, underlying, exchange, lifecycleId }, 'Trigger router: keep-alive end failed');
+    logger.warn({ error: err.message, underlying, exchange, lifecycleId }, 'Trigger router: watch end failed');
   }
-}
-
-/**
- * Pure: the kept-alive family candidates that clear every router check on
- * bar `end` (bucket TRADE = R:R ≥ 1.50R at the rebuilt entry, cost within the
- * ceiling), handed to the slot under their ORIGINAL id, parent and anchors.
- */
-export function recoveredFamilyCandidates(
-  watch: readonly FamilyWatchEntry[],
-  end: number,
-  stages: Record<string, LiveTriggerStage>,
-  chain: OptionChain | null,
-  already: readonly RoutedCandidate[]
-): RoutedCandidate[] {
-  const out: RoutedCandidate[] = [];
-  for (const w of watch) {
-    if (w.ended || w.cause === 'DISPLAY' || !w.current || w.current.decisionIndex !== end || w.current.bucket !== 'TRADE') continue;
-    const stage = stages[w.original.triggerId];
-    if (!PAPER_TRADING_STAGES.includes(stage) || already.some((p) => p.lifecycleId === w.lifecycleId)) continue;
-    const cost = costOnChain(w.current, chain);
-    const risk = validateCandidateRisk(w.current, { sessionOk: true, costPct: cost?.costPctOfPremium != null ? Math.round(cost.costPctOfPremium * 100) / 100 : null, maxCostPct: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM });
-    if (risk.wouldTrade) out.push({ candidate: w.current, stage, risk, cost, lifecycleId: w.lifecycleId, parentId: w.parentId, anchorKeys: w.anchorKeys });
-  }
-  return out;
 }
 
 /** Pure: what the slot receives — every eligible paper-stage candidate decided on the newest closed bar (no pre-selection). */
@@ -352,8 +304,10 @@ export function routedLifecycleId(exchange: Exchange, underlying: string, c: Tri
 /** Pure: the risk verdict for one candidate. */
 export function validateCandidateRisk(c: TriggerCandidate, args: { sessionOk: boolean; costPct: number | null; maxCostPct: number }): RiskValidation {
   const costOk = args.costPct == null ? null : args.costPct <= args.maxCostPct;
+  // Genuine geometry only: a stop with positive risk and a target beyond the entry. Net R:R is never checked here.
+  const geometryOk = c.bucket === 'TRADE' || c.bucket === 'LOW_RR';
   const reasons: string[] = [];
-  if (c.bucket !== 'TRADE') reasons.push(c.bucket === 'LOW_RR' ? `LOW_RR: T1 only ${c.rToT1}R away (needs 1.5R)` : c.bucket === 'NO_TARGET' ? 'NO_TARGET: no untaken pool ahead' : 'INVALID_STOP');
+  if (!geometryOk) reasons.push(c.bucket === 'NO_TARGET' ? 'NO_TARGET: no untaken pool ahead' : 'INVALID_STOP');
   if (!args.sessionOk) reasons.push('SESSION_GUARD: outside the allowed entry window');
   if (costOk === false) reasons.push(`COST_TOO_HIGH: ~${args.costPct}% of premium round trip`);
   return {
@@ -361,7 +315,7 @@ export function validateCandidateRisk(c: TriggerCandidate, args: { sessionOk: bo
     sessionOk: args.sessionOk,
     costPct: args.costPct,
     costOk,
-    wouldTrade: c.bucket === 'TRADE' && args.sessionOk && costOk !== false,
+    wouldTrade: geometryOk && args.sessionOk && costOk !== false,
     reason: reasons.length ? reasons.join('; ') : null,
   };
 }
@@ -536,25 +490,19 @@ export async function routeTriggerFamilies(args: { underlying: string; exchange:
     }
     const paper = paperCandidatesForSlot(routed, end);
 
-    // 6. Keep-alive. A paper-stage candidate CONFIRMED on the newest bar (a
-    //    valid stop and target) but below 1.50R is not forgotten: it is kept
-    //    under its id and re-measured on every later closed bar with the
-    //    rule's own builder; once it clears every check it goes to the slot
-    //    with the others, under the same id and parent.
+    // 6. The watch: every CONFIRMED paper-stage candidate of the newest bar
+    //    (valid geometry, any R:R) is shown and re-measured under its id on
+    //    every later closed bar with the rule's own builder, until it is
+    //    invalidated, expires or is filled. Display only.
     const sessionOkAt = (i: number) => series.bars[i].time - window.open >= SETTLE_MS && window.close - (series.bars[i].time + BAR_MS_15M) >= closingGuardMs;
     const watchKey = familyWatchKey(exchange, underlying, session);
     let watch: FamilyWatchEntry[] = JSON.parse((await redis.get(watchKey).catch(() => null)) ?? '[]');
     watch = advanceFamilyWatch(watch, ctx, log, end, sessionOkAt);
-    // Every CONFIRMED paper-stage candidate (a valid stop and target, any
-    // R:R) is shown and re-measured: below 1.50R it is also kept for the
-    // paper-trade log (LOW_RR_AT_DECISION); at 1.50R or more it already goes
-    // to the slot on this bar, so its watch is DISPLAY only.
     for (const rc of routed) {
       if (rc.candidate.decisionIndex !== end || !PAPER_TRADING_STAGES.includes(rc.stage) || !rc.risk.sessionOk) continue;
       if (rc.candidate.bucket !== 'LOW_RR' && rc.candidate.bucket !== 'TRADE') continue;
-      if (!watch.some((w) => w.lifecycleId === rc.lifecycleId)) watch.push(newFamilyWatch(rc, rc.candidate.bucket === 'LOW_RR' ? 'LOW_RR_AT_DECISION' : 'DISPLAY'));
+      if (!watch.some((w) => w.lifecycleId === rc.lifecycleId)) watch.push(newFamilyWatch(rc));
     }
-    paper.push(...recoveredFamilyCandidates(watch, end, stages, chain, paper));
     await redis.set(watchKey, JSON.stringify(watch), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);
 
     await redis.set(linkKey, JSON.stringify(linkage), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);

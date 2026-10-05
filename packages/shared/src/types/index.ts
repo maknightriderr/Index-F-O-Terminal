@@ -391,7 +391,8 @@ export interface TradeSetup {
   /**
    * Only on an R:R refusal built with `plan: true`: the option levels the
    * refusal was judged at (premium entry / SL / target, gross and net R:R).
-   * Shown for a confirmed setup below 1.50R; never traded.
+   * Only produced when a caller keeps the builder's R:R gate on (research /
+   * backtests); live callers pass rrGate: false and never get an R:R refusal.
    */
   rrPlan?: {
     entry: number;
@@ -2011,31 +2012,30 @@ export interface SetupWatchSnapshot {
   statusRR: number | null;
 }
 
-/** One confirmed setup kept alive and re-evaluated under its SAME id (setup-watch.ts). */
+/** Display-only R:R band (setup-watch-core rrBandOf): < 1.0, 1.0 – 1.5, ≥ 1.5. Never read by a decision. */
+export type RrBand = '<1.0' | '1.0-1.5' | '>=1.5';
+
+/** One confirmed setup, shown and re-evaluated under its SAME id until it ends (setup-watch.ts). */
 export interface SetupWatchRow {
   id: string;
   /** 'S1', 'INDICATOR', or the trigger id. */
   source: string;
   direction: 'BULLISH' | 'BEARISH';
   parentId: string | null;
-  /** Every confirmed setup is CONFIRMED until its genuine invalidation / expiry (ENDED). R:R never changes this. */
+  /** CONFIRMED until INVALIDATION / EXPIRY / FILLED (ENDED). Net R:R never changes this. */
   status: 'CONFIRMED' | 'ENDED';
-  /** "Confirmed — R:R 1.40R < 1.50R" / "Confirmed — R:R 1.62R ≥ 1.50R" (1.50R is informational). */
+  /** "Confirmed — R:R 1.20R" — R:R shown, never compared against a threshold. */
   statusText: string;
-  /** The binding R:R (the lower of the underlying R:R to T1 and the option's net R:R). */
+  /** The binding R:R (the lower of the underlying R:R to T1 and the option's net R:R) — display / ranking only. */
   statusRR: number | null;
-  /** Informational: statusRR ≥ 1.50R (null = not measured). */
-  rrAtMin: boolean | null;
-  /** Informational: the check (other than R:R) that would stop the AUTOMATIC paper-trade log now. Never hides the setup. */
+  /** Display-only band of statusRR (null = not measured). */
+  rrBand: RrBand | null;
+  /** Informational: a genuine check that would stop the paper-trade log right now. Never hides the setup. */
   blockCode: string | null;
   blockReason: string | null;
   plan: OptionTradePlan | null;
   initial: SetupWatchSnapshot;
   current: SetupWatchSnapshot;
-  startedBelowMin: boolean;
-  rrRecovered: boolean;
-  /** When the binding R:R first reached 1.50R (informational). */
-  firstAtMinAt: number | null;
   strikeChanges: number;
   optionBuildFailures: number;
   startedAt: number;

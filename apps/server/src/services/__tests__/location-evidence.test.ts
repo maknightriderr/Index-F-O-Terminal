@@ -95,7 +95,7 @@ describe('neither confidence nor location is a universal gate', () => {
     expect(src).not.toMatch(/enabled: TRADING_FLAGS\.LOCATION_GATE/);
   });
   it('trades carry both evidence suffixes; positional stamps are unchanged', () => {
-    expect(liveLogicStamp().logicVersion).toBe(`${STRUCTURE_LOGIC_VERSION}+indicator-evidence.1+location-evidence.1`);
+    expect(liveLogicStamp().logicVersion).toBe(`${STRUCTURE_LOGIC_VERSION}+indicator-evidence.1+location-evidence.1+rr-display-only.1`);
     expect(liveLogicStamp().indicator).toEqual({ confidenceMode: 'EVIDENCE', locationMode: 'EVIDENCE' });
     expect(logicStamp().logicVersion).toBe(LOGIC_VERSION);
   });

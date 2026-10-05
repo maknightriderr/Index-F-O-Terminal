@@ -132,12 +132,13 @@ describe('the fill and its gate', () => {
     copy.lifecycles.forEach((l) => (l.live = { outcome: 'MINTED', code: null, reason: null, at: 1 }));
     expect(fillCandidate(copy, 100.7, null)).toBeNull();
   });
-  it('STRUCTURE_SEQUENCE: through the stop, at T1, or T1 closer than 1.5R from the fill refuses', () => {
+  it('STRUCTURE_SEQUENCE: through the stop or at T1 refuses; a fill close to T1 (low R:R) does NOT (R:R is display only since 2026-10-05)', () => {
     const lc = state.lifecycles.find((l) => l.direction === 'BEARISH') as LiveLifecycle;
     expect(structureSequenceRefusal(lc, 100.7)).toBeNull();
     expect(structureSequenceRefusal(lc, lc.stop! + 0.01)?.code).toBe('STRUCTURE_SEQUENCE');
     expect(structureSequenceRefusal(lc, 96.9)?.code).toBe('STRUCTURE_SEQUENCE');
-    expect(structureSequenceRefusal(lc, 98)?.reason).toMatch(/only .*R away/);
+    // Was: refused "T1 only xR away". Now a valid fill — still between stop and T1.
+    expect(structureSequenceRefusal(lc, 98)).toBeNull();
     expect(gateForRefusalCode('STRUCTURE_SEQUENCE')).toBe('STRUCTURE_SEQUENCE');
     expect(classifyRefusal('STRUCTURE_SEQUENCE')).toBe('REFUSED');
   });
@@ -214,7 +215,8 @@ describe('flags, stamp and schema', () => {
     const off = logicStamp(TRADING_FLAG_DEFAULTS, TRADING_PARAM_DEFAULTS, COVERAGE_LAG_FLAG_DEFAULTS, COVERAGE_LAG_PARAM_DEFAULTS, [], false, MOMENTUM_BREAK_PARAM_DEFAULTS, [], extras(false));
     expect(off.logicVersion).toBe(LOGIC_VERSION);
     // The live stamp also carries the indicator engine's EVIDENCE mode (2026-10-01).
-    expect(liveLogicStamp().logicVersion).toBe(`${STRUCTURE_LOGIC_VERSION}+indicator-evidence.1+location-evidence.1`);
+    // …and, since 2026-10-05, the R:R-display-only bump (RISK-2.0).
+    expect(liveLogicStamp().logicVersion).toBe(`${STRUCTURE_LOGIC_VERSION}+indicator-evidence.1+location-evidence.1+rr-display-only.1`);
   });
   it('CONSENSUS_OFF is classified as not eligible', () => {
     expect(classifyRefusal('CONSENSUS_OFF')).toBe('NOT_ELIGIBLE');

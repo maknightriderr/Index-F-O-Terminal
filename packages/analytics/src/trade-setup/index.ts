@@ -571,6 +571,11 @@ function buildNakedLong(
   // the flag off, or IV not RICH, this is exactly MIN_RISK_REWARD.
   const richIvActive = instrument.flags?.richIvRr === true && instrument.ivVsHv === 'RICH';
   const requiredRr = richIvActive ? instrument.richIvMinRiskReward ?? RICH_IV_MIN_RISK_REWARD : MIN_RISK_REWARD;
+  // `rrGate: false` (every live caller since 2026-10-05): net R:R is a
+  // ranking / display input only — never a refusal. Only the genuine stop
+  // checks below still refuse (stop inside the noise floor beyond the cap).
+  // Absent / true = the pre-existing behaviour, byte-identical.
+  const rrGate = instrument.rrGate !== false;
 
   const maxStopWidth = entry * effectiveSlPct;
   const minStopWidth = entry * MIN_SL_PREMIUM_PCT;
@@ -583,7 +588,10 @@ function buildNakedLong(
     const rrStopWidth = netReward / requiredRr - roundTripCost;
     stopWidth = Math.min(maxStopWidth, rrStopWidth);
 
-    if (stopWidth < minStopWidth) {
+    // No R:R gate: keep the sizing above when the target can pay for it,
+    // otherwise use the tightest tradeable stop (MIN_SL_PREMIUM_PCT) — never refuse for R:R.
+    if (!rrGate && stopWidth < minStopWidth) stopWidth = minStopWidth;
+    if (rrGate && stopWidth < minStopWidth) {
       const impliedRr = round2(netReward / (minStopWidth + roundTripCost));
       return {
         available: false,
@@ -598,7 +606,9 @@ function buildNakedLong(
     // F&O validation rule 4: widen to the noise floor only as far as both the
     // 45% cap and the R:R-affordable width allow; otherwise refuse.
     if (noiseStopWidth != null && stopWidth < noiseStopWidth) {
-      const ceiling = Math.min(Math.max(entry * MAX_SL_PREMIUM_PCT, maxStopWidth), rrStopWidth);
+      const capCeiling = Math.max(entry * MAX_SL_PREMIUM_PCT, maxStopWidth);
+      // With the R:R gate, the R:R-affordable width also caps the widening; without it only the 45% cap does.
+      const ceiling = rrGate ? Math.min(capCeiling, rrStopWidth) : capCeiling;
       if (noiseStopWidth > ceiling) return stopInsideNoise(stopWidth);
       stopWidth = noiseStopWidth;
       stopWidenedForNoise = true;
@@ -642,8 +652,11 @@ function buildNakedLong(
       stopBeforeStructure,
     };
 
+    // No R:R gate: a structural stop tighter than the minimum premium stop is
+    // widened to it (structure only ever widens a stop); R:R never refuses.
+    if (!rrGate && stopWidth < minStopWidth) stopWidth = Math.min(minStopWidth, capWidth);
     const netRrAtStop = netReward / (stopWidth + roundTripCost);
-    if (stopWidth < minStopWidth || netRrAtStop < requiredRr) {
+    if (rrGate && (stopWidth < minStopWidth || netRrAtStop < requiredRr)) {
       return {
         available: false,
         noTradeCode: 'REWARD_RISK_TOO_LOW',
@@ -745,10 +758,11 @@ function buildNakedLong(
             ? `, widened from the ${Math.round(effectiveSlPct * 100)}% base${vixNote}${expiryNote} to sit ${structuralRecord.bufferAtr} ATR beyond the level at ${structuralRecord.nearestBehindLevel}` +
               (structuralRecord.stopBeforeStructure ? ` — capped at ${Math.round(MAX_SL_PREMIUM_PCT * 100)}%, so the stop fires BEFORE that structure is reached` : '')
             : `${vixNote}${expiryNote}`) +
-          `; not squeezed to fit — the target clears ${requiredRr}:1 reward:risk after costs at this stop`
-        : `SL ${stopLoss.toFixed(2)} — a ${Math.round(effectiveStopPct * 100)}% premium stop, sized so the trade clears ${requiredRr}:1 reward:risk after costs` +
+          (rrGate ? `; not squeezed to fit — the target clears ${requiredRr}:1 reward:risk after costs at this stop` : '; not squeezed to fit')
+        : `SL ${stopLoss.toFixed(2)} — a ${Math.round(effectiveStopPct * 100)}% premium stop` +
+          (rrGate ? `, sized so the trade clears ${requiredRr}:1 reward:risk after costs` : '') +
           (stopWidth < maxStopWidth ? ` (tighter than the ${Math.round(effectiveSlPct * 100)}% ceiling${vixNote}${expiryNote} this setup would otherwise allow)` : `${vixNote}${expiryNote}`)) +
-      (richIvActive ? ` (IV is rich against realised volatility, so ${requiredRr}:1 is required rather than ${MIN_RISK_REWARD}:1)` : '') +
+      (richIvActive && rrGate ? ` (IV is rich against realised volatility, so ${requiredRr}:1 is required rather than ${MIN_RISK_REWARD}:1)` : '') +
       `. R:R ${riskReward.toFixed(2)} gross, ~${riskRewardNet.toFixed(2)} after costs.` +
       (dte != null ? ` DTE ${dte}.` : '') +
       ` The entry/SL/target figures themselves are pre-cost — the round trip is estimated at ~${costPct}% of premium (~${estimatedCost.toFixed(2)} per unit: this contract's bid-ask spread, a slippage allowance, statutory charges, and brokerage for one lot), a broker-dependent estimate, which is why it gates the setup rather than being subtracted from the displayed prices.` +
@@ -818,6 +832,14 @@ export interface SetupInstrumentContext {
    * names the strike's real moneyness; strike choice by delta, the IV cap on
    * the target and the expiry fallback are the caller's (they need the chain).
    */
+  /**
+   * False (every live caller): net R:R is a ranking / display input only — the
+   * builder never refuses REWARD_RISK_TOO_LOW (incl. the RICH-IV bar); only
+   * genuine stop checks refuse. Absent / true = the original R:R gate
+   * (golden snapshots, research and backtests).
+   */
+  rrGate?: boolean;
+
   /**
    * Opt-in: an R:R refusal (REWARD_RISK_TOO_LOW) also returns `rrPlan` — the
    * option levels it was judged at — so a confirmed setup below the minimum
