@@ -112,6 +112,8 @@ export const FILES = [
   // strike evaluated) and option_plan_events (its level changes). Written at the
   // mint and on each trailing-stop move, so ensured at boot too.
   '035_option_plans.sql',
+  // Hotfix: logic_version widened to 200 (the live stamp outgrew 64 characters).
+  '036_widen_logic_version.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */

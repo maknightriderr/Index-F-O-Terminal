@@ -3,6 +3,7 @@
 
 import type { DecisionRecord, SignalDecisionSnapshot } from '@fno/shared';
 import { sql } from '../lib/db.js';
+import { insertOnce } from '../lib/insert-once.js';
 import { logger } from '../lib/logger.js';
 import { schemaFileReady } from './ensure-capture-schema.js';
 import { DECISION_RECORDS_MIGRATION } from './snapshot-context.js';
@@ -25,12 +26,11 @@ export async function persistSnapshot(snap: SignalDecisionSnapshot): Promise<boo
   if (!decisionRecordsReady()) return false;
   const row = freezeSnapshotRow(snap);
   try {
-    await sql`
+    await insertOnce(sql`
       INSERT INTO signal_decision_snapshots (snapshot_id, symbol, exchange, mode, decision_bar_time, polled_at, capture_reason, snapshot_schema_version, versions, data_quality, inputs)
       VALUES (${row.snapshot_id}, ${row.symbol}, ${row.exchange}, ${row.mode}, ${row.decision_bar_time}, ${row.polled_at}, ${row.capture_reason}, ${row.snapshot_schema_version},
               ${sql.json(row.versions as never)}, ${sql.json(row.data_quality as never)}, ${sql.json(row.inputs as never)})
-      ON CONFLICT (snapshot_id) DO NOTHING
-    `;
+    `);
     return true;
   } catch (err: any) {
     logger.error({ error: err.message, snapshotId: snap.snapshotId, symbol: snap.symbol }, 'Decision snapshot: insert failed — this decision is not replayable');
@@ -42,18 +42,16 @@ export async function persistSnapshot(snap: SignalDecisionSnapshot): Promise<boo
 export async function persistDecisionRecord(record: DecisionRecord): Promise<boolean> {
   if (!decisionRecordsReady()) return false;
   try {
-    await sql`
+    await insertOnce(sql`
       INSERT INTO decision_records (snapshot_id, record_schema_version, record, record_hash, final_status, selected_candidate_id, generated_at)
       VALUES (${record.snapshotId}, ${record.schemaVersion}, ${sql.json(JSON.parse(canonicalJson(record)) as never)}, ${recordHash(record)}, ${record.finalStatus}, ${record.selectedCandidateId}, ${new Date(record.generatedAt).toISOString()})
-      ON CONFLICT (snapshot_id) DO NOTHING
-    `;
+    `);
     for (const link of record.triggerEventIds) {
       for (let k = 0; k < link.eventIds.length; k++) {
-        await sql`
+        await insertOnce(sql`
           INSERT INTO decision_trigger_events (snapshot_id, candidate_id, event_id, ordinal)
           VALUES (${record.snapshotId}, ${link.candidateId}, ${link.eventIds[k]}, ${k})
-          ON CONFLICT DO NOTHING
-        `;
+        `);
       }
     }
     return true;
