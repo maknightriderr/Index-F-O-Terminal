@@ -386,128 +386,206 @@ function costOnChain(c: TriggerCandidate, chain: OptionChain | null): SetupCostM
   });
 }
 
+/** The router's own per-symbol state, read from Redis before an evaluation (an input of the decision). */
+export interface FamilyRouterState {
+  /** Open time of the newest bar already evaluated (0 = none). */
+  lastDone: number;
+  /** Observation selections fixed by earlier evaluations (parent id → selection). */
+  observeSelections: Record<string, FixedSelection>;
+  /** The family watch as last written. */
+  watch: FamilyWatchEntry[];
+  /** The linkage written when the newest bar was evaluated (returned when there is no new bar). */
+  cachedLinkage: ParentLinkage | null;
+}
+
+export const EMPTY_FAMILY_ROUTER_STATE: FamilyRouterState = { lastDone: 0, observeSelections: {}, watch: [], cachedLinkage: null };
+
+/** Where the router would evaluate: today's session of the closed bars, or null when it does not run. */
+export function familyRouterSession(args: { exchange: Exchange; mode: TradingMode; bars: readonly MomentumBar[]; now: number; ids: readonly string[] }): string | null {
+  const { exchange, mode, bars, now, ids } = args;
+  if (mode !== 'INTRADAY' || bars.length < 30 || ids.length === 0) return null;
+  const series = prepareMomentumSeries(bars as MomentumBar[]);
+  const session = series.sessionDates[series.sessionStarts.length - 1];
+  const today = new Date(now).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  if (session !== today) return null;
+  return getSessionWindow(exchange, session) ? session : null;
+}
+
+/** Reads the router's state for a session (each read failing to its empty value, as before). */
+export async function readFamilyRouterState(exchange: Exchange, underlying: string, mode: TradingMode, session: string): Promise<FamilyRouterState> {
+  const [lastDone, sel, watched, cached] = await Promise.all([
+    redis.get(`mp_eval:${exchange}:${underlying}:${mode}`).catch(() => null),
+    redis.get(`mp_sel:observe:${exchange}:${underlying}:${session}`).catch(() => null),
+    redis.get(familyWatchKey(exchange, underlying, session)).catch(() => null),
+    redis.get(`mp_link:${exchange}:${underlying}:${session}`).catch(() => null),
+  ]);
+  return {
+    lastDone: Number(lastDone ?? 0),
+    observeSelections: JSON.parse(sel ?? '{}') as Record<string, FixedSelection>,
+    watch: watched ? (JSON.parse(watched) as FamilyWatchEntry[]) : [],
+    cachedLinkage: cached ? (JSON.parse(cached) as ParentLinkage) : null,
+  };
+}
+
+export interface FamilyCoreResult {
+  /** NOT_RUN: not intraday / too few bars / no live trigger / not today's session. NO_NEW_BAR: nothing new to evaluate. */
+  status: 'NOT_RUN' | 'NO_NEW_BAR' | 'EVALUATED';
+  session: string | null;
+  /** Open time of the newest evaluated bar (null unless EVALUATED). */
+  newestBarTime: number | null;
+  /** Index of the newest closed bar in the series (-1 when not run). */
+  end: number;
+  /** Bar indices evaluated this time. */
+  todo: number[];
+  /** Every candidate of today's session, with parent, anchor keys and (for evaluated bars) its observation role. */
+  routed: RoutedCandidate[];
+  /** The session's market events (the event log). */
+  events: MarketEvent[];
+  linkage: ParentLinkage | null;
+  observeSelections: Record<string, FixedSelection>;
+  observeSelectionsChanged: boolean;
+  paper: RoutedCandidate[];
+  watch: FamilyWatchEntry[];
+}
+
+/**
+ * Pure: the router's decision for the closed bars and its prior state — every
+ * trigger on every bar of today's session, risk validation, cost on the given
+ * chain (newest bar only), parents, linkage, the observation arbitration, the
+ * slot hand-over and the watch. No IO and no clock: `now` only names today.
+ * The live router and replay(snapshotId) both run exactly this.
+ */
+export function evaluateFamiliesCore(args: {
+  underlying: string;
+  exchange: Exchange;
+  mode: TradingMode;
+  bars: MomentumBar[];
+  chain: OptionChain | null;
+  now: number;
+  stages: Record<string, LiveTriggerStage>;
+  state: FamilyRouterState;
+}): FamilyCoreResult {
+  const { underlying, exchange, mode, bars, chain, now, stages, state } = args;
+  const ids = liveRoutedTriggerIds(stages);
+  const notRun: FamilyCoreResult = { status: 'NOT_RUN', session: null, newestBarTime: null, end: -1, todo: [], routed: [], events: [], linkage: null, observeSelections: {}, observeSelectionsChanged: false, paper: [], watch: [] };
+  if (!familyRouterSession({ exchange, mode, bars, now, ids })) return notRun;
+  const series = prepareMomentumSeries(bars);
+  const s = series.sessionStarts.length - 1;
+  const session = series.sessionDates[s];
+  const window = getSessionWindow(exchange, session)!;
+
+  const ctx = buildSeriesContext(series);
+  const start = series.sessionStarts[s];
+  const end = ctx.sessionEnd(s);
+  const todo: number[] = [];
+  for (let i = Math.max(start, end - MAX_CATCHUP_BARS + 1); i <= end; i++) if (series.bars[i].time > state.lastDone) todo.push(i);
+  if (todo.length === 0) {
+    // No new bar: the linkage written when the newest bar was evaluated is still exact (parents only change on a new bar).
+    return { ...notRun, status: 'NO_NEW_BAR', session, end, linkage: state.cachedLinkage, observeSelections: state.observeSelections, watch: state.watch };
+  }
+
+  const log = runSessionEvents(ctx, s);
+  const closingGuardMs = STRUCTURE_PARAMS.STRUCTURE_CLOSING_GUARD_MIN * 60 * 1000;
+  const todoSet = new Set(todo);
+
+  // 1. Every trigger, independently, on every bar of today's session so far
+  //    (each rule reads only bars up to its own decision bar). One rule
+  //    failing — no displacement, no target — never stops another.
+  const all: TriggerCandidate[] = [];
+  for (let i = start; i <= end; i++) all.push(...evaluateTriggersAt(ctx, log, i, ids));
+
+  // 2. Qualify each: risk geometry, session window, and option cost on the
+  //    live quote (only meaningful for the bar that just closed).
+  const routed: RoutedCandidate[] = all.map((c) => {
+    const barTime = c.decisionTime;
+    const sessionOk = barTime - window.open >= SETTLE_MS && window.close - (barTime + BAR_MS_15M) >= closingGuardMs;
+    const cost = c.decisionIndex === end ? costOnChain(c, chain) : null;
+    const risk = validateCandidateRisk(c, { sessionOk, costPct: cost?.costPctOfPremium != null ? Math.round(cost.costPctOfPremium * 100) / 100 : null, maxCostPct: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM });
+    return { candidate: c, stage: stages[c.triggerId], risk, cost, lifecycleId: routedLifecycleId(exchange, underlying, c) };
+  });
+
+  // 3. Group by parent move, then 4. arbitrate one setup per parent for
+  //    observation (SHADOW and up). A bar settled by an earlier evaluation
+  //    keeps its verdict: its selection (if any) is persisted, and its other
+  //    candidates cannot be re-selected with hindsight.
+  const parents = groupIntoParents(all, new Map([[session, log]]));
+  const linkage = buildParentLinkage(session, parents, all, log.events);
+  const parentOf = new Map<number, string>();
+  for (const p of parents) for (const idx of p.candidates) parentOf.set(idx, p.parentId);
+  const fixed: Record<string, FixedSelection> = { ...state.observeSelections };
+  const allowed: LiveTriggerStage[] = ['SHADOW', ...PAPER_TRADING_STAGES];
+  const observed = arbitrateParents(parents, all, (idx) => {
+    const r = routed[idx];
+    const fresh = todoSet.has(r.candidate.decisionIndex);
+    return {
+      eligible: fresh && r.risk.wouldTrade,
+      ineligibleReason: fresh ? r.risk.reason : 'Decided at an earlier evaluation',
+      stageAllowed: allowed.includes(r.stage),
+      netR: r.cost?.netR ?? null,
+    };
+  }, fixed);
+  let changed = false;
+  for (const [idx, d] of observed) {
+    const c = all[idx];
+    if (d.role === 'SELECTED' && todoSet.has(c.decisionIndex) && !fixed[d.parentId]) {
+      fixed[d.parentId] = { triggerId: c.triggerId, decisionIndex: c.decisionIndex };
+      changed = true;
+    }
+  }
+
+  // 5. Every candidate carries its parent and anchor keys; an evaluated one its
+  //    observation role. The slot gets EVERY eligible paper-stage candidate of
+  //    the bar that just closed — the trading choice is made there.
+  for (let idx = 0; idx < all.length; idx++) {
+    const rc = routed[idx];
+    rc.parentId = parentOf.get(idx) ?? null;
+    rc.anchorKeys = rc.parentId ? anchorKeysOf(rc.parentId, rc.candidate, log.events) : [];
+    if (todoSet.has(rc.candidate.decisionIndex)) rc.arbitration = observed.get(idx) ?? null;
+  }
+  const paper = paperCandidatesForSlot(routed, end);
+
+  // 6. The watch: every CONFIRMED paper-stage candidate of the newest bar
+  //    (valid geometry, any R:R) is shown and re-measured under its id on
+  //    every later closed bar with the rule's own builder, until it is
+  //    invalidated, expires or is filled. Display only.
+  const sessionOkAt = (i: number) => series.bars[i].time - window.open >= SETTLE_MS && window.close - (series.bars[i].time + BAR_MS_15M) >= closingGuardMs;
+  const watch = advanceFamilyWatch(state.watch, ctx, log, end, sessionOkAt);
+  for (const rc of routed) {
+    if (rc.candidate.decisionIndex !== end || !PAPER_TRADING_STAGES.includes(rc.stage) || !rc.risk.sessionOk) continue;
+    if (rc.candidate.bucket !== 'LOW_RR' && rc.candidate.bucket !== 'TRADE') continue;
+    if (!watch.some((w) => w.lifecycleId === rc.lifecycleId)) watch.push(newFamilyWatch(rc));
+  }
+  return { status: 'EVALUATED', session, newestBarTime: series.bars[end].time, end, todo, routed, events: log.events, linkage, observeSelections: fixed, observeSelectionsChanged: changed, paper, watch };
+}
+
 /**
  * Evaluates the newly closed bars of today's session. Returns the PAPER-stage
  * candidates of the newest bar that would trade (normally none), or null on
- * any failure. SHADOW candidates are recorded once each.
+ * any failure. SHADOW candidates are recorded once each. The decision itself
+ * is evaluateFamiliesCore; this shell reads the router's state (unless the
+ * caller already read it — the decision snapshot does) and writes it back.
  */
-export async function routeTriggerFamilies(args: { underlying: string; exchange: Exchange; mode: TradingMode; bars: MomentumBar[]; chain: OptionChain | null; now: number }): Promise<{ paper: RoutedCandidate[]; evaluated: number; linkage?: ParentLinkage | null; watch?: FamilyWatchEntry[] } | null> {
+export async function routeTriggerFamilies(args: { underlying: string; exchange: Exchange; mode: TradingMode; bars: MomentumBar[]; chain: OptionChain | null; now: number; state?: FamilyRouterState | null }): Promise<{ paper: RoutedCandidate[]; evaluated: number; linkage?: ParentLinkage | null; watch?: FamilyWatchEntry[] } | null> {
   const { underlying, exchange, mode, bars, chain, now } = args;
   try {
-    if (mode !== 'INTRADAY' || bars.length < 30) return { paper: [], evaluated: 0 };
     const stages = liveTriggerStages();
-    const ids = liveRoutedTriggerIds(stages);
-    if (ids.length === 0) return { paper: [], evaluated: 0 };
+    const session = familyRouterSession({ exchange, mode, bars, now, ids: liveRoutedTriggerIds(stages) });
+    if (!session) return { paper: [], evaluated: 0 };
+    const state = args.state ?? (await readFamilyRouterState(exchange, underlying, mode, session));
+    const out = evaluateFamiliesCore({ underlying, exchange, mode, bars, chain, now, stages, state });
+    if (out.status === 'NOT_RUN') return { paper: [], evaluated: 0 };
+    if (out.status === 'NO_NEW_BAR') return { paper: [], evaluated: 0, linkage: out.linkage, watch: out.watch };
 
-    const series = prepareMomentumSeries(bars);
-    const s = series.sessionStarts.length - 1;
-    const session = series.sessionDates[s];
-    const today = new Date(now).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-    if (session !== today) return { paper: [], evaluated: 0 };
-    const window = getSessionWindow(exchange, session);
-    if (!window) return { paper: [], evaluated: 0 };
-
-    const stateKey = `mp_eval:${exchange}:${underlying}:${mode}`;
-    const linkKey = `mp_link:${exchange}:${underlying}:${session}`;
-    const lastDone = Number((await redis.get(stateKey).catch(() => null)) ?? 0);
-    const ctx = buildSeriesContext(series);
-    const start = series.sessionStarts[s];
-    const end = ctx.sessionEnd(s);
-    const todo: number[] = [];
-    for (let i = Math.max(start, end - MAX_CATCHUP_BARS + 1); i <= end; i++) if (series.bars[i].time > lastDone) todo.push(i);
-    if (todo.length === 0) {
-      // No new bar: the linkage written when the newest bar was evaluated is still exact (parents only change on a new bar).
-      const cached = await redis.get(linkKey).catch(() => null);
-      const watched = await redis.get(familyWatchKey(exchange, underlying, session)).catch(() => null);
-      return { paper: [], evaluated: 0, linkage: cached ? (JSON.parse(cached) as ParentLinkage) : null, watch: watched ? (JSON.parse(watched) as FamilyWatchEntry[]) : [] };
-    }
-
-    const log = runSessionEvents(ctx, s);
-    const closingGuardMs = STRUCTURE_PARAMS.STRUCTURE_CLOSING_GUARD_MIN * 60 * 1000;
-    const todoSet = new Set(todo);
-
-    // 1. Every trigger, independently, on every bar of today's session so far
-    //    (each rule reads only bars up to its own decision bar). One rule
-    //    failing — no displacement, no target — never stops another.
-    const all: TriggerCandidate[] = [];
-    for (let i = start; i <= end; i++) all.push(...evaluateTriggersAt(ctx, log, i, ids));
-
-    // 2. Qualify each: risk geometry, session window, and option cost on the
-    //    live quote (only meaningful for the bar that just closed).
-    const routed: RoutedCandidate[] = all.map((c) => {
-      const barTime = c.decisionTime;
-      const sessionOk = barTime - window.open >= SETTLE_MS && window.close - (barTime + BAR_MS_15M) >= closingGuardMs;
-      const cost = c.decisionIndex === end ? costOnChain(c, chain) : null;
-      const risk = validateCandidateRisk(c, { sessionOk, costPct: cost?.costPctOfPremium != null ? Math.round(cost.costPctOfPremium * 100) / 100 : null, maxCostPct: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM });
-      return { candidate: c, stage: stages[c.triggerId], risk, cost, lifecycleId: routedLifecycleId(exchange, underlying, c) };
-    });
-
-    // 3. Group by parent move, then 4. arbitrate one setup per parent — once
-    //    for observation (SHADOW and up) and once for trading (PAPER and up).
-    //    A bar settled by an earlier evaluation keeps its verdict: its
-    //    selection (if any) is persisted, and its other candidates cannot be
-    //    re-selected with hindsight.
-    const parents = groupIntoParents(all, new Map([[session, log]]));
-    const linkage = buildParentLinkage(session, parents, all, log.events);
-    const parentOf = new Map<number, string>();
-    for (const p of parents) for (const idx of p.candidates) parentOf.set(idx, p.parentId);
-    const arbitrate = async (modeKey: 'observe' | 'trade', allowed: LiveTriggerStage[]) => {
-      const selKey = `mp_sel:${modeKey}:${exchange}:${underlying}:${session}`;
-      const fixed: Record<string, FixedSelection> = JSON.parse((await redis.get(selKey).catch(() => null)) ?? '{}');
-      const decisions = arbitrateParents(parents, all, (idx) => {
-        const r = routed[idx];
-        const fresh = todoSet.has(r.candidate.decisionIndex);
-        return {
-          eligible: fresh && r.risk.wouldTrade,
-          ineligibleReason: fresh ? r.risk.reason : 'Decided at an earlier evaluation',
-          stageAllowed: allowed.includes(r.stage),
-          netR: r.cost?.netR ?? null,
-        };
-      }, fixed);
-      let changed = false;
-      for (const [idx, d] of decisions) {
-        const c = all[idx];
-        if (d.role === 'SELECTED' && todoSet.has(c.decisionIndex) && !fixed[d.parentId]) {
-          fixed[d.parentId] = { triggerId: c.triggerId, decisionIndex: c.decisionIndex };
-          changed = true;
-        }
-      }
-      if (changed) await redis.set(selKey, JSON.stringify(fixed), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);
-      return decisions;
-    };
-    const observed = await arbitrate('observe', ['SHADOW', ...PAPER_TRADING_STAGES]);
-
-    // 5. Record every new candidate with its observation role and parent; hand
-    //    the slot EVERY eligible paper-stage candidate of the bar that just
-    //    closed — the trading choice is made there, across all engines.
-    for (let idx = 0; idx < all.length; idx++) {
-      const rc = routed[idx];
-      rc.parentId = parentOf.get(idx) ?? null;
-      rc.anchorKeys = rc.parentId ? anchorKeysOf(rc.parentId, rc.candidate, log.events) : [];
+    if (out.observeSelectionsChanged) await redis.set(`mp_sel:observe:${exchange}:${underlying}:${session}`, JSON.stringify(out.observeSelections), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);
+    const todoSet = new Set(out.todo);
+    for (const rc of out.routed) {
       if (!todoSet.has(rc.candidate.decisionIndex)) continue;
-      rc.arbitration = observed.get(idx) ?? null;
-      await recordCandidate(underlying, exchange, rc, rc.candidate.decisionIndex === end);
+      await recordCandidate(underlying, exchange, rc, rc.candidate.decisionIndex === out.end);
     }
-    const paper = paperCandidatesForSlot(routed, end);
-
-    // 6. The watch: every CONFIRMED paper-stage candidate of the newest bar
-    //    (valid geometry, any R:R) is shown and re-measured under its id on
-    //    every later closed bar with the rule's own builder, until it is
-    //    invalidated, expires or is filled. Display only.
-    const sessionOkAt = (i: number) => series.bars[i].time - window.open >= SETTLE_MS && window.close - (series.bars[i].time + BAR_MS_15M) >= closingGuardMs;
-    const watchKey = familyWatchKey(exchange, underlying, session);
-    let watch: FamilyWatchEntry[] = JSON.parse((await redis.get(watchKey).catch(() => null)) ?? '[]');
-    watch = advanceFamilyWatch(watch, ctx, log, end, sessionOkAt);
-    for (const rc of routed) {
-      if (rc.candidate.decisionIndex !== end || !PAPER_TRADING_STAGES.includes(rc.stage) || !rc.risk.sessionOk) continue;
-      if (rc.candidate.bucket !== 'LOW_RR' && rc.candidate.bucket !== 'TRADE') continue;
-      if (!watch.some((w) => w.lifecycleId === rc.lifecycleId)) watch.push(newFamilyWatch(rc));
-    }
-    await redis.set(watchKey, JSON.stringify(watch), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);
-
-    await redis.set(linkKey, JSON.stringify(linkage), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);
-    await redis.set(stateKey, String(series.bars[end].time), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);
-    return { paper, evaluated: todo.length, linkage, watch };
+    await redis.set(familyWatchKey(exchange, underlying, session), JSON.stringify(out.watch), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);
+    await redis.set(`mp_link:${exchange}:${underlying}:${session}`, JSON.stringify(out.linkage), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);
+    await redis.set(`mp_eval:${exchange}:${underlying}:${mode}`, String(out.newestBarTime), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);
+    return { paper: out.paper, evaluated: out.todo.length, linkage: out.linkage, watch: out.watch };
   } catch (err: any) {
     logger.warn({ error: err.message, underlying, exchange }, 'Trigger router: evaluation failed — structure and consensus engines unaffected');
     return null;

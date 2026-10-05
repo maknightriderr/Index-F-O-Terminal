@@ -19,7 +19,27 @@
 // display and record only.
 // ============================================================
 
-import { rejectionCloseFill, STRUCTURE_RULES, STRUCTURE_RULES_5M, TERMINAL_STAGES, type LiquidityPool, type StructureEvaluation, type StructureScore, type StructureSetup, type StructureStage } from '@fno/analytics';
+import {
+  rejectionCloseFill,
+  STRUCTURE_RULES,
+  STRUCTURE_RULES_5M,
+  STRUCTURE_VARIANTS,
+  STRUCTURE_5M_VARIANTS,
+  TERMINAL_STAGES,
+  evaluateStructureSession,
+  evaluateStructureSessionMTF,
+  prepareMomentumSeries,
+  momentumAtrAt,
+  istDateOf,
+  type LiquidityPool,
+  type MomentumBar,
+  type StructureEvaluation,
+  type StructureScore,
+  type StructureSetup,
+  type StructureStage,
+  type StructureVariant,
+} from '@fno/analytics';
+import { STRUCTURE_PARAMS } from '../config/trading-flags.js';
 import type { Exchange, StructureBlock, StructureCandleScoreView, StructureLifecycleView, StructurePatternsView, StructurePoolView, StructureTimeframe, TradingMode } from '@fno/shared';
 import type { GateDiagnostic } from './gate-diagnostics.js';
 import type { SetupCostMeasurement } from './setup-cost.js';
@@ -48,6 +68,94 @@ export function structureRulesFor(timeframe: StructureTimeframe) {
  */
 export function liveStructureRulesFor(timeframe: StructureTimeframe) {
   return { ...structureRulesFor(timeframe), minT1R: 0 };
+}
+
+/** The live engine's variant for a timeframe (from STRUCTURE_PARAMS). */
+export function liveStructureVariant(timeframe: StructureTimeframe = '15m'): StructureVariant {
+  if (timeframe === '5m') {
+    // The 5m backtest's in-sample choice (STRUCTURE_5M_DISP_MULT) with the structure closing guard.
+    const dispMult5 = STRUCTURE_PARAMS.STRUCTURE_5M_DISP_MULT;
+    const closingGuardMin = STRUCTURE_PARAMS.STRUCTURE_CLOSING_GUARD_MIN;
+    return (
+      STRUCTURE_5M_VARIANTS.find((v) => v.dispMult === dispMult5 && v.closingGuardMin === closingGuardMin) ?? {
+        id: `custom-5m-D${dispMult5}-C${closingGuardMin}`,
+        dispMult: dispMult5,
+        openingGuard: STRUCTURE_PARAMS.STRUCTURE_OPENING_GUARD >= 1,
+        closingGuardMin,
+      }
+    );
+  }
+  const dispMult = STRUCTURE_PARAMS.STRUCTURE_DISP_MULT;
+  const openingGuard = STRUCTURE_PARAMS.STRUCTURE_OPENING_GUARD >= 1;
+  return (
+    STRUCTURE_VARIANTS.find((v) => v.dispMult === dispMult && v.openingGuard === openingGuard) ?? {
+      id: `custom-D${dispMult}-${openingGuard ? 'GUARD' : 'NOGUARD'}`,
+      dispMult,
+      openingGuard,
+    }
+  );
+}
+
+/** What the structure lifecycle read from Redis before a poll's advance — an input of the decision. */
+export interface StructureInputs {
+  prev: LiveState | null;
+  /** structure_outcome:* by lifecycle id, for the lifecycles still open after the advance. */
+  outcomes: Record<string, LiveLifecycle['live']>;
+}
+
+/** Live outcomes (minted / refused) kept under their own keys, by lifecycle id. */
+export function structureOutcomeKey(lifecycleId: string): string {
+  return `structure_outcome:${lifecycleId}`;
+}
+
+/**
+ * Pure: the structure engine's read of the closed bars (15m, or 15m pools
+ * with closed 5m events) and the lifecycle advanced from `prev`, with the
+ * stored live outcomes merged onto lifecycles that have none. Null when there
+ * are too few bars. The live poll and replay(snapshotId) both run exactly this.
+ */
+export function advanceStructureCore(args: {
+  prev: LiveState | null;
+  bars15: MomentumBar[];
+  /** Closed 5m bars (5m entry timeframe only). */
+  bars5?: MomentumBar[] | null;
+  /** structure_outcome:* values by lifecycle id (only open lifecycles are read). */
+  outcomes: Readonly<Record<string, LiveLifecycle['live']>>;
+  exchange: Exchange;
+  underlying: string;
+  mode: TradingMode;
+  now: number;
+  spot: number | null;
+  entryMode?: 'TOUCH' | 'REJECTION_CLOSE';
+}): { state: LiveState; events: LifecycleEventRow[]; reset: { from: StructureTimeframe; to: StructureTimeframe } | null } | null {
+  const { bars15, bars5, exchange, underlying, mode, now, spot } = args;
+  let evaluation: StructureEvaluation;
+  let poolAtr: number | null = null;
+  const timeframe: StructureTimeframe = bars5 ? '5m' : '15m';
+  if (bars5) {
+    if (bars15.length < 2 || bars5.length < 2) return null;
+    const series15 = prepareMomentumSeries(bars15);
+    evaluation = evaluateStructureSessionMTF(series15, prepareMomentumSeries(bars5), bars5.length - 1, liveStructureVariant('5m'), liveStructureRulesFor('5m'));
+    // The 15m ATR: the option leg's atrPoints (target, structural stop) in 5m mode; the 5m ATR is only rule 4's noise floor.
+    poolAtr = momentumAtrAt(series15, bars15.length);
+  } else {
+    if (bars15.length < 2) return null;
+    // Live rules: net R:R is not a confirmation gate (liveStructureRulesFor) — only the geometry is.
+    evaluation = evaluateStructureSession(prepareMomentumSeries(bars15), bars15.length - 1, liveStructureVariant(), liveStructureRulesFor('15m'));
+  }
+  const out = advanceLiveState({ prev: args.prev, evaluation, exchange, underlying, mode, day: istDateOf(evaluation.barTime), now, spot, timeframe, entryMode: args.entryMode });
+  if (bars5) out.state.poolAtr = poolAtr != null ? Math.round(poolAtr * 100) / 100 : null;
+  for (const l of out.state.lifecycles) {
+    if (l.live != null) continue;
+    const stored = args.outcomes[l.id];
+    if (stored != null) l.live = stored;
+  }
+  return out;
+}
+
+/** Ids of the lifecycles whose stored outcome advanceStructureCore merges (open ones, after the advance). */
+export function openLifecycleIds(state: LiveState): string[] {
+  return state.lifecycles.filter((l) => l.live == null).map((l) => l.id);
 }
 
 /**

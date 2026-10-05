@@ -86,16 +86,28 @@ Step 1 — Market Bias / indicator engine (market-bias.ts)
     FVG, VCP, liquidity sweeps, order blocks, EMA structure, OI build-up, PCR, IV vs HV, expected move
   Output: MarketBias { direction, regime, score, intelligenceScore } + the indicator candidate
   ▼
+Step 1b — Decision snapshot (decision-record.ts; INTRADAY, structure on)
+  Freezes the inputs S1 / the router / the slot read — closed 15m (and 5m) bars ≤ T, 1h closes,
+  futures quote, option chain, PCR / IV / HV, regime, liquidity map, corporate-actions context,
+  the engines' stored Redis state (structure lifecycle + outcomes, router state, traded parents)
+  — with per-input dataQuality {asOf, decisionBarTime, ageMs = T − asOf, source, status} and every
+  version. T = close of the newest 15m bar closed at the poll (exchange session calendar).
+  The DecisionRecord is derived from it by the pure core; S1 and the router below run on the
+  snapshot's own inputs, so the record is what they decided.
+  ▼
 Step 2 — Structure engine S1 (structure-engine/, structure-live.ts)
   Liquidity sweep → displacement → zone (FVG / 50%) → CONFIRMED → fill (TOUCH or REJECTION_CLOSE)
   Live rules: liveStructureRulesFor() — the pre-registered STRUCTURE_RULES with NO R:R floor
     (minT1R = 0): confirmation needs only valid geometry (a T1 strictly beyond the entry, positive
     risk). Research / backtests keep STRUCTURE_RULES (1.5R) unchanged.
   State: Redis structure_setup:{ex}:{u}:{mode}   Events: setup_lifecycle_events
+  Decision: advanceStructureCore (pure; structure-live.ts) — the live poll and replay run it.
   ▼
 Step 3 — Trigger router (trigger-router.ts), families A2–F3 (event engine)
   Per closed 15m bar: prepareMomentumSeries → runSessionEvents → evaluateTriggersAt →
   groupIntoParents → arbitrateParents (OBSERVATION only)
+  Decision: evaluateFamiliesCore (pure) on the bars + the router's stored state; the shell
+    routeTriggerFamilies reads / writes that state and records the candidates.
   Risk validation (validateCandidateRisk): geometry (TRADE or LOW_RR bucket — LOW_RR is a label,
     not a rejection), session window, option cost ceiling. NO_TARGET / INVALID_STOP are rejected.
   Stages: SHADOW → recorded only · PAPER_RESEARCH / PAPER / ACTIVE → slot arbitration ·
@@ -129,6 +141,30 @@ Step 5 — Setup Watch (setup-watch-core.ts / setup-watch.ts) — DISPLAY ONLY
 ## 7. Analytics package (`packages/analytics/src`)
 
 Pure TypeScript — no IO, no network, no database, no clock. Modules: indicators, candlestick-patterns, event-engine (events, triggers, parents, arbitration, `rebuildCandidateAt`), structure-engine (`STRUCTURE_RULES`, `evaluateStructureSession(series, i, variant, rules)`), market-structure, fvg, vcp, liquidity-map, ema-trend, momentum-break, greeks, gamma-exposure, historical-volatility, expected-move, max-pain, pcr, oi, execution-quality, option-quality, setup-classifier, strike-selection, target-estimate, trade-setup (`buildTradeSetup` — option `rrGate`, default true for research / golden snapshots; live passes false), patterns.
+
+## 6a. Decision snapshot, DecisionRecord and replay (Phase 2)
+
+```
+captureDecisionSnapshot (market-bias.ts, before S1 / router)
+  read: structure_setup + structure_outcome:* · mp_eval / mp_sel:observe / mp_watch / mp_link ·
+        slot_traded:{day}
+  buildSignalDecisionSnapshot (pure, deep-frozen, JSON round-tripped exactly as stored)
+  deriveDecisionRecord(snapshot, generatedAt)   ← pure: no IO, no clock
+  persist when NEW_BAR (first poll after T) or SPOT_FILL (a later poll where an S1 limit fills)
+    → signal_decision_snapshots (chain gzip+base64) → decision_records (+ record_hash)
+    → decision_trigger_events (candidate → event ids, written after event evaluation)
+  setScopeSnapshotId → every setup_events / signals row this poll writes carries snapshot_id
+replay(snapshotId)   (decision-record-store.ts)
+  load the snapshot (the only read) → refuse on CONFIG_MISMATCH → deriveDecisionRecord →
+  compare canonical forms with the stored record (NONDETERMINISTIC_RECORD_FIELDS = ['generatedAt'])
+```
+
+- **Snapshot** (`SignalDecisionSnapshot`, `@fno/shared`): inputs only — nothing the decision derives. Version fields: gitCommit, analyticsVersion, signalEngineVersion (+ logic flag hash), optionModelVersion, parentingVersion (`PARENT-1.0`), arbitrationVersion (`ARB-1.0`), ruleVersion, strategyVersion, trigger versions, riskVersion, costModelVersion, snapshotSchemaVersion (`SNAP-1.0`). Config: trigger stages, structure on / timeframe / entry mode, STRUCTURE_PARAMS + FNO_VALIDATION_PARAMS, configHash.
+- **Data quality** (`decision-quality.ts`): status OK · STALE_INPUT (older than its tolerance) · FUTURE_INPUT (as of after T) · MISSING. Tolerances: closed bars 0 (the bar that closed at T must be there), 1h bars 1 h, chain / futures 2 min. A FUTURE_INPUT / STALE_INPUT / MISSING input is never used silently: the record is `degraded` with one reason per input, and every candidate / option candidate that read it carries `degraded: true`. Polls run after T, so the chain is normally FUTURE_INPUT — its candidates are marked degraded; the build is not skipped (skipping would stop every paper trade).
+- **DecisionRecord** (`DR-1.0`): S1 lifecycle advance + transitions + fill; family status, events, linkage, watch; every candidate decided (parentId, anchor keys, eligibility, reason, observation role, degraded); candidate → event ids; common decision metrics of every slot candidate; option candidates (each newest-bar family leg's cost on the snapshot chain); the pre-build slot ranking (order, criteria used / skipped, criterion each loser lost on, parents already traded); final status (NO_CANDIDATE / NO_ELIGIBLE_CANDIDATE / CANDIDATES_TO_SLOT) and the top-ranked candidate.
+- **Not re-derived** (`NOT_REPLAYED`; their rows carry the snapshot id): the indicator engine, the safety gates, the option-leg build, the slot settlement (its ARBITRATION rows), the setup-watch refresh.
+- **Immutability**: Postgres rules make an UPDATE of a snapshot or of a record's decision columns a no-op (only `outcome` / `outcome_at` may be written later); trigger-event links are insert-only.
+- **Snapshot id**: a UUID-shaped sha256 of exchange / symbol / mode / T / polledAt (deterministic).
 
 ## 8. Background services (18)
 
@@ -176,6 +212,10 @@ PostgreSQL + TimescaleDB
 ├── setup_events               ← every setup decision + grades; ARBITRATION / LIFECYCLE rows
 ├── setup_lifecycle_events     ← S1 lifecycle transitions
 ├── decision_snapshots         ← existing per-decision TAKE / REFUSE record (006; missed-winner audit)
+├── signal_decision_snapshots  ← Phase 2 immutable INPUT snapshots (034; chain compressed)
+├── decision_records           ← Phase 2 DecisionRecord per snapshot (+ record_hash, later outcome)
+├── decision_trigger_events    ← candidate → event ids (insert-only)
+│   setup_events.snapshot_id / signals.snapshot_id — the snapshot a row was decided from (logical reference)
 ├── alerts, learning_events, learning_findings, capture_* tables
 Redis
 ├── quote:{exchange}:{token}            TTL 60 s
@@ -215,9 +255,11 @@ Observation only: `startSystemLearningAudit` → `learningDetectors.ts` → `lea
 | 6 | **Net R:R is a ranking / display input only (RISK-2.0, 2026-10-05)** | A setup that passes every genuine safety, data-quality, execution, liquidity, spread and stop-validity check is confirmed, shown and tradeable at any R:R. 1.50R is a displayed reference (rrBand). Replaces "Setup watch keeps alive below 1.50R". |
 | 7 | Slot arbitration across ALL engines | no engine pre-selects; identical metrics and ranking |
 | 8 | `HEALTH_PROBE_TIMEOUT_MS = 3000` | a hung DB never silences the health page |
+| 9 | Decisions are derived by pure cores from an immutable, versioned input snapshot (Phase 2) | the record is reproducible offline; replay never substitutes current data or config |
 
 ---
 
 ## Change log
 
 - **2026-10-05 — Phase 1: 1.50R display-only (RISK-2.0, `+rr-display-only.1`).** Removed every live R:R gate (structure confirmation via `liveStructureRulesFor`, the fill's sequence gate, family LOW_RR rejection, the option builder via `rrGate: false` incl. the RICH-IV bar, the sticky-slot plausibility floor, Setup Watch keep-alive / RR_RECOVERED, the `rr-recovery` endpoint). Setup Watch tracks only INVALIDATION / EXPIRY / FILLED; status "Confirmed — R:R x" with a display-only rrBand. Audit: `docs/phase1-rr-classification.md`.
+- **2026-10-05 — Phase 2: immutable input snapshot + DecisionRecord.** Migration `034_decision_records.sql` (signal_decision_snapshots, decision_records, decision_trigger_events; snapshot_id on setup_events / signals; validated on PGlite against the full boot schema, applied twice). Pure cores `advanceStructureCore` (structure-live.ts) and `evaluateFamiliesCore` (trigger-router.ts) — the live shells now read state, call the core, write state (behaviour unchanged). `decision-record.ts` (snapshot, data quality, record, canonical form, replay), `decision-record-store.ts` (persistence, `replay(snapshotId)`), `snapshot-context.ts` (snapshot id on every row of the poll, only once 034 applied). Versions `PARENT-1.0`, `ARB-1.0`.

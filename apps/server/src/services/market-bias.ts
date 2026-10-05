@@ -135,6 +135,7 @@ import { INDICATOR_CONFIDENCE_MODE, locationGateEnforced } from '../config/tradi
 import type { ExposureSnapshot } from './exposure-tracker.js';
 import { stopOvershootPct } from './stop-overshoot.js';
 import type { NoTradeCode, TradeDecision } from '@fno/shared';
+import { decisionBarCloseAt, type FuturesChainResponse } from '@fno/shared';
 import { assessTradeHealth, emptyExcursion, updateExcursion, mfeInAtr, deadTradeMarker, type TradeExcursion, type TradeHealthAssessment } from './trade-health.js';
 import { notifyTradeSetupClosed } from './trade-setup-close-notifier.js';
 import type { TradeCloseReason } from './trade-setup-close-notifier.js';
@@ -166,16 +167,8 @@ import { buildWithFnoValidation, fnoValidationDiagnostic } from './fno-validatio
 // structure-live.ts, I/O in setup-lifecycle.ts); only a filled limit mints,
 // through the same mint lock and slot as every other family.
 import {
-  evaluateStructureSession,
-  evaluateStructureSessionMTF,
-  istDateOf,
-  momentumAtrAt,
-  STRUCTURE_5M_VARIANTS,
   STRUCTURE_RULES,
-  STRUCTURE_VARIANTS,
   type MomentumBar,
-  type StructureEvaluation,
-  type StructureVariant,
 } from '@fno/analytics';
 import type { StructureBlock, StructureLifecycleView, StructureTradePreview, OptionTradePlan, SetupWatchRow } from '@fno/shared';
 import { CONSENSUS_SETUPS, STRUCTURE, STRUCTURE_ENTRY_MODE, STRUCTURE_ENTRY_TF, STRUCTURE_PARAMS, structureEnabledFor, COST_VERSION, PAPER_TRADING_STAGES } from '../config/trading-flags.js';
@@ -189,6 +182,11 @@ import {
   type RoutedCandidate,
   type ParentLinkage,
   type FamilyWatchEntry,
+  type FamilyRouterState,
+  liveTriggerStages,
+  liveRoutedTriggerIds,
+  familyRouterSession,
+  readFamilyRouterState,
 } from './trigger-router.js';
 import {
   setupWatchKey,
@@ -224,17 +222,23 @@ import {
   type SlotEntry,
 } from './slot-arbitration.js';
 import { recordSetupEvent } from './setup-events.js';
+import { currentSnapshotId, runInSnapshotScope, setScopeSnapshotId } from './snapshot-context.js';
+import { buildSignalDecisionSnapshot, currentVersions, decisionConfig, deriveDecisionRecord } from './decision-record.js';
+import { persistDecisionRecord, persistSnapshot } from './decision-record-store.js';
 import { BAR_MS_15M } from '@fno/analytics';
 import {
   STRUCTURE_SEQUENCE_CONFIDENCE,
   STRUCTURE_SETUP_TYPE,
   STRUCTURE_STRATEGY,
-  advanceLiveState,
   fillCandidate,
   rejectionCloseCandidate,
   structureBlock,
   structureRulesFor,
   liveStructureRulesFor,
+  advanceStructureCore,
+  openLifecycleIds,
+  structureOutcomeKey,
+  type StructureInputs,
   structureSequenceDiagnostic,
   structureSequenceRefusal,
   structureSessionOpts,
@@ -341,7 +345,8 @@ export async function buildMarketBias(
   const cacheKey = `bias_result:${exchange}:${underlying}:${mode}`;
 
   try {
-    return await computeMarketBias(provider, underlying, exchange, cacheKey, mode);
+    // One snapshot scope per poll: rows written by this poll carry its decision snapshot id (snapshot-context.ts).
+    return await runInSnapshotScope(() => computeMarketBias(provider, underlying, exchange, cacheKey, mode));
   } catch (err: any) {
     // Fresh computation failed — try to return the last successful result
     // from Redis so the frontend stays on real data instead of falling back
@@ -1458,13 +1463,31 @@ async function computeMarketBias(
       logger.warn({ error: err.message, underlying, exchange }, 'Structure 5m: candle load failed — no structure read this poll');
     }
   }
+  // --- Decision snapshot (Phase 2): the inputs S1, the trigger router and the slot read, frozen before they run ---
+  // Both engines below are handed the snapshot's own inputs (its stored state
+  // and its round-tripped chain), so the DecisionRecord derived from it is
+  // exactly what they decide. A failure here never blocks the engines: they
+  // then read their state themselves, as before, and the poll is not snapshotted.
+  const decision = structureOn && !isPositional
+    ? await captureDecisionSnapshot({
+        provider, underlying, exchange, mode, bars15m: closedNow, bars5m: structureTimeframe === '5m' ? structureClosed5m : null,
+        structureRuns: structureTimeframe !== '5m' || structureClosed5m != null,
+        candles1h, chain: chain ?? null, futures, lastClosedBar,
+        optionMetrics: { pcr: chain ? pcr : null, atmIvPct: atmIvPct > 0 ? atmIvPct : null, hvPct: hvPct ?? null, ivVsHv: atmIvPct > 0 ? ivVsHv.reading : null },
+        marketRegime: { regime: fastRegime.regime, source: fastRegime.source },
+      }).catch((err: any) => {
+        logger.warn({ error: err.message, underlying, exchange }, 'Decision snapshot: capture failed — engines run on their own reads, poll not snapshotted');
+        return null;
+      })
+    : null;
+  const structurePre = decision?.structureInputs ? { inputs: decision.structureInputs, now: decision.polledAt } : null;
   const structureState = !structureOn
     ? null
     : structureTimeframe === '5m'
       ? structureClosed5m
-        ? await advanceStructureLifecycle(underlying, exchange, mode, closedNow, chain?.spotPrice ?? null, { timeframe: '5m', bars5: structureClosed5m }, chain ? { provider, chain } : null)
+        ? await advanceStructureLifecycle(underlying, exchange, mode, closedNow, chain?.spotPrice ?? null, { timeframe: '5m', bars5: structureClosed5m }, chain ? { provider, chain } : null, structurePre)
         : null
-      : await advanceStructureLifecycle(underlying, exchange, mode, closedNow, chain?.spotPrice ?? null, undefined, chain ? { provider, chain } : null);
+      : await advanceStructureLifecycle(underlying, exchange, mode, closedNow, chain?.spotPrice ?? null, undefined, chain ? { provider, chain } : null, structurePre);
   // The structure family's own newest closed bar (5m in 5m mode): the engine-fill check, SWEEP_RECLAIMED and REJECTION_CLOSE read it.
   const structureLastBar =
     structureTimeframe === '5m' && structureClosed5m && structureClosed5m.length > 0
@@ -1483,7 +1506,13 @@ async function computeMarketBias(
   // without a displacement; SHADOW families are recorded and graded only.
   // Only a PAPER-stage family (a code-level promotion; none today) is handed
   // to the slot below, through the structure engine's own mint chain.
-  const routed = structureOn && !isPositional ? await routeTriggerFamilies({ underlying, exchange, mode, bars: closedNow, chain: chain ?? null, now: decisionNow() }) : null;
+  const routed = structureOn && !isPositional
+    ? await routeTriggerFamilies(
+        decision
+          ? { underlying, exchange, mode, bars: closedNow, chain: decision.chain, now: decision.polledAt, state: decision.familyRouterState }
+          : { underlying, exchange, mode, bars: closedNow, chain: chain ?? null, now: decisionNow() }
+      )
+    : null;
   // Regime assist: a qualified trigger in the last BREAKOUT_PERSIST_BARS bars
   // (not since closed back through its level) reads as BREAKOUT/BREAKDOWN, so
   // the consensus side stops calling a crash a weak bull trend. Expiry-day
@@ -4369,33 +4398,125 @@ interface TriggerFamilies {
   families: Array<MomentumFamilyInput | StructureFamilyInput | MultipathFamilyInput>;
 }
 
-/** The live structure variant: the pre-registered one the in-sample run chose (env-overridable). */
-function liveStructureVariant(timeframe: StructureTimeframe = '15m'): StructureVariant {
-  if (timeframe === '5m') {
-    // The 5m backtest's in-sample choice (STRUCTURE_5M_DISP_MULT) with the structure closing guard.
-    const dispMult5 = STRUCTURE_PARAMS.STRUCTURE_5M_DISP_MULT;
-    const closingGuardMin = STRUCTURE_PARAMS.STRUCTURE_CLOSING_GUARD_MIN;
-    return (
-      STRUCTURE_5M_VARIANTS.find((v) => v.dispMult === dispMult5 && v.closingGuardMin === closingGuardMin) ?? {
-        id: `custom-5m-D${dispMult5}-C${closingGuardMin}`,
-        dispMult: dispMult5,
-        openingGuard: STRUCTURE_PARAMS.STRUCTURE_OPENING_GUARD >= 1,
-        closingGuardMin,
+const STRUCTURE_OUTCOME_TTL_SECONDS = 60 * 60 * 36;
+
+/**
+ * Reads the structure lifecycle's inputs: the stored state, then the stored
+ * live outcomes of the lifecycles still open after this poll's (pure)
+ * advance. Unparseable / failed reads fall back exactly as before.
+ */
+async function readStructureInputs(
+  underlying: string,
+  exchange: Exchange,
+  mode: TradingMode,
+  bars: MomentumBar[],
+  bars5: MomentumBar[] | null,
+  now: number,
+  spot: number | null
+): Promise<StructureInputs> {
+  const prev = await readLiveState(exchange, underlying, mode);
+  const outcomes: Record<string, LiveLifecycle['live']> = {};
+  const advanced = advanceStructureCore({ prev, bars15: bars, bars5, outcomes: {}, exchange, underlying, mode, now, spot, entryMode: STRUCTURE_ENTRY_MODE });
+  const ids = advanced ? openLifecycleIds(advanced.state) : [];
+  if (ids.length === 0) return { prev, outcomes };
+  try {
+    const values = await redis.mget(...ids.map(structureOutcomeKey));
+    values.forEach((v, k) => {
+      if (!v) return;
+      try {
+        outcomes[ids[k]] = JSON.parse(v);
+      } catch (err: any) {
+        logger.warn({ error: err.message, lifecycleId: ids[k] }, 'Structure: unparseable live outcome ignored');
       }
-    );
+    });
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying }, 'Structure: live outcome read failed');
   }
-  const dispMult = STRUCTURE_PARAMS.STRUCTURE_DISP_MULT;
-  const openingGuard = STRUCTURE_PARAMS.STRUCTURE_OPENING_GUARD >= 1;
-  return (
-    STRUCTURE_VARIANTS.find((v) => v.dispMult === dispMult && v.openingGuard === openingGuard) ?? {
-      id: `custom-D${dispMult}-${openingGuard ? 'GUARD' : 'NOGUARD'}`,
-      dispMult,
-      openingGuard,
-    }
-  );
+  return { prev, outcomes };
 }
 
-const STRUCTURE_OUTCOME_TTL_SECONDS = 60 * 60 * 36;
+/** Newest decision bar snapshotted per symbol / mode in this process (a NEW_BAR is the first poll after T). */
+const lastSnapshotBar = new Map<string, number>();
+
+/**
+ * Phase 2: reads the engines' stored state, freezes every input into a
+ * SignalDecisionSnapshot (data quality judged at T on the exchange calendar),
+ * derives its DecisionRecord with the pure core and — on the first poll after
+ * a bar closes, or on a later poll where a structure limit fills on the live
+ * spot — persists both and tags the rest of the poll with the snapshot id.
+ * Returns the inputs the engines must run on (always, persisted or not).
+ */
+async function captureDecisionSnapshot(args: {
+  provider: MarketDataProvider;
+  underlying: string;
+  exchange: Exchange;
+  mode: TradingMode;
+  bars15m: MomentumBar[];
+  bars5m: MomentumBar[] | null;
+  structureRuns: boolean;
+  candles1h: OHLCV[];
+  chain: OptionChain | null;
+  futures: FuturesChainResponse | null;
+  lastClosedBar: { time: number } | null;
+  optionMetrics: { pcr: number | null; atmIvPct: number | null; hvPct: number | null; ivVsHv: string | null };
+  marketRegime: { regime: string; source: string } | null;
+}): Promise<{ polledAt: number; structureInputs: StructureInputs | null; familyRouterState: FamilyRouterState | null; chain: OptionChain | null; snapshotId: string | null }> {
+  const { provider, underlying, exchange, mode, bars15m, bars5m, chain } = args;
+  const polledAt = decisionNow();
+  const spot = chain?.spotPrice ?? null;
+  const structureInputs = args.structureRuns ? await readStructureInputs(underlying, exchange, mode, bars15m, bars5m, polledAt, spot) : null;
+  const stages = liveTriggerStages();
+  const session = familyRouterSession({ exchange, mode, bars: bars15m, now: polledAt, ids: liveRoutedTriggerIds(stages) });
+  const familyRouterState = session ? await readFamilyRouterState(exchange, underlying, mode, session) : null;
+  const istDay = new Date(polledAt).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const slotTradedKeys = JSON.parse((await redis.get(`slot_traded:${exchange}:${underlying}:${mode}:${istDay}`).catch(() => null)) ?? '[]') as string[];
+  const decisionBarTime = decisionBarCloseAt(exchange, polledAt, BAR_MS_15M) ?? (args.lastClosedBar ? args.lastClosedBar.time + BAR_MS_15M : polledAt);
+  const key = `${exchange}:${underlying}:${mode}`;
+  const newBar = lastSnapshotBar.get(key) !== decisionBarTime;
+  const last1h = args.candles1h.length ? Date.parse(args.candles1h[args.candles1h.length - 1].timestamp) : NaN;
+  const snapshot = buildSignalDecisionSnapshot({
+    symbol: underlying,
+    exchange,
+    mode,
+    decisionBarTime,
+    polledAt,
+    captureReason: newBar ? 'NEW_BAR' : 'SPOT_FILL',
+    bars15m,
+    bars5m,
+    closes1h: args.candles1h.map((c) => c.close),
+    last1hBarTime: Number.isFinite(last1h) ? last1h : null,
+    chain,
+    futures: args.futures,
+    optionMetrics: args.optionMetrics,
+    marketRegime: args.marketRegime,
+    structureState: structureInputs,
+    familyRouterState,
+    slotTradedKeys,
+    config: decisionConfig({ triggerStages: stages, structureOn: true, structureEntryTimeframe: STRUCTURE_ENTRY_TF, structureEntryMode: STRUCTURE_ENTRY_MODE }),
+    versions: currentVersions(),
+    sources: { candles: `${provider.name}:historical-candles`, chain: `${provider.name}:option-chain`, futures: `${provider.name}:futures-quote` },
+  });
+  // The record is generated now (generatedAt: the one declared nondeterministic field).
+  const record = deriveDecisionRecord(snapshot, Date.now());
+  let snapshotId: string | null = null;
+  if (newBar || record.structure.fill?.kind === 'FILL') {
+    if (await persistSnapshot(snapshot)) {
+      snapshotId = snapshot.snapshotId;
+      lastSnapshotBar.set(key, decisionBarTime);
+      setScopeSnapshotId(snapshotId);
+      await persistDecisionRecord(record);
+      if (record.degraded) logger.info({ underlying, exchange, snapshotId, reasons: record.degradedReasons }, 'Decision snapshot: inputs not all as of T — candidates marked degraded');
+    }
+  }
+  // The engines run on the snapshot's own (stored, round-tripped) inputs — mutable copies.
+  return {
+    polledAt,
+    structureInputs: snapshot.inputs.structureState ? (structuredClone(snapshot.inputs.structureState) as StructureInputs) : null,
+    familyRouterState: snapshot.inputs.familyRouterState ? (structuredClone(snapshot.inputs.familyRouterState) as FamilyRouterState) : null,
+    chain: snapshot.inputs.optionChain ? (structuredClone(snapshot.inputs.optionChain) as OptionChain) : null,
+    snapshotId,
+  };
+}
 
 /**
  * Advances this symbol's structure lifecycle from the closed 15m bars (or,
@@ -4403,6 +4524,8 @@ const STRUCTURE_OUTCOME_TTL_SECONDS = 60 * 60 * 36;
  * engine read → Redis state (structure_setup:*) → lifecycle rows for the
  * transitions not yet written → Telegram at a fresh CONFIRMED. Null — logged
  * — when it cannot be read; a missing structure read never blocks the rest.
+ * The decision is advanceStructureCore on `inputs` (read here unless the
+ * caller — the decision snapshot — already read them) at `now`.
  */
 async function advanceStructureLifecycle(
   underlying: string,
@@ -4412,36 +4535,22 @@ async function advanceStructureLifecycle(
   spot: number | null,
   fiveMinute?: { timeframe: '5m'; bars5: MomentumBar[] },
   /** Present whenever this poll has a live option chain — used ONLY to attach a read-only preview to a fresh CONFIRMED's Telegram alert. Never mints. */
-  previewCtx?: { provider: MarketDataProvider; chain: OptionChain } | null
+  previewCtx?: { provider: MarketDataProvider; chain: OptionChain } | null,
+  pre?: { inputs: StructureInputs; now: number } | null
 ): Promise<LiveState | null> {
   try {
-    const timeframe: StructureTimeframe = fiveMinute ? '5m' : '15m';
-    let evaluation: StructureEvaluation;
-    let poolAtr: number | null = null;
-    if (fiveMinute) {
-      if (bars.length < 2 || fiveMinute.bars5.length < 2) {
-        logger.warn({ underlying, exchange, bars15: bars.length, bars5: fiveMinute.bars5.length }, 'Structure 5m: not enough closed 15m/5m bars to evaluate');
-        return null;
-      }
-      const series15 = prepareMomentumSeries(bars);
-      evaluation = evaluateStructureSessionMTF(series15, prepareMomentumSeries(fiveMinute.bars5), fiveMinute.bars5.length - 1, liveStructureVariant('5m'), liveStructureRulesFor('5m'));
-      // The 15m ATR: the option leg's atrPoints (target, structural stop) in 5m mode; the 5m ATR is only rule 4's noise floor.
-      poolAtr = momentumAtrAt(series15, bars.length);
-    } else {
-      if (bars.length < 2) {
-        logger.warn({ underlying, exchange, bars: bars.length }, 'Structure: not enough closed 15m bars to evaluate');
-        return null;
-      }
-      const series = prepareMomentumSeries(bars);
-      // Live rules: net R:R is not a confirmation gate (liveStructureRulesFor) — only the geometry is.
-      evaluation = evaluateStructureSession(series, bars.length - 1, liveStructureVariant(), liveStructureRulesFor('15m'));
+    const bars5 = fiveMinute?.bars5 ?? null;
+    if (bars5 ? bars.length < 2 || bars5.length < 2 : bars.length < 2) {
+      if (bars5) logger.warn({ underlying, exchange, bars15: bars.length, bars5: bars5.length }, 'Structure 5m: not enough closed 15m/5m bars to evaluate');
+      else logger.warn({ underlying, exchange, bars: bars.length }, 'Structure: not enough closed 15m bars to evaluate');
+      return null;
     }
-    const now = decisionNow();
-    const prev = await readLiveState(exchange, underlying, mode);
-    const { state, events, reset } = advanceLiveState({ prev, evaluation, exchange, underlying, mode, day: istDateOf(evaluation.barTime), now, spot, timeframe, entryMode: STRUCTURE_ENTRY_MODE });
+    const now = pre?.now ?? decisionNow();
+    const inputs = pre?.inputs ?? (await readStructureInputs(underlying, exchange, mode, bars, bars5, now, spot));
+    const advanced = advanceStructureCore({ prev: inputs.prev, bars15: bars, bars5, outcomes: inputs.outcomes, exchange, underlying, mode, now, spot, entryMode: STRUCTURE_ENTRY_MODE });
+    if (!advanced) return null;
+    const { state, events, reset } = advanced;
     if (reset) logger.info({ underlying, exchange, mode, from: reset.from, to: reset.to }, "Structure: entry timeframe changed — today's lifecycles for this symbol start over");
-    if (fiveMinute) state.poolAtr = poolAtr != null ? round2(poolAtr) : null;
-    await mergeStructureOutcomes(state);
     recordLifecycleEvents(events);
     for (const e of events) {
       if (e.toState !== 'CONFIRMED') continue;
@@ -4467,25 +4576,6 @@ async function advanceStructureLifecycle(
   }
 }
 
-/** Live outcomes (minted / refused) are kept under their own keys so a concurrent state write can never lose one. */
-async function mergeStructureOutcomes(state: LiveState): Promise<void> {
-  const open = state.lifecycles.filter((l) => l.live == null);
-  if (open.length === 0) return;
-  try {
-    const values = await redis.mget(...open.map((l) => `structure_outcome:${l.id}`));
-    values.forEach((v, k) => {
-      if (!v) return;
-      try {
-        open[k].live = JSON.parse(v);
-      } catch (err: any) {
-        logger.warn({ error: err.message, lifecycleId: open[k].id }, 'Structure: unparseable live outcome ignored');
-      }
-    });
-  } catch (err: any) {
-    logger.warn({ error: err.message, underlying: state.underlying }, 'Structure: live outcome read failed');
-  }
-}
-
 /** Records what the live engine did at a fill, on the lifecycle and as a lifecycle row. */
 async function recordStructureOutcome(
   state: LiveState,
@@ -4497,7 +4587,7 @@ async function recordStructureOutcome(
 ): Promise<void> {
   lc.live = outcome;
   try {
-    await redis.set(`structure_outcome:${lc.id}`, JSON.stringify(outcome), 'EX', STRUCTURE_OUTCOME_TTL_SECONDS);
+    await redis.set(structureOutcomeKey(lc.id), JSON.stringify(outcome), 'EX', STRUCTURE_OUTCOME_TTL_SECONDS);
   } catch (err: any) {
     logger.warn({ error: err.message, lifecycleId: lc.id }, 'Structure: live outcome write failed');
   }
@@ -5525,8 +5615,10 @@ async function recordTradeSetupGenerated(
     // positional trades start generating, their fundamentally different
     // SL%/target/hold-time profile would get silently mixed into the same
     // win-rate stats as intraday trades, diluting both.
+    // The decision snapshot this paper trade was decided from (Phase 2; null outside a snapshotted poll).
+    const snapshotId = currentSnapshotId();
     const rows = await sql<{ id: string }[]>`
-      INSERT INTO signals (time, symbol, signal_type, direction, confidence, inputs, reasoning, market_regime, intelligence_score)
+      INSERT INTO signals (time, symbol, signal_type, direction, confidence, inputs, reasoning, market_regime, intelligence_score${snapshotId ? sql`, snapshot_id` : sql``})
       VALUES (
         NOW(), ${underlying}, 'TRADE_SETUP', ${direction}, ${confidence},
         ${sql.json(
@@ -5568,7 +5660,7 @@ async function recordTradeSetupGenerated(
             logic,
           } as any
         )},
-        ${fresh.reason}, ${regime}, ${intelligenceScore}
+        ${fresh.reason}, ${regime}, ${intelligenceScore}${snapshotId ? sql`, ${snapshotId}` : sql``}
       )
       RETURNING id
     `;

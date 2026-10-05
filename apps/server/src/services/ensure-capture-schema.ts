@@ -51,7 +51,7 @@ const CANDIDATE_DIRS = [
   path.resolve(__dirname, '../../../../../database/init'),
 ];
 
-const FILES = [
+export const FILES = [
   '006_market_state_capture.sql',
   '007_capture_timescale.sql',
   '008_capture_instrumentation.sql',
@@ -104,10 +104,14 @@ const FILES = [
   '032_setup_event_costs.sql',
   // Recorder boots, census coverage columns, major-move diagnostics (measurement only).
   '033_coverage_and_major_moves.sql',
+  // Phase 2: immutable input snapshots, DecisionRecords, trigger-event links
+  // and snapshot_id on setup_events / signals. The snapshot writer and both
+  // event writers use them, so they are ensured at boot too.
+  '034_decision_records.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */
-const BEST_EFFORT = new Set(['007_capture_timescale.sql']);
+export const BEST_EFFORT = new Set(['007_capture_timescale.sql']);
 
 export interface SchemaEnsureResult {
   applied: number;
@@ -117,13 +121,20 @@ export interface SchemaEnsureResult {
 }
 
 let lastResult: SchemaEnsureResult | null = null;
+/** Files every statement of which applied at the last boot check (a writer may rely on their columns). */
+const readyFiles = new Set<string>();
+
+/** True once every statement of `file` applied at boot — e.g. snapshot_id is only written after 034 is in place. */
+export function schemaFileReady(file: string): boolean {
+  return readyFiles.has(file);
+}
 
 /** What the last boot-time schema check did. Surfaced on the coverage endpoint. */
 export function captureSchemaStatus(): SchemaEnsureResult | null {
   return lastResult;
 }
 
-function splitStatements(text: string): string[] {
+export function splitStatements(text: string): string[] {
   return text
     .split('\n')
     .filter((line) => !line.trim().startsWith('--'))
@@ -156,12 +167,14 @@ export async function ensureCaptureSchema(): Promise<SchemaEnsureResult> {
     const full = path.join(dir, file);
     if (!existsSync(full)) continue;
     const bestEffort = BEST_EFFORT.has(file);
+    let fileOk = true;
 
     for (const statement of splitStatements(readFileSync(full, 'utf-8'))) {
       try {
         await sql.unsafe(statement);
         result.applied++;
       } catch (err: any) {
+        fileOk = false;
         if (bestEffort) {
           result.skipped++;
         } else {
@@ -172,6 +185,8 @@ export async function ensureCaptureSchema(): Promise<SchemaEnsureResult> {
         }
       }
     }
+    if (fileOk) readyFiles.add(file);
+    else readyFiles.delete(file);
   }
 
   // Record when each recorded layer first wrote a row, once, so no report

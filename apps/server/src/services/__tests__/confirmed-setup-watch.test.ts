@@ -489,9 +489,13 @@ describe('Phase 1 source guards: the 1.5R gate cannot come back unnoticed', () =
     expect(src.match(/rrGate: false,/g)?.length).toBe(builds);
   });
   it('the live structure engine runs the live rules (no R:R floor)', () => {
+    // Since Phase 2 the engine call lives in the pure core advanceStructureCore (structure-live.ts), which market-bias runs.
+    const core = read('../structure-live.ts');
+    expect(core).toMatch(/evaluateStructureSession\(prepareMomentumSeries\(bars15\), bars15\.length - 1, liveStructureVariant\(\), liveStructureRulesFor\('15m'\)\)/);
+    expect(core).toMatch(/liveStructureVariant\('5m'\), liveStructureRulesFor\('5m'\)\)/);
     const src = read('../market-bias.ts');
-    expect(src).toMatch(/evaluateStructureSession\(series, bars\.length - 1, liveStructureVariant\(\), liveStructureRulesFor\('15m'\)\)/);
-    expect(src).toMatch(/liveStructureVariant\('5m'\), liveStructureRulesFor\('5m'\)\)/);
+    expect(src).toMatch(/advanceStructureCore\(/);
+    expect(src).not.toMatch(/evaluateStructureSession(MTF)?\(/);
     expect(src).not.toMatch(/riskReward >= MIN_RISK_REWARD/);
   });
   it('no live module compares R:R against the 1.5 minimum any more; the RR_RECOVERED endpoint is gone', () => {

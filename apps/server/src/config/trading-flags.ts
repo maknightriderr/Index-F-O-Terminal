@@ -444,6 +444,14 @@ export const COST_VERSION = 'COST-2.0';
  */
 export const EVENT_ENGINE_VERSION = 'EVENT-1.0';
 
+// Phase 2 (2026-10-05) decision-snapshot version metadata. Parenting =
+// groupIntoParents / linkage (event-engine candidates.ts + trigger-router);
+// arbitration = slot-arbitration.ts ranking. Bumped with any change to them.
+export const PARENTING_VERSION = 'PARENT-1.0';
+export const ARBITRATION_VERSION = 'ARB-1.0';
+/** @fno/analytics package version (packages/analytics/package.json) — kept equal by a test. */
+export const ANALYTICS_VERSION = '0.1.0';
+
 // ---- Indicator (consensus) engine confidence mode (2026-10-01) ----
 // EVIDENCE (default, the only path that runs): confidence is recorded and
 // ranks, it never refuses a setup by itself. The setup still needs a
