@@ -945,9 +945,9 @@ class AngelOneWebSocket implements WebSocketConnection {
           // The server answers each heartbeat with a text "pong" — not a tick.
           if (data.length <= 4 && data.toString() === 'pong') return;
           try {
-            const ticks = this.parseBinaryMessage(data);
-            if (ticks.length > 0) {
-              this.tickCallbacks.forEach(cb => cb(ticks));
+            const { ticks, partial } = this.parseBinaryMessage(data);
+            if (ticks.length > 0 || partial) {
+              this.tickCallbacks.forEach(cb => cb(ticks, { partial }));
             }
           } catch (err: any) {
             logger.error({ error: err.message }, 'Failed to parse WebSocket message');
@@ -1100,7 +1100,7 @@ class AngelOneWebSocket implements WebSocketConnection {
   // acted on tick prices until the trade-setup monitor started closing
   // positions on them (16 Sep 21:16 IST), when every first tick read as a
   // huge price and closed each open setup as a WIN at its target.
-  private parseBinaryMessage(data: Buffer): Tick[] {
+  private parseBinaryMessage(data: Buffer): { ticks: Tick[]; partial: boolean } {
     const ticks: Tick[] = [];
     let offset = 0;
 
@@ -1116,7 +1116,8 @@ class AngelOneWebSocket implements WebSocketConnection {
       offset += packetSize;
     }
 
-    return ticks;
+    // Bytes left over = a truncated or unknown packet: flagged, never guessed at.
+    return { ticks, partial: offset < data.length };
   }
 
   private parseTickPacket(packet: Buffer, mode: number, exchangeType: number): Tick | null {
@@ -1126,10 +1127,17 @@ class AngelOneWebSocket implements WebSocketConnection {
 
       const paise = (at: number) => Number(packet.readBigInt64LE(at)) / 100;
 
+      // Sequence number (27) and the exchange timestamp (35, epoch ms) — what
+      // ordering and de-duplication use; an implausible timestamp is left out.
+      const sequence = Number(packet.readBigInt64LE(27));
+      const exchangeTs = Number(packet.readBigInt64LE(35));
+      const arrival = Date.now();
       const tick: Tick = {
         token,
         exchange: this.exchangeTypeToExchange(exchangeType),
-        timestamp: Date.now(),
+        timestamp: arrival,
+        ...(Number.isFinite(exchangeTs) && exchangeTs > 1_577_836_800_000 && exchangeTs < arrival + 86_400_000 ? { exchangeTimestamp: exchangeTs } : {}),
+        ...(Number.isFinite(sequence) && sequence >= 0 ? { sequence } : {}),
         ltp: paise(43),
         open: 0,
         high: 0,

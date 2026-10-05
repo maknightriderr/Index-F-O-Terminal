@@ -88,6 +88,15 @@ async function send(text: string): Promise<boolean> {
  * Returns immediately; the caller is on the critical path of generating a
  * setup and must not wait on (or fail because of) a messaging side effect.
  */
+/** An operational alert (feed / auth failures) — plain text, escaped. Never throws. */
+export async function notifyOperationalAlert(message: string): Promise<boolean> {
+  try {
+    return await send(escapeMarkdown(message));
+  } catch {
+    return false;
+  }
+}
+
 export function notifyTradeSetup(params: {
   underlying: string;
   exchange: Exchange;

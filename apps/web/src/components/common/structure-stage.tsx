@@ -19,7 +19,8 @@ const STAGE_STYLES: Record<string, { label: string; className: string }> = {
   INVALIDATED: { label: 'Invalidated', className: 'bg-red-500/15 text-red-400 light:text-red-700' },
   LATE: { label: 'Late', className: 'bg-amber-500/15 text-amber-400 light:text-amber-700' },
   MISSED: { label: 'Missed', className: 'bg-amber-500/15 text-amber-400 light:text-amber-700' },
-  LOW_RR: { label: 'Low R:R', className: 'bg-amber-500/15 text-amber-400 light:text-amber-700' },
+  // Since 2026-10-05 the live engine has no R:R floor: LOW_RR only means "no valid target" (no untaken pool beyond the entry, or no risk).
+  LOW_RR: { label: 'No valid target', className: 'bg-amber-500/15 text-amber-400 light:text-amber-700' },
 };
 
 const STAGE_MEANING: Record<string, string> = {

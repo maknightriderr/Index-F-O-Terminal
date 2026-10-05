@@ -28,12 +28,14 @@ import {
   type DiagnosticsOpportunityStats,
   type SignalDiagnosticsData,
 } from '@/lib/use-signal-diagnostics';
+import { DecisionRecordView } from './decision-record-view';
 
-type View = 'opportunity' | 'decision' | 'performance' | 'cost' | 'health' | 'moves' | 'registry';
+type View = 'opportunity' | 'decision' | 'record' | 'performance' | 'cost' | 'health' | 'moves' | 'registry';
 
 const VIEW_LABELS: Record<View, string> = {
   opportunity: 'Opportunity',
   decision: 'Decision',
+  record: 'Decision Record',
   performance: 'Performance',
   cost: 'Cost',
   health: 'Architecture Health',
@@ -909,6 +911,7 @@ export function SignalDiagnosticsPage() {
 
       {view === 'opportunity' && <OpportunityView opportunity={opportunity} />}
       {view === 'decision' && <DecisionView summary={summary} rejections={rejections} />}
+      {view === 'record' && <DecisionRecordView />}
       {view === 'performance' && <PerformanceView performance={performance} grades={grades} />}
       {view === 'cost' && <CostView performance={performance} />}
       {view === 'health' && <HealthView leakage={leakage} census={census} />}

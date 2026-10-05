@@ -1,52 +1,55 @@
 // ============================================================
-// CONFIRMED-SETUP WATCH (pure core) — a confirmed setup is not forgotten for R:R alone
+// CONFIRMED-SETUP WATCH (pure core) — display and lifecycle only
 // ============================================================
-// A setup that is CONFIRMED (S1 sweep → displacement → zone; a trigger
-// family's rule hit with a valid stop and target; the indicator engine's
-// directional read) but whose R:R is below 1.50R is kept ALIVE under its SAME
-// id, parent and trigger, re-measured on every closed 15m bar with the
-// existing setup logic, and shown with its full option plan:
+// Every CONFIRMED setup (S1 sweep → displacement → zone; a trigger family's
+// rule hit with a valid stop and target; the indicator engine's read that
+// reached the option build) is shown under its SAME id, parent and trigger,
+// and re-measured on every closed 15m bar with the existing setup logic:
 //
-//   Confirmed — R:R 1.40R < 1.50R
-//   Eligible — R:R 1.62R ≥ 1.50R
-//   Blocked — R:R 1.62R ≥ 1.50R · COST_TOO_HIGH: …   (another hard check)
+//   Confirmed — R:R 1.20R        rrBand '1.0-1.5'
+//   Confirmed — R:R 1.70R        rrBand '>=1.5'
 //
-// The 1.50R minimum is unchanged and nothing here trades: a kept-alive setup
-// reaches the paper slot only through its engine's own chain, with every hard
-// check, when it is eligible on a closed bar. It still ends on its engine's
-// invalidation (sweep reclaimed, stop or T1 traded, a close beyond the rule's
-// invalidation) or expiry (the fill window, the closing guard, session end).
+// Net R:R is DISPLAY / RANKING ONLY (2026-10-05): it never moves a setup out
+// of CONFIRMED, never hides it and never stops it reaching the paper-trade
+// slot. 1.50R is a displayed reference (the rrBand edges), nothing else. The
+// watch tracks only how a setup ENDS: INVALIDATION (stop traded, sweep
+// reclaimed, a close beyond the rule's invalidation, T1 traded before a fill),
+// EXPIRY (the fill window, the closing guard, session end) or FILLED (it became
+// the paper trade).
 //
 // Every update is recorded against the same id (setup_events, decision
 // LIFECYCLE — kept out of the census and the grading): started, re-evaluated,
-// RR_RECOVERED, strike changes, option-build failures, ended. Decision-time
-// data only: closed bars up to the evaluated bar and the live chain at that
-// moment; nothing after it.
+// strike changes, option-build failures, ended. Decision-time data only:
+// closed bars up to the evaluated bar and the live chain at that moment.
 // ============================================================
 
-import type { OptionTradePlan, SetupWatchRow, SetupWatchSnapshot } from '@fno/shared';
-import { STRUCTURE_RULES } from '@fno/analytics';
+import type { OptionTradePlan, RrBand, SetupWatchRow, SetupWatchSnapshot } from '@fno/shared';
+import { MIN_RISK_REWARD, MAX_RISK_REWARD } from '@fno/analytics';
 import type { LiveLifecycle } from './structure-live.js';
 
-/** The minimum R:R — the existing one (structure minT1R = the builder's MIN_RISK_REWARD = 1.5), not a new threshold. */
-export const RR_MIN: number = STRUCTURE_RULES.minT1R;
+/** The displayed reference R:R (MIN_RISK_REWARD, a protected constant) — an rrBand edge, never a gate. */
+export const RR_REFERENCE: number = MIN_RISK_REWARD;
 
-/** Floor to 2 dp, so a value below the minimum never prints as "1.50R < 1.50R". */
-const floor2 = (n: number) => Math.floor(n * 100 + 1e-9) / 100;
+/** Display-only R:R band: < 1.0, 1.0 – 1.5, ≥ 1.5 (null = not measured). Never read by a decision. */
+export function rrBandOf(rr: number | null | undefined): RrBand | null {
+  if (rr == null || !Number.isFinite(rr)) return null;
+  return rr < 1 ? '<1.0' : rr < RR_REFERENCE ? '1.0-1.5' : '>=1.5';
+}
+
+/** The status line: always "Confirmed — R:R x" (R:R is shown, never compared against a threshold here). */
+export function rrStatus(rr: number | null): { text: string; band: RrBand | null } {
+  if (rr == null || !Number.isFinite(rr)) return { text: 'Confirmed — R:R not measured', band: null };
+  return { text: `Confirmed — R:R ${rr.toFixed(2)}R`, band: rrBandOf(rr) };
+}
 
 /**
- * The status line. R:R is INFORMATIONAL for a shown setup (user decision
- * 2026-10-02): every confirmed setup reads "Confirmed", and 1.50R is only the
- * reference it is compared against — never a reason to hide, reject or end
- * it. `rr` is the BINDING R:R (the lower of the underlying R:R to T1, where
- * the engine has one, and the option's net R:R after costs). `atMin` = null
- * when not measured. (The automatic paper-trade log keeps its own 1.50R
- * requirement in the mint chains; that is not decided here.)
+ * A stored naked long's R:R is plausible when it is positive (target above
+ * entry, stop below it — genuine geometry) and not above MAX_RISK_REWARD (the
+ * bad-upstream-data ceiling). No minimum R:R: since 2026-10-05 a 1.20R trade
+ * is a valid trade and must not be retired on the next read.
  */
-export function rrStatus(rr: number | null, min: number = RR_MIN): { text: string; atMin: boolean | null } {
-  if (rr == null || !Number.isFinite(rr)) return { text: 'Confirmed — R:R not measured', atMin: null };
-  if (rr < min) return { text: `Confirmed — R:R ${floor2(rr).toFixed(2)}R < ${min.toFixed(2)}R`, atMin: false };
-  return { text: `Confirmed — R:R ${rr.toFixed(2)}R ≥ ${min.toFixed(2)}R`, atMin: true };
+export function isNakedLongRiskRewardPlausible(riskReward: number | null | undefined): boolean {
+  return riskReward != null && Number.isFinite(riskReward) && riskReward > 0 && riskReward <= MAX_RISK_REWARD;
 }
 
 /** The binding R:R: the lower of the measured ones (null when none is measured). */
@@ -55,7 +58,7 @@ export function bindingRR(...values: Array<number | null | undefined>): number |
   return v.length ? Math.min(...v) : null;
 }
 
-// ---------------- S1: keep-alive on closed bars ----------------
+// ---------------- S1: how a shown setup ends ----------------
 
 export interface ClosedBar {
   time: number;
@@ -63,22 +66,6 @@ export interface ClosedBar {
   high: number;
   low: number;
   close: number;
-}
-
-/** What a kept-alive S1 lifecycle carries (persisted on the lifecycle in the live state). */
-export interface StructureKeepAlive {
-  /** When it entered keep-alive (epoch ms: the bar close / refusal time). */
-  since: number;
-  /** Why: the engine's LOW_RR at confirmation, or an R:R-only refusal at the fill. */
-  cause: 'LOW_RR_AT_CONFIRM' | 'RR_REFUSED_AT_FILL';
-  /** The newest closed bar (open time) it was evaluated on. */
-  lastBarTime: number | null;
-  /** The closed bar (open time) of its last fill attempt — at most one per closed bar. */
-  lastAttemptBar: number | null;
-  /** Underlying reference entry and gross R:R at the last evaluation. */
-  reference: number | null;
-  grossRR: number | null;
-  ended: { reason: string; at: number } | null;
 }
 
 /**
@@ -95,7 +82,7 @@ export function structureReference(lc: Pick<LiveLifecycle, 'direction' | 'entry'
   return inside ? close : near;
 }
 
-/** Gross R:R to T1 from an underlying reference, with the setup's own stop. */
+/** Gross R:R to T1 from an underlying reference, with the setup's own stop (display / ranking only). */
 export function grossRRFrom(lc: Pick<LiveLifecycle, 'stop' | 't1'>, reference: number | null): number | null {
   if (reference == null || lc.stop == null || lc.t1 == null) return null;
   const risk = Math.abs(reference - lc.stop);
@@ -104,89 +91,46 @@ export function grossRRFrom(lc: Pick<LiveLifecycle, 'stop' | 't1'>, reference: n
 }
 
 /**
- * Advance a kept-alive S1 lifecycle over the closed bars after its last
- * evaluation (bars ≤ the newest closed bar only). Ends it — permanently — on
- * the engine's own invalidations: a close beyond the sweep extreme
- * (SWEEP_RECLAIMED), the stop traded (STOP_TRADED), T1 traded before any fill
- * (MISSED), or the fill window running out (NO_FILL, the engine's
- * fillWithinBars from the moment it was kept alive). Pure.
- */
-export function advanceStructureKeepAlive(
-  lc: Pick<LiveLifecycle, 'direction' | 'entry' | 'zone' | 'stop' | 't1' | 'sweepExtreme'>,
-  ka: StructureKeepAlive,
-  closedBars: readonly ClosedBar[],
-  barMs: number,
-  fillWithinBars: number
-): StructureKeepAlive {
-  if (ka.ended || lc.stop == null || lc.t1 == null || lc.entry == null) return ka;
-  const bear = lc.direction === 'BEARISH';
-  const after = closedBars.filter((b) => b.time + barMs > ka.since);
-  const fresh = after.filter((b) => ka.lastBarTime == null || b.time > ka.lastBarTime);
-  if (fresh.length === 0) return ka;
-  let next: StructureKeepAlive = { ...ka };
-  for (const b of fresh) {
-    const closeAt = b.time + barMs;
-    const end = (reason: string): StructureKeepAlive => ({ ...next, lastBarTime: b.time, ended: { reason, at: closeAt } });
-    if (bear ? b.high >= lc.stop : b.low <= lc.stop) return end('STOP_TRADED');
-    if (bear ? b.close > lc.sweepExtreme : b.close < lc.sweepExtreme) return end('SWEEP_RECLAIMED');
-    if (bear ? b.low <= lc.t1.price : b.high >= lc.t1.price) return end('MISSED');
-    const barsKept = after.filter((x) => x.time <= b.time).length;
-    if (barsKept > fillWithinBars) return end('NO_FILL');
-    const reference = structureReference(lc, b.close);
-    next = { ...next, lastBarTime: b.time, reference, grossRR: grossRRFrom(lc, reference) };
-  }
-  return next;
-}
-
-/**
- * One poll's keep-alive step for an S1 lifecycle: start it when the engine
- * confirmed the setup below 1.50R (LOW_RR, with a stop and a T1), then
- * advance it over the closed bars. A lifecycle with a live outcome (traded or
- * refused for good) is never kept alive. Returns the new keep-alive state, or
- * undefined when the lifecycle is not kept alive. Pure.
- */
-export function keepAliveStep(
-  lc: Pick<LiveLifecycle, 'stage' | 'stageAt' | 'direction' | 'entry' | 'zone' | 'stop' | 't1' | 'sweepExtreme' | 'rToT1' | 'live' | 'keepAlive'>,
-  closedBars: readonly ClosedBar[],
-  barMs: number,
-  fillWithinBars: number
-): StructureKeepAlive | undefined {
-  if (lc.live != null) return lc.keepAlive;
-  let ka = lc.keepAlive;
-  if (!ka && lc.stage === 'LOW_RR' && lc.entry != null && lc.stop != null && lc.t1 != null) {
-    ka = { since: lc.stageAt, cause: 'LOW_RR_AT_CONFIRM', lastBarTime: null, lastAttemptBar: null, reference: lc.entry, grossRR: lc.rToT1, ended: null };
-  }
-  return ka && !ka.ended ? advanceStructureKeepAlive(lc, ka, closedBars, barMs, fillWithinBars) : ka;
-}
-
-/**
- * Has a SHOWN S1 setup ended — by S1's own genuine rules only (stop traded,
- * sweep reclaimed, T1 traded before a fill, the fill window)? Re-derived from
- * the closed bars since it was confirmed, so a refusal by the automatic
- * paper-trade log (R:R, cooldown, cost…) never ends what is shown. Null =
- * still confirmed (or never confirmed). Pure; bars ≤ the newest closed bar.
+ * Has a SHOWN S1 setup ended — by S1's own genuine rules only? Walks the
+ * closed bars since it was confirmed (bars ≤ the newest closed bar): the stop
+ * traded (STOP_TRADED), a close beyond the sweep extreme (SWEEP_RECLAIMED),
+ * T1 traded before a fill (MISSED), or the fill window over (NO_FILL — the
+ * engine's fillWithinBars). Net R:R and any paper-trade-log refusal never end
+ * it. Null = still confirmed (or never confirmed). Pure, stateless.
  */
 export function structureDisplayEnd(
-  lc: Pick<LiveLifecycle, 'stage' | 'stageAt' | 'confirmedAt' | 'keepAlive' | 'direction' | 'entry' | 'zone' | 'stop' | 't1' | 'sweepExtreme'>,
+  lc: Pick<LiveLifecycle, 'stage' | 'stageAt' | 'confirmedAt' | 'direction' | 'entry' | 'zone' | 'stop' | 't1' | 'sweepExtreme'>,
   closedBars: readonly ClosedBar[],
   barMs: number,
   fillWithinBars: number
 ): { reason: string; at: number } | null {
-  const since = lc.keepAlive?.since ?? lc.confirmedAt ?? (lc.stage === 'LOW_RR' ? lc.stageAt : null);
-  if (since == null) return null;
-  const fresh: StructureKeepAlive = { since, cause: 'LOW_RR_AT_CONFIRM', lastBarTime: null, lastAttemptBar: null, reference: null, grossRR: null, ended: null };
-  return advanceStructureKeepAlive(lc, fresh, closedBars, barMs, fillWithinBars).ended;
+  const since = lc.confirmedAt ?? (lc.stage === 'LOW_RR' ? lc.stageAt : null);
+  if (since == null || lc.stop == null || lc.t1 == null || lc.entry == null) return null;
+  const bear = lc.direction === 'BEARISH';
+  const after = closedBars.filter((b) => b.time + barMs > since);
+  for (const [k, b] of after.entries()) {
+    const at = b.time + barMs;
+    if (bear ? b.high >= lc.stop : b.low <= lc.stop) return { reason: 'STOP_TRADED', at };
+    if (bear ? b.close > lc.sweepExtreme : b.close < lc.sweepExtreme) return { reason: 'SWEEP_RECLAIMED', at };
+    if (bear ? b.low <= lc.t1.price : b.high >= lc.t1.price) return { reason: 'MISSED', at };
+    if (k + 1 > fillWithinBars) return { reason: 'NO_FILL', at };
+  }
+  return null;
 }
 
-/** A confirmed S1 setup that is shown: it reached CONFIRMED (any R:R), or the engine confirmed it below 1.50R (LOW_RR with a T1). */
-export function isShownStructureSetup(lc: Pick<LiveLifecycle, 'stage' | 'confirmedAt' | 'keepAlive' | 'entry' | 'stop' | 't1'>): boolean {
+/**
+ * A confirmed S1 setup that is shown: it reached CONFIRMED (any R:R) with a
+ * stop and a T1. (LOW_RR is kept for lifecycles recorded before 2026-10-05,
+ * when 1.5R still decided confirmation.)
+ */
+export function isShownStructureSetup(lc: Pick<LiveLifecycle, 'stage' | 'confirmedAt' | 'entry' | 'stop' | 't1'>): boolean {
   if (lc.entry == null || lc.stop == null || lc.t1 == null) return false;
-  return lc.confirmedAt != null || lc.keepAlive != null || lc.stage === 'LOW_RR';
+  return lc.confirmedAt != null || lc.stage === 'LOW_RR';
 }
 
 // ---------------- the per-setup lifecycle record ----------------
 
-export type WatchEventType = 'WATCH_STARTED' | 'REEVALUATED' | 'RR_RECOVERED' | 'STRIKE_CHANGED' | 'OPTION_BUILD_FAILED' | 'WATCH_ENDED';
+export type WatchEventType = 'WATCH_STARTED' | 'REEVALUATED' | 'STRIKE_CHANGED' | 'OPTION_BUILD_FAILED' | 'WATCH_ENDED';
 
 export interface WatchUpdate {
   id: string;
@@ -197,18 +141,18 @@ export interface WatchUpdate {
   at: number;
   /** The closed bar (open time) this evaluation read up to. */
   barTime: number | null;
-  /** The binding R:R this evaluation measured. */
+  /** The binding R:R this evaluation measured (display / ranking only). */
   statusRR: number | null;
   grossRR: number | null;
   netRR: number | null;
-  /** Informational: the first check (other than R:R) that would stop the AUTOMATIC paper-trade log now (null = none). Never hides or ends the setup. */
+  /** Informational: the first genuine check that would stop the paper-trade log now (null = none). Never hides or ends the setup. */
   block: { code: string | null; reason: string } | null;
   plan: OptionTradePlan | null;
-  /** True when the option leg itself could not be built (every strike failed). */
+  /** True when the option leg itself could not be built (every strike failed a genuine check). */
   optionBuildFailed: boolean;
   underlying: { entry: number | null; sl: number | null; t1: number | null; t2: number | null };
   expiresAt: number | null;
-  /** Set when this evaluation ends the setup (invalidation, expiry, traded). */
+  /** Set when this evaluation ends the setup: INVALIDATION, EXPIRY or FILLED. */
   ended?: { reason: string; at: number } | null;
 }
 
@@ -231,18 +175,15 @@ function snapshotOf(u: WatchUpdate): SetupWatchSnapshot {
 
 /**
  * Apply one evaluation to a setup's record — same id, never a second row —
- * and list what happened. Pure. An ended record is never reopened.
+ * and list what happened. Pure. An ended record is never reopened. Net R:R
+ * only changes the displayed text and band, never the status.
  */
-export function applyWatchUpdate(prev: SetupWatchRow | null, u: WatchUpdate, min: number = RR_MIN): { row: SetupWatchRow; events: WatchEventType[] } {
+export function applyWatchUpdate(prev: SetupWatchRow | null, u: WatchUpdate): { row: SetupWatchRow; events: WatchEventType[] } {
   if (prev?.ended) return { row: prev, events: [] };
-  const { text, atMin } = rrStatus(u.statusRR, min);
+  const { text, band } = rrStatus(u.statusRR);
   const events: WatchEventType[] = [];
   if (!prev) events.push('WATCH_STARTED');
   else if (u.barTime !== prev.lastBarTime) events.push('REEVALUATED');
-  const wasBelow = prev ? prev.statusRR == null || prev.statusRR < min : false;
-  const nowAtOrAbove = u.statusRR != null && u.statusRR >= min;
-  const recovered = prev != null && wasBelow && nowAtOrAbove && !prev.rrRecovered;
-  if (recovered) events.push('RR_RECOVERED');
   const strikeChanged = prev?.plan != null && u.plan != null && (prev.plan.strike !== u.plan.strike || prev.plan.expiry !== u.plan.expiry || prev.plan.side !== u.plan.side);
   if (strikeChanged) events.push('STRIKE_CHANGED');
   if (u.optionBuildFailed) events.push('OPTION_BUILD_FAILED');
@@ -256,15 +197,12 @@ export function applyWatchUpdate(prev: SetupWatchRow | null, u: WatchUpdate, min
     status: u.ended ? 'ENDED' : 'CONFIRMED',
     statusText: u.ended ? `Ended — ${u.ended.reason} (last: ${text})` : text,
     statusRR: u.statusRR,
-    rrAtMin: atMin,
+    rrBand: band,
     blockCode: u.block?.code ?? null,
     blockReason: u.block?.reason ?? null,
     plan: u.plan ?? prev?.plan ?? null,
     initial: prev?.initial ?? snap,
     current: snap,
-    startedBelowMin: prev ? prev.startedBelowMin : !(u.statusRR != null && u.statusRR >= min),
-    rrRecovered: (prev?.rrRecovered ?? false) || recovered,
-    firstAtMinAt: prev?.firstAtMinAt ?? (atMin === true && !u.ended ? u.at : null),
     strikeChanges: (prev?.strikeChanges ?? 0) + (strikeChanged ? 1 : 0),
     optionBuildFailures: (prev?.optionBuildFailures ?? 0) + (u.optionBuildFailed ? 1 : 0),
     startedAt: prev?.startedAt ?? u.at,
@@ -276,7 +214,7 @@ export function applyWatchUpdate(prev: SetupWatchRow | null, u: WatchUpdate, min
   return { row, events };
 }
 
-/** An update that only ends a row (traded, invalidated, expired, bias flipped), carrying its last measurements. Pure. */
+/** An update that only ends a row (INVALIDATION / EXPIRY / FILLED, or the indicator's bias flip), carrying its last measurements. Pure. */
 export function endUpdateFor(row: SetupWatchRow, reason: string, at: number): WatchUpdate {
   return {
     id: row.id,

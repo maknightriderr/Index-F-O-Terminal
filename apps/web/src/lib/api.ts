@@ -407,6 +407,16 @@ class ApiClient {
   async getSetupOutcomes(lifecycleIds: string[]) {
     return this.get<unknown>(`/api/diagnostics/setup-outcomes?lifecycleIds=${encodeURIComponent(lifecycleIds.join(','))}`);
   }
+
+  /** Phase 8: recent snapshotted decisions. */
+  async getDecisionList(symbol?: string) {
+    return this.get<{ rows: import('@fno/shared').DecisionListRow[] }>(`/api/diagnostics/decisions${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ''}`);
+  }
+
+  /** Phase 8: one decision end to end (replay = re-derive offline and compare). */
+  async getDecision(snapshotId: string, replay = false) {
+    return this.get<import('@fno/shared').DecisionDiagnosticsView>(`/api/diagnostics/decision/${encodeURIComponent(snapshotId)}${replay ? '?replay=1' : ''}`);
+  }
 }
 
 export interface DiagnosticsFilter {

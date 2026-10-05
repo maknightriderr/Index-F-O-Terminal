@@ -1,19 +1,22 @@
 // ============================================================
-// CONFIRMED-SETUP WATCH — acceptance tests
+// CONFIRMED-SETUP WATCH + R:R DISPLAY-ONLY (Phase 1, 2026-10-05)
 // ============================================================
-// A confirmed setup below 1.50R is kept alive under its SAME id, re-measured
-// on every closed 15m bar with the existing setup logic, shown with its full
-// option plan (premium Entry / SL / TSL / T1 / T2), and becomes Eligible only
-// when every hard check passes. The 1.50R minimum is unchanged; nothing here
-// trades on its own; decision-time data only.
+// Net R:R is a ranking / display input only. A confirmed setup at 1.20R (or
+// 0.4R) is CONFIRMED, ranks (criterion #3), can be minted and is shown under
+// its SAME id on every closed bar until it is INVALIDATED / EXPIRES / FILLS.
+// Genuine checks still reject: no target, zero / negative risk, a fill at or
+// through the stop or T1, a stop that cannot sit outside the noise floor.
 // ============================================================
 
 import { describe, it, expect, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 vi.mock('../../lib/redis.js', () => ({ redis: { get: async () => null, set: async () => 'OK' } }));
 
 import {
   buildTradeSetup,
+  evaluateStructureSession,
   prepareMomentumSeries,
   buildSeriesContext,
   runSessionEvents,
@@ -21,55 +24,59 @@ import {
   rebuildCandidateAt,
   EVENT_ENGINE_TRIGGER_IDS,
   STRUCTURE_RULES,
+  STRUCTURE_VARIANTS,
+  MIN_RISK_REWARD,
   type MomentumBar,
   type TriggerCandidate,
 } from '@fno/analytics';
 import type { OptionChain, OptionChainLeg, OptionChainStrike, TradeSetup } from '@fno/shared';
 import { fixtureStrikes, leg, ATM, LOT } from './trade-setup-fixtures.js';
 import {
-  RR_MIN,
-  structureDisplayEnd,
-  isShownStructureSetup,
+  RR_REFERENCE,
   rrStatus,
+  rrBandOf,
   bindingRR,
   structureReference,
   grossRRFrom,
-  advanceStructureKeepAlive,
-  keepAliveStep,
+  structureDisplayEnd,
+  isShownStructureSetup,
+  isNakedLongRiskRewardPlausible,
   applyWatchUpdate,
   planFromLevels,
   endUpdateFor,
   type ClosedBar,
-  type StructureKeepAlive,
   type WatchUpdate,
 } from '../setup-watch-core.js';
 import { validateOnChain, rankStrikeBuilds, strikeNetRR, type StrikeBuild } from '../fno-validation.js';
-import { advanceFamilyWatch, newFamilyWatch, recoveredFamilyCandidates, FAMILY_WATCH_BARS, validateCandidateRisk, routedLifecycleId, liveTriggerStages, type RoutedCandidate, type FamilyWatchEntry } from '../trigger-router.js';
-import { fillCandidate, structureSequenceRefusal, type LiveLifecycle, type LiveState } from '../structure-live.js';
+import { advanceFamilyWatch, newFamilyWatch, FAMILY_WATCH_BARS, validateCandidateRisk, routedLifecycleId, liveTriggerStages, paperCandidatesForSlot, type RoutedCandidate } from '../trigger-router.js';
+import { liveStructureRulesFor, structureSequenceRefusal, type LiveLifecycle } from '../structure-live.js';
+import { rankSlotCandidates, settleSlot, type DeferredSetup, type SlotCandidate } from '../slot-arbitration.js';
+import { RISK_VERSION, RR_DISPLAY_ONLY_LOGIC_SUFFIX, liveLogicStamp } from '../../config/trading-flags.js';
 
 const M15 = 15 * 60 * 1000;
 const T0 = Date.parse('2026-08-10T10:00:00+05:30');
 const bar = (k: number, o: number, h: number, l: number, c: number): ClosedBar => ({ time: T0 + k * M15, open: o, high: h, low: l, close: c });
+const fill = STRUCTURE_RULES.fillWithinBars;
 
-/** A bearish S1 setup confirmed at 1.33R: limit 100 (FVG 100–103), stop 106, T1 92, sweep extreme 105. */
-const lowRrS1 = (over: Partial<LiveLifecycle> = {}): LiveLifecycle =>
+/** A bearish S1 setup confirmed at 1.20R: limit 100 (FVG 100–103), stop 106, T1 92.8, sweep extreme 105. */
+const s1 = (over: Partial<LiveLifecycle> = {}): LiveLifecycle =>
   ({
     id: 'NSE:NIFTY:BEARISH:1',
     direction: 'BEARISH',
-    stage: 'LOW_RR',
-    stageAt: T0 + M15, // bar 0's close
+    stage: 'CONFIRMED',
+    stageAt: T0 + M15,
+    confirmedAt: T0 + M15,
     entry: 100,
     zone: { kind: 'FVG', near: 100, far: 103 },
     stop: 106,
-    t1: { kind: 'PREV_DAY_LOW', price: 92 },
+    t1: { kind: 'PREV_DAY_LOW', price: 92.8 },
     t2: null,
     sweepExtreme: 105,
-    rToT1: 1.33,
+    rToT1: 1.2,
     atr: 4,
     live: null,
     ...over,
   }) as unknown as LiveLifecycle;
-const fill = STRUCTURE_RULES.fillWithinBars;
 const watchUpdate = (over: Partial<WatchUpdate>): WatchUpdate => ({
   id: 'NSE:NIFTY:BEARISH:1',
   source: 'S1',
@@ -77,13 +84,13 @@ const watchUpdate = (over: Partial<WatchUpdate>): WatchUpdate => ({
   parentId: 'P1',
   at: T0,
   barTime: T0,
-  statusRR: 1.4,
-  grossRR: 1.4,
-  netRR: 1.6,
+  statusRR: 1.2,
+  grossRR: 1.2,
+  netRR: 1.25,
   block: null,
   plan: null,
   optionBuildFailed: false,
-  underlying: { entry: 100, sl: 106, t1: 92, t2: null },
+  underlying: { entry: 100, sl: 106, t1: 92.8, t2: null },
   expiresAt: null,
   ...over,
 });
@@ -94,38 +101,200 @@ const planOf = (strike: number, entryPremium = 118) =>
     expiry: '2026-10-07',
     dte: 5,
     lotSize: 75,
-    levels: { entry: entryPremium, stopLoss: entryPremium - 26, target: entryPremium + 37 },
+    levels: { entry: entryPremium, stopLoss: entryPremium - 26, target: entryPremium + 31 },
     delta: -0.5,
     spot: 100,
     reference: 100,
-    underlying: { sl: 106, t1: 92, t2: null },
-    grossRR: 1.4,
-    netRR: 1.6,
+    underlying: { sl: 106, t1: 92.8, t2: null },
+    grossRR: 1.2,
+    netRR: 1.15,
     estimatedCostPct: 2,
     ranking: null,
     trail: { breakevenAtR: 1, lockAtR: 2 },
   });
 
-describe('3. the status line — R:R is informational', () => {
-  it('every confirmed setup reads "Confirmed"; 1.50R is only the reference', () => {
-    expect(RR_MIN).toBe(1.5);
-    expect(rrStatus(1.2).text).toBe('Confirmed — R:R 1.20R < 1.50R');
-    expect(rrStatus(1.4).text).toBe('Confirmed — R:R 1.40R < 1.50R');
-    expect(rrStatus(1.49).text).toBe('Confirmed — R:R 1.49R < 1.50R');
-    expect(rrStatus(1.5).text).toBe('Confirmed — R:R 1.50R ≥ 1.50R');
-    expect(rrStatus(1.62).text).toBe('Confirmed — R:R 1.62R ≥ 1.50R');
-    // Never "1.50R < 1.50R": a value just below the reference floors to 1.49.
-    expect(rrStatus(1.4999).text).toBe('Confirmed — R:R 1.49R < 1.50R');
-    expect(rrStatus(null).text).toBe('Confirmed — R:R not measured');
+// ---------------- the structure-engine fixture (from structure-engine.test.ts) ----------------
+const at = (date: string, hhmm: string) => Date.parse(`${date}T${hhmm}:00+05:30`);
+function mbar(time: number, open: number, close: number, wick = 0.2, volume = 1000): MomentumBar {
+  return { time, open, high: Math.max(open, close) + wick, low: Math.min(open, close) - wick, close, volume };
+}
+function session(date: string, closes: number[], startOpen: number): MomentumBar[] {
+  let prev = startOpen;
+  return closes.map((c, k) => {
+    const b = mbar(at(date, '09:15') + k * M15, prev, c);
+    prev = c;
+    return b;
   });
-  it('low R:R or another check never changes the status: the row stays CONFIRMED; the check is only a note', () => {
-    for (const rr of [1.2, 1.4, 1.49, 1.5, 1.62]) {
-      const row = applyWatchUpdate(null, watchUpdate({ statusRR: rr, block: { code: 'COST_TOO_HIGH', reason: 'round trip 6.1% of premium' } })).row;
-      expect(row.status, String(rr)).toBe('CONFIRMED');
-      expect(row.statusText.startsWith('Confirmed — R:R')).toBe(true);
-      expect(row.rrAtMin).toBe(rr >= 1.5);
-      expect(row.blockCode).toBe('COST_TOO_HIGH'); // shown as a note, never hides or ends it
+}
+const alternating = (n: number, a = 100, b = 100.5) => Array.from({ length: n }, (_, k) => (k % 2 === 0 ? a : b));
+const HIST = ['2026-01-12', '2026-01-13', '2026-01-14', '2026-01-15', '2026-01-16'];
+const PREV = '2026-01-19';
+const TODAY = '2026-01-20';
+const PREV_CLOSES = [100, 99.5, 99, 98.5, 98, 97.5, 97.2, 97.5, 98, 98.5, 99, 99.5, 100, 100.5, 101, 101.5, 101.8, 101.5, 101.2, 101.0, 101.2, 101.0, 101.2, 101.0, 101.2];
+function base(): MomentumBar[] {
+  const bars: MomentumBar[] = [];
+  let last = 100.5;
+  for (const d of HIST) {
+    bars.push(...session(d, alternating(25), last));
+    last = bars[bars.length - 1].close;
+  }
+  bars.push(...session(PREV, PREV_CLOSES, last));
+  last = bars[bars.length - 1].close;
+  bars.push(...session(TODAY, [101.3, 101.0, 101.3, 101.0, 101.3, 101.0], last));
+  return bars;
+}
+const t = (k: number) => at(TODAY, '10:45') + k * M15;
+const B = (k: number, open: number, high: number, low: number, close: number): MomentumBar => ({ time: t(k), open, high, low, close, volume: 1000 });
+const SWEEP = B(0, 101.0, 102.3, 100.9, 101.6);
+const DISP = B(1, 101.6, 101.7, 100.1, 100.2);
+const CONF = B(2, 100.2, 100.6, 99.9, 100.3);
+const V10 = STRUCTURE_VARIANTS.find((v) => v.id === 'D1.0-GUARD')!;
+/** The LOW_RR fixture: a previous-day low at 99.8 sits only ~0.4R below the entry. */
+const closeTarget = () =>
+  base().map((b) => (b.low < 99.8 && b.time < at(TODAY, '09:15') && b.time >= at(PREV, '09:15') ? { ...b, low: 99.8, close: Math.max(b.close, 99.9), open: Math.max(b.open, 99.9) } : b));
+
+describe('Phase 1 — net R:R never decides confirmation, eligibility or minting', () => {
+  it('the same low-R:R sweep is LOW_RR under the pre-registered rules and CONFIRMED under the live rules', () => {
+    const bars = [...closeTarget(), SWEEP, DISP, CONF];
+    const series = prepareMomentumSeries(bars);
+    const research = evaluateStructureSession(series, bars.length - 1, V10).setups.find((s) => s.direction === 'BEARISH')!;
+    expect(research.stage).toBe('LOW_RR'); // research / backtests keep 1.5R (unchanged)
+    const live = evaluateStructureSession(series, bars.length - 1, V10, liveStructureRulesFor('15m')).setups.find((s) => s.direction === 'BEARISH')!;
+    expect(live.stage).toBe('CONFIRMED');
+    expect(live.rToT1!).toBeLessThan(1);
+    expect(live.t1).not.toBeNull();
+  });
+
+  it('the live rules keep only the geometry: no R:R floor, a T1 strictly beyond the entry, the research rules unchanged', () => {
+    expect(liveStructureRulesFor('15m').minT1R).toBe(0);
+    expect(liveStructureRulesFor('5m').minT1R).toBe(0);
+    expect(STRUCTURE_RULES.minT1R).toBe(1.5);
+    const bars = [...closeTarget(), SWEEP, DISP, CONF];
+    const live = evaluateStructureSession(prepareMomentumSeries(bars), bars.length - 1, V10, liveStructureRulesFor('15m')).setups.find((s) => s.direction === 'BEARISH')!;
+    expect(live.rToT1!).toBeGreaterThan(0); // the target is beyond the entry (positive reward)
+    expect(Math.abs(live.entry! - live.stop!)).toBeGreaterThan(0); // positive risk
+  });
+
+  it('the fill gate passes a 1.20R fill and still refuses a fill at / through the stop or T1', () => {
+    expect(structureSequenceRefusal(s1(), 100)).toBeNull(); // 1.20R
+    expect(structureSequenceRefusal(s1(), 99)).toBeNull(); // ~0.92R — still a valid fill
+    expect(structureSequenceRefusal(s1(), 106)?.code).toBe('STRUCTURE_SEQUENCE'); // at the stop: zero risk
+    expect(structureSequenceRefusal(s1(), 107)?.code).toBe('STRUCTURE_SEQUENCE'); // through it: negative risk
+    expect(structureSequenceRefusal(s1(), 92.8)?.code).toBe('STRUCTURE_SEQUENCE'); // at T1: no reward
+    expect(structureSequenceRefusal(s1({ t1: null }), 100)?.code).toBe('STRUCTURE_SEQUENCE'); // no target
+  });
+
+  it('a family candidate at 0.8R is eligible and handed to the slot; no target / invalid stop are not', () => {
+    const c = (bucket: TriggerCandidate['bucket'], rToT1: number | null): TriggerCandidate => ({ triggerId: 'A3', direction: 'BULLISH', decisionIndex: 100, bucket, rToT1 }) as unknown as TriggerCandidate;
+    const ok = { sessionOk: true, costPct: 2, maxCostPct: 5 };
+    expect(validateCandidateRisk(c('LOW_RR', 0.8), ok)).toMatchObject({ wouldTrade: true, reason: null });
+    expect(validateCandidateRisk(c('TRADE', 2.1), ok).wouldTrade).toBe(true);
+    expect(validateCandidateRisk(c('NO_TARGET', null), ok)).toMatchObject({ wouldTrade: false, reason: 'NO_TARGET: no untaken pool ahead' });
+    expect(validateCandidateRisk(c('INVALID_STOP', null), ok)).toMatchObject({ wouldTrade: false, reason: 'INVALID_STOP' });
+    const rc = (b: TriggerCandidate['bucket']): RoutedCandidate => ({ candidate: c(b, 0.8), stage: 'PAPER_RESEARCH', risk: validateCandidateRisk(c(b, 0.8), ok), cost: null, lifecycleId: b });
+    expect(paperCandidatesForSlot([rc('LOW_RR'), rc('NO_TARGET')], 100).map((r) => r.lifecycleId)).toEqual(['LOW_RR']);
+  });
+
+  it('the option builder (rrGate: false) builds a low-R:R leg the original gate refuses', () => {
+    let checked = 0;
+    for (let move = 5; move <= 300; move += 5) {
+      const gated = buildTradeSetup(fixtureStrikes(), ATM, 'BULLISH', 80, move, undefined, null, 5, LOT, 50, {});
+      if (gated.noTradeCode !== 'REWARD_RISK_TOO_LOW') continue;
+      const open = buildTradeSetup(fixtureStrikes(), ATM, 'BULLISH', 80, move, undefined, null, 5, LOT, 50, { rrGate: false });
+      expect(open.available, `move ${move}`).toBe(true);
+      expect(open.stopLoss!).toBeLessThan(open.entry!);
+      expect(open.target!).toBeGreaterThan(open.entry!);
+      expect(strikeNetRR(open)!).toBeLessThan(MIN_RISK_REWARD); // a genuinely low net R:R leg (after costs), built
+      checked++;
     }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it('the structural-stop builder (live default) never refuses for R:R, incl. the RICH-IV bar', () => {
+    let checked = 0;
+    for (let move = 5; move <= 300; move += 5) {
+      const opts = { flags: { structuralStop: true, richIvRr: true }, spot: ATM, nearestBehindLevel: ATM - 120, ivVsHv: 'RICH' };
+      const gated = buildTradeSetup(fixtureStrikes(), ATM, 'BULLISH', 80, move, undefined, null, 5, LOT, 50, opts);
+      if (gated.noTradeCode !== 'REWARD_RISK_TOO_LOW') continue;
+      const open = buildTradeSetup(fixtureStrikes(), ATM, 'BULLISH', 80, move, undefined, null, 5, LOT, 50, { ...opts, rrGate: false });
+      expect(open.noTradeCode, `move ${move}`).not.toBe('REWARD_RISK_TOO_LOW');
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it('genuine option checks still refuse with rrGate: false: no edge after cost, an unusable quote', () => {
+    const tiny = buildTradeSetup(fixtureStrikes(), ATM, 'BULLISH', 80, 0.5, undefined, null, 5, LOT, 50, { rrGate: false });
+    expect(tiny.available).toBe(false);
+    expect(tiny.noTradeCode).not.toBe('REWARD_RISK_TOO_LOW');
+  });
+
+  it('a stored 1.20R trade stays live on the next read; only non-positive or implausibly high R:R retires it', () => {
+    expect(isNakedLongRiskRewardPlausible(1.2)).toBe(true);
+    expect(isNakedLongRiskRewardPlausible(0.6)).toBe(true);
+    expect(isNakedLongRiskRewardPlausible(0)).toBe(false);
+    expect(isNakedLongRiskRewardPlausible(-0.4)).toBe(false);
+    expect(isNakedLongRiskRewardPlausible(7)).toBe(false); // MAX_RISK_REWARD (bad upstream data)
+    expect(isNakedLongRiskRewardPlausible(null)).toBe(false);
+  });
+
+  it('a 1.20R candidate ranks on net R:R (criterion #3) and is minted when it ranks first', async () => {
+    const common = { direction: 'BEARISH' as const, parentId: 'P', anchorKeys: [] as string[], timingClass: 'OPTIMAL' as const, moveConsumedPct: 0.1, movePotential: 'NORMAL' as const, objectiveDistanceAtr: 2, entryQuality: 0.55, evidence: 2, decisionTime: 1 };
+    const low: SlotCandidate = { ...common, source: 'A3', candidateId: 'low', netRR: 1.2 };
+    const lower: SlotCandidate = { ...common, source: 'B1', candidateId: 'lower', netRR: 0.9 };
+    const r = rankSlotCandidates([lower, low]);
+    expect(r.winner).toBe(1);
+    expect(r.lostOn.get(0)).toBe('net R:R after costs');
+    const log: string[] = [];
+    const entry = (sl: SlotCandidate): DeferredSetup => ({
+      kind: 'DEFERRED',
+      setup: { available: true, reason: '' },
+      slot: sl,
+      commit: async () => {
+        log.push(`MINT ${sl.candidateId}`);
+        return { setup: { available: true, reason: 'minted' }, minted: true };
+      },
+      decline: async () => {
+        log.push(`DECLINE ${sl.candidateId}`);
+      },
+    });
+    const minted = await settleSlot({ underlying: 'NIFTY', exchange: 'NSE', entries: [entry(lower), entry(low)] });
+    expect(minted?.available).toBe(true);
+    expect(log).toEqual(['MINT low', 'DECLINE lower']);
+  });
+
+  it('versions are bumped: RISK-2.0 and +rr-display-only.1 on every live stamp', () => {
+    expect(RISK_VERSION).toBe('RISK-2.0');
+    // Since Phase 4 the parent-identity suffix follows it (PARENT-2.0).
+    expect(liveLogicStamp().logicVersion.endsWith(`${RR_DISPLAY_ONLY_LOGIC_SUFFIX}+parent-identity.1`)).toBe(true);
+    expect(liveLogicStamp().versions?.riskVersion).toBe('RISK-2.0');
+  });
+});
+
+describe('the status line and the display-only band', () => {
+  it('reads "Confirmed — R:R x" at any R:R; the band is display only', () => {
+    expect(RR_REFERENCE).toBe(1.5);
+    expect(rrStatus(1.2)).toEqual({ text: 'Confirmed — R:R 1.20R', band: '1.0-1.5' });
+    expect(rrStatus(1.49)).toEqual({ text: 'Confirmed — R:R 1.49R', band: '1.0-1.5' });
+    expect(rrStatus(1.5)).toEqual({ text: 'Confirmed — R:R 1.50R', band: '>=1.5' });
+    expect(rrStatus(1.7)).toEqual({ text: 'Confirmed — R:R 1.70R', band: '>=1.5' });
+    expect(rrStatus(0.8)).toEqual({ text: 'Confirmed — R:R 0.80R', band: '<1.0' });
+    expect(rrStatus(null)).toEqual({ text: 'Confirmed — R:R not measured', band: null });
+    expect(rrBandOf(0.999)).toBe('<1.0');
+    expect(rrBandOf(1)).toBe('1.0-1.5');
+  });
+  it('R:R never changes the status: any value stays CONFIRMED, no "< / ≥ 1.50R" comparison, no RR_RECOVERED', () => {
+    const a = applyWatchUpdate(null, watchUpdate({ statusRR: 1.2 }));
+    expect(a.row.status).toBe('CONFIRMED');
+    expect(a.row.statusText).toBe('Confirmed — R:R 1.20R');
+    const b = applyWatchUpdate(a.row, watchUpdate({ statusRR: 1.7, barTime: T0 + M15, at: T0 + M15 }));
+    expect(b.events).toEqual(['REEVALUATED']);
+    expect(b.row.status).toBe('CONFIRMED');
+    expect(b.row.rrBand).toBe('>=1.5');
+    const c = applyWatchUpdate(b.row, watchUpdate({ statusRR: 0.9, barTime: T0 + 2 * M15, at: T0 + 2 * M15 }));
+    expect(c.row.status).toBe('CONFIRMED');
+    expect(c.row.statusText).toBe('Confirmed — R:R 0.90R');
+    for (const row of [a.row, b.row, c.row]) expect(row.statusText).not.toMatch(/[<≥]\s*1\.50R/);
   });
   it('the binding R:R is the lower of the underlying R:R and the option net R:R', () => {
     expect(bindingRR(1.8, 1.42)).toBe(1.42);
@@ -134,136 +303,129 @@ describe('3. the status line — R:R is informational', () => {
   });
 });
 
-describe('1–2. a confirmed setup at 1.40R stays visible and is re-evaluated under the same id', () => {
-  it('S1: the engine\'s LOW_RR starts a keep-alive instead of being forgotten', () => {
-    const ka = keepAliveStep(lowRrS1(), [bar(1, 99, 101, 98.5, 99)], M15, fill)!;
-    expect(ka).toBeDefined();
-    expect(ka.cause).toBe('LOW_RR_AT_CONFIRM');
-    expect(ka.ended).toBeNull();
-    expect(ka.lastBarTime).toBe(T0 + M15);
-    expect(ka.grossRR).toBe(1.33);
-    // A setup with a live outcome (traded / refused for good) is never kept alive.
-    expect(keepAliveStep(lowRrS1({ live: { outcome: 'MINTED', reason: null, code: null, at: 1 } }), [], M15, fill)).toBeUndefined();
-    // No T1 = not a confirmed trade plan: not kept.
-    expect(keepAliveStep(lowRrS1({ t1: null }), [], M15, fill)).toBeUndefined();
+describe('a confirmed 1.20R setup is shown and survives across bars until it genuinely ends', () => {
+  it('shown: any confirmed lifecycle with a stop and a T1', () => {
+    expect(isShownStructureSetup(s1())).toBe(true);
+    expect(isShownStructureSetup(s1({ stage: 'DEVELOPING', confirmedAt: null }))).toBe(false);
+    expect(isShownStructureSetup(s1({ t1: null }))).toBe(false);
   });
-
-  it('each closed bar re-measures the same setup; only new bars are read', () => {
-    const lc = lowRrS1();
-    const b1 = bar(1, 99, 101, 98.5, 99);
-    const b2 = bar(2, 99, 101.5, 98.8, 101);
-    const k1 = keepAliveStep(lc, [b1], M15, fill)!;
-    const k2 = keepAliveStep({ ...lc, keepAlive: k1 }, [b1, b2], M15, fill)!;
-    expect(k2.since).toBe(k1.since);
-    expect(k2.lastBarTime).toBe(b2.time);
-    expect(k2.reference).toBe(101); // the close is inside the zone: a fill would happen there now
-    // Re-running on the same bars changes nothing (idempotent per bar).
-    expect(keepAliveStep({ ...lc, keepAlive: k2 }, [b1, b2], M15, fill)).toEqual(k2);
+  it('survives quiet bars at 1.20R; one row, same id, re-measured each bar', () => {
+    const lc = s1();
+    const bars = [bar(1, 99, 101, 98.5, 99), bar(2, 99, 101.5, 98.8, 101), bar(3, 101, 102, 99.5, 100.2)];
+    expect(structureDisplayEnd(lc, bars, M15, fill)).toBeNull();
+    let row = applyWatchUpdate(null, watchUpdate({ barTime: bars[0].time })).row;
+    for (const b of bars.slice(1)) {
+      const ref = structureReference(lc, b.close);
+      const next = applyWatchUpdate(row, watchUpdate({ barTime: b.time, at: b.time + M15, statusRR: grossRRFrom(lc, ref), underlying: { entry: ref, sl: 106, t1: 92.8, t2: null } }));
+      expect(next.events).toEqual(['REEVALUATED']);
+      expect(next.row.id).toBe(row.id);
+      row = next.row;
+    }
+    expect(row.status).toBe('CONFIRMED');
+    expect(grossRRFrom(lc, structureReference(lc, 101))).toBe(1.64); // a fill inside the zone measures better — display only
   });
-
-  it('the watch keeps ONE row per id across evaluations (no duplicate candidate)', () => {
-    const a = applyWatchUpdate(null, watchUpdate({ statusRR: 1.4, plan: planOf(8950) }));
-    expect(a.events).toEqual(['WATCH_STARTED']);
-    expect(a.row.statusText).toBe('Confirmed — R:R 1.40R < 1.50R');
-    expect(a.row.startedBelowMin).toBe(true);
-    const b = applyWatchUpdate(a.row, watchUpdate({ statusRR: 1.45, barTime: T0 + M15, at: T0 + M15, plan: planOf(8950) }));
-    expect(b.events).toEqual(['REEVALUATED']);
-    expect(b.row.id).toBe(a.row.id);
-    expect(b.row.initial).toEqual(a.row.initial);
-    expect(b.row.current.statusRR).toBe(1.45);
+  it('ends only on INVALIDATION / EXPIRY (S1: stop traded, sweep reclaimed, T1 traded first, fill window over)', () => {
+    const lc = s1();
+    expect(structureDisplayEnd(lc, [bar(1, 104, 106.2, 103, 104)], M15, fill)?.reason).toBe('STOP_TRADED');
+    expect(structureDisplayEnd(lc, [bar(1, 104, 105.9, 103, 105.5)], M15, fill)?.reason).toBe('SWEEP_RECLAIMED');
+    expect(structureDisplayEnd(lc, [bar(1, 96, 97, 92.5, 93)], M15, fill)?.reason).toBe('MISSED');
+    const quiet = Array.from({ length: fill + 1 }, (_, j) => bar(j + 1, 99, 99.5, 98.5, 99));
+    expect(structureDisplayEnd(lc, quiet, M15, fill)?.reason).toBe('NO_FILL');
+    expect(structureDisplayEnd(lc, quiet.slice(0, fill), M15, fill)).toBeNull();
+    // A paper-trade-log refusal (any reason) never ends what is shown.
+    const refused = s1({ live: { outcome: 'REFUSED', reason: 'cooldown', code: 'POST_LOSS_COOLDOWN', at: T0 + M15 } });
+    expect(structureDisplayEnd(refused, [bar(1, 99, 101, 98.5, 99)], M15, fill)).toBeNull();
   });
-
-  it('families: a confirmed LOW_RR candidate is kept under its original id and rebuilt by its own rule on later bars', () => {
-    const { ctx, log, s, start } = familySession();
-    const original = evaluateTriggersAt(ctx, log, start + 7, EVENT_ENGINE_TRIGGER_IDS).find((c) => c.triggerId === 'A2')!;
-    expect(original.bucket).toBe('LOW_RR');
-    expect(original.stopRef).toBeDefined();
-    const rc = routedOf(original);
-    const watch = [newFamilyWatch(rc, 'LOW_RR_AT_DECISION')];
-    const next = advanceFamilyWatch(watch, ctx, log, start + 7, () => true);
-    expect(next[0]).toEqual(watch[0]); // nothing new to read yet
-    const rebuilt = rebuildCandidateAt(ctx, log, original, start + 8);
-    expect(rebuilt).not.toBeNull();
-    expect(rebuilt!).toMatchObject({ triggerId: 'A2', anchorEventId: original.anchorEventId, stopRef: original.stopRef, decisionIndex: start + 8 });
-    expect(rebuilt!.entry).toBe(ctx.series.bars[start + 8].close);
-    void s;
-  });
-});
-
-describe('3–4. R:R moves from below 1.50R to ≥ 1.50R on the same row', () => {
-  it('S1: a close inside the zone is the achievable fill — R:R recovers from 1.33R to 2.5R', () => {
-    const lc = lowRrS1();
-    expect(grossRRFrom(lc, structureReference(lc, 99))).toBe(1.33); // below the zone: the limit
-    expect(structureReference(lc, 102)).toBe(102);
-    expect(grossRRFrom(lc, 102)).toBe(2.5);
-  });
-  it('1.40R → 1.62R: still Confirmed, the text follows the R:R, RR_RECOVERED recorded once (diagnostic only)', () => {
-    const a = applyWatchUpdate(null, watchUpdate({ statusRR: 1.4 })).row;
-    const b = applyWatchUpdate(a, watchUpdate({ statusRR: 1.62, barTime: T0 + M15, at: T0 + M15 }));
-    expect(b.events).toEqual(['REEVALUATED', 'RR_RECOVERED']);
-    expect(b.row.status).toBe('CONFIRMED');
-    expect(b.row.statusText).toBe('Confirmed — R:R 1.62R ≥ 1.50R');
-    expect(b.row.rrRecovered).toBe(true);
-    expect(b.row.firstAtMinAt).toBe(T0 + M15);
-    const c = applyWatchUpdate(b.row, watchUpdate({ statusRR: 1.3, barTime: T0 + 2 * M15, at: T0 + 2 * M15 }));
-    expect(c.events).toEqual(['REEVALUATED']);
-    expect(c.row.statusText).toBe('Confirmed — R:R 1.30R < 1.50R'); // back below: still shown, same row
-    expect(c.row.firstAtMinAt).toBe(T0 + M15);
-  });
-  it('a recovered S1 is offered to the fill chain only at ≥ 1.50R at the live price, at most once per closed bar', () => {
-    const ka: StructureKeepAlive = { since: T0, cause: 'LOW_RR_AT_CONFIRM', lastBarTime: null, lastAttemptBar: null, reference: 100, grossRR: 1.33, ended: null };
-    const state = { lifecycles: [lowRrS1({ keepAlive: ka })] } as unknown as LiveState;
-    expect(fillCandidate(state, 100.2, T0)).toBeNull(); // 1.41R at the live price: not yet
-    expect(fillCandidate(state, 102, T0)?.id).toBe('NSE:NIFTY:BEARISH:1'); // 2.5R: offered
-    const tried = { lifecycles: [lowRrS1({ keepAlive: { ...ka, lastAttemptBar: T0 } })] } as unknown as LiveState;
-    expect(fillCandidate(tried, 102, T0)).toBeNull(); // already tried on this bar
-    expect(fillCandidate(tried, 102, T0 + M15)?.id).toBe('NSE:NIFTY:BEARISH:1'); // the next bar may try again
-    // The chain's own sequence gate still decides at the fill, and an R:R-only refusal is marked as such (kept alive).
-    expect(structureSequenceRefusal(lowRrS1(), 100.2)?.rrOnly).toBe(true);
-    expect(structureSequenceRefusal(lowRrS1(), 102)).toBeNull();
-  });
-});
-
-describe('5. no duplicate candidate', () => {
-  it('a kept-alive family candidate is handed to the slot once, under its original id', () => {
-    const { ctx, log, start } = familySession();
-    const original = evaluateTriggersAt(ctx, log, start + 7, EVENT_ENGINE_TRIGGER_IDS).find((c) => c.triggerId === 'A2')!;
-    const rebuilt = { ...rebuildCandidateAt(ctx, log, original, start + 8)!, bucket: 'TRADE' as const, rToT1: 1.8 };
-    const w: FamilyWatchEntry = { ...newFamilyWatch(routedOf(original), 'LOW_RR_AT_DECISION'), current: rebuilt, lastIndex: start + 8 };
-    const stages = liveTriggerStages();
-    const once = recoveredFamilyCandidates([w], start + 8, stages, null, []);
-    expect(once.map((r) => r.lifecycleId)).toEqual([w.lifecycleId]);
-    expect(once[0].lifecycleId).toBe(routedLifecycleId('NSE', 'NIFTY', original)); // the ORIGINAL id
-    expect(recoveredFamilyCandidates([w], start + 8, stages, null, once)).toEqual([]); // already in the slot list
-  });
-  it('an ended row is never reopened', () => {
+  it('… or when FILLED; an ended row is never reopened', () => {
     const live = applyWatchUpdate(null, watchUpdate({})).row;
-    const ended = applyWatchUpdate(live, endUpdateFor(live, 'SWEEP_RECLAIMED', T0 + M15)).row;
-    expect(ended.status).toBe('ENDED');
-    expect(applyWatchUpdate(ended, watchUpdate({ statusRR: 2 }))).toEqual({ row: ended, events: [] });
+    const filled = applyWatchUpdate(live, endUpdateFor(live, 'FILLED', T0 + M15));
+    expect(filled.events).toEqual(['WATCH_ENDED']);
+    expect(filled.row.status).toBe('ENDED');
+    expect(applyWatchUpdate(filled.row, watchUpdate({ statusRR: 2 }))).toEqual({ row: filled.row, events: [] });
   });
-});
-
-describe('6. option strike, entry, SL, TSL and targets are recalculated', () => {
-  it('a new closed bar rebuilds the premium levels; a strike change keeps the same id', () => {
+  it('a strike change keeps the same row and is recorded', () => {
     const a = applyWatchUpdate(null, watchUpdate({ plan: planOf(8950, 118) })).row;
     const b = applyWatchUpdate(a, watchUpdate({ plan: planOf(9000, 131), barTime: T0 + M15, at: T0 + M15 }));
-    expect(b.events).toContain('STRIKE_CHANGED');
+    expect(b.events).toEqual(['REEVALUATED', 'STRIKE_CHANGED']);
     expect(b.row.id).toBe(a.id);
     expect(b.row.strikeChanges).toBe(1);
-    expect(b.row.plan!.strike).toBe(9000);
-    expect(b.row.plan!.entryPremium).toBe(131);
     expect(b.row.initial.strike).toBe(8950);
-  });
-  it('premiums follow the underlying entry reference by the leg\'s delta (marked est.)', () => {
-    const at = (reference: number) =>
-      planFromLevels({ side: 'PE', strike: 25000, expiry: 'x', dte: 3, lotSize: 75, levels: { entry: 120, stopLoss: 90, target: 180 }, delta: -0.5, spot: 25000, reference, underlying: { sl: 25150, t1: 24800, t2: null }, grossRR: 1.5, netRR: 1.6, estimatedCostPct: 2, ranking: null, trail: { breakevenAtR: 1, lockAtR: 2 } });
-    expect(at(25000)).toMatchObject({ entryPremium: 120, slPremium: 90, t1Premium: 180, estimated: false });
-    expect(at(24950)).toMatchObject({ entryPremium: 145, slPremium: 115, t1Premium: 205, estimated: true }); // PE gains as the underlying falls
   });
 });
 
-describe('7–8. the best valid strike, deterministically; a failing strike falls through to the next', () => {
+describe('families on the watch: display only, ending on genuine rules', () => {
+  function familySession() {
+    const ist = (s: string) => Date.parse(`${s}+05:30`);
+    const sess = (date: string, path: Array<[number, number, number, number]>): MomentumBar[] =>
+      path.map(([open, high, low, close], k) => ({ time: ist(`${date}T09:15:00`) + k * M15, open, high, low, close, volume: 0 }));
+    const quiet = (date: string): MomentumBar[] =>
+      sess(
+        date,
+        Array.from({ length: 25 }, (_, k) => {
+          const o = 100 + ((k % 4) - 1.5) * 2;
+          const c = 100 + (((k + 1) % 4) - 1.5) * 2;
+          return [o, Math.max(o, c) + 4, Math.min(o, c) - 4, c] as [number, number, number, number];
+        })
+      );
+    const days = Array.from({ length: 22 }, (_, k) => new Date(Date.parse('2026-07-15T12:00:00Z') + k * 86_400_000).toISOString().slice(0, 10));
+    const today = sess('2026-08-10', [
+      [100, 104, 96, 102],
+      [102, 106, 99, 104],
+      [104, 107, 101, 105],
+      [105, 112, 103, 104],
+      [104, 105, 100, 101],
+      [101, 103, 98, 102],
+      [102, 104, 99, 100],
+      [100, 101, 94, 95],
+      [95, 96, 90, 91],
+      ...Array.from({ length: 16 }, (_, k) => [91 - k, 92 - k, 88 - k, 89 - k] as [number, number, number, number]),
+    ]);
+    const allBars = [...days.flatMap(quiet), ...today];
+    const series = prepareMomentumSeries(allBars);
+    const ctx = buildSeriesContext(series);
+    const s = series.sessionDates.indexOf('2026-08-10');
+    return { ctx, log: runSessionEvents(ctx, s), start: series.sessionStarts[s], allBars };
+  }
+  const routedOf = (c: TriggerCandidate): RoutedCandidate => ({
+    candidate: c,
+    stage: liveTriggerStages()[c.triggerId],
+    risk: validateCandidateRisk(c, { sessionOk: true, costPct: 2, maxCostPct: 5 }),
+    cost: null,
+    lifecycleId: routedLifecycleId('NSE', 'NIFTY', c),
+    parentId: 'P1',
+    anchorKeys: ['P1', c.anchorEventId],
+  });
+  it('a LOW_RR candidate is eligible at its own bar and watched (DISPLAY) under its original id', () => {
+    const { ctx, log, start } = familySession();
+    const original = evaluateTriggersAt(ctx, log, start + 7, EVENT_ENGINE_TRIGGER_IDS).find((c) => c.triggerId === 'A2')!;
+    expect(original.bucket).toBe('LOW_RR');
+    expect(routedOf(original).risk.wouldTrade).toBe(true);
+    const w = newFamilyWatch(routedOf(original));
+    expect(w).toMatchObject({ cause: 'DISPLAY', lifecycleId: routedLifecycleId('NSE', 'NIFTY', original), ended: null });
+  });
+  it('ends on a close beyond the invalidation, T1 traded, the window or the closing guard — never on R:R', () => {
+    const { ctx, log, start } = familySession();
+    const original = evaluateTriggersAt(ctx, log, start + 7, EVENT_ENGINE_TRIGGER_IDS).find((c) => c.triggerId === 'A2')!;
+    const w = newFamilyWatch(routedOf(original));
+    expect(advanceFamilyWatch([w], ctx, log, start + 8, () => true)[0].ended?.reason).toBe('MISSED');
+    const noT1 = { ...w, original: { ...original, t1: null } };
+    expect(advanceFamilyWatch([noT1], ctx, log, start + 8, () => false)[0].ended?.reason).toBe('EXPIRED_CLOSING_GUARD');
+    expect(advanceFamilyWatch([noT1], ctx, log, start + 7 + FAMILY_WATCH_BARS + 1, () => true)[0].ended?.reason).toMatch(/EXPIRED|NO_TARGET|INVALIDATED/);
+    const high = { ...w, original: { ...original, t1: null, stopRef: 50 } };
+    expect(advanceFamilyWatch([high], ctx, log, start + 8, () => true)[0].ended?.reason).toBe('INVALIDATED');
+  });
+  it('a re-measure at bar i reads bars ≤ i only', () => {
+    const { ctx, log, start, allBars } = familySession();
+    const original = evaluateTriggersAt(ctx, log, start + 7, EVENT_ENGINE_TRIGGER_IDS).find((c) => c.triggerId === 'A2')!;
+    const i = start + 8;
+    const cut = prepareMomentumSeries(allBars.slice(0, i + 1));
+    const cctx = buildSeriesContext(cut);
+    const clog = runSessionEvents(cctx, cut.sessionStarts.length - 1);
+    expect(rebuildCandidateAt(cctx, clog, original, i)).toEqual(rebuildCandidateAt(ctx, log, original, i));
+  });
+});
+
+describe('the option leg: best valid strike, deterministic, premium levels', () => {
   const liquid = { volume: 50_000, oi: 500_000, theta: -2 };
   const putRow = (strike: number, over: Partial<OptionChainLeg>, dist = 0): OptionChainStrike => ({ strike, distanceFromSpot: dist, call: null, put: leg({ token: `PE${strike}`, ...over }) });
   const chain = {
@@ -288,214 +450,61 @@ describe('7–8. the best valid strike, deterministically; a failing strike fall
   const params = { deltaMin: 0.35, deltaMax: 0.65, deltaTarget: 0.5 };
   const ok = (strike: number, entry: number, stop: number, target: number): TradeSetup => ({ available: true, reason: '', strike, side: 'PE', entry, stopLoss: stop, target, estimatedCostPct: 2 });
 
-  it('every in-band strike is built; the highest net R:R after costs wins — not the ATM, not the cheapest, not the highest delta', () => {
-    const builds: Record<number, TradeSetup> = { 24900: ok(24900, 50, 40, 70), 25000: ok(25000, 70, 55, 100), 25100: ok(25100, 120, 95, 170) };
+  it('every in-band strike is built; the highest net R:R wins even when every leg is below 1.5R', () => {
+    const builds: Record<number, TradeSetup> = { 24900: ok(24900, 50, 40, 61), 25000: ok(25000, 70, 55, 88), 25100: ok(25100, 120, 95, 150) };
     const out = validateOnChain({ chain, side: 'PE', params, context: ctx, build: (_c, strike) => builds[strike] });
     const ranking = out.setup.fnoValidation!.strikeSelection!.ranking!;
-    expect(ranking.map((r) => r.strike)).toHaveLength(3);
-    const best = ranking[0];
-    expect(best.netRR).toBe(Math.max(...ranking.map((r) => r.netRR!)));
-    expect(out.setup.strike).toBe(best.strike);
-    expect(out.setup.fnoValidation!.strikeSelection!.method).toBe('BEST_OF_BAND');
-  });
-
-  it('the top strike failing a hard check falls through to the next valid one', () => {
-    const builds: Record<number, TradeSetup> = {
-      24900: { available: false, reason: 'cost', noTradeCode: 'COST_TOO_HIGH' },
-      25000: ok(25000, 70, 55, 100),
-      25100: { available: false, reason: 'noise', noTradeCode: 'STOP_INSIDE_NOISE' },
-    };
-    const out = validateOnChain({ chain, side: 'PE', params, context: ctx, build: (_c, strike) => builds[strike] });
+    expect(ranking).toHaveLength(3);
     expect(out.setup.available).toBe(true);
+    expect(out.setup.strike).toBe(ranking[0].strike);
+    expect(ranking[0].netRR!).toBeLessThan(1.5);
+  });
+  it('the top strike failing a genuine check falls through to the next', () => {
+    const builds: Record<number, TradeSetup> = { 24900: { available: false, reason: 'cost', noTradeCode: 'COST_TOO_HIGH' }, 25000: ok(25000, 70, 55, 100), 25100: { available: false, reason: 'noise', noTradeCode: 'STOP_INSIDE_NOISE' } };
+    const out = validateOnChain({ chain, side: 'PE', params, context: ctx, build: (_c, strike) => builds[strike] });
     expect(out.setup.strike).toBe(25000);
   });
-
-  it('only when every strike fails is the setup refused — with the most specific reason; an R:R-only refusal keeps its plan', () => {
-    const allFail: Record<number, TradeSetup> = {
-      24900: { available: false, reason: 'cost', noTradeCode: 'COST_TOO_HIGH' },
-      25000: { available: false, reason: 'rr', noTradeCode: 'REWARD_RISK_TOO_LOW', rrPlan: { entry: 70, stopLoss: 55, target: 88, riskReward: 1.2, riskRewardNet: 1.1, estimatedCostPct: 2, stopInAtr: 1.5, targetInAtr: 2, delta: -0.5 } },
-      25100: { available: false, reason: 'noise', noTradeCode: 'STOP_INSIDE_NOISE' },
-    };
-    const out = validateOnChain({ chain, side: 'PE', params, context: ctx, build: (_c, strike) => allFail[strike] });
-    expect(out.setup.available).toBe(false);
-    expect(out.setup.noTradeCode).toBe('REWARD_RISK_TOO_LOW');
-    expect(out.setup.rrPlan?.riskRewardNet).toBe(1.1);
-  });
-
-  it('the ranking is deterministic: any input order gives the same order', () => {
+  it('the ranking is deterministic whatever the input order', () => {
     const b = (strike: number, setup: TradeSetup, spreadPct = 0.4, delta = -0.5): StrikeBuild => ({ strike, delta, spreadPct, setup });
     const builds = [b(24900, ok(24900, 50, 40, 70), 0.4, -0.4), b(25000, ok(25000, 70, 55, 100)), b(25100, ok(25100, 120, 95, 170), 0.3, -0.6), b(25200, { available: false, reason: 'x', noTradeCode: 'COST_TOO_HIGH' })];
     const ref = rankStrikeBuilds(builds, 0.5, 25000).map((x) => x.strike);
     for (const perm of [[3, 2, 1, 0], [1, 3, 0, 2], [2, 0, 3, 1]]) expect(rankStrikeBuilds(perm.map((i) => builds[i]), 0.5, 25000).map((x) => x.strike)).toEqual(ref);
-    expect(ref[ref.length - 1]).toBe(25200); // a refused strike never outranks a tradeable one
+    expect(ref[ref.length - 1]).toBe(25200);
     expect(strikeNetRR(ok(25000, 70, 55, 100))).toBe(Math.round(((100 - 70 - 1.4) / (70 - 55 + 1.4)) * 100) / 100);
   });
-});
-
-describe('9. option SL / TSL are premium values, never underlying prices', () => {
-  it('an R:R refusal built with plan:true carries premium levels; without it the refusal is unchanged', () => {
-    let found = false;
-    for (let move = 5; move <= 300 && !found; move += 5) {
-      const planned = buildTradeSetup(fixtureStrikes(), ATM, 'BULLISH', 80, move, undefined, null, 5, LOT, 50, { plan: true });
-      if (planned.noTradeCode !== 'REWARD_RISK_TOO_LOW') continue;
-      found = true;
-      const p = planned.rrPlan!;
-      expect(p.entry).toBeGreaterThan(p.stopLoss);
-      expect(p.target).toBeGreaterThan(p.entry);
-      expect(p.entry).toBeLessThan(1000); // a premium, not the 25,000 underlying
-      expect(p.riskRewardNet!).toBeLessThan(1.5);
-      const plain = buildTradeSetup(fixtureStrikes(), ATM, 'BULLISH', 80, move, undefined, null, 5, LOT, 50, {});
-      expect(plain.rrPlan).toBeUndefined();
-      expect({ ...planned, rrPlan: undefined }).toEqual({ ...plain, rrPlan: undefined });
-    }
-    expect(found).toBe(true);
-  });
-  it('the plan\'s SL and TSL are in premium; the TSL is the existing trailing rule in that premium', () => {
+  it('SL / TSL are premium values from the existing trailing rule, never underlying prices', () => {
     const p = planOf(8950, 118);
     expect(p.slPremium).toBe(92);
-    expect(p.tslPremium).toBe(92); // before entry the TSL is the initial SL
+    expect(p.tslPremium).toBe(92);
     expect(p.underlyingSl).toBe(106);
-    expect(p.slPremium).not.toBe(p.underlyingSl);
     expect(p.tslRule).toBe('TSL = SL ₹92.00 until entry; then at +1R (premium ₹144.00) SL → entry ₹118.00; at +2R (₹170.00) SL → ₹144.00 (locks +1R).');
   });
 });
 
-describe('10. no future data', () => {
-  it('S1 keep-alive state at bar k is identical whether or not later bars exist', () => {
-    const lc = lowRrS1();
-    const bars = [bar(1, 99, 101, 98.5, 99), bar(2, 99, 101.5, 98.8, 101), bar(3, 101, 104, 100, 103.5), bar(4, 103, 107, 102, 106.5)];
-    const atTwo = advanceStructureKeepAlive(lc, keepAliveStep(lc, [], M15, fill)!, bars.slice(0, 2), M15, fill);
-    const k = keepAliveStep(lc, [], M15, fill)!;
-    const stepped = advanceStructureKeepAlive(lc, advanceStructureKeepAlive(lc, k, bars.slice(0, 2), M15, fill), bars, M15, fill);
-    expect(atTwo.ended).toBeNull();
-    expect(stepped.ended?.reason).toBe('STOP_TRADED'); // only once bar 4 exists
+describe('Phase 1 source guards: the 1.5R gate cannot come back unnoticed', () => {
+  const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
+  it('every live option build passes rrGate: false', () => {
+    const src = read('../market-bias.ts');
+    const builds = src.match(/buildTradeSetup\(/g)?.length ?? 0;
+    expect(builds).toBeGreaterThan(0);
+    expect(src.match(/rrGate: false,/g)?.length).toBe(builds);
   });
-  it('a family re-measure at bar i reads bars ≤ i only', () => {
-    const { ctx, log, start, allBars } = familySession();
-    const original = evaluateTriggersAt(ctx, log, start + 7, EVENT_ENGINE_TRIGGER_IDS).find((c) => c.triggerId === 'A2')!;
-    const i = start + 8;
-    const cut = prepareMomentumSeries(allBars.slice(0, i + 1));
-    const cctx = buildSeriesContext(cut);
-    const s = cut.sessionStarts.length - 1;
-    const clog = runSessionEvents(cctx, s);
-    expect(rebuildCandidateAt(cctx, clog, original, i)).toEqual(rebuildCandidateAt(ctx, log, original, i));
+  it('the live structure engine runs the live rules (no R:R floor)', () => {
+    // Since Phase 2 the engine call lives in the pure core advanceStructureCore (structure-live.ts), which market-bias runs.
+    const core = read('../structure-live.ts');
+    expect(core).toMatch(/evaluateStructureSession\(prepareMomentumSeries\(bars15\), bars15\.length - 1, liveStructureVariant\(\), liveStructureRulesFor\('15m'\)\)/);
+    expect(core).toMatch(/liveStructureVariant\('5m'\), liveStructureRulesFor\('5m'\)\)/);
+    const src = read('../market-bias.ts');
+    expect(src).toMatch(/advanceStructureCore\(/);
+    expect(src).not.toMatch(/evaluateStructureSession(MTF)?\(/);
+    expect(src).not.toMatch(/riskReward >= MIN_RISK_REWARD/);
   });
-});
-
-describe('11. invalidation and expiry still end the setup', () => {
-  const lc = lowRrS1();
-  const k = keepAliveStep(lc, [], M15, fill)!;
-  const endOn = (b: ClosedBar) => advanceStructureKeepAlive(lc, k, [b], M15, fill).ended?.reason;
-  it('S1: stop traded, sweep reclaimed, T1 traded first, fill window over', () => {
-    expect(endOn(bar(1, 104, 106.2, 103, 104))).toBe('STOP_TRADED');
-    expect(endOn(bar(1, 104, 105.9, 103, 105.5))).toBe('SWEEP_RECLAIMED');
-    expect(endOn(bar(1, 96, 97, 91.5, 93))).toBe('MISSED');
-    const quiet = Array.from({ length: fill + 1 }, (_, j) => bar(j + 1, 99, 99.5, 98.5, 99));
-    expect(advanceStructureKeepAlive(lc, k, quiet, M15, fill).ended?.reason).toBe('NO_FILL');
-    expect(advanceStructureKeepAlive(lc, k, quiet.slice(0, fill), M15, fill).ended).toBeNull();
-  });
-  it('families: a close beyond the rule\'s invalidation, T1 traded, the window or the closing guard', () => {
-    const { ctx, log, start } = familySession();
-    const original = evaluateTriggersAt(ctx, log, start + 7, EVENT_ENGINE_TRIGGER_IDS).find((c) => c.triggerId === 'A2')!;
-    const w = newFamilyWatch(routedOf(original), 'LOW_RR_AT_DECISION');
-    // The session falls straight through A2's tiny T1 on the next bar: the move it was confirmed for is gone.
-    expect(advanceFamilyWatch([w], ctx, log, start + 8, () => true)[0].ended?.reason).toBe('MISSED');
-    const noT1 = { ...w, original: { ...original, t1: null } };
-    expect(advanceFamilyWatch([noT1], ctx, log, start + 8, () => false)[0].ended?.reason).toBe('EXPIRED_CLOSING_GUARD');
-    const late = start + 7 + FAMILY_WATCH_BARS + 1;
-    expect(advanceFamilyWatch([noT1], ctx, log, late, () => true)[0].ended?.reason).toMatch(/EXPIRED|NO_TARGET|INVALIDATED/);
-    const high = { ...w, original: { ...original, t1: null, stopRef: 50 } }; // every close is above a 50 invalidation for a short
-    expect(advanceFamilyWatch([high], ctx, log, start + 8, () => true)[0].ended?.reason).toBe('INVALIDATED');
-  });
-  it('the 1.50R minimum is not relaxed anywhere: the sequence gate still refuses below it', () => {
-    expect(structureSequenceRefusal(lowRrS1(), 100)?.code).toBe('STRUCTURE_SEQUENCE');
-    expect(STRUCTURE_RULES.minT1R).toBe(1.5);
-  });
-});
-
-// ---------------- fixtures ----------------
-
-function familySession() {
-  const ist = (s: string) => Date.parse(`${s}+05:30`);
-  const session = (date: string, path: Array<[number, number, number, number]>): MomentumBar[] =>
-    path.map(([open, high, low, close], k) => ({ time: ist(`${date}T09:15:00`) + k * M15, open, high, low, close, volume: 0 }));
-  const quiet = (date: string): MomentumBar[] =>
-    session(
-      date,
-      Array.from({ length: 25 }, (_, k) => {
-        const o = 100 + ((k % 4) - 1.5) * 2;
-        const c = 100 + (((k + 1) % 4) - 1.5) * 2;
-        return [o, Math.max(o, c) + 4, Math.min(o, c) - 4, c] as [number, number, number, number];
-      })
-    );
-  const days = Array.from({ length: 22 }, (_, k) => new Date(Date.parse('2026-07-15T12:00:00Z') + k * 86_400_000).toISOString().slice(0, 10));
-  const today = session('2026-08-10', [
-    [100, 104, 96, 102],
-    [102, 106, 99, 104],
-    [104, 107, 101, 105],
-    [105, 112, 103, 104],
-    [104, 105, 100, 101],
-    [101, 103, 98, 102],
-    [102, 104, 99, 100],
-    [100, 101, 94, 95],
-    [95, 96, 90, 91],
-    ...Array.from({ length: 16 }, (_, k) => [91 - k, 92 - k, 88 - k, 89 - k] as [number, number, number, number]),
-  ]);
-  const allBars = [...days.flatMap(quiet), ...today];
-  const series = prepareMomentumSeries(allBars);
-  const ctx = buildSeriesContext(series);
-  const s = series.sessionDates.indexOf('2026-08-10');
-  const log = runSessionEvents(ctx, s);
-  return { ctx, log, s, start: series.sessionStarts[s], allBars };
-}
-
-function routedOf(c: TriggerCandidate): RoutedCandidate {
-  return {
-    candidate: c,
-    stage: liveTriggerStages()[c.triggerId],
-    risk: validateCandidateRisk(c, { sessionOk: true, costPct: 2, maxCostPct: 5 }),
-    cost: null,
-    lifecycleId: routedLifecycleId('NSE', 'NIFTY', c),
-    parentId: 'P1',
-    anchorKeys: ['P1', c.anchorEventId],
-  };
-}
-
-describe('every confirmed setup is shown; it ends only on genuine invalidation / expiry', () => {
-  it('S1: any confirmed lifecycle with a stop and T1 is shown — CONFIRMED at any R:R, or the engine\'s LOW_RR', () => {
-    expect(isShownStructureSetup(lowRrS1())).toBe(true); // LOW_RR (1.33R)
-    expect(isShownStructureSetup(lowRrS1({ stage: 'CONFIRMED', confirmedAt: T0 + M15, rToT1: 1.9 }))).toBe(true);
-    expect(isShownStructureSetup(lowRrS1({ stage: 'DEVELOPING', confirmedAt: null }))).toBe(false); // not confirmed yet
-    expect(isShownStructureSetup(lowRrS1({ t1: null }))).toBe(false);
-  });
-  it('S1: a refusal by the paper-trade log never ends the shown setup; S1\'s own rules do', () => {
-    // Refused for good by the paper log (e.g. a cooldown): the lifecycle has a live REFUSED outcome — still shown.
-    const refused = lowRrS1({ stage: 'CONFIRMED', confirmedAt: T0 + M15, live: { outcome: 'REFUSED', reason: 'cooldown', code: 'POST_LOSS_COOLDOWN', at: T0 + M15 } });
-    expect(structureDisplayEnd(refused, [bar(1, 99, 101, 98.5, 99), bar(2, 99, 101.5, 98.8, 101)], M15, fill)).toBeNull();
-    expect(structureDisplayEnd(refused, [bar(1, 104, 106.2, 103, 104)], M15, fill)?.reason).toBe('STOP_TRADED');
-    expect(structureDisplayEnd(refused, [bar(1, 104, 105.9, 103, 105.5)], M15, fill)?.reason).toBe('SWEEP_RECLAIMED');
-    expect(structureDisplayEnd(refused, [bar(1, 96, 97, 91.5, 93)], M15, fill)?.reason).toBe('MISSED');
-    const quiet = Array.from({ length: fill + 1 }, (_, j) => bar(j + 1, 99, 99.5, 98.5, 99));
-    expect(structureDisplayEnd(refused, quiet, M15, fill)?.reason).toBe('NO_FILL');
-  });
-  it('families: a confirmed candidate at ≥ 1.50R is shown (DISPLAY) but never handed to the slot again', () => {
-    const { ctx, log, start } = familySession();
-    const original = evaluateTriggersAt(ctx, log, start + 7, EVENT_ENGINE_TRIGGER_IDS).find((c) => c.triggerId === 'A2')!;
-    const rebuilt = { ...rebuildCandidateAt(ctx, log, original, start + 8)!, bucket: 'TRADE' as const, rToT1: 1.8 };
-    const display: FamilyWatchEntry = { ...newFamilyWatch(routedOf(original), 'DISPLAY'), current: rebuilt, lastIndex: start + 8 };
-    expect(recoveredFamilyCandidates([display], start + 8, liveTriggerStages(), null, [])).toEqual([]);
-    // The same candidate kept for the paper log (it started below 1.50R) IS handed once it clears it — unchanged.
-    expect(recoveredFamilyCandidates([{ ...display, cause: 'LOW_RR_AT_DECISION' }], start + 8, liveTriggerStages(), null, [])).toHaveLength(1);
-  });
-  it('the shown plan\'s strike: an R:R-only refusal is a valid strike (ranked by net R:R); the paper log keeps tradeable strikes first', () => {
-    const rrPlan = { entry: 70, stopLoss: 55, target: 95, riskReward: 1.67, riskRewardNet: 1.55, estimatedCostPct: 2, stopInAtr: 1.5, targetInAtr: 2, delta: -0.5 };
-    const builds: StrikeBuild[] = [
-      { strike: 25000, delta: -0.5, spreadPct: 0.3, setup: { available: false, reason: 'rr', noTradeCode: 'REWARD_RISK_TOO_LOW', rrPlan } },
-      { strike: 25100, delta: -0.6, spreadPct: 0.3, setup: { available: true, reason: '', strike: 25100, entry: 120, stopLoss: 100, target: 150, estimatedCostPct: 2 } },
-    ];
-    // Shown setup (R:R informational): the higher net R:R wins even though it is below the paper log's bar.
-    expect(rankStrikeBuilds(builds, 0.5, 25000, false)[0].strike).toBe(25000);
-    // Paper-trade log (unchanged): the tradeable strike first.
-    expect(rankStrikeBuilds(builds, 0.5, 25000)[0].strike).toBe(25100);
+  it('no live module compares R:R against the 1.5 minimum any more; the RR_RECOVERED endpoint is gone', () => {
+    for (const f of ['../structure-live.ts', '../trigger-router.ts', '../setup-watch-core.ts', '../slot-arbitration.ts', '../fno-validation.ts']) {
+      const src = read(f);
+      expect(src, f).not.toMatch(/>=\s*(STRUCTURE_RULES\.minT1R|MIN_RISK_REWARD|RR_MIN)\b/);
+      expect(src, f).not.toMatch(/<\s*(STRUCTURE_RULES\.minT1R|MIN_RISK_REWARD|RR_MIN)\b/);
+    }
+    expect(read('../../api/diagnostics.ts')).not.toMatch(/rr-recovery/);
   });
 });

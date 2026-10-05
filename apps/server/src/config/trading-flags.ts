@@ -427,7 +427,11 @@ export const STRATEGY_VERSION = 'STRUCTURE-15M-1.0';
 // FAMILIES-1.0: displacement became trigger-specific (S1's own condition),
 // with the other families evaluated live in SHADOW. LEGACY-1.0 rows predate it.
 export const TRIGGER_VERSION = 'FAMILIES-1.0';
-export const RISK_VERSION = 'RISK-1.0';
+// RISK-2.0 (2026-10-05): net R:R is a ranking / display input only — no
+// 1.50R gate anywhere in the live path (structure confirmation, the fill's
+// sequence gate, the family buckets, the option builder, the sticky slot's
+// plausibility read). Genuine geometry / stop / safety checks are unchanged.
+export const RISK_VERSION = 'RISK-2.0';
 export const OPTION_VERSION = 'OPTION-1.0';
 // COST-2.0: setup_events carry a per-setup cost measured at the fill from the
 // leg's live quote (setup-cost.ts; spread observed, slippage/charges modelled
@@ -439,6 +443,24 @@ export const COST_VERSION = 'COST-2.0';
  * part of the logic stamp — no live decision reads the engine.
  */
 export const EVENT_ENGINE_VERSION = 'EVENT-1.0';
+
+// Phase 2 (2026-10-05) decision-snapshot version metadata. Parenting =
+// groupIntoParents / linkage (event-engine candidates.ts + trigger-router);
+// arbitration = slot-arbitration.ts ranking. Bumped with any change to them.
+// PARENT-2.0 (2026-10-05): parent identity = the same origin event, or the same
+// origin level inside the move's window (event-engine PARENT IDENTITY); time
+// proximity alone no longer merges; parentId is a stable hash.
+export const PARENTING_VERSION = 'PARENT-2.0';
+export const ARBITRATION_VERSION = 'ARB-1.0';
+/** @fno/analytics package version (packages/analytics/package.json) — kept equal by a test. */
+export const ANALYTICS_VERSION = '0.1.0';
+/**
+ * Phase 3 (2026-10-05): the OptionCandidate pipeline record (every strike with
+ * its stage / rejection) and the persisted option plan. The strike CHOSEN is
+ * unchanged from OPTION-1.0's ranking (the token is only a final tie-break
+ * between identical strikes, which a chain side never has).
+ */
+export const OPTION_SELECTION_VERSION = 'OPTSEL-1.0';
 
 // ---- Indicator (consensus) engine confidence mode (2026-10-01) ----
 // EVIDENCE (default, the only path that runs): confidence is recorded and
@@ -870,16 +892,26 @@ export function logicStamp(
  * indicator engine's: `<base>+paper-research.<triggerId>`.
  */
 export const PAPER_RESEARCH_LOGIC_SUFFIX = '+paper-research';
+
+/** Every live stamp since 2026-10-05: net R:R is display / ranking only (RISK-2.0) — rows before it never pool with rows after. */
+export const RR_DISPLAY_ONLY_LOGIC_SUFFIX = '+rr-display-only.1';
+/**
+ * Phase 4 (2026-10-05): parents are grouped by origin (PARENT-2.0), so the
+ * one-trade-per-parent guard and the observation arbitration see different
+ * groups than before — every live stamp carries this suffix after the R:R one.
+ */
+export const PARENT_IDENTITY_LOGIC_SUFFIX = '+parent-identity.1';
 export function paperResearchStamp(stamp: LogicStamp, triggerId: string | null | undefined): LogicStamp {
   return triggerId ? { ...stamp, logicVersion: `${stamp.logicVersion}${PAPER_RESEARCH_LOGIC_SUFFIX}.${triggerId}` } : stamp;
 }
 
 /** The stamp with every live switch — what the engine writes on setups and decisions. */
 export function liveLogicStamp(): LogicStamp {
-  return logicStamp(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, {
+  const stamp = logicStamp(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, {
     fnoValidation: { enabled: FNO_VALIDATION, params: FNO_VALIDATION_PARAMS },
     structure: { enabled: STRUCTURE, consensusSetups: CONSENSUS_SETUPS, params: STRUCTURE_PARAMS, symbols: STRUCTURE_SYMBOLS, entryTimeframe: STRUCTURE_ENTRY_TF, entryMode: STRUCTURE_ENTRY_MODE },
     versions: { strategyVersion: STRATEGY_VERSION, triggerVersion: TRIGGER_VERSION, riskVersion: RISK_VERSION, optionVersion: OPTION_VERSION, costVersion: COST_VERSION },
     indicator: { confidenceMode: INDICATOR_CONFIDENCE_MODE, locationMode: INDICATOR_LOCATION_MODE },
   });
+  return { ...stamp, logicVersion: `${stamp.logicVersion}${RR_DISPLAY_ONLY_LOGIC_SUFFIX}${PARENT_IDENTITY_LOGIC_SUFFIX}` };
 }

@@ -121,7 +121,12 @@ export interface Expiry {
 export interface Tick {
   token: string;
   exchange: Exchange;
+  /** Arrival time at this server (epoch ms). */
   timestamp: number;
+  /** The exchange's own timestamp of the tick (epoch ms), when the feed carries one — what ordering and de-duplication use. */
+  exchangeTimestamp?: number;
+  /** The feed's sequence number, when it carries one. */
+  sequence?: number;
   ltp: number;
   open: number;
   high: number;
@@ -391,7 +396,8 @@ export interface TradeSetup {
   /**
    * Only on an R:R refusal built with `plan: true`: the option levels the
    * refusal was judged at (premium entry / SL / target, gross and net R:R).
-   * Shown for a confirmed setup below 1.50R; never traded.
+   * Only produced when a caller keeps the builder's R:R gate on (research /
+   * backtests); live callers pass rrGate: false and never get an R:R refusal.
    */
   rrPlan?: {
     entry: number;
@@ -470,6 +476,38 @@ export interface TradeSetup {
 }
 
 /** Part A — F&O trade validation. Every field is what the rule saw, so a refusal or a pass can be audited. */
+/**
+ * The OptionCandidate pipeline's stages, in order (Phase 3). AVAILABILITY,
+ * LIQUIDITY, SPREAD and DELTA are genuine pass / fail checks; PREMIUM_RISK
+ * and TARGET_POTENTIAL fail only on genuine validity (a stop inside the noise,
+ * no reward left after cost); NET_RR never rejects — it ranks.
+ */
+export const OPTION_CANDIDATE_STAGES = ['AVAILABILITY', 'LIQUIDITY', 'SPREAD', 'DELTA', 'PREMIUM_RISK', 'TARGET_POTENTIAL', 'NET_RR'] as const;
+export type OptionCandidateStage = (typeof OPTION_CANDIDATE_STAGES)[number] | 'BUILD';
+
+export interface OptionCandidate {
+  side: OptionType;
+  strike: number;
+  token: string | null;
+  expiry: string | null;
+  delta: number | null;
+  spreadPct: number | null;
+  /** Entry premium (mid, else LTP); null without a quote. */
+  premium: number | null;
+  /** Premium entry − SL per unit (null before a build). */
+  premiumRisk: number | null;
+  /** (premium target − entry) / entry (null before a build). */
+  targetPotential: number | null;
+  /** Net R:R after the cost model — ranking / display only. */
+  netRR: number | null;
+  status: 'SELECTED' | 'RANKED' | 'REJECTED';
+  /** 1 = selected; null when rejected. */
+  rank: number | null;
+  /** The first stage that failed, in pipeline order (null when not rejected). */
+  rejectedAt: OptionCandidateStage | null;
+  rejectionReason: string | null;
+}
+
 export interface TradeSetupFnoValidation {
   /** Rule 1: the strike chosen by |delta| band rather than by rounding spot. */
   strikeSelection: {
@@ -485,6 +523,8 @@ export interface TradeSetupFnoValidation {
     eligible: number;
     /** BEST_OF_BAND: every in-band strike as built, best first (the first available one is traded). */
     ranking?: Array<{ strike: number; delta: number | null; spreadPct: number | null; available: boolean; code: string | null; netRR: number | null }>;
+    /** Phase 3: EVERY strike of the chain through the OptionCandidate pipeline — selected, ranked, or rejected with its stage and reason. */
+    optionCandidates?: OptionCandidate[];
   } | null;
   /** Rule 2: IV used for the target's expected move = min(ATM IV, HV × mult). Null when the family's target is structural, not IV-based. */
   ivCap: {
@@ -1218,7 +1258,37 @@ export interface WatchlistItem {
 
 export type ServiceStatus = 'HEALTHY' | 'DEGRADED' | 'DOWN';
 
+/** Phase 5: a tick-feed token's data state (server feed-freshness.ts). */
+export type FeedTokenState = 'DATA_FRESH' | 'DATA_STALE' | 'DATA_GAP' | 'RECOVERING';
+
+export interface FeedTokenHealth {
+  token: string;
+  exchange: Exchange;
+  state: FeedTokenState;
+  lastTickTime: number | null;
+  lastSuccessfulQuoteTime: number | null;
+  gapDurationMs: number | null;
+  /** As in Phase 2 dataQuality: asOf = the newest tick's exchange time, source, status. */
+  asOf: number | null;
+  source: string;
+  status: 'OK' | 'STALE_INPUT' | 'FUTURE_INPUT' | 'MISSING';
+  lastGapOutcome: { at: number; outcome: string; detail: string } | null;
+}
+
+export interface FeedHealth {
+  tokens: number;
+  byState: Record<FeedTokenState, number>;
+  upstreamDown: boolean;
+  partialBatches: number;
+  lastPartialBatchAt: number | null;
+  droppedDuplicates: number;
+  droppedOutOfOrder: number;
+  perToken: FeedTokenHealth[];
+}
+
 export interface SystemHealth {
+  /** Phase 5: per-token feed states from /api/health (absent until the first read). */
+  feed?: FeedHealth;
   websocket: {
     status: ServiceStatus;
     connected: boolean;
@@ -2011,31 +2081,30 @@ export interface SetupWatchSnapshot {
   statusRR: number | null;
 }
 
-/** One confirmed setup kept alive and re-evaluated under its SAME id (setup-watch.ts). */
+/** Display-only R:R band (setup-watch-core rrBandOf): < 1.0, 1.0 – 1.5, ≥ 1.5. Never read by a decision. */
+export type RrBand = '<1.0' | '1.0-1.5' | '>=1.5';
+
+/** One confirmed setup, shown and re-evaluated under its SAME id until it ends (setup-watch.ts). */
 export interface SetupWatchRow {
   id: string;
   /** 'S1', 'INDICATOR', or the trigger id. */
   source: string;
   direction: 'BULLISH' | 'BEARISH';
   parentId: string | null;
-  /** Every confirmed setup is CONFIRMED until its genuine invalidation / expiry (ENDED). R:R never changes this. */
+  /** CONFIRMED until INVALIDATION / EXPIRY / FILLED (ENDED). Net R:R never changes this. */
   status: 'CONFIRMED' | 'ENDED';
-  /** "Confirmed — R:R 1.40R < 1.50R" / "Confirmed — R:R 1.62R ≥ 1.50R" (1.50R is informational). */
+  /** "Confirmed — R:R 1.20R" — R:R shown, never compared against a threshold. */
   statusText: string;
-  /** The binding R:R (the lower of the underlying R:R to T1 and the option's net R:R). */
+  /** The binding R:R (the lower of the underlying R:R to T1 and the option's net R:R) — display / ranking only. */
   statusRR: number | null;
-  /** Informational: statusRR ≥ 1.50R (null = not measured). */
-  rrAtMin: boolean | null;
-  /** Informational: the check (other than R:R) that would stop the AUTOMATIC paper-trade log now. Never hides the setup. */
+  /** Display-only band of statusRR (null = not measured). */
+  rrBand: RrBand | null;
+  /** Informational: a genuine check that would stop the paper-trade log right now. Never hides the setup. */
   blockCode: string | null;
   blockReason: string | null;
   plan: OptionTradePlan | null;
   initial: SetupWatchSnapshot;
   current: SetupWatchSnapshot;
-  startedBelowMin: boolean;
-  rrRecovered: boolean;
-  /** When the binding R:R first reached 1.50R (informational). */
-  firstAtMinAt: number | null;
   strikeChanges: number;
   optionBuildFailures: number;
   startedAt: number;

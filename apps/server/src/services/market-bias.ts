@@ -135,6 +135,7 @@ import { INDICATOR_CONFIDENCE_MODE, locationGateEnforced } from '../config/tradi
 import type { ExposureSnapshot } from './exposure-tracker.js';
 import { stopOvershootPct } from './stop-overshoot.js';
 import type { NoTradeCode, TradeDecision } from '@fno/shared';
+import { decisionBarCloseAt, type FuturesChainResponse } from '@fno/shared';
 import { assessTradeHealth, emptyExcursion, updateExcursion, mfeInAtr, deadTradeMarker, type TradeExcursion, type TradeHealthAssessment } from './trade-health.js';
 import { notifyTradeSetupClosed } from './trade-setup-close-notifier.js';
 import type { TradeCloseReason } from './trade-setup-close-notifier.js';
@@ -166,16 +167,8 @@ import { buildWithFnoValidation, fnoValidationDiagnostic } from './fno-validatio
 // structure-live.ts, I/O in setup-lifecycle.ts); only a filled limit mints,
 // through the same mint lock and slot as every other family.
 import {
-  evaluateStructureSession,
-  evaluateStructureSessionMTF,
-  istDateOf,
-  momentumAtrAt,
-  STRUCTURE_5M_VARIANTS,
   STRUCTURE_RULES,
-  STRUCTURE_VARIANTS,
   type MomentumBar,
-  type StructureEvaluation,
-  type StructureVariant,
 } from '@fno/analytics';
 import type { StructureBlock, StructureLifecycleView, StructureTradePreview, OptionTradePlan, SetupWatchRow } from '@fno/shared';
 import { CONSENSUS_SETUPS, STRUCTURE, STRUCTURE_ENTRY_MODE, STRUCTURE_ENTRY_TF, STRUCTURE_PARAMS, structureEnabledFor, COST_VERSION, PAPER_TRADING_STAGES } from '../config/trading-flags.js';
@@ -184,13 +177,16 @@ import {
   routeTriggerFamilies,
   lifecycleFromCandidate,
   linkStructureToParent,
-  keepFamilyAlive,
   endFamilyWatch,
-  displayOnlyFamilyWatch,
   FAMILY_WATCH_BARS,
   type RoutedCandidate,
   type ParentLinkage,
   type FamilyWatchEntry,
+  type FamilyRouterState,
+  liveTriggerStages,
+  liveRoutedTriggerIds,
+  familyRouterSession,
+  readFamilyRouterState,
 } from './trigger-router.js';
 import {
   setupWatchKey,
@@ -202,10 +198,10 @@ import {
   bindingRR,
   grossRRFrom,
   structureReference,
-  keepAliveStep,
   structureDisplayEnd,
   isShownStructureSetup,
   endUpdateFor,
+  isNakedLongRiskRewardPlausible,
   type WatchUpdate,
 } from './setup-watch.js';
 import { strikeNetRR } from './fno-validation.js';
@@ -226,16 +222,25 @@ import {
   type SlotEntry,
 } from './slot-arbitration.js';
 import { recordSetupEvent } from './setup-events.js';
+import { currentSnapshotId, runInSnapshotScope, setScopeSnapshotId } from './snapshot-context.js';
+import { serviceFailure, serviceHeartbeat } from '../lib/service-supervisor.js';
+import { buildSignalDecisionSnapshot, currentVersions, decisionConfig, deriveDecisionRecord } from './decision-record.js';
+import { persistDecisionRecord, persistSnapshot } from './decision-record-store.js';
+import { buildOptionPlanRow, optionLevelsOf, persistOptionPlan, planIdFor, recordOptionPlanEvent, type UnderlyingPlan } from './option-plans.js';
 import { BAR_MS_15M } from '@fno/analytics';
 import {
   STRUCTURE_SEQUENCE_CONFIDENCE,
   STRUCTURE_SETUP_TYPE,
   STRUCTURE_STRATEGY,
-  advanceLiveState,
   fillCandidate,
   rejectionCloseCandidate,
   structureBlock,
   structureRulesFor,
+  liveStructureRulesFor,
+  advanceStructureCore,
+  openLifecycleIds,
+  structureOutcomeKey,
+  type StructureInputs,
   structureSequenceDiagnostic,
   structureSequenceRefusal,
   structureSessionOpts,
@@ -313,7 +318,7 @@ export interface MarketBiasResult {
   tradeSetup: TradeSetup;
   /** Structure engine (flag STRUCTURE, INTRADAY): the lifecycle for this symbol. Absent when the flag is off. */
   structure?: StructureBlock;
-  /** Today's confirmed setups (every engine), kept alive and re-evaluated under the same id, with their option plans. */
+  /** Today's confirmed setups (every engine), shown and re-evaluated under the same id until they end, with their option plans. */
   setupWatch?: SetupWatchRow[];
 }
 
@@ -342,8 +347,12 @@ export async function buildMarketBias(
   const cacheKey = `bias_result:${exchange}:${underlying}:${mode}`;
 
   try {
-    return await computeMarketBias(provider, underlying, exchange, cacheKey, mode);
+    // One snapshot scope per poll: rows written by this poll carry its decision snapshot id (snapshot-context.ts).
+    const result = await runInSnapshotScope(() => computeMarketBias(provider, underlying, exchange, cacheKey, mode));
+    serviceHeartbeat('signalEngine');
+    return result;
   } catch (err: any) {
+    serviceFailure('signalEngine', err);
     // Fresh computation failed — try to return the last successful result
     // from Redis so the frontend stays on real data instead of falling back
     // to mocks and showing the "signal engine unreachable" banner.
@@ -1459,13 +1468,31 @@ async function computeMarketBias(
       logger.warn({ error: err.message, underlying, exchange }, 'Structure 5m: candle load failed — no structure read this poll');
     }
   }
+  // --- Decision snapshot (Phase 2): the inputs S1, the trigger router and the slot read, frozen before they run ---
+  // Both engines below are handed the snapshot's own inputs (its stored state
+  // and its round-tripped chain), so the DecisionRecord derived from it is
+  // exactly what they decide. A failure here never blocks the engines: they
+  // then read their state themselves, as before, and the poll is not snapshotted.
+  const decision = structureOn && !isPositional
+    ? await captureDecisionSnapshot({
+        provider, underlying, exchange, mode, bars15m: closedNow, bars5m: structureTimeframe === '5m' ? structureClosed5m : null,
+        structureRuns: structureTimeframe !== '5m' || structureClosed5m != null,
+        candles1h, chain: chain ?? null, futures, lastClosedBar,
+        optionMetrics: { pcr: chain ? pcr : null, atmIvPct: atmIvPct > 0 ? atmIvPct : null, hvPct: hvPct ?? null, ivVsHv: atmIvPct > 0 ? ivVsHv.reading : null },
+        marketRegime: { regime: fastRegime.regime, source: fastRegime.source },
+      }).catch((err: any) => {
+        logger.warn({ error: err.message, underlying, exchange }, 'Decision snapshot: capture failed — engines run on their own reads, poll not snapshotted');
+        return null;
+      })
+    : null;
+  const structurePre = decision?.structureInputs ? { inputs: decision.structureInputs, now: decision.polledAt } : null;
   const structureState = !structureOn
     ? null
     : structureTimeframe === '5m'
       ? structureClosed5m
-        ? await advanceStructureLifecycle(underlying, exchange, mode, closedNow, chain?.spotPrice ?? null, { timeframe: '5m', bars5: structureClosed5m }, chain ? { provider, chain } : null)
+        ? await advanceStructureLifecycle(underlying, exchange, mode, closedNow, chain?.spotPrice ?? null, { timeframe: '5m', bars5: structureClosed5m }, chain ? { provider, chain } : null, structurePre)
         : null
-      : await advanceStructureLifecycle(underlying, exchange, mode, closedNow, chain?.spotPrice ?? null, undefined, chain ? { provider, chain } : null);
+      : await advanceStructureLifecycle(underlying, exchange, mode, closedNow, chain?.spotPrice ?? null, undefined, chain ? { provider, chain } : null, structurePre);
   // The structure family's own newest closed bar (5m in 5m mode): the engine-fill check, SWEEP_RECLAIMED and REJECTION_CLOSE read it.
   const structureLastBar =
     structureTimeframe === '5m' && structureClosed5m && structureClosed5m.length > 0
@@ -1479,12 +1506,19 @@ async function computeMarketBias(
         }
       : null;
   const structureRun: StructureRun = { claimed: null, handled: false };
+  const familyRun = { reached: new Set<string>() };
   // --- Trigger-family router (displacement is S1's own condition, not a gate on the engine) ---
   // Evaluates every other trigger family on the same closed 15m bars, with or
   // without a displacement; SHADOW families are recorded and graded only.
   // Only a PAPER-stage family (a code-level promotion; none today) is handed
   // to the slot below, through the structure engine's own mint chain.
-  const routed = structureOn && !isPositional ? await routeTriggerFamilies({ underlying, exchange, mode, bars: closedNow, chain: chain ?? null, now: decisionNow() }) : null;
+  const routed = structureOn && !isPositional
+    ? await routeTriggerFamilies(
+        decision
+          ? { underlying, exchange, mode, bars: closedNow, chain: decision.chain, now: decision.polledAt, state: decision.familyRouterState }
+          : { underlying, exchange, mode, bars: closedNow, chain: chain ?? null, now: decisionNow() }
+      )
+    : null;
   // Regime assist: a qualified trigger in the last BREAKOUT_PERSIST_BARS bars
   // (not since closed back through its level) reads as BREAKOUT/BREAKDOWN, so
   // the consensus side stops calling a crash a weak bull trend. Expiry-day
@@ -2070,11 +2104,38 @@ async function computeMarketBias(
         families: [
           { family: 'MOMENTUM_BREAK', trigger: momentumRead?.trigger ?? null },
           ...(structureState ? [{ family: 'STRUCTURE' as const, state: structureState, run: structureRun, ...(structureLastBar ? { lastClosedBar: structureLastBar } : {}) }] : []),
-          ...(structureState && routed ? [{ family: 'MULTIPATH' as const, state: structureState, candidates: routed.paper, linkage: routed.linkage ?? null }] : []),
+          ...(structureState && routed ? [{ family: 'MULTIPATH' as const, state: structureState, candidates: routed.paper, linkage: routed.linkage ?? null, run: familyRun }] : []),
         ],
       })
     : { available: false, reason: 'Option chain unavailable for this symbol — cannot size a setup.' };
   const tradeSetupWithTrail: TradeSetup = tradeSetup.available ? { ...tradeSetup, trailState: deriveTrailState(tradeSetup) } : tradeSetup;
+
+  // Phase 4 — the slot rule recorded on every candidate: paper-stage family
+  // candidates of this bar that never reached the slot path because it held
+  // an OPEN trade are recorded SLOT_OCCUPIED (never silently dropped).
+  if (chain && routed) {
+    const occupied = routed.paper.filter((rc) => PAPER_TRADING_STAGES.includes(rc.stage) && !familyRun.reached.has(rc.lifecycleId));
+    if (occupied.length > 0) {
+      const heldSignalId = (tradeSetup as StoredTradeSetup).signalId ?? null;
+      const metrics = buildMetricsContext(closedNow, decisionIstDate());
+      recordSlotArbitration(
+        underlying,
+        exchange,
+        occupied.map((rc) => ({
+          slot: routedSlotCandidate(rc, metrics),
+          role: 'INELIGIBLE' as const,
+          rank: null,
+          preBuildRank: 0,
+          reason: 'SLOT_OCCUPIED: the symbol already holds an open paper trade — one open trade per symbol; it competes again once that trade closes.',
+          refusalCode: 'SLOT_OCCUPIED',
+          optionBuildFailure: null,
+          criteriaUsed: [],
+          criteriaSkipped: [],
+          slotDecision: { slot: 'OCCUPIED' as const, decision: 'SLOT_OCCUPIED' as const, heldSignalId },
+        }))
+      );
+    }
+  }
 
   // A fill this poll claimed but the slot never reached (it already held a
   // same-direction setup): recorded on the lifecycle, never silently dropped.
@@ -2084,11 +2145,24 @@ async function computeMarketBias(
       code: 'SLOT_OCCUPIED',
       reason: 'The paper-trade slot already holds a same-direction setup for this symbol — not minted.',
       at: decisionNow(),
-    }, chain?.spotPrice ?? null, null, {
-      // A kept-alive setup is blocked for now by the one-trade slot, not ended: re-checked on the next closed bar.
-      keepAlive: structureRun.claimed.keepAlive != null && structureRun.claimed.keepAlive.ended == null,
-      attemptBar: (structureLastBar ?? lastClosedBar)?.time ?? null,
-    });
+    }, chain?.spotPrice ?? null);
+    // Phase 4: and its slot decision, like every other candidate's.
+    const claimed = structureRun.claimed;
+    const link = { ...linkStructureToParent(claimed, routed?.linkage ?? null), decisionTime: lastClosedBar ? lastClosedBar.time + BAR_MS_15M : decisionNow() };
+    recordSlotArbitration(underlying, exchange, [
+      {
+        slot: structureSlotCandidate(claimed, claimed.rejectionFillPrice ?? chain?.spotPrice ?? claimed.entry ?? 0, null, link, buildMetricsContext(closedNow, decisionIstDate())),
+        role: 'INELIGIBLE',
+        rank: null,
+        preBuildRank: 0,
+        reason: 'SLOT_OCCUPIED: the symbol already holds an open paper trade — one open trade per symbol.',
+        refusalCode: 'SLOT_OCCUPIED',
+        optionBuildFailure: null,
+        criteriaUsed: [],
+        criteriaSkipped: [],
+        slotDecision: { slot: 'OCCUPIED', decision: 'SLOT_OCCUPIED', heldSignalId: (tradeSetup as StoredTradeSetup).signalId ?? null },
+      },
+    ]);
   }
 
   // CONFIRMED structure lifecycles get a read-only PREVIEW of the option
@@ -2921,6 +2995,7 @@ function recordSlotArbitration(underlying: string, exchange: Exchange, records: 
           optionBuildFailure: r.optionBuildFailure,
           criteriaUsed: r.criteriaUsed,
           criteriaSkipped: r.criteriaSkipped,
+          slotDecision: r.slotDecision,
           inputs: {
             timing: r.slot.timingClass,
             movePotential: r.slot.movePotential,
@@ -2991,9 +3066,10 @@ async function resolveStickyTradeSetup(
   // Re-applying the same R:R band buildTradeSetup itself enforces on every
   // read closes that gap without needing a manual cache clear — this is what
   // lets a fix land and immediately self-heal any setup already sitting in
-  // Redis, not just new ones generated after. Now bounded on BOTH sides:
-  // the floor retires setups minted before the minimum-R:R fix, which were
-  // risking more than they could win (see MIN_RISK_REWARD's own comment).
+  // Redis, not just new ones generated after. Since 2026-10-05 net R:R is
+  // display / ranking only, so the only bounds are the genuine ones: a
+  // positive R:R (target beyond entry, stop below it) and the plausibility
+  // ceiling against bad upstream Greeks (isNakedLongRiskRewardPlausible).
   // The R:R cap only makes sense for a naked long, whose target comes from
   // a delta×expected-move projection that can run away on bad upstream
   // data — a spread's max profit/loss are geometrically bounded by real
@@ -3003,7 +3079,7 @@ async function resolveStickyTradeSetup(
     stored?.available &&
     (stored.structureType === 'SPREAD'
       ? stored.maxProfit != null && stored.maxProfit > 0 && stored.maxLoss != null && stored.maxLoss > 0
-      : stored.riskReward != null && stored.riskReward <= MAX_RISK_REWARD && stored.riskReward >= MIN_RISK_REWARD);
+      : isNakedLongRiskRewardPlausible(stored.riskReward));
 
   // Self-heal a setup that's alive and trade-able in the terminal but
   // missing its Backtesting row — recordTradeSetupGenerated below can
@@ -3108,11 +3184,16 @@ async function resolveStickyTradeSetup(
               newStopLoss >= stored!.entry + initialRisk
                 ? `SL trailed to ${newStopLoss.toFixed(2)} — 1x initial risk locked in.`
                 : `SL trailed to breakeven (${newStopLoss.toFixed(2)}).`;
+            const beforeTrail = stored!;
             stored = { ...stored!, stopLoss: newStopLoss, reason: `${stored!.reason} ${trailNote}` };
             try {
               await redis.set(key, JSON.stringify(stored), 'EX', setupTtl);
             } catch (err: any) {
               logger.warn({ error: err.message, underlying }, 'Sticky trade setup trailing-stop write failed');
+            }
+            // Phase 3: the plan's evolution — the trailing stop moved (T2 stays as planned).
+            if (stored.signalId) {
+              void recordOptionPlanEvent({ planId: planIdFor(stored.signalId), at: decisionNow(), type: 'TSL_MOVED', before: optionLevelsOf(beforeTrail, null), after: optionLevelsOf(stored, null), reason: trailNote, snapshotId: currentSnapshotId() });
             }
           }
         }
@@ -3259,7 +3340,6 @@ async function resolveStickyTradeSetup(
           provider, underlying, exchange, mode, key, today, setupTtl, chain, lc: structureFill, state: structureFamily.state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId,
           link,
           metrics,
-          attemptBar: (structureFamily.lastClosedBar ?? lastClosedBar)?.time ?? null,
         })
       );
     }
@@ -3272,15 +3352,15 @@ async function resolveStickyTradeSetup(
   // reaches a broker.
   for (const rc of multipathFamily?.candidates ?? []) {
     if (!PAPER_TRADING_STAGES.includes(rc.stage)) continue;
-    // One claim per candidate per closed bar: a kept-alive candidate keeps its id across bars.
+    multipathFamily!.run?.reached.add(rc.lifecycleId);
+    // One claim per candidate per decision bar.
     const first = await redis.set(`structure_claimed:${rc.lifecycleId}:${rc.candidate.decisionTime}`, '1', 'EX', 60 * 60 * 24, 'NX').catch(() => null);
     if (first !== 'OK') continue;
     const lc = lifecycleFromCandidate(rc);
     const slot = routedSlotCandidate(rc, metrics);
     if (parentTraded(slot.anchorKeys)) {
       await recordStructureOutcome(multipathFamily!.state, lc, { outcome: 'REFUSED', code: 'PARENT_ALREADY_TRADED', reason: parentTradedReason, at: decisionNow() }, chain.spotPrice);
-      // Not an invalidation: the setup stays shown, it is just never handed to the paper-trade log again.
-      await displayOnlyFamilyWatch(exchange, underlying, rc.candidate.session, rc.lifecycleId);
+      // Not an invalidation: the setup stays shown (its watch entry is display only).
       entries.push({ kind: 'REFUSED', slot, code: 'PARENT_ALREADY_TRADED', reason: parentTradedReason, optionBuild: false });
       continue;
     }
@@ -3290,8 +3370,6 @@ async function resolveStickyTradeSetup(
         link: { parentId: slot.parentId, anchorKeys: slot.anchorKeys, decisionTime: slot.decisionTime },
         slot,
         metrics,
-        attemptBar: rc.candidate.decisionTime,
-        routed: rc,
       })
     );
   }
@@ -3322,8 +3400,8 @@ async function resolveStickyTradeSetup(
     markTraded,
     // The traded setup's watch ends here (TRADED) — under the same id it was watched with.
     onSelected: async (slot) => {
-      await endWatchRow(setupWatchKey(exchange, underlying, mode, today), { exchange, underlying }, slot.candidateId, 'PAPER_TRADED', decisionNow());
-      if (slot.source !== 'S1' && slot.source !== 'INDICATOR') await endFamilyWatch(exchange, underlying, today, slot.candidateId, 'PAPER_TRADED', decisionNow());
+      await endWatchRow(setupWatchKey(exchange, underlying, mode, today), { exchange, underlying }, slot.candidateId, 'FILLED', decisionNow());
+      if (slot.source !== 'S1' && slot.source !== 'INDICATOR') await endFamilyWatch(exchange, underlying, today, slot.candidateId, 'FILLED', decisionNow());
     },
     ...(arbitrated ? { record: (r: SlotArbitrationRecord[]) => recordSlotArbitration(underlying, exchange, r) } : {}),
   });
@@ -3850,6 +3928,8 @@ async function resolveStickyTradeSetup(
             structuralStopBufferAtr: TRADING_PARAMS.STRUCTURAL_STOP_BUFFER_ATR,
             ivVsHv: entryContext?.ivVsHv ?? null,
             richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
+            // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
+            rrGate: false,
             // EVIDENCE: the builder's own confidence floor is off too — confidence ranks, it does not refuse.
             ...(INDICATOR_CONFIDENCE_MODE === 'EVIDENCE' ? { confidenceGate: false } : {}),
           // An R:R refusal still carries its option levels (shown for a confirmed setup; never traded).
@@ -4306,6 +4386,8 @@ async function resolveMomentumBreakSetup(ctx: {
           structuralStopBufferAtr: TRADING_PARAMS.STRUCTURAL_STOP_BUFFER_ATR,
           ivVsHv: entryContext?.ivVsHv ?? null,
           richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
+          // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
+          rrGate: false,
           ...(FNO_VALIDATION
             ? { fnoValidation: { enabled: true, maxCostPctOfPremium: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM, minOptionStopAtr: FNO_VALIDATION_PARAMS.MIN_OPTION_STOP_ATR } }
             : {}),
@@ -4365,6 +4447,8 @@ interface MultipathFamilyInput {
   state: LiveState;
   candidates: RoutedCandidate[];
   linkage: ParentLinkage | null;
+  /** Filled by resolveStickyTradeSetup: candidates that reached the slot path (absent = none — the slot held an open trade). */
+  run?: { reached: Set<string> };
 }
 interface TriggerFamilies {
   lastClosedBar: { time: number; close: number; open?: number; high?: number; low?: number } | null;
@@ -4373,33 +4457,125 @@ interface TriggerFamilies {
   families: Array<MomentumFamilyInput | StructureFamilyInput | MultipathFamilyInput>;
 }
 
-/** The live structure variant: the pre-registered one the in-sample run chose (env-overridable). */
-function liveStructureVariant(timeframe: StructureTimeframe = '15m'): StructureVariant {
-  if (timeframe === '5m') {
-    // The 5m backtest's in-sample choice (STRUCTURE_5M_DISP_MULT) with the structure closing guard.
-    const dispMult5 = STRUCTURE_PARAMS.STRUCTURE_5M_DISP_MULT;
-    const closingGuardMin = STRUCTURE_PARAMS.STRUCTURE_CLOSING_GUARD_MIN;
-    return (
-      STRUCTURE_5M_VARIANTS.find((v) => v.dispMult === dispMult5 && v.closingGuardMin === closingGuardMin) ?? {
-        id: `custom-5m-D${dispMult5}-C${closingGuardMin}`,
-        dispMult: dispMult5,
-        openingGuard: STRUCTURE_PARAMS.STRUCTURE_OPENING_GUARD >= 1,
-        closingGuardMin,
+const STRUCTURE_OUTCOME_TTL_SECONDS = 60 * 60 * 36;
+
+/**
+ * Reads the structure lifecycle's inputs: the stored state, then the stored
+ * live outcomes of the lifecycles still open after this poll's (pure)
+ * advance. Unparseable / failed reads fall back exactly as before.
+ */
+async function readStructureInputs(
+  underlying: string,
+  exchange: Exchange,
+  mode: TradingMode,
+  bars: MomentumBar[],
+  bars5: MomentumBar[] | null,
+  now: number,
+  spot: number | null
+): Promise<StructureInputs> {
+  const prev = await readLiveState(exchange, underlying, mode);
+  const outcomes: Record<string, LiveLifecycle['live']> = {};
+  const advanced = advanceStructureCore({ prev, bars15: bars, bars5, outcomes: {}, exchange, underlying, mode, now, spot, entryMode: STRUCTURE_ENTRY_MODE });
+  const ids = advanced ? openLifecycleIds(advanced.state) : [];
+  if (ids.length === 0) return { prev, outcomes };
+  try {
+    const values = await redis.mget(...ids.map(structureOutcomeKey));
+    values.forEach((v, k) => {
+      if (!v) return;
+      try {
+        outcomes[ids[k]] = JSON.parse(v);
+      } catch (err: any) {
+        logger.warn({ error: err.message, lifecycleId: ids[k] }, 'Structure: unparseable live outcome ignored');
       }
-    );
+    });
+  } catch (err: any) {
+    logger.warn({ error: err.message, underlying }, 'Structure: live outcome read failed');
   }
-  const dispMult = STRUCTURE_PARAMS.STRUCTURE_DISP_MULT;
-  const openingGuard = STRUCTURE_PARAMS.STRUCTURE_OPENING_GUARD >= 1;
-  return (
-    STRUCTURE_VARIANTS.find((v) => v.dispMult === dispMult && v.openingGuard === openingGuard) ?? {
-      id: `custom-D${dispMult}-${openingGuard ? 'GUARD' : 'NOGUARD'}`,
-      dispMult,
-      openingGuard,
-    }
-  );
+  return { prev, outcomes };
 }
 
-const STRUCTURE_OUTCOME_TTL_SECONDS = 60 * 60 * 36;
+/** Newest decision bar snapshotted per symbol / mode in this process (a NEW_BAR is the first poll after T). */
+const lastSnapshotBar = new Map<string, number>();
+
+/**
+ * Phase 2: reads the engines' stored state, freezes every input into a
+ * SignalDecisionSnapshot (data quality judged at T on the exchange calendar),
+ * derives its DecisionRecord with the pure core and — on the first poll after
+ * a bar closes, or on a later poll where a structure limit fills on the live
+ * spot — persists both and tags the rest of the poll with the snapshot id.
+ * Returns the inputs the engines must run on (always, persisted or not).
+ */
+async function captureDecisionSnapshot(args: {
+  provider: MarketDataProvider;
+  underlying: string;
+  exchange: Exchange;
+  mode: TradingMode;
+  bars15m: MomentumBar[];
+  bars5m: MomentumBar[] | null;
+  structureRuns: boolean;
+  candles1h: OHLCV[];
+  chain: OptionChain | null;
+  futures: FuturesChainResponse | null;
+  lastClosedBar: { time: number } | null;
+  optionMetrics: { pcr: number | null; atmIvPct: number | null; hvPct: number | null; ivVsHv: string | null };
+  marketRegime: { regime: string; source: string } | null;
+}): Promise<{ polledAt: number; structureInputs: StructureInputs | null; familyRouterState: FamilyRouterState | null; chain: OptionChain | null; snapshotId: string | null }> {
+  const { provider, underlying, exchange, mode, bars15m, bars5m, chain } = args;
+  const polledAt = decisionNow();
+  const spot = chain?.spotPrice ?? null;
+  const structureInputs = args.structureRuns ? await readStructureInputs(underlying, exchange, mode, bars15m, bars5m, polledAt, spot) : null;
+  const stages = liveTriggerStages();
+  const session = familyRouterSession({ exchange, mode, bars: bars15m, now: polledAt, ids: liveRoutedTriggerIds(stages) });
+  const familyRouterState = session ? await readFamilyRouterState(exchange, underlying, mode, session) : null;
+  const istDay = new Date(polledAt).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const slotTradedKeys = JSON.parse((await redis.get(`slot_traded:${exchange}:${underlying}:${mode}:${istDay}`).catch(() => null)) ?? '[]') as string[];
+  const decisionBarTime = decisionBarCloseAt(exchange, polledAt, BAR_MS_15M) ?? (args.lastClosedBar ? args.lastClosedBar.time + BAR_MS_15M : polledAt);
+  const key = `${exchange}:${underlying}:${mode}`;
+  const newBar = lastSnapshotBar.get(key) !== decisionBarTime;
+  const last1h = args.candles1h.length ? Date.parse(args.candles1h[args.candles1h.length - 1].timestamp) : NaN;
+  const snapshot = buildSignalDecisionSnapshot({
+    symbol: underlying,
+    exchange,
+    mode,
+    decisionBarTime,
+    polledAt,
+    captureReason: newBar ? 'NEW_BAR' : 'SPOT_FILL',
+    bars15m,
+    bars5m,
+    closes1h: args.candles1h.map((c) => c.close),
+    last1hBarTime: Number.isFinite(last1h) ? last1h : null,
+    chain,
+    futures: args.futures,
+    optionMetrics: args.optionMetrics,
+    marketRegime: args.marketRegime,
+    structureState: structureInputs,
+    familyRouterState,
+    slotTradedKeys,
+    config: decisionConfig({ triggerStages: stages, structureOn: true, structureEntryTimeframe: STRUCTURE_ENTRY_TF, structureEntryMode: STRUCTURE_ENTRY_MODE }),
+    versions: currentVersions(),
+    sources: { candles: `${provider.name}:historical-candles`, chain: `${provider.name}:option-chain`, futures: `${provider.name}:futures-quote` },
+  });
+  // The record is generated now (generatedAt: the one declared nondeterministic field).
+  const record = deriveDecisionRecord(snapshot, Date.now());
+  let snapshotId: string | null = null;
+  if (newBar || record.structure.fill?.kind === 'FILL') {
+    if (await persistSnapshot(snapshot)) {
+      snapshotId = snapshot.snapshotId;
+      lastSnapshotBar.set(key, decisionBarTime);
+      setScopeSnapshotId(snapshotId);
+      await persistDecisionRecord(record);
+      if (record.degraded) logger.info({ underlying, exchange, snapshotId, reasons: record.degradedReasons }, 'Decision snapshot: inputs not all as of T — candidates marked degraded');
+    }
+  }
+  // The engines run on the snapshot's own (stored, round-tripped) inputs — mutable copies.
+  return {
+    polledAt,
+    structureInputs: snapshot.inputs.structureState ? (structuredClone(snapshot.inputs.structureState) as StructureInputs) : null,
+    familyRouterState: snapshot.inputs.familyRouterState ? (structuredClone(snapshot.inputs.familyRouterState) as FamilyRouterState) : null,
+    chain: snapshot.inputs.optionChain ? (structuredClone(snapshot.inputs.optionChain) as OptionChain) : null,
+    snapshotId,
+  };
+}
 
 /**
  * Advances this symbol's structure lifecycle from the closed 15m bars (or,
@@ -4407,6 +4583,8 @@ const STRUCTURE_OUTCOME_TTL_SECONDS = 60 * 60 * 36;
  * engine read → Redis state (structure_setup:*) → lifecycle rows for the
  * transitions not yet written → Telegram at a fresh CONFIRMED. Null — logged
  * — when it cannot be read; a missing structure read never blocks the rest.
+ * The decision is advanceStructureCore on `inputs` (read here unless the
+ * caller — the decision snapshot — already read them) at `now`.
  */
 async function advanceStructureLifecycle(
   underlying: string,
@@ -4416,45 +4594,22 @@ async function advanceStructureLifecycle(
   spot: number | null,
   fiveMinute?: { timeframe: '5m'; bars5: MomentumBar[] },
   /** Present whenever this poll has a live option chain — used ONLY to attach a read-only preview to a fresh CONFIRMED's Telegram alert. Never mints. */
-  previewCtx?: { provider: MarketDataProvider; chain: OptionChain } | null
+  previewCtx?: { provider: MarketDataProvider; chain: OptionChain } | null,
+  pre?: { inputs: StructureInputs; now: number } | null
 ): Promise<LiveState | null> {
   try {
-    const timeframe: StructureTimeframe = fiveMinute ? '5m' : '15m';
-    let evaluation: StructureEvaluation;
-    let poolAtr: number | null = null;
-    if (fiveMinute) {
-      if (bars.length < 2 || fiveMinute.bars5.length < 2) {
-        logger.warn({ underlying, exchange, bars15: bars.length, bars5: fiveMinute.bars5.length }, 'Structure 5m: not enough closed 15m/5m bars to evaluate');
-        return null;
-      }
-      const series15 = prepareMomentumSeries(bars);
-      evaluation = evaluateStructureSessionMTF(series15, prepareMomentumSeries(fiveMinute.bars5), fiveMinute.bars5.length - 1, liveStructureVariant('5m'));
-      // The 15m ATR: the option leg's atrPoints (target, structural stop) in 5m mode; the 5m ATR is only rule 4's noise floor.
-      poolAtr = momentumAtrAt(series15, bars.length);
-    } else {
-      if (bars.length < 2) {
-        logger.warn({ underlying, exchange, bars: bars.length }, 'Structure: not enough closed 15m bars to evaluate');
-        return null;
-      }
-      const series = prepareMomentumSeries(bars);
-      evaluation = evaluateStructureSession(series, bars.length - 1, liveStructureVariant());
+    const bars5 = fiveMinute?.bars5 ?? null;
+    if (bars5 ? bars.length < 2 || bars5.length < 2 : bars.length < 2) {
+      if (bars5) logger.warn({ underlying, exchange, bars15: bars.length, bars5: bars5.length }, 'Structure 5m: not enough closed 15m/5m bars to evaluate');
+      else logger.warn({ underlying, exchange, bars: bars.length }, 'Structure: not enough closed 15m bars to evaluate');
+      return null;
     }
-    const now = decisionNow();
-    const prev = await readLiveState(exchange, underlying, mode);
-    const { state, events, reset } = advanceLiveState({ prev, evaluation, exchange, underlying, mode, day: istDateOf(evaluation.barTime), now, spot, timeframe, entryMode: STRUCTURE_ENTRY_MODE });
+    const now = pre?.now ?? decisionNow();
+    const inputs = pre?.inputs ?? (await readStructureInputs(underlying, exchange, mode, bars, bars5, now, spot));
+    const advanced = advanceStructureCore({ prev: inputs.prev, bars15: bars, bars5, outcomes: inputs.outcomes, exchange, underlying, mode, now, spot, entryMode: STRUCTURE_ENTRY_MODE });
+    if (!advanced) return null;
+    const { state, events, reset } = advanced;
     if (reset) logger.info({ underlying, exchange, mode, from: reset.from, to: reset.to }, "Structure: entry timeframe changed — today's lifecycles for this symbol start over");
-    if (fiveMinute) state.poolAtr = poolAtr != null ? round2(poolAtr) : null;
-    await mergeStructureOutcomes(state);
-    // Keep-alive (setup-watch.ts): a setup CONFIRMED below 1.50R (the engine's
-    // LOW_RR) is not forgotten; every kept-alive lifecycle is re-measured on
-    // the closed bars of its own timeframe and ends on the engine's own
-    // invalidations or its fill window.
-    const tfBars: MomentumBar[] = fiveMinute ? fiveMinute.bars5 : bars;
-    const fillWithin = structureRulesFor(timeframe).fillWithinBars;
-    for (const lc of state.lifecycles) {
-      const ka = keepAliveStep(lc, tfBars, STRUCTURE_TF_BAR_MS[timeframe], fillWithin);
-      if (ka) lc.keepAlive = ka;
-    }
     recordLifecycleEvents(events);
     for (const e of events) {
       if (e.toState !== 'CONFIRMED') continue;
@@ -4473,29 +4628,12 @@ async function advanceStructureLifecycle(
       }
     }
     await writeLiveState(state);
+    serviceHeartbeat('setupLifecycle');
     return state;
   } catch (err: any) {
+    serviceFailure('setupLifecycle', err);
     logger.warn({ error: err.message, underlying, exchange }, 'Structure: lifecycle read failed — no structure setups this poll');
     return null;
-  }
-}
-
-/** Live outcomes (minted / refused) are kept under their own keys so a concurrent state write can never lose one. */
-async function mergeStructureOutcomes(state: LiveState): Promise<void> {
-  const open = state.lifecycles.filter((l) => l.live == null);
-  if (open.length === 0) return;
-  try {
-    const values = await redis.mget(...open.map((l) => `structure_outcome:${l.id}`));
-    values.forEach((v, k) => {
-      if (!v) return;
-      try {
-        open[k].live = JSON.parse(v);
-      } catch (err: any) {
-        logger.warn({ error: err.message, lifecycleId: open[k].id }, 'Structure: unparseable live outcome ignored');
-      }
-    });
-  } catch (err: any) {
-    logger.warn({ error: err.message, underlying: state.underlying }, 'Structure: live outcome read failed');
   }
 }
 
@@ -4506,32 +4644,13 @@ async function recordStructureOutcome(
   outcome: NonNullable<LiveLifecycle['live']>,
   spot: number | null,
   /** Measurement for setup_events only — written after the outcome is decided, never read by it. */
-  cost: SetupCostMeasurement | null = null,
-  /**
-   * keepAlive: a REFUSED outcome that does not end the setup (it was refused
-   * for R:R alone, or it is already kept alive — setup-watch.ts). The refusal
-   * is recorded as a lifecycle row; the lifecycle gets no live outcome, so it
-   * is re-measured on the next closed bar and may be offered again then.
-   */
-  opts: { keepAlive?: boolean; attemptBar?: number | null } = {}
+  cost: SetupCostMeasurement | null = null
 ): Promise<void> {
-  const keepAlive = opts.keepAlive === true && outcome.outcome === 'REFUSED';
-  if (keepAlive) {
-    // The state's own lifecycle (a REJECTION_CLOSE claim is a copy); a routed family lifecycle is not in the state (the router keeps it).
-    const own = state.lifecycles.find((l) => l.id === lc.id);
-    if (own) {
-      own.keepAlive = own.keepAlive
-        ? { ...own.keepAlive, lastAttemptBar: opts.attemptBar ?? own.keepAlive.lastAttemptBar }
-        : { since: outcome.at, cause: 'RR_REFUSED_AT_FILL', lastBarTime: opts.attemptBar ?? null, lastAttemptBar: opts.attemptBar ?? null, reference: null, grossRR: null, ended: null };
-      lc.keepAlive = own.keepAlive;
-    }
-  } else {
-    lc.live = outcome;
-    try {
-      await redis.set(`structure_outcome:${lc.id}`, JSON.stringify(outcome), 'EX', STRUCTURE_OUTCOME_TTL_SECONDS);
-    } catch (err: any) {
-      logger.warn({ error: err.message, lifecycleId: lc.id }, 'Structure: live outcome write failed');
-    }
+  lc.live = outcome;
+  try {
+    await redis.set(structureOutcomeKey(lc.id), JSON.stringify(outcome), 'EX', STRUCTURE_OUTCOME_TTL_SECONDS);
+  } catch (err: any) {
+    logger.warn({ error: err.message, lifecycleId: lc.id }, 'Structure: live outcome write failed');
   }
   await writeLiveState(state);
   recordLifecycleEvents([
@@ -4543,7 +4662,7 @@ async function recordStructureOutcome(
       direction: lc.direction,
       fromState: lc.stage,
       toState: outcome.outcome === 'MINTED' ? 'ENTRY_MINTED' : 'ENTRY_REFUSED',
-      reason: `${keepAlive ? 'KEPT_ALIVE · ' : ''}${outcome.code ? `${outcome.code}: ${outcome.reason ?? ''}` : outcome.reason ?? ''}`,
+      reason: outcome.code ? `${outcome.code}: ${outcome.reason ?? ''}` : outcome.reason,
       at: outcome.at,
       poolKind: lc.pool.kind,
       poolPrice: lc.pool.price,
@@ -4608,9 +4727,7 @@ async function claimStructureFill(
   }
   if (!candidate) return null;
   try {
-    // A kept-alive lifecycle may be tried again — once per closed bar.
-    const claimKey = candidate.keepAlive ? `structure_claimed:${candidate.id}:${closedBar?.time ?? 0}` : `structure_claimed:${candidate.id}`;
-    const first = await redis.set(claimKey, '1', 'EX', 60 * 60 * 24, 'NX');
+    const first = await redis.set(`structure_claimed:${candidate.id}`, '1', 'EX', 60 * 60 * 24, 'NX');
     if (first !== 'OK') return null;
     logger.info({ underlying, exchange, mode, lifecycleId: candidate.id, entry: candidate.entry, spot }, 'Structure: limit filled — running the structure chain');
     family.run.claimed = candidate;
@@ -4624,7 +4741,7 @@ async function claimStructureFill(
 /**
  * The structure family's chain and mint. Hard gates: the Tier-1 sequence
  * (completed by the fill), STRUCTURE_SEQUENCE at the fill price (still
- * between stop and T1, T1 ≥ 1.5R), the safety gates (risk-off, feed,
+ * between stop and T1 — geometry only; net R:R is never a gate), the safety gates (risk-off, feed,
  * session/closing — the opening-hour guard per the chosen variant —,
  * post-loss cooldown, reliability, concurrency) and Part A. The option leg
  * is built by buildTradeSetup: target move = distance to T1, premium stop =
@@ -4653,10 +4770,6 @@ async function resolveStructureSetup(ctx: {
   slot?: SlotCandidate;
   /** The check's metric context (today's closed 15m bars); null = metrics that need it are NOT_MEASURED. */
   metrics: MetricsContext | null;
-  /** The newest closed bar (open time) of this attempt — a kept-alive setup is tried at most once per closed bar. */
-  attemptBar?: number | null;
-  /** A routed family candidate: kept alive in the router's watch when refused for R:R alone. */
-  routed?: RoutedCandidate;
 }): Promise<SlotEntry> {
   const { provider, underlying, exchange, mode, key, today, setupTtl, chain, lc, state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId } = ctx;
   const direction: BiasDirection = lc.direction;
@@ -4808,12 +4921,8 @@ async function resolveStructureSetup(ctx: {
     `${lc.patterns ? ` Candles: ${lc.patterns.label}.` : ''}` +
     `${lc.rejectionPattern ? ` Entry confirmed by ${lc.rejectionPattern.label.toLowerCase()} (REJECTION_CLOSE).` : ''}`;
 
-  // A refusal ends the setup — unless it was refused for R:R alone (still a
-  // valid, confirmed setup: kept alive) or it is already kept alive.
-  const keptAlive = lc.keepAlive != null && lc.keepAlive.ended == null;
-  const recordRefusal = async (code: NoTradeCode | null, reason: string, setup: TradeSetup | null, costChain: OptionChain = chain, rrOnly = false) => {
-    const keep = keptAlive || rrOnly;
-    if (keep && ctx.routed) await keepFamilyAlive(exchange, underlying, ctx.routed);
+  // A refusal by a genuine check ends this fill attempt (net R:R is never one of them).
+  const recordRefusal = async (code: NoTradeCode | null, reason: string, setup: TradeSetup | null, costChain: OptionChain = chain) => {
     logDecision({
       at,
       symbol: underlying,
@@ -4854,15 +4963,12 @@ async function resolveStructureSetup(ctx: {
       atr: lc.atr,
       ...snapshotBlocks(chain, structureContext, setup, side),
     });
-    await recordStructureOutcome(state, lc, { outcome: 'REFUSED', code: code ?? null, reason, at }, spot, measureStructureFillCost(costChain, lc, side, setup), {
-      keepAlive: keep,
-      attemptBar: ctx.attemptBar ?? null,
-    });
+    await recordStructureOutcome(state, lc, { outcome: 'REFUSED', code: code ?? null, reason, at }, spot, measureStructureFillCost(costChain, lc, side, setup));
   };
 
   if (refusal) {
     logger.info({ underlying, exchange, code: refusal.code, lifecycleId: lc.id }, 'Structure: fill refused by its chain');
-    await recordRefusal(refusal.code, `${describe} Refused: ${refusal.reason}`, null, chain, 'rrOnly' in refusal && refusal.rrOnly === true);
+    await recordRefusal(refusal.code, `${describe} Refused: ${refusal.reason}`, null, chain);
     return { kind: 'REFUSED', slot: baseSlot, code: refusal.code, reason: refusal.reason, optionBuild: false };
   }
 
@@ -4909,6 +5015,8 @@ async function resolveStructureSetup(ctx: {
           structuralStopBufferAtr: fiveMinute ? 0 : STRUCTURE_RULES.stopBufferAtr,
           ivVsHv: entryContext?.ivVsHv ?? null,
           richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
+          // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
+          rrGate: false,
           ...(FNO_VALIDATION
             ? {
                 fnoValidation: {
@@ -4929,7 +5037,7 @@ async function resolveStructureSetup(ctx: {
   structureFnoRecord = validated.fnoValidation;
   if (!builtRaw.available) {
     logger.info({ underlying, exchange, code: builtRaw.noTradeCode ?? null, lifecycleId: lc.id }, 'Structure: option leg refused by buildTradeSetup');
-    await recordRefusal(builtRaw.noTradeCode ?? null, `${describe} ${builtRaw.reason}`, builtRaw, usedChain, builtRaw.noTradeCode === 'REWARD_RISK_TOO_LOW');
+    await recordRefusal(builtRaw.noTradeCode ?? null, `${describe} ${builtRaw.reason}`, builtRaw, usedChain);
     return { kind: 'REFUSED', slot: baseSlot, code: builtRaw.noTradeCode ?? null, reason: builtRaw.reason, optionBuild: true };
   }
   const fresh: TradeSetup = {
@@ -5034,6 +5142,8 @@ async function planForLifecycle(
       structuralStopBufferAtr: fiveMinute ? 0 : STRUCTURE_RULES.stopBufferAtr,
       ivVsHv: null,
       richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
+      // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
+      rrGate: false,
       plan: true,
       ...(FNO_VALIDATION
         ? { fnoValidation: { enabled: true, maxCostPctOfPremium: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM, minOptionStopAtr: FNO_VALIDATION_PARAMS.MIN_OPTION_STOP_ATR, ...(fiveMinute ? { noiseAtrPoints: lc.atr } : {}) } }
@@ -5046,8 +5156,6 @@ async function planForLifecycle(
     side,
     params: { deltaMin: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MIN, deltaMax: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MAX, deltaTarget: FNO_VALIDATION_PARAMS.OPTION_DELTA_TARGET },
     contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: null, ivCap: null }),
-    // A shown setup's plan: R:R is informational, so a strike refused for R:R alone is a valid strike here.
-    rrIsGate: false,
     fetchNextExpiry: (expiry) => buildOptionChain(provider, underlying, exchange, expiry),
     onError: (stage, err: any) => logger.warn({ error: err?.message ?? String(err), stage, underlying, exchange }, 'Setup watch: next-expiry chain unavailable — no fallback contract'),
     build: (c, strike, ctx) => build(c, strike, ctx.expectedMovePoints),
@@ -5084,7 +5192,7 @@ async function planForLifecycle(
 
 /**
  * Once per closed 15m bar: every confirmed S1 setup (pending its fill, or
- * kept alive below 1.50R) and every kept-alive family candidate is re-measured
+ * any R:R) and every confirmed family candidate on the watch is re-measured
  * under its SAME id — underlying entry reference, SL, T1/T2, gross R:R, the
  * ranked strike and its premium Entry/SL/TSL/T1/T2, net R:R — and its watch
  * row updated (setup-watch.ts). Decision time = that bar's close; the chain is
@@ -5115,7 +5223,6 @@ async function refreshSetupWatch(args: {
     // EVERY confirmed S1 setup is shown, whatever its R:R and whatever the
     // automatic paper-trade log decided about it (R:R is informational here).
     if (!isShownStructureSetup(lc)) continue;
-    const ka = lc.keepAlive;
     // Display windows are judged on the 15m bars (a 5m lifecycle's fill window is the same 2 hours).
     const fill = structureRulesFor('15m').fillWithinBars;
     const barMs = BAR_MS_15M;
@@ -5127,10 +5234,10 @@ async function refreshSetupWatch(args: {
       at,
       barTime: lastBar.time,
       underlying: { entry: lc.entry, sl: lc.stop, t1: lc.t1?.price ?? null, t2: lc.t2?.price ?? null },
-      expiresAt: (ka?.since ?? lc.confirmedAt ?? lc.stageAt) + fill * barMs,
+      expiresAt: (lc.confirmedAt ?? lc.stageAt) + fill * barMs,
     };
     if (lc.live?.outcome === 'MINTED') {
-      updates.push({ ...base, ...quiet, ended: { reason: 'PAPER_TRADED', at: lc.live.at }, onlyIfExists: true });
+      updates.push({ ...base, ...quiet, ended: { reason: 'FILLED', at: lc.live.at }, onlyIfExists: true });
       continue;
     }
     // Ends only on S1's genuine invalidation / expiry — never because the paper-trade log refused it.
@@ -5323,6 +5430,8 @@ async function buildStructurePreview(
           structuralStopBufferAtr: fiveMinute ? 0 : STRUCTURE_RULES.stopBufferAtr,
           ivVsHv: null,
           richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
+          // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
+          rrGate: false,
           ...(FNO_VALIDATION
             ? {
                 fnoValidation: {
@@ -5394,6 +5503,29 @@ async function buildStructurePreview(
  * slot write and the Telegram push. Split out of resolveStickyTradeSetup
  * (unchanged line for line) so the mint lock can wrap it.
  */
+/**
+ * The underlying plan a minted setup was built on: S1 / a family — its fill,
+ * structural stop, T1 and T2; momentum break — its trigger's entry, stop and
+ * target; the indicator — the spot it was built at with its stop / target
+ * moves (stopInAtr / targetInAtr × the ATR it was built with). Unknown parts
+ * stay null.
+ */
+function underlyingPlanOf(ctx: { structure?: StoredStructureTrade; momentumBreak?: StoredMomentumBreak; entryContext: SetupEntryContext | undefined; fresh: TradeSetup }, chain: OptionChain, direction: BiasDirection): UnderlyingPlan {
+  if (ctx.structure) return { entry: ctx.structure.fillSpot ?? ctx.structure.entry, stop: ctx.structure.stop, t1: ctx.structure.t1.price, t2: ctx.structure.t2?.price ?? null };
+  if (ctx.momentumBreak) return { entry: ctx.momentumBreak.entry, stop: ctx.momentumBreak.stop, t1: ctx.momentumBreak.target, t2: null };
+  const spot = ctx.entryContext?.locationSpot ?? chain.spotPrice;
+  const atr = ctx.entryContext?.atrPoints ?? null;
+  const sg = direction === 'BEARISH' ? -1 : 1;
+  const stopInAtr = ctx.fresh.stopInAtr ?? null;
+  const targetInAtr = ctx.fresh.targetInAtr ?? null;
+  return {
+    entry: spot,
+    stop: atr != null && stopInAtr != null ? round2(spot - sg * stopInAtr * atr) : null,
+    t1: atr != null && targetInAtr != null ? round2(spot + sg * targetInAtr * atr) : null,
+    t2: null,
+  };
+}
+
 async function mintTradeSetup(ctx: {
   underlying: string;
   exchange: Exchange;
@@ -5525,6 +5657,19 @@ async function mintTradeSetup(ctx: {
     logger.warn({ error: err.message, underlying }, 'Sticky trade setup write failed');
   }
 
+  // Phase 3: the option plan, persisted with its underlying plan, every strike
+  // evaluated and the decision snapshot (option_plans). Never blocks the mint.
+  if (signalId && fresh.available && (fresh.structureType ?? 'NAKED_LONG') === 'NAKED_LONG') {
+    const source = ctx.structure ? ctx.structure.triggerId ?? 'S1' : ctx.momentumBreak ? 'MOMENTUM_BREAK' : 'INDICATOR';
+    void persistOptionPlan(
+      buildOptionPlanRow({
+        signalId, snapshotId: currentSnapshotId(), symbol: underlying, exchange, mode, source,
+        candidateId: ctx.structure?.lifecycleId ?? null, direction, underlying: underlyingPlanOf(ctx, chain, direction), setup: fresh, chain,
+      }),
+      toStore.generatedAt ?? decisionNow()
+    );
+  }
+
   // Push exactly here and nowhere else. This branch is the ONLY one that
   // mints a genuinely new setup — every other path either returns a setup
   // already locked in Redis or backfills its database row, and hooking
@@ -5567,8 +5712,10 @@ async function recordTradeSetupGenerated(
     // positional trades start generating, their fundamentally different
     // SL%/target/hold-time profile would get silently mixed into the same
     // win-rate stats as intraday trades, diluting both.
+    // The decision snapshot this paper trade was decided from (Phase 2; null outside a snapshotted poll).
+    const snapshotId = currentSnapshotId();
     const rows = await sql<{ id: string }[]>`
-      INSERT INTO signals (time, symbol, signal_type, direction, confidence, inputs, reasoning, market_regime, intelligence_score)
+      INSERT INTO signals (time, symbol, signal_type, direction, confidence, inputs, reasoning, market_regime, intelligence_score${snapshotId ? sql`, snapshot_id` : sql``})
       VALUES (
         NOW(), ${underlying}, 'TRADE_SETUP', ${direction}, ${confidence},
         ${sql.json(
@@ -5610,7 +5757,7 @@ async function recordTradeSetupGenerated(
             logic,
           } as any
         )},
-        ${fresh.reason}, ${regime}, ${intelligenceScore}
+        ${fresh.reason}, ${regime}, ${intelligenceScore}${snapshotId ? sql`, ${snapshotId}` : sql``}
       )
       RETURNING id
     `;
@@ -5674,6 +5821,15 @@ async function recordTradeSetupOutcome(
     } catch (err: any) {
       logger.warn({ error: err.message, signalId: stored.signalId }, 'Backtesting: failed to record trade setup outcome');
     }
+    // Phase 3: the plan's last event — closed at these levels (the exit is in the reason).
+    void recordOptionPlanEvent({
+      planId: planIdFor(stored.signalId),
+      at: decisionNow(),
+      type: 'CLOSED',
+      before: null,
+      after: optionLevelsOf(stored, null),
+      reason: `${outcome} (${close.reason})${exitValue != null ? ` at ${exitValue}` : ''}`,
+    });
   }
 
   // A stop, recorded with the state that explains it, at the instant it

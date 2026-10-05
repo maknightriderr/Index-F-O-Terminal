@@ -75,16 +75,21 @@ describe('routeTriggerFamilies', () => {
     for (const n of selectedPerParent.values()) expect(n).toBe(1);
     // Trading: no pre-selection in the router. Each candidate carries its parent
     // and anchor keys; the slot receives every eligible paper-stage candidate of
-    // the newest bar. The risk controls still bind: every candidate in this
-    // session has T1 under 1.5R, so none is eligible and none reaches the slot.
+    // the newest bar. Every candidate in this session has T1 under 1.5R
+    // (LOW_RR) — since 2026-10-05 that is a label, not a rejection: all are
+    // eligible, and the newest bar's go to the slot.
+    const newestClose = today[7].time + M15;
     for (const r of recorded) {
       expect(r.context.bucket, r.triggerType).toBe('LOW_RR');
       expect(r.context.trade.parentId, r.triggerType).toBe(r.context.arbitration.parentId);
       expect(r.context.trade.anchorKeys[0]).toBe(r.context.trade.parentId);
-      expect(r.context.trade.eligible, r.triggerType).toBe(false);
-      expect(r.context.trade.handedToSlot, r.triggerType).toBe(false);
+      expect(r.context.trade.eligible, r.triggerType).toBe(true);
+      expect(r.context.trade.handedToSlot, r.triggerType).toBe(r.time.getTime() === newestClose);
     }
-    expect(out!.paper).toEqual([]);
+    const newestIds = recorded.filter((r) => r.time.getTime() === newestClose).map((r) => r.lifecycleId).sort();
+    expect(newestIds.length).toBeGreaterThan(0);
+    expect(out!.paper.map((p) => p.lifecycleId).sort()).toEqual(newestIds);
+    for (const p of out!.paper) expect(p.risk.wouldTrade).toBe(true);
     // The parent linkage S1 joins through: today's sweep of the previous high (bar 3), BEARISH.
     expect(out!.linkage?.sweeps.some((w) => w.direction === 'BEARISH' && w.time === today[3].time)).toBe(true);
   });

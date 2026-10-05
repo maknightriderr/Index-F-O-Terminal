@@ -80,13 +80,12 @@ export async function writeSetupWatch(
             plan: row.plan,
             initial: row.initial,
             current: row.current,
-            startedBelowMin: row.startedBelowMin,
-            rrRecovered: row.rrRecovered,
-            rrAtMin: row.rrAtMin,
-            firstAtMinAt: row.firstAtMinAt,
+            rrBand: row.rrBand,
             strikeChanges: row.strikeChanges,
             optionBuildFailures: row.optionBuildFailures,
             ended: row.ended,
+            // Phase 6: the whole row as written — PostgreSQL is the source the Redis watch is rebuilt from.
+            row,
           },
         },
         versions: {

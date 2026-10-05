@@ -156,11 +156,14 @@ describe('parent setups', () => {
       mk({ triggerId: 'B3', direction: 'BULLISH', decisionIndex: 11, anchorEventId: 'ORB:w', anchorIndex: 9 }),
     ];
     const parents = groupIntoParents(cs, logs);
-    expect(parents).toHaveLength(3);
+    // Since PARENT-2.0 (2026-10-05) a parent is one ORIGIN: C1's pullback is a different origin (and,
+    // without a level, cannot share one), so it is its own move — time proximity alone no longer merges.
+    expect(parents).toHaveLength(4);
     const first = parents.find((p) => p.anchorEventId === 'SWEEP:x')!;
-    expect(first.triggerIds).toEqual(['A2', 'A4', 'C1']);
-    expect(first.families).toEqual(['LIQUIDITY_REVERSAL', 'TREND_CONTINUATION']);
+    expect(first.triggerIds).toEqual(['A2', 'A4']);
+    expect(first.families).toEqual(['LIQUIDITY_REVERSAL']);
     expect(first.stages.firstAvailable).toBe(10);
+    expect(parents.find((p) => p.anchorEventId === 'PULLBACK:y')!.triggerIds).toEqual(['C1']);
     // Every candidate belongs to exactly one parent.
     expect(parents.flatMap((p) => p.candidates).sort()).toEqual([0, 1, 2, 3, 4]);
   });

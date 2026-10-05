@@ -32,6 +32,7 @@ import { gradeFromScore } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 import { measureStopDistance, type SetupCostMeasurement } from './setup-cost.js';
+import { currentSnapshotId } from './snapshot-context.js';
 
 export { gradeFromScore };
 
@@ -56,6 +57,7 @@ export type SetupEventType =
   /** A confirmed setup's watch lifecycle (setup-watch.ts): measurement only, decision LIFECYCLE. */
   | 'WATCH_STARTED'
   | 'REEVALUATED'
+  /** Historical only: emitted until 2026-10-05, when net R:R stopped being a gate (nothing "recovers" any more). */
   | 'RR_RECOVERED'
   | 'STRIKE_CHANGED'
   | 'OPTION_BUILD_FAILED'
@@ -192,10 +194,12 @@ export interface SetupEventInput {
  * alters the lifecycle it was called from.
  */
 export function recordSetupEvent(input: SetupEventInput): void {
-  void insertSetupEvent(input).catch((err: any) => logger.error({ error: err.message, lifecycleId: input.lifecycleId, toStage: input.toStage }, 'setup_events: insert failed'));
+  // The decision snapshot this row was decided from (Phase 2), read synchronously in the poll's scope.
+  const snapshotId = currentSnapshotId();
+  void insertSetupEvent(input, snapshotId).catch((err: any) => logger.error({ error: err.message, lifecycleId: input.lifecycleId, toStage: input.toStage }, 'setup_events: insert failed'));
 }
 
-async function insertSetupEvent(input: SetupEventInput): Promise<void> {
+async function insertSetupEvent(input: SetupEventInput, snapshotId: string | null = null): Promise<void> {
   const eventType = EVENT_TYPE_BY_STAGE[input.toStage] ?? (input.toStage as SetupEventType);
   const decision = DECISION_BY_EVENT_TYPE[eventType] ?? 'DETECTED';
   const grossRr = input.entry != null && input.stop != null && input.t1 != null && Math.abs(input.entry - input.stop) > 0 ? round4(Math.abs(input.t1 - input.entry) / Math.abs(input.entry - input.stop)) : null;
@@ -236,6 +240,7 @@ async function insertSetupEvent(input: SetupEventInput): Promise<void> {
         cost_quality, option_side, option_strike, option_expiry, option_strike_basis, option_premium, option_bid, option_ask, option_delta, lot_size,
         cost_spread, cost_slippage, cost_charges, cost_total, cost_pct_premium, cost_r, spread_r, slippage_r, charges_r,
         stop_points, stop_atr, stop_pct, underlying_risk_lot, option_risk_unit, option_risk_lot, option_risk_basis
+        ${snapshotId ? sql`, snapshot_id` : sql``}
       ) VALUES (
         ${input.time}, ${input.instrument}, ${input.exchange}, ${input.timeframe}, ${input.lifecycleId}, ${input.direction}, ${eventType},
         ${input.poolId ?? null}, ${input.poolType}, ${input.poolPrice},
@@ -250,6 +255,7 @@ async function insertSetupEvent(input: SetupEventInput): Promise<void> {
         ${cost?.perUnit?.spread ?? null}, ${cost?.perUnit?.slippage ?? null}, ${cost?.perUnit?.charges ?? null}, ${cost?.perUnit?.total ?? null}, ${cost?.costPctOfPremium ?? null},
         ${cost?.costR ?? null}, ${cost?.spreadR ?? null}, ${cost?.slippageR ?? null}, ${cost?.chargesR ?? null},
         ${stopDist.points}, ${stopDist.atr}, ${stopDist.pct}, ${stopDist.underlyingRiskPerLot}, ${stopDist.optionRiskPerUnit}, ${stopDist.optionRiskPerLot}, ${stopDist.optionRiskBasis}
+        ${snapshotId ? sql`, ${snapshotId}` : sql``}
       )
     `;
   } catch (err: any) {

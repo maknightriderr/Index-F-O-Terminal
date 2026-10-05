@@ -23,8 +23,11 @@
 // off together instead of each retry immediately tripping the limit again.
 // ============================================================
 
+import { nextLane } from './request-priority.js';
+
 interface QueueItem {
   resolve: () => void;
+  enqueuedAt: number;
 }
 
 export type RequestPriority = 'high' | 'normal';
@@ -45,7 +48,11 @@ export class RateLimiter {
   private grantedAt: number[] = []; // grant times within the last minute (only tracked when perMinute is set)
   private pausedUntil = 0;
 
-  constructor(ratePerSecond: number, perMinute?: number) {
+  /** Background requests waiting longer than this are served ahead of interactive ones (request-priority.ts). */
+  private readonly maxWaitMs: number | undefined;
+
+  constructor(ratePerSecond: number, perMinute?: number, maxWaitMs?: number) {
+    this.maxWaitMs = maxWaitMs;
     this.maxTokens = ratePerSecond;
     this.tokens = ratePerSecond;
     this.refillIntervalMs = 1000 / ratePerSecond;
@@ -89,8 +96,10 @@ export class RateLimiter {
   private drain(): void {
     const now = Date.now();
     while ((this.highQueue.length > 0 || this.queue.length > 0) && this.canGrant(now)) {
+      // Interactive first — unless the oldest background request has waited past the max-wait cap.
+      const lane = nextLane({ highWaiting: this.highQueue.length, normalWaiting: this.queue.length, oldestNormalEnqueuedAt: this.queue[0]?.enqueuedAt ?? null, now, maxWaitMs: this.maxWaitMs });
       this.grant(now);
-      (this.highQueue.length > 0 ? this.highQueue : this.queue).shift()!.resolve();
+      (lane === 'high' ? this.highQueue : this.queue).shift()!.resolve();
     }
   }
 
@@ -107,7 +116,7 @@ export class RateLimiter {
       return;
     }
     return new Promise((resolve) => {
-      (priority === 'high' ? this.highQueue : this.queue).push({ resolve });
+      (priority === 'high' ? this.highQueue : this.queue).push({ resolve, enqueuedAt: now });
     });
   }
 }
