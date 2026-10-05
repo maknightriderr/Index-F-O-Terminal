@@ -12,6 +12,8 @@ import { logger } from './lib/logger.js';
 import { redis, pingRedis } from './lib/redis.js';
 import { sql, pingDb } from './lib/db.js';
 import { SubscriptionManager } from './lib/subscription-manager.js';
+import { refreshAuthWithRetry } from './lib/auth-refresh.js';
+import { notifyOperationalAlert } from './services/telegram.js';
 import { runInteractive } from './lib/request-priority.js';
 import { startHolidayCalendarCheck } from './services/holiday-calendar-check.js';
 import { startSystemLearningAudit } from './services/system-learning-audit.js';
@@ -147,6 +149,8 @@ app.get('/api/health', async (_req, res) => {
     withProbeTimeout(pingDb(), 'Database'),
   ]);
   const wsStatus = subscriptionManager.getStatus();
+  // Phase 5: every tick-feed token's data state (asOf / source / status as in Phase 2 dataQuality).
+  const feed = { ...wsStatus.feed, perToken: subscriptionManager.getFeedStates() };
 
   const services = {
     api: 'HEALTHY' as const,
@@ -161,13 +165,14 @@ app.get('/api/health', async (_req, res) => {
       ? { status: 'HEALTHY' as const, latencyMs: dbHealth.latencyMs }
       : { status: 'DOWN' as const, error: dbHealth.error },
     websocket: {
-      status: wsStatus.connected ? ('HEALTHY' as const) : ('DOWN' as const),
+      status: wsStatus.connected ? (feed.upstreamDown || feed.byState.DATA_GAP > 0 ? ('DEGRADED' as const) : ('HEALTHY' as const)) : ('DOWN' as const),
       ...wsStatus,
     },
   };
 
+  // The feed counts only while it is down in session (a token gap is shown per token, not as an outage).
   const overall =
-    services.redis.status === 'HEALTHY' && services.database.status === 'HEALTHY'
+    services.redis.status === 'HEALTHY' && services.database.status === 'HEALTHY' && !feed.upstreamDown
       ? 'HEALTHY'
       : 'DEGRADED';
 
@@ -178,6 +183,7 @@ app.get('/api/health', async (_req, res) => {
       uptime: process.uptime(),
       timestamp: Date.now(),
       services,
+      feed,
       version: '0.1.0',
     },
   });
@@ -318,17 +324,15 @@ setInterval(() => {
   // never got retried — isAuthenticated() would just keep returning false
   // forever. Always attempt something: refresh if the current token is
   // still technically valid, otherwise a full fresh TOTP login.
-  const reauth = provider.isAuthenticated()
-    ? provider.refreshAuth()
-    : provider.authenticate({ apiKey, clientId, password, totpSecret });
-
-  reauth
-    .then((result) => {
-      if (!result.success) {
-        logger.error({ error: result.error }, 'Scheduled Angel One re-authentication failed');
-      }
-    })
-    .catch((err) => logger.error({ error: err.message }, 'Scheduled Angel One re-authentication threw'));
+  // Phase 5: retried with backoff, alerted when every attempt fails, and on
+  // success the tick feed reconnects with the new feed token — every token
+  // re-subscribed and RECOVERING until its switchover gap is checked.
+  void refreshAuthWithRetry({
+    attempt: () => (provider.isAuthenticated() ? provider.refreshAuth() : provider.authenticate({ apiKey, clientId, password, totpSecret })),
+    onSuccess: () => subscriptionManager.refreshConnection(),
+    alert: (message) => notifyOperationalAlert(message),
+    log: logger,
+  });
 }, TOKEN_REFRESH_INTERVAL_MS);
 
 // --- Graceful Shutdown ---

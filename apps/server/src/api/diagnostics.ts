@@ -29,6 +29,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { logger } from '../lib/logger.js';
+import { redis, scanKeys } from '../lib/redis.js';
 import {
   diagnosticsSummary,
   diagnosticsRejections,
@@ -182,6 +183,29 @@ export function createDiagnosticsRoutes(): Router {
       res.json({ success: true, data: { rows: await diagnosticsSetupOutcomes(ids) } });
     } catch (err: any) {
       logger.error({ error: err.message }, 'Signal diagnostics setup outcomes failed');
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Phase 5: feed-gap checks of open paper trades (last 3 days) — FILL_UNCERTAIN /
+  // MISSED_TOUCH_POSSIBLE are surfaced here; nothing was assumed for them.
+  router.get('/feed-gaps', async (_req: Request, res: Response) => {
+    try {
+      const keys = (await scanKeys('feed_gap:*')).slice(0, 500);
+      const values = keys.length ? await redis.mget(...keys) : [];
+      const rows = values
+        .map((v) => {
+          try {
+            return v ? JSON.parse(v) : null;
+          } catch {
+            return null;
+          }
+        })
+        .filter((r): r is Record<string, unknown> & { checkedAt: number } => r != null)
+        .sort((a, b) => b.checkedAt - a.checkedAt);
+      res.json({ success: true, data: { rows } });
+    } catch (err: any) {
+      logger.error({ error: err.message }, 'Signal diagnostics feed gaps failed');
       res.status(500).json({ success: false, error: err.message });
     }
   });

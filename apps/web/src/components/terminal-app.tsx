@@ -22,7 +22,7 @@ import { AddAssetModal } from '@/components/common/add-asset-modal';
 import { useMarketStore, useUISettingsStore, useSystemHealthStore } from '@/stores';
 import { useMarketWebSocket } from '@/lib/ws';
 import { api } from '@/lib/api';
-import type { ServiceStatus } from '@fno/shared';
+import type { FeedHealth, FeedTokenState, ServiceStatus } from '@fno/shared';
 
 export function TerminalApp() {
   const { activeTab } = useMarketStore();
@@ -146,6 +146,8 @@ interface HealthServiceRow {
 
 function SystemHealthPage() {
   const wsHealth = useSystemHealthStore((s) => s.health.websocket);
+  const feed = useSystemHealthStore((s) => s.health.feed);
+  const updateHealth = useSystemHealthStore((s) => s.updateHealth);
   const [apiHealth, setApiHealth] = useState<any>(null);
   const [apiError, setApiError] = useState<string | null>(null);
 
@@ -159,6 +161,8 @@ function SystemHealthPage() {
           if (cancelled) return;
           setApiHealth(data);
           setApiError(null);
+          // Phase 5: per-token feed states into the shared health store.
+          if (data?.feed) updateHealth({ feed: data.feed });
         })
         .catch((err) => {
           if (cancelled) return;
@@ -173,7 +177,7 @@ function SystemHealthPage() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, []);
+  }, [updateHealth]);
 
   const redis = apiHealth?.services?.redis;
   const database = apiHealth?.services?.database;
@@ -254,6 +258,61 @@ function SystemHealthPage() {
           </div>
         ))}
       </div>
+
+      {feed && <FeedStatesTable feed={feed} />}
+    </div>
+  );
+}
+
+const FEED_STATE_STYLE: Record<FeedTokenState, string> = {
+  DATA_FRESH: 'text-emerald-400 light:text-emerald-700',
+  DATA_STALE: 'text-yellow-400 light:text-amber-700',
+  DATA_GAP: 'text-red-400 light:text-red-700',
+  RECOVERING: 'text-sky-400 light:text-sky-700',
+};
+
+/** Phase 5: every tick-feed token's data state, as /api/health reports it. */
+function FeedStatesTable({ feed }: { feed: FeedHealth }) {
+  const ageOf = (t: number | null) => (t == null ? '—' : `${Math.max(0, Math.round((Date.now() - t) / 1000))}s ago`);
+  return (
+    <div className="bg-[#12121a] light:bg-white border border-gray-800/60 light:border-slate-200 rounded-xl p-4 space-y-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-sm font-medium text-gray-200 light:text-slate-800">Data feed</h2>
+        <span className="text-xs text-gray-400 light:text-slate-600">
+          {feed.tokens} token{feed.tokens === 1 ? '' : 's'} · fresh {feed.byState.DATA_FRESH} · stale {feed.byState.DATA_STALE} · gap {feed.byState.DATA_GAP} · recovering {feed.byState.RECOVERING}
+          {feed.upstreamDown ? ' · upstream down' : ''} · dropped {feed.droppedDuplicates} duplicate / {feed.droppedOutOfOrder} out-of-order · {feed.partialBatches} partial batch{feed.partialBatches === 1 ? '' : 'es'}
+        </span>
+      </div>
+      {feed.perToken.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs tabular-nums">
+            <thead className="text-gray-500 light:text-slate-500">
+              <tr className="text-left">
+                <th className="py-1 pr-3 font-normal">Token</th>
+                <th className="py-1 pr-3 font-normal">State</th>
+                <th className="py-1 pr-3 font-normal">Status</th>
+                <th className="py-1 pr-3 font-normal">Last tick</th>
+                <th className="py-1 pr-3 font-normal">Gap</th>
+                <th className="py-1 pr-3 font-normal">Source</th>
+                <th className="py-1 font-normal">Last gap check</th>
+              </tr>
+            </thead>
+            <tbody className="text-gray-300 light:text-slate-700">
+              {feed.perToken.map((t) => (
+                <tr key={`${t.exchange}:${t.token}`} className="border-t border-gray-800/60 light:border-slate-200">
+                  <td className="py-1 pr-3">{t.exchange} {t.token}</td>
+                  <td className={`py-1 pr-3 ${FEED_STATE_STYLE[t.state]}`}>{t.state}</td>
+                  <td className="py-1 pr-3">{t.status}</td>
+                  <td className="py-1 pr-3">{ageOf(t.asOf)}</td>
+                  <td className="py-1 pr-3">{t.gapDurationMs != null ? `${Math.round(t.gapDurationMs / 1000)}s` : '—'}</td>
+                  <td className="py-1 pr-3">{t.source}</td>
+                  <td className="py-1">{t.lastGapOutcome ? `${t.lastGapOutcome.outcome} — ${t.lastGapOutcome.detail}` : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

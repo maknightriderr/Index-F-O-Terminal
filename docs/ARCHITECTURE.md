@@ -58,16 +58,33 @@ apps/web (Next.js 14)
 ## 4. Live market data (ticks)
 
 ```
-Angel One WebSocket (SNAP_QUOTE)
+Angel One WebSocket (SNAP_QUOTE)   parser: exchange timestamp (byte 35) + sequence (27); partial batches flagged
   ▼
 SubscriptionManager.handleTicks()
+  ├─► filterTicks()              drop DUPLICATE / OUT_OF_ORDER per token (exchange ts, then sequence)
+  ├─► FeedTracker                per-token DATA_FRESH / DATA_STALE (2 min) / DATA_GAP (5 min or socket down)
+  │                              / RECOVERING — in session only (exchange calendar); no gaps after hours
   ├─► computeChangeOi()          enrich each tick with changeOi
   ├─► latestQuotes Map           in-memory latest tick per token
   ├─► redis.set()                quote:{exchange}:{token}  TTL 60 s
   └─► tickListeners[]            fan-out
         ├── WS Bridge (/ws)      ticks grouped per browser clientId → { type:'tick', data:[...] }
-        └── TradeSetupPriceMonitor   fill / exit triggers on minted paper setups
+        └── TradeSetupPriceMonitor   fill / exit triggers on minted paper setups — only on DATA_FRESH tokens
 ```
+
+Reconnect / auth refresh (Phase 5): socket drop → in-session tokens DATA_GAP from their last tick;
+reconnect → every refCounts token re-subscribed, RECOVERING, gaps handed to the gap checker. The 8 h
+re-authentication retries with exponential backoff (4 attempts from 30 s), alerts (Telegram) when every
+attempt fails, and on success opens a new feed connection (new feed token) — every token RECOVERING.
+Gap check (feed-gap-check.ts) for each open paper trade: the gap (clamped to the session) is backfilled
+with the contract's 1-minute bars; LEVEL_TOUCHED (first level known) → closed normally at that level;
+NO_TOUCH → nothing; FILL_UNCERTAIN (SL and target in one minute) / MISSED_TOUCH_POSSIBLE (minutes missing,
+or no backfill) → recorded (`feed_gap:*`, `/api/diagnostics/feed-gaps`, `/api/health` per token) — never a
+fill, never a cancel. The 90 s REST sweep keeps checking open trades on fresh REST quotes.
+Health: `/api/health` → `feed` {byState, upstreamDown, dropped duplicates / out-of-order, partial batches,
+perToken [{state, lastTickTime, lastSuccessfulQuoteTime, gapDurationMs, asOf, source, status, lastGapOutcome}]};
+overall DEGRADED while the upstream feed is down in session; System Health page → "Data feed" table
+(`useSystemHealthStore.health.feed`).
 
 Ref-counting: `refCounts` (exchangeSegment:token → Set<clientId>) — one upstream subscription shared by all clients; upstream unsubscribe only when the last interested party leaves.
 
@@ -287,3 +304,4 @@ Observation only: `startSystemLearningAudit` → `learningDetectors.ts` → `lea
 - **2026-10-05 — Phase 2: immutable input snapshot + DecisionRecord.** Migration `034_decision_records.sql` (signal_decision_snapshots, decision_records, decision_trigger_events; snapshot_id on setup_events / signals; validated on PGlite against the full boot schema, applied twice). Pure cores `advanceStructureCore` (structure-live.ts) and `evaluateFamiliesCore` (trigger-router.ts) — the live shells now read state, call the core, write state (behaviour unchanged). `decision-record.ts` (snapshot, data quality, record, canonical form, replay), `decision-record-store.ts` (persistence, `replay(snapshotId)`), `snapshot-context.ts` (snapshot id on every row of the poll, only once 034 applied). Versions `PARENT-1.0`, `ARB-1.0`.
 - **2026-10-05 — Phase 3: option selection contract + option plans (`OPTSEL-1.0`).** The OptionCandidate record (`optionCandidatesOf`, every strike with stage / reason; pipeline order availability → liquidity → spread → delta → premium risk → target potential → net R:R → rank), a final token tie-break in `rankStrikeBuilds` (the chosen strike is unchanged — a side never has two equal strikes), migration `035_option_plans.sql` (option_plans immutable, option_plan_events insert-only; PGlite-validated), `option-plans.ts` (plan row at the mint incl. option T2 = T1 + |Δ| × the underlying move T1→T2; TSL_MOVED on each trailing-stop ratchet; CLOSED at the exit).
 - **2026-10-05 — Phase 4: parent identity + slot semantics (PARENT-2.0, `+parent-identity.1`).** `groupIntoParents` groups by origin event / origin level within a fixed window (no time-proximity merge), with a stable hashed `parentId` (`parentIdFor`); the linkage maps every sweep to its move (S1 joins by the same rule); `slotRuleFor` + `slotDecision` on every arbitration row (incl. SLOT_OCCUPIED rows for family candidates and S1 fills that met an open trade). Live stamps carry `+parent-identity.1`.
+- **2026-10-05 — Phase 5: data freshness and gap protection.** `feed-freshness.ts` (FeedTracker states, `resolveGapTouch`), SubscriptionManager filtering / partial batches / gap + RECOVERING transitions / `refreshConnection`, exchange timestamp + sequence parsed from the binary feed, `feed-gap-check.ts` (no assumed fills: FILL_UNCERTAIN / MISSED_TOUCH_POSSIBLE), `auth-refresh.ts` (retry + alert + feed reconnect), `/api/health` feed states, `/api/diagnostics/feed-gaps`, System Health "Data feed" table.

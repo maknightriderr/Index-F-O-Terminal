@@ -99,7 +99,8 @@ export interface WebSocketConfig {
   feedToken: string;
 }
 
-export type TickCallback = (ticks: Tick[]) => void;
+/** `meta.partial`: the message held a truncated or unknown packet that was not parsed (its complete ticks are still delivered). */
+export type TickCallback = (ticks: Tick[], meta?: { partial: boolean }) => void;
 
 export interface WebSocketConnection {
   connect(): Promise<void>;

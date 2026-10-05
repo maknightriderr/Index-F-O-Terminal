@@ -31,6 +31,10 @@
 //    exited on a reversal at all, only on SL/target or the session end.
 //    The recheck runs the same buildMarketBias path, so exits, fresh
 //    setups and notifications behave exactly as an on-screen poll would.
+// 4. Feed freshness (Phase 5): a tick for a token that is not DATA_FRESH
+//    (stale, in a gap, or recovering) never triggers a price check; when the
+//    feed comes back each open trade's gap is backfilled with 1-minute bars
+//    and resolved without assuming a fill (feed-gap-check.ts).
 // ============================================================
 
 import { FO_SEGMENT, minutesSinceSessionOpen } from '@fno/shared';
@@ -40,7 +44,8 @@ import { logger } from '../lib/logger.js';
 import { buildMarketBias, checkLockedSetupPriceLevels, lastBiasComputedAt } from './market-bias.js';
 import type { LockedSetupWatch } from './market-bias.js';
 import type { MarketDataProvider } from '../providers/interface.js';
-import type { SubscriptionManager, SubscriptionTarget } from '../lib/subscription-manager.js';
+import type { FeedGap, SubscriptionManager, SubscriptionTarget } from '../lib/subscription-manager.js';
+import { istMinute, runGapCheck } from './feed-gap-check.js';
 
 // Tighter than the institutional scanner's 15 minutes, and independent of
 // whether any browser happens to be polling — still comfortably clear of
@@ -79,6 +84,9 @@ export function startTradeSetupPriceMonitor(provider: MarketDataProvider, subscr
 
   if (subscriptions) {
     subscriptions.onTick((ticks) => onTicks(provider, subscriptions, ticks));
+    subscriptions.onRecovering((gaps) => {
+      void checkGaps(provider, subscriptions, gaps).catch((err: any) => logger.error({ error: err.message }, 'Trade setup price monitor: gap check failed'));
+    });
   }
 
   setTimeout(tick, INITIAL_DELAY_MS);
@@ -200,10 +208,53 @@ async function syncSubscriptions(subscriptions: SubscriptionManager | undefined,
   }
 }
 
+/**
+ * The feed came back: every gap of a token an open trade is watched on is
+ * backfilled and resolved (runGapCheck); other tokens have nothing to check.
+ * Each token returns to DATA_FRESH with its outcome on record.
+ */
+async function checkGaps(provider: MarketDataProvider, subscriptions: SubscriptionManager, gaps: FeedGap[]): Promise<void> {
+  for (const gap of gaps) {
+    const watch = watchesByToken.get(gap.token);
+    if (!watch) {
+      subscriptions.markRecovered(gap.key, 'NOT_CHECKED', 'No open paper trade on this token.');
+      continue;
+    }
+    const id = setupKey(watch);
+    // Wait out a price check already running for this setup (bounded).
+    for (let i = 0; i < 20 && inFlight.has(id); i++) await new Promise((r) => setTimeout(r, 250));
+    inFlight.add(id);
+    try {
+      const r = await runGapCheck({
+        gap,
+        watch,
+        fetchMinuteBars: (from, to) =>
+          provider.getHistoricalData({ exchange: watch.exchange, segment: 'FO', token: watch.token, interval: 'ONE_MINUTE', fromDate: istMinute(from - 60_000), toDate: istMinute(to) }),
+        closeAt: (price) => checkLockedSetupPriceLevels(provider, watch.exchange, watch.underlying, watch.mode, price),
+        record: async (res) => {
+          const level = res.outcome === 'LEVEL_TOUCHED' || res.outcome === 'NO_TOUCH' || res.outcome === 'NO_GAP_IN_SESSION' ? 'info' : 'warn';
+          logger[level]({ underlying: watch.underlying, exchange: watch.exchange, mode: watch.mode, token: watch.token, ...res }, `Trade setup monitor: feed gap check — ${res.outcome}`);
+          await redis
+            .set(`feed_gap:${id}:${res.from}`, JSON.stringify({ ...res, underlying: watch.underlying, exchange: watch.exchange, mode: watch.mode, token: watch.token, stopLoss: watch.stopLoss, target: watch.target, checkedAt: Date.now() }), 'EX', 3 * 24 * 60 * 60)
+            .catch(() => undefined);
+        },
+      });
+      subscriptions.markRecovered(gap.key, r.outcome, r.detail);
+    } catch (err: any) {
+      subscriptions.markRecovered(gap.key, 'MISSED_TOUCH_POSSIBLE', `Gap check failed: ${err.message}`);
+    } finally {
+      inFlight.delete(id);
+    }
+  }
+}
+
 function onTicks(provider: MarketDataProvider, subscriptions: SubscriptionManager, ticks: Tick[]): void {
   for (const tick of ticks) {
     const watch = watchesByToken.get(tick.token);
     if (!watch || !(tick.ltp > 0)) continue;
+    // Never evaluate a level on a token whose data is stale, in a gap, or not yet gap-checked.
+    const state = subscriptions.feedStateOfToken(tick.token);
+    if (state != null && state !== 'DATA_FRESH') continue;
     if (tick.ltp > watch.stopLoss && tick.ltp < watch.target) continue;
 
     const id = setupKey(watch);

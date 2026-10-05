@@ -121,7 +121,12 @@ export interface Expiry {
 export interface Tick {
   token: string;
   exchange: Exchange;
+  /** Arrival time at this server (epoch ms). */
   timestamp: number;
+  /** The exchange's own timestamp of the tick (epoch ms), when the feed carries one — what ordering and de-duplication use. */
+  exchangeTimestamp?: number;
+  /** The feed's sequence number, when it carries one. */
+  sequence?: number;
   ltp: number;
   open: number;
   high: number;
@@ -1253,7 +1258,37 @@ export interface WatchlistItem {
 
 export type ServiceStatus = 'HEALTHY' | 'DEGRADED' | 'DOWN';
 
+/** Phase 5: a tick-feed token's data state (server feed-freshness.ts). */
+export type FeedTokenState = 'DATA_FRESH' | 'DATA_STALE' | 'DATA_GAP' | 'RECOVERING';
+
+export interface FeedTokenHealth {
+  token: string;
+  exchange: Exchange;
+  state: FeedTokenState;
+  lastTickTime: number | null;
+  lastSuccessfulQuoteTime: number | null;
+  gapDurationMs: number | null;
+  /** As in Phase 2 dataQuality: asOf = the newest tick's exchange time, source, status. */
+  asOf: number | null;
+  source: string;
+  status: 'OK' | 'STALE_INPUT' | 'FUTURE_INPUT' | 'MISSING';
+  lastGapOutcome: { at: number; outcome: string; detail: string } | null;
+}
+
+export interface FeedHealth {
+  tokens: number;
+  byState: Record<FeedTokenState, number>;
+  upstreamDown: boolean;
+  partialBatches: number;
+  lastPartialBatchAt: number | null;
+  droppedDuplicates: number;
+  droppedOutOfOrder: number;
+  perToken: FeedTokenHealth[];
+}
+
 export interface SystemHealth {
+  /** Phase 5: per-token feed states from /api/health (absent until the first read). */
+  feed?: FeedHealth;
   websocket: {
     status: ServiceStatus;
     connected: boolean;
