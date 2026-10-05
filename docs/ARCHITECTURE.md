@@ -106,6 +106,12 @@ Step 2 — Structure engine S1 (structure-engine/, structure-live.ts)
 Step 3 — Trigger router (trigger-router.ts), families A2–F3 (event engine)
   Per closed 15m bar: prepareMomentumSeries → runSessionEvents → evaluateTriggersAt →
   groupIntoParents → arbitrateParents (OBSERVATION only)
+  Parent identity (PARENT-2.0): "the same underlying move" = same session + direction and the
+    same ORIGIN event (root of the anchor's ancestry: RECLAIM → its SWEEP, RETEST → its break …),
+    or the same ORIGIN LEVEL (pool kind + price) within PARENT_SPAN_BARS (12) of the move's first
+    origin — the window never slides. Time proximity alone never merges two moves.
+    parentId = P:<stable hash of symbol, session, direction, first origin, its level, its
+    ancestry, the window> — independent of input order and of later candidates.
   Decision: evaluateFamiliesCore (pure) on the bars + the router's stored state; the shell
     routeTriggerFamilies reads / writes that state and records the candidates.
   Risk validation (validateCandidateRisk): geometry (TRADE or LOW_RR bucket — LOW_RR is a label,
@@ -113,7 +119,13 @@ Step 3 — Trigger router (trigger-router.ts), families A2–F3 (event engine)
   Stages: SHADOW → recorded only · PAPER_RESEARCH / PAPER / ACTIVE → slot arbitration ·
           RESEARCH / RETIRED → not evaluated live
   ▼
-Step 4 — Slot arbitration (slot-arbitration.ts) — ONE paper trade per symbol
+Step 4 — Slot arbitration (slot-arbitration.ts) — ONE OPEN paper trade per symbol
+  Slot rule (slotRuleFor): while a trade is open every candidate is SLOT_OCCUPIED (recorded);
+    once it closes the slot is free again the same day — an independent parent competes,
+    subject to the chains' cooldown / risk gates; a parent that already traded never trades
+    again (PARENT_ALREADY_TRADED). Nothing blocks the whole day.
+  Every candidate's ARBITRATION row carries its parentId and slotDecision
+    {slot FREE|OCCUPIED, decision MINTED|MINT_LOST|NOT_SELECTED|INELIGIBLE|PARENT_ALREADY_TRADED|SLOT_OCCUPIED}.
   Every engine (S1 + indicator + every paper-stage family) hands in every eligible candidate.
   Each is built through its own chain: safety gates → option leg (every in-band strike built and
     ranked; a failing strike falls through to the next) → cost model.
@@ -274,3 +286,4 @@ Observation only: `startSystemLearningAudit` → `learningDetectors.ts` → `lea
 - **2026-10-05 — Phase 1: 1.50R display-only (RISK-2.0, `+rr-display-only.1`).** Removed every live R:R gate (structure confirmation via `liveStructureRulesFor`, the fill's sequence gate, family LOW_RR rejection, the option builder via `rrGate: false` incl. the RICH-IV bar, the sticky-slot plausibility floor, Setup Watch keep-alive / RR_RECOVERED, the `rr-recovery` endpoint). Setup Watch tracks only INVALIDATION / EXPIRY / FILLED; status "Confirmed — R:R x" with a display-only rrBand. Audit: `docs/phase1-rr-classification.md`.
 - **2026-10-05 — Phase 2: immutable input snapshot + DecisionRecord.** Migration `034_decision_records.sql` (signal_decision_snapshots, decision_records, decision_trigger_events; snapshot_id on setup_events / signals; validated on PGlite against the full boot schema, applied twice). Pure cores `advanceStructureCore` (structure-live.ts) and `evaluateFamiliesCore` (trigger-router.ts) — the live shells now read state, call the core, write state (behaviour unchanged). `decision-record.ts` (snapshot, data quality, record, canonical form, replay), `decision-record-store.ts` (persistence, `replay(snapshotId)`), `snapshot-context.ts` (snapshot id on every row of the poll, only once 034 applied). Versions `PARENT-1.0`, `ARB-1.0`.
 - **2026-10-05 — Phase 3: option selection contract + option plans (`OPTSEL-1.0`).** The OptionCandidate record (`optionCandidatesOf`, every strike with stage / reason; pipeline order availability → liquidity → spread → delta → premium risk → target potential → net R:R → rank), a final token tie-break in `rankStrikeBuilds` (the chosen strike is unchanged — a side never has two equal strikes), migration `035_option_plans.sql` (option_plans immutable, option_plan_events insert-only; PGlite-validated), `option-plans.ts` (plan row at the mint incl. option T2 = T1 + |Δ| × the underlying move T1→T2; TSL_MOVED on each trailing-stop ratchet; CLOSED at the exit).
+- **2026-10-05 — Phase 4: parent identity + slot semantics (PARENT-2.0, `+parent-identity.1`).** `groupIntoParents` groups by origin event / origin level within a fixed window (no time-proximity merge), with a stable hashed `parentId` (`parentIdFor`); the linkage maps every sweep to its move (S1 joins by the same rule); `slotRuleFor` + `slotDecision` on every arbitration row (incl. SLOT_OCCUPIED rows for family candidates and S1 fills that met an open trade). Live stamps carry `+parent-identity.1`.

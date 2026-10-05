@@ -447,7 +447,10 @@ export const EVENT_ENGINE_VERSION = 'EVENT-1.0';
 // Phase 2 (2026-10-05) decision-snapshot version metadata. Parenting =
 // groupIntoParents / linkage (event-engine candidates.ts + trigger-router);
 // arbitration = slot-arbitration.ts ranking. Bumped with any change to them.
-export const PARENTING_VERSION = 'PARENT-1.0';
+// PARENT-2.0 (2026-10-05): parent identity = the same origin event, or the same
+// origin level inside the move's window (event-engine PARENT IDENTITY); time
+// proximity alone no longer merges; parentId is a stable hash.
+export const PARENTING_VERSION = 'PARENT-2.0';
 export const ARBITRATION_VERSION = 'ARB-1.0';
 /** @fno/analytics package version (packages/analytics/package.json) — kept equal by a test. */
 export const ANALYTICS_VERSION = '0.1.0';
@@ -892,6 +895,12 @@ export const PAPER_RESEARCH_LOGIC_SUFFIX = '+paper-research';
 
 /** Every live stamp since 2026-10-05: net R:R is display / ranking only (RISK-2.0) — rows before it never pool with rows after. */
 export const RR_DISPLAY_ONLY_LOGIC_SUFFIX = '+rr-display-only.1';
+/**
+ * Phase 4 (2026-10-05): parents are grouped by origin (PARENT-2.0), so the
+ * one-trade-per-parent guard and the observation arbitration see different
+ * groups than before — every live stamp carries this suffix after the R:R one.
+ */
+export const PARENT_IDENTITY_LOGIC_SUFFIX = '+parent-identity.1';
 export function paperResearchStamp(stamp: LogicStamp, triggerId: string | null | undefined): LogicStamp {
   return triggerId ? { ...stamp, logicVersion: `${stamp.logicVersion}${PAPER_RESEARCH_LOGIC_SUFFIX}.${triggerId}` } : stamp;
 }
@@ -904,5 +913,5 @@ export function liveLogicStamp(): LogicStamp {
     versions: { strategyVersion: STRATEGY_VERSION, triggerVersion: TRIGGER_VERSION, riskVersion: RISK_VERSION, optionVersion: OPTION_VERSION, costVersion: COST_VERSION },
     indicator: { confidenceMode: INDICATOR_CONFIDENCE_MODE, locationMode: INDICATOR_LOCATION_MODE },
   });
-  return { ...stamp, logicVersion: `${stamp.logicVersion}${RR_DISPLAY_ONLY_LOGIC_SUFFIX}` };
+  return { ...stamp, logicVersion: `${stamp.logicVersion}${RR_DISPLAY_ONLY_LOGIC_SUFFIX}${PARENT_IDENTITY_LOGIC_SUFFIX}` };
 }

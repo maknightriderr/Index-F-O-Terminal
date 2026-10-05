@@ -1502,6 +1502,7 @@ async function computeMarketBias(
         }
       : null;
   const structureRun: StructureRun = { claimed: null, handled: false };
+  const familyRun = { reached: new Set<string>() };
   // --- Trigger-family router (displacement is S1's own condition, not a gate on the engine) ---
   // Evaluates every other trigger family on the same closed 15m bars, with or
   // without a displacement; SHADOW families are recorded and graded only.
@@ -2099,11 +2100,38 @@ async function computeMarketBias(
         families: [
           { family: 'MOMENTUM_BREAK', trigger: momentumRead?.trigger ?? null },
           ...(structureState ? [{ family: 'STRUCTURE' as const, state: structureState, run: structureRun, ...(structureLastBar ? { lastClosedBar: structureLastBar } : {}) }] : []),
-          ...(structureState && routed ? [{ family: 'MULTIPATH' as const, state: structureState, candidates: routed.paper, linkage: routed.linkage ?? null }] : []),
+          ...(structureState && routed ? [{ family: 'MULTIPATH' as const, state: structureState, candidates: routed.paper, linkage: routed.linkage ?? null, run: familyRun }] : []),
         ],
       })
     : { available: false, reason: 'Option chain unavailable for this symbol — cannot size a setup.' };
   const tradeSetupWithTrail: TradeSetup = tradeSetup.available ? { ...tradeSetup, trailState: deriveTrailState(tradeSetup) } : tradeSetup;
+
+  // Phase 4 — the slot rule recorded on every candidate: paper-stage family
+  // candidates of this bar that never reached the slot path because it held
+  // an OPEN trade are recorded SLOT_OCCUPIED (never silently dropped).
+  if (chain && routed) {
+    const occupied = routed.paper.filter((rc) => PAPER_TRADING_STAGES.includes(rc.stage) && !familyRun.reached.has(rc.lifecycleId));
+    if (occupied.length > 0) {
+      const heldSignalId = (tradeSetup as StoredTradeSetup).signalId ?? null;
+      const metrics = buildMetricsContext(closedNow, decisionIstDate());
+      recordSlotArbitration(
+        underlying,
+        exchange,
+        occupied.map((rc) => ({
+          slot: routedSlotCandidate(rc, metrics),
+          role: 'INELIGIBLE' as const,
+          rank: null,
+          preBuildRank: 0,
+          reason: 'SLOT_OCCUPIED: the symbol already holds an open paper trade — one open trade per symbol; it competes again once that trade closes.',
+          refusalCode: 'SLOT_OCCUPIED',
+          optionBuildFailure: null,
+          criteriaUsed: [],
+          criteriaSkipped: [],
+          slotDecision: { slot: 'OCCUPIED' as const, decision: 'SLOT_OCCUPIED' as const, heldSignalId },
+        }))
+      );
+    }
+  }
 
   // A fill this poll claimed but the slot never reached (it already held a
   // same-direction setup): recorded on the lifecycle, never silently dropped.
@@ -2114,6 +2142,23 @@ async function computeMarketBias(
       reason: 'The paper-trade slot already holds a same-direction setup for this symbol — not minted.',
       at: decisionNow(),
     }, chain?.spotPrice ?? null);
+    // Phase 4: and its slot decision, like every other candidate's.
+    const claimed = structureRun.claimed;
+    const link = { ...linkStructureToParent(claimed, routed?.linkage ?? null), decisionTime: lastClosedBar ? lastClosedBar.time + BAR_MS_15M : decisionNow() };
+    recordSlotArbitration(underlying, exchange, [
+      {
+        slot: structureSlotCandidate(claimed, claimed.rejectionFillPrice ?? chain?.spotPrice ?? claimed.entry ?? 0, null, link, buildMetricsContext(closedNow, decisionIstDate())),
+        role: 'INELIGIBLE',
+        rank: null,
+        preBuildRank: 0,
+        reason: 'SLOT_OCCUPIED: the symbol already holds an open paper trade — one open trade per symbol.',
+        refusalCode: 'SLOT_OCCUPIED',
+        optionBuildFailure: null,
+        criteriaUsed: [],
+        criteriaSkipped: [],
+        slotDecision: { slot: 'OCCUPIED', decision: 'SLOT_OCCUPIED', heldSignalId: (tradeSetup as StoredTradeSetup).signalId ?? null },
+      },
+    ]);
   }
 
   // CONFIRMED structure lifecycles get a read-only PREVIEW of the option
@@ -2946,6 +2991,7 @@ function recordSlotArbitration(underlying: string, exchange: Exchange, records: 
           optionBuildFailure: r.optionBuildFailure,
           criteriaUsed: r.criteriaUsed,
           criteriaSkipped: r.criteriaSkipped,
+          slotDecision: r.slotDecision,
           inputs: {
             timing: r.slot.timingClass,
             movePotential: r.slot.movePotential,
@@ -3302,6 +3348,7 @@ async function resolveStickyTradeSetup(
   // reaches a broker.
   for (const rc of multipathFamily?.candidates ?? []) {
     if (!PAPER_TRADING_STAGES.includes(rc.stage)) continue;
+    multipathFamily!.run?.reached.add(rc.lifecycleId);
     // One claim per candidate per decision bar.
     const first = await redis.set(`structure_claimed:${rc.lifecycleId}:${rc.candidate.decisionTime}`, '1', 'EX', 60 * 60 * 24, 'NX').catch(() => null);
     if (first !== 'OK') continue;
@@ -4396,6 +4443,8 @@ interface MultipathFamilyInput {
   state: LiveState;
   candidates: RoutedCandidate[];
   linkage: ParentLinkage | null;
+  /** Filled by resolveStickyTradeSetup: candidates that reached the slot path (absent = none — the slot held an open trade). */
+  run?: { reached: Set<string> };
 }
 interface TriggerFamilies {
   lastClosedBar: { time: number; close: number; open?: number; high?: number; low?: number } | null;

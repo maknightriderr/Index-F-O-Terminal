@@ -62,6 +62,9 @@ import {
   type SessionEventLog,
   rebuildCandidateAt,
   STRUCTURE_RULES,
+  PARENT_SPAN_BARS,
+  parentIdFor,
+  levelKeyOf,
 } from '@fno/analytics';
 import { getSessionWindow, type Exchange, type OptionChain, type TradingMode } from '@fno/shared';
 import { redis } from '../lib/redis.js';
@@ -134,6 +137,8 @@ export interface SweepRef {
 /** Which parent each canonical event key belongs to, for today's session. */
 export interface ParentLinkage {
   session: string;
+  /** The symbol the parent ids were hashed with (absent on linkage cached before PARENT-2.0). */
+  symbol?: string;
   sweeps: SweepRef[];
   /** Event id (an anchor or one of its ancestors) or parent id → parent id. */
   parentOfKey: Record<string, string>;
@@ -150,22 +155,39 @@ function eventChain(eventId: string, byId: ReadonlyMap<string, MarketEvent>): st
   return out;
 }
 
+/** The parent id of a sweep no family candidate is anchored on: the move it starts (or joins, by level and window — PARENT IDENTITY). */
+function sweepParentId(symbol: string, session: string, sweep: MarketEvent, parents: readonly Pick<ParentSetup, 'parentId' | 'direction' | 'anchorEventId' | 'anchorIndex'>[], byId: ReadonlyMap<string, MarketEvent>): string {
+  const level = levelKeyOf(sweep.level ?? null);
+  const joined = parents.find((p) => {
+    const origin = byId.get(p.anchorEventId);
+    return p.direction === sweep.direction && level != null && levelKeyOf(origin?.level ?? null) === level && sweep.barIndex - p.anchorIndex >= 0 && sweep.barIndex - p.anchorIndex <= PARENT_SPAN_BARS;
+  });
+  return joined?.parentId ?? parentIdFor(symbol, session, sweep.direction as 'BULLISH' | 'BEARISH', { originEventId: sweep.id, originLevel: level, ancestry: [sweep.id], windowStart: sweep.time });
+}
+
 /**
  * Pure: the parent linkage of a session — every candidate's anchor event and
  * its ancestors mapped to the candidate's parent (first parent wins, in
- * chronological order), and the session's sweep events.
+ * chronological order), every sweep event mapped to its move (PARENT
+ * IDENTITY), and the session's sweep events.
  */
-export function buildParentLinkage(session: string, parents: readonly Pick<ParentSetup, 'parentId' | 'candidates'>[], all: readonly TriggerCandidate[], events: readonly MarketEvent[]): ParentLinkage {
+export function buildParentLinkage(
+  session: string,
+  parents: readonly Pick<ParentSetup, 'parentId' | 'candidates' | 'direction' | 'anchorEventId' | 'anchorIndex'>[],
+  all: readonly TriggerCandidate[],
+  events: readonly MarketEvent[],
+  symbol = ''
+): ParentLinkage {
   const byId = new Map(events.map((e) => [e.id, e]));
   const parentOfKey: Record<string, string> = {};
   for (const p of parents) {
     parentOfKey[p.parentId] ??= p.parentId;
     for (const idx of p.candidates) for (const k of eventChain(all[idx].anchorEventId, byId)) parentOfKey[k] ??= p.parentId;
   }
-  const sweeps: SweepRef[] = events
-    .filter((e) => e.type === 'SWEEP' && e.direction != null && e.level != null)
-    .map((e) => ({ eventId: e.id, direction: e.direction as 'BULLISH' | 'BEARISH', time: e.time, levelKind: e.level!.kind, levelPrice: e.level!.price }));
-  return { session, sweeps, parentOfKey };
+  const sweepEvents = events.filter((e) => e.type === 'SWEEP' && e.direction != null && e.level != null);
+  for (const e of sweepEvents) parentOfKey[e.id] ??= sweepParentId(symbol, session, e, parents, byId);
+  const sweeps: SweepRef[] = sweepEvents.map((e) => ({ eventId: e.id, direction: e.direction as 'BULLISH' | 'BEARISH', time: e.time, levelKind: e.level!.kind, levelPrice: e.level!.price }));
+  return { session, symbol, sweeps, parentOfKey };
 }
 
 /** Pure: a candidate's anchor keys — its parent and the canonical events it stands on. */
@@ -190,7 +212,10 @@ export function linkStructureToParent(
   if (!Number.isFinite(sweepTime)) return alone;
   const sweep = linkage.sweeps.find((w) => w.direction === lc.direction && w.time === sweepTime && w.levelKind === lc.pool.kind && Math.abs(w.levelPrice - lc.pool.price) < 0.005);
   if (!sweep) return alone;
-  const parentId = linkage.parentOfKey[sweep.eventId] ?? `${linkage.session}:${lc.direction}:${sweep.eventId}`;
+  // Every sweep is in parentOfKey since PARENT-2.0; a linkage cached before it falls back to the sweep's own move id.
+  const parentId =
+    linkage.parentOfKey[sweep.eventId] ??
+    parentIdFor(linkage.symbol ?? '', linkage.session, lc.direction, { originEventId: sweep.eventId, originLevel: levelKeyOf({ kind: sweep.levelKind, price: sweep.levelPrice }), ancestry: [sweep.eventId], windowStart: sweep.time });
   return { parentId, anchorKeys: [parentId, sweep.eventId], linked: true };
 }
 
@@ -508,8 +533,8 @@ export function evaluateFamiliesCore(args: {
   //    observation (SHADOW and up). A bar settled by an earlier evaluation
   //    keeps its verdict: its selection (if any) is persisted, and its other
   //    candidates cannot be re-selected with hindsight.
-  const parents = groupIntoParents(all, new Map([[session, log]]));
-  const linkage = buildParentLinkage(session, parents, all, log.events);
+  const parents = groupIntoParents(all, new Map([[session, log]]), { symbol: underlying });
+  const linkage = buildParentLinkage(session, parents, all, log.events, underlying);
   const parentOf = new Map<number, string>();
   for (const p of parents) for (const idx of p.candidates) parentOf.set(idx, p.parentId);
   const fixed: Record<string, FixedSelection> = { ...state.observeSelections };

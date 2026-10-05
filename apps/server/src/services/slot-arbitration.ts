@@ -345,6 +345,34 @@ export function parentAlreadyTraded(anchorKeys: readonly string[], traded: Reado
   return anchorKeys.some((k) => traded.has(k));
 }
 
+// ---------------- the slot rule (Phase 4) ----------------
+//
+// ONE OPEN paper trade per symbol (per trading mode's slot). While it is open
+// every new candidate is SLOT_OCCUPIED. Once it closes (target / SL / expiry /
+// abandoned / reversal) the slot is free again the SAME day: any candidate of
+// an independent parent move competes — subject to the chains' own cooldown
+// and risk gates (post-loss cooldown, risk-off, …). The only day-long block is
+// per parent: a move that already produced a paper trade never trades again
+// (PARENT_ALREADY_TRADED). Nothing blocks the whole day.
+
+export type SlotRule = 'COMPETES' | 'SLOT_OCCUPIED' | 'PARENT_ALREADY_TRADED';
+
+/** Pure: whether a candidate may compete for the symbol's slot right now. */
+export function slotRuleFor(args: { openTradeHeld: boolean; anchorKeys: readonly string[]; traded: ReadonlySet<string> }): SlotRule {
+  if (args.openTradeHeld) return 'SLOT_OCCUPIED';
+  return parentAlreadyTraded(args.anchorKeys, args.traded) ? 'PARENT_ALREADY_TRADED' : 'COMPETES';
+}
+
+/** The slot decision recorded on every candidate of an arbitration. */
+export type SlotDecisionCode = 'MINTED' | 'MINT_LOST' | 'NOT_SELECTED' | 'INELIGIBLE' | 'PARENT_ALREADY_TRADED' | 'SLOT_OCCUPIED';
+export interface SlotDecision {
+  /** FREE: no open trade held when the candidates were arbitrated. */
+  slot: 'FREE' | 'OCCUPIED';
+  decision: SlotDecisionCode;
+  /** The open trade holding the slot (OCCUPIED only). */
+  heldSignalId: string | null;
+}
+
 // ---------------- settle ----------------
 
 /** A setup an engine built through its whole chain but has not minted. */
@@ -391,6 +419,8 @@ export interface SlotArbitrationRecord {
   optionBuildFailure: string | null;
   criteriaUsed: string[];
   criteriaSkipped: string[];
+  /** Phase 4: what the slot decided for this candidate (with its parentId on slot.parentId). */
+  slotDecision: SlotDecision;
 }
 
 /**
@@ -426,6 +456,7 @@ export async function settleSlot(args: {
       optionBuildFailure: e.optionBuild ? e.reason : null,
       criteriaUsed: [],
       criteriaSkipped: [],
+      slotDecision: { slot: 'FREE', decision: e.code === 'PARENT_ALREADY_TRADED' ? 'PARENT_ALREADY_TRADED' : 'INELIGIBLE', heldSignalId: null },
     });
   }
   if (built.length === 0) {
@@ -464,6 +495,7 @@ export async function settleSlot(args: {
       optionBuildFailure: null,
       criteriaUsed: r.used,
       criteriaSkipped: r.skipped,
+      slotDecision: { slot: 'FREE', decision: pos === 0 ? (result.minted ? 'MINTED' : 'MINT_LOST') : 'NOT_SELECTED', heldSignalId: null },
     });
   });
   for (const k of r.order.slice(1)) {

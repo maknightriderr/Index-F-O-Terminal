@@ -96,7 +96,7 @@ export function runMultiPath(symbol: string, loaded: LoadedSymbol, exchange: Exc
     }
   }
 
-  return { symbol, exchange, ctx, logs, coverage, candidates, parents: groupIntoParents(candidates, logs), majorMoves };
+  return { symbol, exchange, ctx, logs, coverage, candidates, parents: groupIntoParents(candidates, logs, { symbol }), majorMoves };
 }
 
 export interface GradedCandidate {
