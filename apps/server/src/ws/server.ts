@@ -6,6 +6,10 @@
 // SubscriptionManager, which owns the single upstream Angel
 // One connection. Ticks are fanned out only to clients that
 // asked for that token.
+//
+// Phase 7: upgrades are authorised (allowed origin and/or WS_AUTH_TOKEN),
+// messages are bounded and validated, and each client may hold at most
+// WS_MAX_SUBSCRIPTIONS_PER_CLIENT tokens (ws-guard.ts).
 // ============================================================
 
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -14,6 +18,11 @@ import { randomUUID } from 'crypto';
 import { logger } from '../lib/logger.js';
 import { SubscriptionManager, type SubscriptionTarget } from '../lib/subscription-manager.js';
 import type { Tick } from '@fno/shared';
+import { config } from '../lib/config.js';
+import { WS_MAX_PAYLOAD_BYTES, admitSubscriptions, authorizeWsUpgrade, parseMaxSubscriptions, validTargets } from './ws-guard.js';
+
+const MAX_SUBSCRIPTIONS_PER_CLIENT = parseMaxSubscriptions(process.env.WS_MAX_SUBSCRIPTIONS_PER_CLIENT);
+const WS_AUTH_TOKEN = process.env.WS_AUTH_TOKEN?.trim() || null;
 
 interface ClientMessage {
   type: 'subscribe' | 'unsubscribe';
@@ -26,12 +35,23 @@ export function createMarketWebSocketServer(
   httpServer: Server,
   subscriptionManager: SubscriptionManager
 ): WebSocketServer {
-  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+  const wss = new WebSocketServer({
+    server: httpServer,
+    path: '/ws',
+    maxPayload: WS_MAX_PAYLOAD_BYTES,
+    verifyClient: (info, done) => {
+      const verdict = authorizeWsUpgrade({ origin: info.origin, url: info.req.url, allowedOrigins: config.cors.origins, token: WS_AUTH_TOKEN });
+      if (verdict.ok) return done(true);
+      logger.warn({ origin: info.origin, reason: verdict.reason }, 'WS upgrade refused');
+      done(false, verdict.status, verdict.reason);
+    },
+  });
   const clients = new Map<string, WebSocket>();
 
   wss.on('connection', (socket) => {
     const clientId = randomUUID();
     clients.set(clientId, socket);
+    const held = new Set<string>();
     logger.info({ clientId, total: clients.size }, 'WS client connected');
 
     socket.on('message', (raw) => {
@@ -42,14 +62,23 @@ export function createMarketWebSocketServer(
         return;
       }
 
-      if (!msg.tokens?.length) return;
+      const targets = validTargets(msg?.tokens);
+      if (targets.length === 0) return;
 
       if (msg.type === 'subscribe') {
-        subscriptionManager.subscribe(clientId, msg.tokens).catch((err) =>
+        const { admitted, rejected } = admitSubscriptions(held, targets, MAX_SUBSCRIPTIONS_PER_CLIENT);
+        if (rejected > 0) {
+          logger.warn({ clientId, rejected, limit: MAX_SUBSCRIPTIONS_PER_CLIENT }, 'WS subscription limit reached');
+          if (socket.readyState === socket.OPEN) socket.send(JSON.stringify({ type: 'error', data: { code: 'SUBSCRIPTION_LIMIT', limit: MAX_SUBSCRIPTIONS_PER_CLIENT, rejected } }));
+        }
+        if (admitted.length === 0) return;
+        for (const t of admitted) held.add(`${t.exchangeSegment}:${t.token}`);
+        subscriptionManager.subscribe(clientId, admitted as SubscriptionTarget[]).catch((err) =>
           logger.error({ error: err.message, clientId }, 'WS subscribe failed')
         );
       } else if (msg.type === 'unsubscribe') {
-        subscriptionManager.unsubscribe(clientId, msg.tokens);
+        for (const t of targets) held.delete(`${t.exchangeSegment}:${t.token}`);
+        subscriptionManager.unsubscribe(clientId, targets as SubscriptionTarget[]);
       }
     });
 

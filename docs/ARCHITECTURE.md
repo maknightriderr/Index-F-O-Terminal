@@ -88,6 +88,8 @@ overall DEGRADED while the upstream feed is down in session; System Health page 
 
 Ref-counting: `refCounts` (exchangeSegment:token → Set<clientId>) — one upstream subscription shared by all clients; upstream unsubscribe only when the last interested party leaves.
 
+`/ws` hardening (Phase 7, ws/ws-guard.ts): an upgrade must come from an allowed origin (`CORS_ORIGINS`, as the REST API) — or, when `WS_AUTH_TOKEN` is set, carry `?token=` equal to it (constant-time compare; the web client sends `NEXT_PUBLIC_WS_AUTH_TOKEN`); messages ≤ 64 KB; only well-formed targets; at most `WS_MAX_SUBSCRIPTIONS_PER_CLIENT` (200) tokens per client — the rest refused with a `SUBSCRIPTION_LIMIT` message.
+
 ## 5. Frontend WebSocket client
 
 `useMarketWebSocket()` is mounted once at AppShell: `MarketWebSocketClient.connect()` → `ws://server:4000/ws`; visibility / focus / online listeners call `reconnectIfStale()`; `onHealth()` feeds `useSystemHealthStore`. Per component `useMarketTicks(targets[])` subscribes / unsubscribes. Reconnect: exponential backoff capped at 30 s; all active subscriptions re-sent on open; no message for 20 s → forced reconnect.
@@ -300,7 +302,9 @@ Redis
 
 ## 14. AI assistant
 
-`POST /api/ai-assistant/ask` → `ai-assistant.ts` builds market context (MarketBias, option chain, OI, alerts) → `askClaude()` → response.
+`POST /api/ai-assistant/ask` → `ai-assistant.ts` builds market context (indices, the F&O scanner aggregates, recent alerts) → `askClaude()` → response.
+
+Read-only (Phase 7): the routes and service may not import trade, strategy, risk, strike, flag or learning modules — enforced by `eslint no-restricted-imports` (`apps/server/eslint.config.mjs`, `npm run lint -w apps/server`) and by a test that lints the files and walks their import graph. Untrusted text (alert messages, any news / third-party text) is wrapped in `<untrusted_data>…</untrusted_data>`, sanitised so it cannot close or open a delimiter, capped at 500 characters per entry, and the system prompt tells the model to treat it as data and ignore any instructions inside it.
 
 ## 15. Angel One authentication
 
@@ -334,3 +338,4 @@ Observation only: `startSystemLearningAudit` → `learningDetectors.ts` → `lea
 - **2026-10-05 — Phase 4: parent identity + slot semantics (PARENT-2.0, `+parent-identity.1`).** `groupIntoParents` groups by origin event / origin level within a fixed window (no time-proximity merge), with a stable hashed `parentId` (`parentIdFor`); the linkage maps every sweep to its move (S1 joins by the same rule); `slotRuleFor` + `slotDecision` on every arbitration row (incl. SLOT_OCCUPIED rows for family candidates and S1 fills that met an open trade). Live stamps carry `+parent-identity.1`.
 - **2026-10-05 — Phase 5: data freshness and gap protection.** `feed-freshness.ts` (FeedTracker states, `resolveGapTouch`), SubscriptionManager filtering / partial batches / gap + RECOVERING transitions / `refreshConnection`, exchange timestamp + sequence parsed from the binary feed, `feed-gap-check.ts` (no assumed fills: FILL_UNCERTAIN / MISSED_TOUCH_POSSIBLE), `auth-refresh.ts` (retry + alert + feed reconnect), `/api/health` feed states, `/api/diagnostics/feed-gaps`, System Health "Data feed" table.
 - **2026-10-05 — Phase 6: ServiceSupervisor, clean shutdown, state recovery.** All 18 services + 2 components supervised (critical: tradeSetupPriceMonitor, signalEngine, setupLifecycle); health DEGRADED on a critical failure; shutdown order supervisor-first; Redis rebuilt from PostgreSQL at boot (PG wins); setup-watch LIFECYCLE rows carry the whole row; request-priority max-wait cap.
+- **2026-10-05 — Phase 7: AI assistant read-only + /ws hardening.** ESLint import boundary for the assistant (+ graph test), untrusted-text delimiting in its prompt, `/ws` origin / token check, payload cap, target validation and per-client subscription limit.

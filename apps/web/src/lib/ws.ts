@@ -13,7 +13,9 @@ import { useEffect, useRef, useState } from 'react';
 import { useSystemHealthStore } from '@/stores';
 import type { Tick, Exchange, ExchangeSegment } from '@fno/shared';
 
-const WS_URL = (process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:4000') + '/ws';
+// Phase 7: the server checks the origin; when WS_AUTH_TOKEN is set there, the same value goes here.
+const WS_TOKEN = process.env.NEXT_PUBLIC_WS_AUTH_TOKEN;
+const WS_URL = (process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:4000') + '/ws' + (WS_TOKEN ? `?token=${encodeURIComponent(WS_TOKEN)}` : '');
 
 export interface WsSubscriptionTarget {
   token: string;

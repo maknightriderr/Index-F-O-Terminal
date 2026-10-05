@@ -9,6 +9,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint src/api/ai-assistant.ts src/services/ai-assistant.ts",
     "test": "vitest run",
     "clean": "rimraf dist",
     "db:migrate": "tsx src/database/migrate.ts",
@@ -58,9 +59,11 @@
     "@types/uuid": "^10.0.0",
     "@types/ws": "^8.5.0",
     "drizzle-kit": "^0.30.0",
+    "eslint": "^9.39.5",
     "rimraf": "^6.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.66.0",
     "vitest": "^3.0.0"
   }
 }
