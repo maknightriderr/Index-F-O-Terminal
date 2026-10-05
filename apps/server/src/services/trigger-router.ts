@@ -60,6 +60,7 @@ import {
   type ParentSetup,
   type SeriesContext,
   type SessionEventLog,
+  type TriggerFailure,
   rebuildCandidateAt,
   STRUCTURE_RULES,
   PARENT_SPAN_BARS,
@@ -471,6 +472,8 @@ export interface FamilyCoreResult {
   observeSelectionsChanged: boolean;
   paper: RoutedCandidate[];
   watch: FamilyWatchEntry[];
+  /** Triggers that failed on a bar (error or look-ahead) — only their own candidates were lost. */
+  triggerFailures: TriggerFailure[];
 }
 
 /**
@@ -492,7 +495,7 @@ export function evaluateFamiliesCore(args: {
 }): FamilyCoreResult {
   const { underlying, exchange, mode, bars, chain, now, stages, state } = args;
   const ids = liveRoutedTriggerIds(stages);
-  const notRun: FamilyCoreResult = { status: 'NOT_RUN', session: null, newestBarTime: null, end: -1, todo: [], routed: [], events: [], linkage: null, observeSelections: {}, observeSelectionsChanged: false, paper: [], watch: [] };
+  const notRun: FamilyCoreResult = { status: 'NOT_RUN', session: null, newestBarTime: null, end: -1, todo: [], routed: [], events: [], linkage: null, observeSelections: {}, observeSelectionsChanged: false, paper: [], watch: [], triggerFailures: [] };
   if (!familyRouterSession({ exchange, mode, bars, now, ids })) return notRun;
   const series = prepareMomentumSeries(bars);
   const s = series.sessionStarts.length - 1;
@@ -516,8 +519,10 @@ export function evaluateFamiliesCore(args: {
   // 1. Every trigger, independently, on every bar of today's session so far
   //    (each rule reads only bars up to its own decision bar). One rule
   //    failing — no displacement, no target — never stops another.
+  // A trigger that throws (or reads past its bar) loses only its own candidates.
   const all: TriggerCandidate[] = [];
-  for (let i = start; i <= end; i++) all.push(...evaluateTriggersAt(ctx, log, i, ids));
+  const triggerFailures: TriggerFailure[] = [];
+  for (let i = start; i <= end; i++) all.push(...evaluateTriggersAt(ctx, log, i, ids, triggerFailures));
 
   // 2. Qualify each: risk geometry, session window, and option cost on the
   //    live quote (only meaningful for the bar that just closed).
@@ -580,7 +585,7 @@ export function evaluateFamiliesCore(args: {
     if (rc.candidate.bucket !== 'LOW_RR' && rc.candidate.bucket !== 'TRADE') continue;
     if (!watch.some((w) => w.lifecycleId === rc.lifecycleId)) watch.push(newFamilyWatch(rc));
   }
-  return { status: 'EVALUATED', session, newestBarTime: series.bars[end].time, end, todo, routed, events: log.events, linkage, observeSelections: fixed, observeSelectionsChanged: changed, paper, watch };
+  return { status: 'EVALUATED', session, newestBarTime: series.bars[end].time, end, todo, routed, events: log.events, linkage, observeSelections: fixed, observeSelectionsChanged: changed, paper, watch, triggerFailures };
 }
 
 /**
@@ -600,6 +605,7 @@ export async function routeTriggerFamilies(args: { underlying: string; exchange:
     const out = evaluateFamiliesCore({ underlying, exchange, mode, bars, chain, now, stages, state });
     if (out.status === 'NOT_RUN') return { paper: [], evaluated: 0 };
     if (out.status === 'NO_NEW_BAR') return { paper: [], evaluated: 0, linkage: out.linkage, watch: out.watch };
+    for (const f of out.triggerFailures) logger.error({ underlying, exchange, ...f }, 'Trigger router: one trigger failed — its candidates are dropped, every other trigger still evaluated');
 
     if (out.observeSelectionsChanged) await redis.set(`mp_sel:observe:${exchange}:${underlying}:${session}`, JSON.stringify(out.observeSelections), 'EX', EVAL_STATE_TTL_SECONDS).catch(() => undefined);
     const todoSet = new Set(out.todo);

@@ -445,7 +445,7 @@ export function deriveDecisionRecord(snap: SignalDecisionSnapshot, generatedAt: 
   // --- slot: common metrics and the pre-build ranking ---
   const lastBar15 = bars15[bars15.length - 1] ?? null;
   const decisionBarClose = lastBar15 ? lastBar15.time + BAR_MS_15M : snap.decisionBarTime;
-  const metricsCtx = buildMetricsContext(bars15, istDate(polledAt));
+  const metricsCtx = buildMetricsContext(bars15, istDate(polledAt), snap.inputs.optionMetrics.positioningNet ?? null);
   const traded = new Set(snap.inputs.slotTradedKeys);
   const pool: SlotCandidate[] = [];
   const parentTraded: string[] = [];
@@ -526,6 +526,7 @@ export function deriveDecisionRecord(snap: SignalDecisionSnapshot, generatedAt: 
       events: fam?.status === 'EVALUATED' ? fam.events : [],
       linkage: fam?.linkage ?? null,
       watch: (fam?.watch ?? []).map((w) => ({ lifecycleId: w.lifecycleId, lastIndex: w.lastIndex, ended: w.ended })),
+      triggerFailures: (fam?.triggerFailures ?? []).map((f) => ({ ...f })),
     },
     candidates,
     triggerEventIds: candidates.filter((c) => c.eventIds.length > 0).map((c) => ({ candidateId: c.candidateId, eventIds: c.eventIds })),

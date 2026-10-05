@@ -1525,6 +1525,12 @@ export type NoTradeCode =
   | 'NOT_SELECTED'
   // The candidate's parent market move already produced a paper trade today (any engine): one trade per parent.
   | 'PARENT_ALREADY_TRADED'
+  // A candidate's own chain threw (it alone is refused; every other candidate continues).
+  | 'ENGINE_ERROR'
+  // The chain a built candidate was priced on is too old at mint time (the slot moves to the next-best).
+  | 'STALE_QUOTE'
+  // The mint itself failed (the slot moves to the next-best).
+  | 'MINT_FAILED'
   | 'UNKNOWN';
 
 /** A structured account of one entry decision — why it was taken, or why it was not. */

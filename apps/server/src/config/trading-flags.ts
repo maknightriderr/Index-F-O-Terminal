@@ -451,7 +451,10 @@ export const EVENT_ENGINE_VERSION = 'EVENT-1.0';
 // origin level inside the move's window (event-engine PARENT IDENTITY); time
 // proximity alone no longer merges; parentId is a stable hash.
 export const PARENTING_VERSION = 'PARENT-2.0';
-export const ARBITRATION_VERSION = 'ARB-1.0';
+// ARB-2.0 (2026-10-05): ranking criterion 5 = confirmations (sweep, displacement,
+// FVG/zone/SMC shift, option-chain agreement) after entry quality; the slot walks
+// down the ranking on a failed pre-mint check / mint.
+export const ARBITRATION_VERSION = 'ARB-2.0';
 /** @fno/analytics package version (packages/analytics/package.json) — kept equal by a test. */
 export const ANALYTICS_VERSION = '0.1.0';
 /**

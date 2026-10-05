@@ -207,6 +207,8 @@ import {
 import { strikeNetRR } from './fno-validation.js';
 import {
   settleSlot,
+  isolatedCandidate,
+  preMintCheck,
   isSlotEntry,
   parentAlreadyTraded,
   structureSlotCandidate,
@@ -1478,7 +1480,7 @@ async function computeMarketBias(
         provider, underlying, exchange, mode, bars15m: closedNow, bars5m: structureTimeframe === '5m' ? structureClosed5m : null,
         structureRuns: structureTimeframe !== '5m' || structureClosed5m != null,
         candles1h, chain: chain ?? null, futures, lastClosedBar,
-        optionMetrics: { pcr: chain ? pcr : null, atmIvPct: atmIvPct > 0 ? atmIvPct : null, hvPct: hvPct ?? null, ivVsHv: atmIvPct > 0 ? ivVsHv.reading : null },
+        optionMetrics: { pcr: chain ? pcr : null, atmIvPct: atmIvPct > 0 ? atmIvPct : null, hvPct: hvPct ?? null, ivVsHv: atmIvPct > 0 ? ivVsHv.reading : null, positioningNet: voteSnapshot.positioningNet },
         marketRegime: { regime: fastRegime.regime, source: fastRegime.source },
       }).catch((err: any) => {
         logger.warn({ error: err.message, underlying, exchange }, 'Decision snapshot: capture failed — engines run on their own reads, poll not snapshotted');
@@ -2117,7 +2119,7 @@ async function computeMarketBias(
     const occupied = routed.paper.filter((rc) => PAPER_TRADING_STAGES.includes(rc.stage) && !familyRun.reached.has(rc.lifecycleId));
     if (occupied.length > 0) {
       const heldSignalId = (tradeSetup as StoredTradeSetup).signalId ?? null;
-      const metrics = buildMetricsContext(closedNow, decisionIstDate());
+      const metrics = buildMetricsContext(closedNow, decisionIstDate(), voteSnapshot.positioningNet);
       recordSlotArbitration(
         underlying,
         exchange,
@@ -2151,7 +2153,7 @@ async function computeMarketBias(
     const link = { ...linkStructureToParent(claimed, routed?.linkage ?? null), decisionTime: lastClosedBar ? lastClosedBar.time + BAR_MS_15M : decisionNow() };
     recordSlotArbitration(underlying, exchange, [
       {
-        slot: structureSlotCandidate(claimed, claimed.rejectionFillPrice ?? chain?.spotPrice ?? claimed.entry ?? 0, null, link, buildMetricsContext(closedNow, decisionIstDate())),
+        slot: structureSlotCandidate(claimed, claimed.rejectionFillPrice ?? chain?.spotPrice ?? claimed.entry ?? 0, null, link, buildMetricsContext(closedNow, decisionIstDate(), voteSnapshot.positioningNet)),
         role: 'INELIGIBLE',
         rank: null,
         preBuildRank: 0,
@@ -3315,7 +3317,7 @@ async function resolveStickyTradeSetup(
   // 15m bar closed at the decision (a family decides at exactly that close).
   const decisionBarClose = lastClosedBar ? lastClosedBar.time + BAR_MS_15M : decisionNow();
   // One metric context for every engine: today's closed 15m bars up to the newest closed bar.
-  const metrics = buildMetricsContext(triggers?.bars15m ?? [], today);
+  const metrics = buildMetricsContext(triggers?.bars15m ?? [], today, voteSnapshot?.positioningNet ?? null);
   const tradedKey = `slot_traded:${exchange}:${underlying}:${mode}:${today}`;
   const tradedKeys = new Set<string>(JSON.parse((await redis.get(tradedKey).catch(() => null)) ?? '[]') as string[]);
   const markTraded = async (keys: readonly string[]) => {
@@ -3335,12 +3337,15 @@ async function resolveStickyTradeSetup(
       await recordStructureOutcome(structureFamily.state, structureFill, { outcome: 'REFUSED', code: 'PARENT_ALREADY_TRADED', reason: parentTradedReason, at: decisionNow() }, chain.spotPrice);
       entries.push({ kind: 'REFUSED', slot: structureSlotCandidate(structureFill, structureFill.rejectionFillPrice ?? chain.spotPrice, null, link, metrics), code: 'PARENT_ALREADY_TRADED', reason: parentTradedReason, optionBuild: false });
     } else {
+      const s1Slot = structureSlotCandidate(structureFill, structureFill.rejectionFillPrice ?? chain.spotPrice, null, link, metrics);
       entries.push(
-        await resolveStructureSetup({
-          provider, underlying, exchange, mode, key, today, setupTtl, chain, lc: structureFill, state: structureFamily.state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId,
-          link,
-          metrics,
-        })
+        await isolatedCandidate(s1Slot, () =>
+          resolveStructureSetup({
+            provider, underlying, exchange, mode, key, today, setupTtl, chain, lc: structureFill, state: structureFamily.state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId,
+            link,
+            metrics,
+          })
+        )
       );
     }
   }
@@ -3365,12 +3370,14 @@ async function resolveStickyTradeSetup(
       continue;
     }
     entries.push(
-      await resolveStructureSetup({
-        provider, underlying, exchange, mode, key, today, setupTtl, chain, lc, state: multipathFamily!.state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId,
-        link: { parentId: slot.parentId, anchorKeys: slot.anchorKeys, decisionTime: slot.decisionTime },
-        slot,
-        metrics,
-      })
+      await isolatedCandidate(slot, () =>
+        resolveStructureSetup({
+          provider, underlying, exchange, mode, key, today, setupTtl, chain, lc, state: multipathFamily!.state, regime, intelligenceScore, voteSnapshot, entryContext, priorDecisionId,
+          link: { parentId: slot.parentId, anchorKeys: slot.anchorKeys, decisionTime: slot.decisionTime },
+          slot,
+          metrics,
+        })
+      )
     );
   }
 
@@ -3382,9 +3389,10 @@ async function resolveStickyTradeSetup(
   try {
     indicator = await indicatorEngine();
   } catch (err: any) {
-    if (entries.length === 0) throw err;
+    // Never blocks the other engines' candidates: it is one more refused candidate.
     logger.warn({ error: err.message, underlying, exchange }, 'Indicator engine failed — arbitrating the other engines\' candidates');
-    indicator = { available: false, reason: 'Indicator engine failed.' };
+    const reason = `The indicator engine failed: ${err.message}`;
+    indicator = { kind: 'REFUSED', slot: indicatorSlotCandidate(indicatorId, direction, null, decisionBarClose), code: 'ENGINE_ERROR', reason, optionBuild: false, setup: { available: false, noTradeCode: 'ENGINE_ERROR', reason } };
   }
   const indicatorSetup: TradeSetup | null = isSlotEntry(indicator) ? (indicator.kind === 'REFUSED' ? indicator.setup ?? null : null) : indicator;
   await updateIndicatorWatch(indicator).catch((err: any) => logger.warn({ error: err.message, underlying, exchange }, 'Setup watch: indicator update failed'));
@@ -3393,18 +3401,25 @@ async function resolveStickyTradeSetup(
   // Arbitration rows only when something besides the indicator engine took
   // part (a lone indicator read is already recorded by its own chain every poll).
   const arbitrated = entries.some((e) => e.slot.source !== 'INDICATOR');
+  let slotRecords: SlotArbitrationRecord[] = [];
   const minted = await settleSlot({
     underlying,
     exchange,
     entries,
     markTraded,
+    // Best first: a candidate that fails this is recorded and the next-best is tried.
+    preMint: (entry) => preMintCheck(entry.setup, chain, decisionNow()),
     // The traded setup's watch ends here (TRADED) — under the same id it was watched with.
     onSelected: async (slot) => {
       await endWatchRow(setupWatchKey(exchange, underlying, mode, today), { exchange, underlying }, slot.candidateId, 'FILLED', decisionNow());
       if (slot.source !== 'S1' && slot.source !== 'INDICATOR') await endFamilyWatch(exchange, underlying, today, slot.candidateId, 'FILLED', decisionNow());
     },
-    ...(arbitrated ? { record: (r: SlotArbitrationRecord[]) => recordSlotArbitration(underlying, exchange, r) } : {}),
+    record: (r: SlotArbitrationRecord[]) => {
+      slotRecords = r;
+      if (arbitrated) recordSlotArbitration(underlying, exchange, r);
+    },
   });
+  void slotRecords;
   return minted ?? indicatorSetup ?? { available: false, reason: 'No engine built an eligible setup this check.' };
 
   /**
@@ -4517,7 +4532,7 @@ async function captureDecisionSnapshot(args: {
   chain: OptionChain | null;
   futures: FuturesChainResponse | null;
   lastClosedBar: { time: number } | null;
-  optionMetrics: { pcr: number | null; atmIvPct: number | null; hvPct: number | null; ivVsHv: string | null };
+  optionMetrics: { pcr: number | null; atmIvPct: number | null; hvPct: number | null; ivVsHv: string | null; positioningNet?: number | null };
   marketRegime: { regime: string; source: string } | null;
 }): Promise<{ polledAt: number; structureInputs: StructureInputs | null; familyRouterState: FamilyRouterState | null; chain: OptionChain | null; snapshotId: string | null }> {
   const { provider, underlying, exchange, mode, bars15m, bars5m, chain } = args;
