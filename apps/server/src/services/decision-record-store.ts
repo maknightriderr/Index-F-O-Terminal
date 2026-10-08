@@ -103,14 +103,16 @@ export async function replay(snapshotId: string): Promise<ReplayReport> {
 // ---------------- full replay tapes (037) ----------------
 
 /** DECISION_TAPE (default on): record each snapshotted poll's I/O tape for full replay. */
-export const DECISION_TAPE_ENABLED = !/^(0|false|off|no)$/i.test(process.env.DECISION_TAPE ?? '');
-/** Tapes are kept this many days (DECISION_TAPE_RETENTION_DAYS, default 7), then removed by the forward-validation job. */
+// OFF unless DECISION_TAPE=1. A production tape is ~MBs (a day of history, the full chain and every
+// SQL result): left on for every snapshot it filled the 5 GB database volume in three days (2026-10-08).
+export const DECISION_TAPE_ENABLED = /^(1|true|on|yes)$/i.test(process.env.DECISION_TAPE ?? '');
+/** Tapes are kept this many days (DECISION_TAPE_RETENTION_DAYS, default 2), then removed by the forward-validation job. */
 export const DECISION_TAPE_RETENTION_DAYS = (() => {
   const n = Number(process.env.DECISION_TAPE_RETENTION_DAYS);
-  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 7;
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 2;
 })();
 /** A tape larger than this (compressed) is not stored — the snapshot and its DecisionRecord still are. */
-export const MAX_TAPE_BYTES = 8 * 1024 * 1024;
+export const MAX_TAPE_BYTES = 512 * 1024;
 export const TAPES_MIGRATION = '037_replay_tapes_forward_validation.sql';
 
 const gz = (v: unknown) => gzipSync(Buffer.from(JSON.stringify(v))).toString('base64');
