@@ -17,7 +17,7 @@ import { sql } from '../lib/db.js';
 import type { DiagnosticsQuery } from './signal-diagnostics.js';
 import { ESTIMATED_ROUND_TRIP_COST_PCT, type TradeSetupRecord } from '@fno/shared';
 import { getTradeSetupHistory } from './backtesting.js';
-import { SHADOW_PARAMS, SHADOW_RULES_VERSION, aggregateEntryRules, aggregateExitRules, entryFlags, type EntryRuleTrade } from './shadow-rules.js';
+import { SHADOW_PARAMS, SHADOW_RULES_REGISTERED_AT, SHADOW_RULES_VERSION, aggregateEntryRules, aggregateExitRules, entryFlags, type EntryRuleTrade } from './shadow-rules.js';
 
 /** Option-plan stages that are time decay / cost, and that are liquidity (OptionCandidate.rejectedAt). */
 export const STRIKE_THETA_COST_STAGES: ReadonlySet<string> = new Set(['TARGET_POTENTIAL', 'PREMIUM_RISK', 'NET_RR']);
@@ -271,7 +271,11 @@ export async function shadowRulesReport(q: DiagnosticsQuery) {
   return {
     version: SHADOW_RULES_VERSION,
     params: SHADOW_PARAMS,
+    registeredAt: SHADOW_RULES_REGISTERED_AT,
     entry: {
+      // The fair test: trades minted after the rules were registered (out of sample).
+      sinceRegistered: aggregateEntryRules(entryRuleTrades(history.filter((r) => r.generatedAt >= SHADOW_RULES_REGISTERED_AT))),
+      // In sample: these trades suggested the rules, so their figures flatter them.
       all: aggregateEntryRules(entryRuleTrades(history)),
       sinceArchitectureChange: aggregateEntryRules(entryRuleTrades(history.filter((r) => r.generatedAt >= ARCHITECTURE_CHANGE_AT))),
     },

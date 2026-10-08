@@ -54,7 +54,8 @@ export interface ShadowRulesReport {
   note: string;
   version: string;
   params: Record<string, number>;
-  entry: { all: EntryBlock; sinceArchitectureChange: EntryBlock };
+  registeredAt?: number;
+  entry: { sinceRegistered?: EntryBlock; all: EntryBlock; sinceArchitectureChange: EntryBlock };
   exit: {
     trades: number;
     baselineNetPerTrade: number | null;
@@ -106,6 +107,17 @@ export function ShadowRulesPanel({ filter }: { filter: DiagnosticsFilter }) {
       title="Shadow experiments"
       subtitle={`${data.version}. Candidate rules fixed in advance and measured on the trades the system actually made — none of them changes what it trades. A rule is considered for live use only after 30+ forward trades show a material gain.`}
     >
+      {data.entry.sinceRegistered && (
+        <div className="space-y-1">
+          <h4 className={`text-[11px] uppercase tracking-wide ${muted}`}>
+            Entry filters — fair test: trades after the rules were registered ({data.entry.sinceRegistered.trades} closed trades, baseline {signedPct(data.entry.sinceRegistered.baselineNetPerTrade)} / trade)
+          </h4>
+          <Rows head={head} rows={entryRows(data.entry.sinceRegistered)} />
+        </div>
+      )}
+      <p className={`text-[11px] ${muted}`}>
+        The two tables below are in sample: the cost-edge, MCX-evening and rich-IV filters were suggested by these same trades, so their improvement there is overstated. Judge the rules on the fair test above.
+      </p>
       <div className="space-y-1">
         <h4 className={`text-[11px] uppercase tracking-wide ${muted}`}>Entry filters — since the 5 Oct change ({data.entry.sinceArchitectureChange.trades} closed trades, baseline {signedPct(data.entry.sinceArchitectureChange.baselineNetPerTrade)} / trade)</h4>
         <Rows head={head} rows={entryRows(data.entry.sinceArchitectureChange)} />
