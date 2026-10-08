@@ -21,6 +21,7 @@
 // ============================================================
 
 import { RICH_IV_MIN_RISK_REWARD as RICH_IV_MIN_RISK_REWARD_DEFAULT, STRUCTURAL_STOP_BUFFER_ATR as STRUCTURAL_STOP_BUFFER_ATR_DEFAULT } from '@fno/analytics';
+import { orderFlowLogicSuffix } from './order-flow-flags.js';
 import {
   OPTION_DELTA_BAND_MIN as OPTION_DELTA_BAND_MIN_DEFAULT,
   OPTION_DELTA_BAND_MAX as OPTION_DELTA_BAND_MAX_DEFAULT,
@@ -954,5 +955,6 @@ export function liveLogicStamp(): LogicStamp {
     versions: { strategyVersion: STRATEGY_VERSION, triggerVersion: TRIGGER_VERSION, riskVersion: RISK_VERSION, optionVersion: OPTION_VERSION, costVersion: COST_VERSION },
     indicator: { confidenceMode: INDICATOR_CONFIDENCE_MODE, locationMode: INDICATOR_LOCATION_MODE },
   });
-  return { ...stamp, logicVersion: `${stamp.logicVersion}${RR_DISPLAY_ONLY_LOGIC_SUFFIX}${PARENT_IDENTITY_LOGIC_SUFFIX}${TRIGGER_DEMOTION_LOGIC_SUFFIX}` };
+  // + the OB1 / OF1 paper-source suffix while either may take the slot (empty when both are off).
+  return { ...stamp, logicVersion: `${stamp.logicVersion}${RR_DISPLAY_ONLY_LOGIC_SUFFIX}${PARENT_IDENTITY_LOGIC_SUFFIX}${TRIGGER_DEMOTION_LOGIC_SUFFIX}${orderFlowLogicSuffix()}` };
 }

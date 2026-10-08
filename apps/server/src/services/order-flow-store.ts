@@ -32,6 +32,11 @@ interface SymbolFlow {
 }
 
 const flows = new Map<string, SymbolFlow>();
+/** Set by the feed: whether it is connected (labels an empty bar's reason). */
+let feedConnected = false;
+export function setFlowFeedConnected(v: boolean): void {
+  feedConnected = v;
+}
 
 /** The 15m bar a time falls in. IST is UTC+5:30, so the epoch 15-minute grid is the IST grid (09:15, 09:30, …). */
 export const flowBarStart = (t: number) => Math.floor(t / FLOW_BAR_MS) * FLOW_BAR_MS;
@@ -59,7 +64,7 @@ export function recordFlowTrade(symbol: string, trade: FlowTrade): void {
  * (inside the NSE session). `connected` says whether the feed was up — it
  * only labels an empty bar's reason.
  */
-export async function closeFlowBars(now: number, connected: boolean): Promise<number> {
+export async function closeFlowBars(now: number, connected: boolean = feedConnected): Promise<number> {
   let written = 0;
   for (const [symbol, f] of flows) {
     const current = flowBarStart(now);
@@ -101,6 +106,8 @@ const num = (v: unknown): number | null => (v == null ? null : Number(v));
 export function footprintsFor(symbol: string, barTimes: readonly number[]): Promise<Map<number, FootprintBar>> {
   return tapedInput('orderFlowFootprints', [symbol, barTimes[0] ?? null, barTimes[barTimes.length - 1] ?? null, barTimes.length], async () => {
     const out = new Map<number, FootprintBar>();
+    // A bar that closed moments ago may not be finalized by the feed's timer yet.
+    await closeFlowBars(Date.now());
     const f = flows.get(symbol);
     const missing: number[] = [];
     for (const t of barTimes) {

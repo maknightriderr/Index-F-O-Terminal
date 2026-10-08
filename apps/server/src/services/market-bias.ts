@@ -108,6 +108,9 @@ import { riskOffReason } from './risk-circuit-breaker.js';
 import { orderBlockSignalAt } from '@fno/analytics';
 import { directionWithOrderBlockVote, recordOrderBlockShadow } from './order-block-shadow.js';
 import { recordOf1Shadow } from './of1-live.js';
+import { orderFlowPaperCandidates, orderFlowSourcesOn } from './order-flow-candidates.js';
+import { footprintsFor } from './order-flow-store.js';
+import { ORDER_FLOW_SOURCE_VERSIONS, ORDER_FLOW_SYMBOLS } from '../config/order-flow-flags.js';
 import { assessLocation, assessRoom, type StructuralLevel } from './location-quality.js';
 import { TRADING_FLAGS, TRADING_PARAMS, COVERAGE_LAG_FLAGS, COVERAGE_LAG_PARAMS, liveLogicStamp, paperResearchStamp, FNO_VALIDATION, FNO_VALIDATION_PARAMS, type LogicStamp } from '../config/trading-flags.js';
 import { bandVote, type Vote } from './vote-bands.js';
@@ -2132,6 +2135,23 @@ async function computeMarketBias(
     breakoutPersistBarsAgo: breakoutPersist?.barsAgo ?? null,
   };
 
+  // OB1 (OB-2.0) / OF1 paper candidate sources (user decision 2026-10-09):
+  // built and routed exactly like the trigger families' candidates and added
+  // to the same pool, on the same cadence (a newly evaluated bar) — the
+  // existing chain and slot arbitration decide. Never part of the indicator.
+  const ofSources = orderFlowSourcesOn();
+  let orderFlowPaper: RoutedCandidate[] = [];
+  if (!isPositional && structureState && routed && routed.evaluated > 0 && closedNow.length > 0 && (ofSources.ob1 || ofSources.of1)) {
+    try {
+      const of1Here = ofSources.of1 && ORDER_FLOW_SYMBOLS.includes(underlying);
+      const footprints = of1Here ? await footprintsFor(underlying, closedNow.slice(-60).map((b) => b.time)) : new Map();
+      orderFlowPaper = orderFlowPaperCandidates({ underlying, exchange, bars: closedNow, chain, footprints, ob1: ofSources.ob1, of1: of1Here });
+    } catch (err: any) {
+      logger.warn({ error: err.message, underlying, exchange }, 'OB1 / OF1 candidates failed — the other engines are unaffected');
+    }
+  }
+  const familyPaper = routed ? [...routed.paper, ...orderFlowPaper] : [];
+
   const tradeSetup: TradeSetup = chain
     ? await resolveStickyTradeSetup(provider, underlying, exchange, chain, direction, setupConfidence, regime, overall, mode, voteSnapshot, entryContext, {
         lastClosedBar,
@@ -2139,7 +2159,7 @@ async function computeMarketBias(
         families: [
           { family: 'MOMENTUM_BREAK', trigger: momentumRead?.trigger ?? null },
           ...(structureState ? [{ family: 'STRUCTURE' as const, state: structureState, run: structureRun, ...(structureLastBar ? { lastClosedBar: structureLastBar } : {}) }] : []),
-          ...(structureState && routed ? [{ family: 'MULTIPATH' as const, state: structureState, candidates: routed.paper, linkage: routed.linkage ?? null, run: familyRun, evaluatedBars: routed.evaluated, triggerFailures: routed.triggerFailures ?? 0 }] : []),
+          ...(structureState && routed ? [{ family: 'MULTIPATH' as const, state: structureState, candidates: familyPaper, linkage: routed.linkage ?? null, run: familyRun, evaluatedBars: routed.evaluated, triggerFailures: routed.triggerFailures ?? 0 }] : []),
         ],
       })
     : { available: false, reason: 'Option chain unavailable for this symbol — cannot size a setup.' };
@@ -2149,7 +2169,7 @@ async function computeMarketBias(
   // candidates of this bar that never reached the slot path because it held
   // an OPEN trade are recorded SLOT_OCCUPIED (never silently dropped).
   if (chain && routed) {
-    const occupied = routed.paper.filter((rc) => PAPER_TRADING_STAGES.includes(rc.stage) && !familyRun.reached.has(rc.lifecycleId));
+    const occupied = familyPaper.filter((rc) => PAPER_TRADING_STAGES.includes(rc.stage) && !familyRun.reached.has(rc.lifecycleId));
     if (occupied.length > 0) {
       const heldSignalId = (tradeSetup as StoredTradeSetup).signalId ?? null;
       const metrics = buildMetricsContext(closedNow, decisionIstDate(), voteSnapshot.positioningNet);
@@ -5726,7 +5746,7 @@ async function mintTradeSetup(ctx: {
   // written to signals.inputs.logic so pre- and post-review trades are never pooled.
   const logic = paperResearchStamp(liveLogicStamp(), ctx.structure?.triggerId);
   const origin = ctx.structure
-    ? { source: ctx.structure.triggerId ?? 'S1', candidateId: ctx.structure.lifecycleId }
+    ? { source: ctx.structure.triggerId ?? 'S1', candidateId: ctx.structure.lifecycleId, sourceVersion: ORDER_FLOW_SOURCE_VERSIONS[ctx.structure.triggerId ?? ''] ?? null }
     : ctx.momentumBreak
       ? { source: 'MOMENTUM_BREAK', candidateId: `${ctx.momentumBreak.direction}:${ctx.momentumBreak.barTime}` }
       : { source: 'INDICATOR', candidateId: null };
@@ -5879,7 +5899,7 @@ async function recordTradeSetupGenerated(
   votes?: BiasVoteSnapshot,
   context?: SetupEntryContext,
   logic: LogicStamp | null = null,
-  origin: { source: string; candidateId: string | null } | null = null
+  origin: { source: string; candidateId: string | null; sourceVersion?: string | null } | null = null
 ): Promise<string | undefined> {
   try {
     // mode is persisted here (found missing in a re-audit) so backtesting
@@ -5936,6 +5956,8 @@ async function recordTradeSetupGenerated(
             // performance by source without matching on time.
             source: origin?.source ?? null,
             candidateId: origin?.candidateId ?? null,
+            // OB1 → OB-2.0, OF1 → OF1-1.0 (measured separately); null for every other source.
+            sourceVersion: origin?.sourceVersion ?? null,
           } as any
         )},
         ${fresh.reason}, ${regime}, ${intelligenceScore}${snapshotId ? sql`, ${snapshotId}` : sql``}

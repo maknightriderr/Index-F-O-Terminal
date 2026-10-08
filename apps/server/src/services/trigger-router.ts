@@ -389,7 +389,7 @@ function legFor(chain: OptionChain, side: 'CE' | 'PE') {
 }
 
 /** The option leg's cost for a candidate, on the ATM leg of the live chain (labelled ATM_PROXY: no contract was chosen). */
-function costOnChain(c: TriggerCandidate, chain: OptionChain | null): SetupCostMeasurement | null {
+export function costOnChain(c: TriggerCandidate, chain: OptionChain | null): SetupCostMeasurement | null {
   if (!chain) return null;
   const side = c.direction === 'BULLISH' ? 'CE' : 'PE';
   const leg = legFor(chain, side);

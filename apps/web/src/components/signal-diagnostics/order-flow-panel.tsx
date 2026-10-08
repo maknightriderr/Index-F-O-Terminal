@@ -1,11 +1,12 @@
 'use client';
 
 // ============================================================
-// SIGNAL DIAGNOSTICS — Order Blocks (OB-2.0) and Order Flow / OF1, shadow
+// SIGNAL DIAGNOSTICS — Order Blocks (OB-2.0 / OB1) and Order Flow / OF1
 // ============================================================
-// What the repaired order-block detector would have done beside the live
+// What the repaired order-block detector did beside the indicator's legacy
 // vote, how much Dhan order flow arrived (and whether its delta is exact or
-// inferred), and every OF1 candidate — none of which trades.
+// inferred), and every OF1 candidate. OB1 / OF1 paper trades themselves are
+// in Backtesting → By Source.
 // ============================================================
 
 import React, { useEffect, useState } from 'react';
@@ -82,19 +83,19 @@ export function OrderFlowPanel({ filter }: { filter: DiagnosticsFilter }) {
   return (
     <section className="bg-gray-900/40 light:bg-white border border-gray-800/60 light:border-slate-200 rounded-lg p-4 space-y-4">
       <header>
-        <h3 className="text-sm font-semibold text-gray-200 light:text-slate-800">Order blocks and order flow (shadow)</h3>
+        <h3 className="text-sm font-semibold text-gray-200 light:text-slate-800">Order blocks and order flow</h3>
         <p className={`text-[11px] ${muted}`}>
-          Recorded beside the live system, never traded. Order blocks: {data.settings.orderBlockMode}; OF1: {data.settings.of1Enabled ? 'recording' : 'off'}, trading {data.settings.of1Trading ? 'on' : 'off'}.
+          Order blocks (OB1): {data.settings.orderBlockMode === 'PAPER' ? 'paper trading' : data.settings.orderBlockMode.toLowerCase()}; OF1: {data.settings.of1Enabled ? (data.settings.of1Trading ? 'paper trading' : 'recording only') : 'off'}. Paper only — no broker orders. Their trades are under Backtesting → By Source (OB1, OF1).
         </p>
       </header>
 
       <div className="space-y-2">
-        <h4 className={`text-[11px] uppercase tracking-wide ${muted}`}>Repaired order blocks (OB-2.0) vs the live vote</h4>
+        <h4 className={`text-[11px] uppercase tracking-wide ${muted}`}>Repaired order blocks (OB-2.0) vs the indicator&apos;s legacy vote</h4>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <Stat label="Decision bars" value={ob.decisions} />
           <Stat label="Live (old) vote fired" value={ob.legacySignals} />
           <Stat label="OB-2.0 signals" value={ob.v2Signals} />
-          <Stat label="Would change direction" value={ob.wouldChangeIndicatorDirection} hint="if OB-2.0 replaced the old vote" />
+          <Stat label="Would change indicator" value={ob.wouldChangeIndicatorDirection} hint="if OB-2.0 replaced the indicator's old vote (it does not)" />
         </div>
         <Table
           head={['Block state', 'Blocks', 'Held ≥ 1 ATR', 'Failed', 'Avg MFE (ATR)', 'Avg MAE (ATR)']}
@@ -114,7 +115,7 @@ export function OrderFlowPanel({ filter }: { filter: DiagnosticsFilter }) {
       </div>
 
       <div className="space-y-2">
-        <h4 className={`text-[11px] uppercase tracking-wide ${muted}`}>OF1 — order flow confirmation (shadow)</h4>
+        <h4 className={`text-[11px] uppercase tracking-wide ${muted}`}>OF1 — order flow confirmation candidates</h4>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <Stat label="Candidates" value={of1.candidates} hint={`${of1.bullish} bullish · ${of1.bearish} bearish`} />
           <Stat label="Would trade if live" value={of1.wouldTradeIfLive} />

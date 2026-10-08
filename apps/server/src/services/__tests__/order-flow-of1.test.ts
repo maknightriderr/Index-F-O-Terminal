@@ -116,15 +116,17 @@ describe('OF1: location + order flow + price response', () => {
   });
 });
 
-describe('OF1 stays shadow-only', () => {
+describe('OF1: paper trading switch and hypothesis', () => {
   const base = { version: 'OF1-1.0', direction: 'BULLISH', decisionIndex: 0, decisionTime: 0, subtype: 'PDL_DELTA', location: { kind: 'PDL', price: 95, role: 'SUPPORT' }, atr: 5, entry: 100, stop: 94, evidence: [], measurable: [], deltaMode: 'INFERRED', delta: 1, deltaPct: 0.2, poc: null, vah: null, val: null, imbalances: 0, absorption: null, priceConfirmation: '' } as any;
   it('would_trade_if_live is a hypothesis: no target, a session gate or risk-off each say no', () => {
     expect(of1TradeVerdict({ ...base, target: null }, null, { session: null, riskOff: null }, 6.25)).toMatchObject({ wouldTrade: false, plan: null });
     expect(of1TradeVerdict({ ...base, target: null }, null, { session: null, riskOff: null }, 6.25).reasons.join()).toMatch(/NO_TARGET/);
     expect(of1TradeVerdict({ ...base, target: { kind: 'PDH', price: 104, role: 'RESISTANCE' } }, null, { session: 'closing guard', riskOff: null }, 6.25).reasons.join()).toMatch(/SESSION/);
   });
-  it('OF1_TRADING is false whatever the environment says; MCX symbols are refused until verified', () => {
-    expect(flags.OF1_TRADING).toBe(false);
+  it('OF1 paper-trades by default (OF1_TRADING=false rolls back to shadow); MCX symbols are refused until verified', () => {
+    expect(flags.OF1_TRADING).toBe(true);
+    expect(flags.orderFlowLogicSuffix(true, true)).toBe('+ob1-paper.1+of1-paper.1');
+    expect(flags.orderFlowLogicSuffix(false, false)).toBe('');
     expect(flags.parseOrderFlowSymbols('NIFTY,CRUDEOIL,banknifty')).toEqual({ symbols: ['NIFTY', 'BANKNIFTY'], rejected: ['CRUDEOIL'] });
     expect(flags.parseOrderFlowSymbols(undefined).symbols).toEqual(['NIFTY', 'BANKNIFTY']);
   });

@@ -26,7 +26,7 @@ import { logger } from '../lib/logger.js';
 import { serviceHeartbeat } from '../lib/service-supervisor.js';
 import { DHAN_RESPONSE, dhanFeedUrl, fullSubscription, parseDhanFrame, resolveIndexFutures, type DhanFullPacket } from '../lib/dhan-feed-packets.js';
 import { dhanCredentials, ORDER_BLOCK_MODE, ORDER_BLOCK_MODE_REJECTED, OF1_TRADING_REQUESTED, ORDER_FLOW_SYMBOLS, ORDER_FLOW_SYMBOLS_REJECTED } from '../config/order-flow-flags.js';
-import { closeFlowBars, recordFlowTrade, registerFlowSymbol } from './order-flow-store.js';
+import { closeFlowBars, recordFlowTrade, registerFlowSymbol, setFlowFeedConnected } from './order-flow-store.js';
 
 export const DHAN_SCRIP_MASTER_URL = 'https://images.dhan.co/api-data/api-scrip-master.csv';
 const TICK_MS = 10_000;
@@ -116,6 +116,7 @@ function connect(creds: { clientId: string; accessToken: string }): void {
   state.ws = ws;
   ws.on('open', () => {
     state.connected = true;
+    setFlowFeedConnected(true);
     state.backoffMs = 5_000;
     state.lastError = null;
     const ids = Object.values(state.resolved).map((r) => r.securityId);
@@ -130,6 +131,7 @@ function connect(creds: { clientId: string; accessToken: string }): void {
   });
   ws.on('close', (code) => {
     state.connected = false;
+    setFlowFeedConnected(false);
     state.ws = null;
     state.reconnectAt = Date.now() + state.backoffMs;
     state.backoffMs = Math.min(60_000, state.backoffMs * 2);
@@ -160,7 +162,7 @@ export function startOrderFlowFeed(): void {
   if (started) return;
   started = true;
   if (ORDER_BLOCK_MODE_REJECTED) logger.warn({ asked: ORDER_BLOCK_MODE_REJECTED, using: ORDER_BLOCK_MODE }, 'ORDER_BLOCK_MODE: only SHADOW or OFF — OB-2.0 enters the live vote by a code change, never a setting');
-  if (OF1_TRADING_REQUESTED) logger.warn('OF1_TRADING=true ignored: OF1 is shadow-only until promoted on its forward record');
+  if (OF1_TRADING_REQUESTED) logger.warn('OF1_TRADING=true ignored: OF1_ENABLED is false');
   if (ORDER_FLOW_SYMBOLS_REJECTED.length) logger.warn({ rejected: ORDER_FLOW_SYMBOLS_REJECTED }, 'ORDER_FLOW_SYMBOLS: not verified for Dhan order flow (MCX pending) — ignored');
   state.configured = dhanCredentials() != null;
   if (!state.configured) {

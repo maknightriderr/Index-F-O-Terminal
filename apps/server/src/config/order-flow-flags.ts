@@ -1,20 +1,23 @@
 // ============================================================
-// ORDER BLOCK SHADOW / ORDER FLOW / OF1 — switches (2026-10-09)
+// ORDER BLOCK (OB1) / ORDER FLOW / OF1 — switches (2026-10-09)
 // ============================================================
-// Kept apart from trading-flags.ts on purpose: nothing here changes what the
-// live strategies decide, so the live logic stamp and the decision config
-// hash are untouched.
+// Kept apart from trading-flags.ts: the existing strategies' own logic and
+// the decision config hash are untouched. While OB1 / OF1 may paper-trade the
+// live logic stamp carries orderFlowLogicSuffix() (the candidate pool changed).
 //
-//   ORDER_BLOCK_MODE  SHADOW (default) — the indicator's live vote keeps the
-//                     frozen legacy detector; OB-2.0 is computed and recorded
-//                     beside it. OFF — nothing recorded. LIVE is not a setting:
-//                     putting OB-2.0 into the vote is a code change made only
-//                     on its forward evidence; a LIVE request is logged and
-//                     ignored (SHADOW).
+//   ORDER_BLOCK_MODE  PAPER (default, user decision 2026-10-09) — OB-2.0 is
+//                     also a paper candidate source (OB1) in the slot
+//                     arbitration, through the same chain as every trigger
+//                     family. SHADOW — recorded only, never traded (rollback
+//                     without a deploy). OFF — nothing recorded. In every mode
+//                     the INDICATOR ENGINE's own structure vote keeps the frozen
+//                     legacy detector (the indicator is unchanged); LIVE (OB-2.0
+//                     inside the indicator vote) is not a setting.
 //   OF1_ENABLED       true (default) — OF1 candidates are evaluated and recorded.
-//   OF1_TRADING       false — OF1 never creates a paper trade. A request for
-//                     true is logged and ignored: trading needs a code-level
-//                     promotion on forward evidence, like every trigger family.
+//   OF1_TRADING       true (default, user decision 2026-10-09) — OF1 is a paper
+//                     candidate source in the slot arbitration; false = shadow
+//                     only (rollback without a deploy). Paper only: nothing
+//                     here, or anywhere in the terminal, places a broker order.
 //   ORDER_FLOW_SYMBOLS  NIFTY,BANKNIFTY (default). MCX symbols are refused
 //                     until the Dhan MCX feed has been verified.
 //   DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN  the Dhan market-feed credentials (data
@@ -22,15 +25,23 @@
 //                     NOT_CONFIGURED and every order-flow measure UNAVAILABLE.
 // ============================================================
 
-import { parseFlag } from './trading-flags.js';
+// Local copy of trading-flags' parseFlag: trading-flags imports this file (the logic-stamp suffix).
+function parseFlag(raw: string | undefined, fallback: boolean): boolean {
+  if (raw == null) return fallback;
+  const v = raw.trim().toLowerCase();
+  if (['true', '1', 'on', 'yes'].includes(v)) return true;
+  if (['false', '0', 'off', 'no'].includes(v)) return false;
+  return fallback;
+}
 
-export type OrderBlockMode = 'SHADOW' | 'OFF';
+export type OrderBlockMode = 'PAPER' | 'SHADOW' | 'OFF';
+export const ORDER_BLOCK_MODE_DEFAULT: OrderBlockMode = 'PAPER';
 
 export function parseOrderBlockMode(raw: string | undefined): { value: OrderBlockMode; rejected: string | null } {
   const v = (raw ?? '').trim().toUpperCase();
-  if (v === '' || v === 'SHADOW') return { value: 'SHADOW', rejected: null };
-  if (v === 'OFF') return { value: 'OFF', rejected: null };
-  return { value: 'SHADOW', rejected: raw ?? null };
+  if (v === '') return { value: ORDER_BLOCK_MODE_DEFAULT, rejected: null };
+  if (v === 'PAPER' || v === 'SHADOW' || v === 'OFF') return { value: v, rejected: null };
+  return { value: ORDER_BLOCK_MODE_DEFAULT, rejected: raw ?? null };
 }
 const parsedObMode = parseOrderBlockMode(process.env.ORDER_BLOCK_MODE);
 export const ORDER_BLOCK_MODE: OrderBlockMode = parsedObMode.value;
@@ -38,9 +49,25 @@ export const ORDER_BLOCK_MODE: OrderBlockMode = parsedObMode.value;
 export const ORDER_BLOCK_MODE_REJECTED = parsedObMode.rejected;
 
 export const OF1_ENABLED: boolean = parseFlag(process.env.OF1_ENABLED, true);
-/** Shadow only: OF1 never trades in this release, whatever the environment says. */
-export const OF1_TRADING = false as const;
-export const OF1_TRADING_REQUESTED: boolean = parseFlag(process.env.OF1_TRADING, false);
+export const OF1_TRADING_DEFAULT = true;
+/** OF1 paper trades (needs OF1_ENABLED). */
+export const OF1_TRADING: boolean = OF1_ENABLED && parseFlag(process.env.OF1_TRADING, OF1_TRADING_DEFAULT);
+/** Kept for the boot log (an OF1_TRADING=true with OF1_ENABLED=false cannot trade). */
+export const OF1_TRADING_REQUESTED: boolean = parseFlag(process.env.OF1_TRADING, OF1_TRADING_DEFAULT) && !OF1_ENABLED;
+/** OB1 paper trades. */
+export const OB1_TRADING: boolean = ORDER_BLOCK_MODE === 'PAPER';
+
+/** Paper-trading candidate sources added 2026-10-09 and the version each trades under. */
+export const ORDER_FLOW_SOURCE_VERSIONS: Readonly<Record<string, string>> = Object.freeze({ OB1: 'OB-2.0', OF1: 'OF1-1.0' });
+
+/**
+ * Live logic-stamp suffix while OB1 / OF1 may take the paper slot: the
+ * candidate pool every other source competes in changed, so trades minted
+ * with them on are never pooled with trades minted before.
+ */
+export function orderFlowLogicSuffix(ob1: boolean = OB1_TRADING, of1: boolean = OF1_TRADING): string {
+  return `${ob1 ? '+ob1-paper.1' : ''}${of1 ? '+of1-paper.1' : ''}`;
+}
 
 export const ORDER_FLOW_DEFAULT_SYMBOLS = ['NIFTY', 'BANKNIFTY'] as const;
 /** Symbols whose Dhan order flow has been verified (NSE index futures). */

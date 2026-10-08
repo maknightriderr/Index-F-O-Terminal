@@ -143,7 +143,7 @@ describe('OB-2.0: no look-ahead, deterministic, closed bars only (frozen real ba
   });
 });
 
-describe('shadow wiring: the live vote stays legacy; OB-2.0 only measured', () => {
+describe('wiring: the indicator vote stays legacy; OB-2.0 trades only as its own source (OB1)', () => {
   const mb = readFileSync(path.join(HERE, '../market-bias.ts'), 'utf8');
   it('market-bias votes with the legacy detector and records OB-2.0 after the decision is final', () => {
     expect(mb).toMatch(/const orderBlocks = detectOrderBlocksLegacy\(c15\.highs, c15\.lows, c15\.closes\);/);
@@ -152,11 +152,13 @@ describe('shadow wiring: the live vote stays legacy; OB-2.0 only measured', () =
     expect(hook).toBeGreaterThan(mb.indexOf('const tradeSetup: TradeSetup = chain'));
     expect(hook).toBeLessThan(mb.indexOf('const result: MarketBiasResult = {'));
   });
-  it('ORDER_BLOCK_MODE: SHADOW by default, OFF allowed, LIVE refused (a code change, never a setting)', () => {
-    expect(flags.parseOrderBlockMode(undefined)).toEqual({ value: 'SHADOW', rejected: null });
+  it('ORDER_BLOCK_MODE: PAPER by default (OB1 paper trades), SHADOW / OFF allowed, LIVE (inside the indicator vote) refused', () => {
+    expect(flags.parseOrderBlockMode(undefined)).toEqual({ value: 'PAPER', rejected: null });
+    expect(flags.parseOrderBlockMode('shadow')).toEqual({ value: 'SHADOW', rejected: null });
     expect(flags.parseOrderBlockMode('off')).toEqual({ value: 'OFF', rejected: null });
-    expect(flags.parseOrderBlockMode('LIVE')).toEqual({ value: 'SHADOW', rejected: 'LIVE' });
-    expect(flags.ORDER_BLOCK_MODE).toBe('SHADOW');
+    expect(flags.parseOrderBlockMode('LIVE')).toEqual({ value: 'PAPER', rejected: 'LIVE' });
+    expect(flags.ORDER_BLOCK_MODE).toBe('PAPER');
+    expect(flags.OB1_TRADING).toBe(true);
   });
   it('"would the OB-2.0 vote change the indicator\'s direction" uses the same netting and caps', () => {
     const chart = [1, 1, -1, -1, 1, -1] as const; // net 0 (incl. a legacy -1)
