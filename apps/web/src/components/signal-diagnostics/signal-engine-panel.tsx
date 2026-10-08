@@ -12,6 +12,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { api, type DiagnosticsFilter } from '@/lib/api';
+import { OrderFlowPanel } from './order-flow-panel';
 
 /** Mirrors apps/server/src/services/signal-engine-metrics.ts signalEngineMetrics(). */
 export interface SignalEngineMetrics {
@@ -288,6 +289,8 @@ export function SignalEnginePanel({ filter }: { filter: DiagnosticsFilter }) {
       </Block>
 
       <ShadowRulesPanel filter={filter} />
+
+      <OrderFlowPanel filter={filter} />
 
       <Block title="Evidence-count ranking" subtitle="ARB-2.0. Every arbitrated candidate graded on its own stop and objective over the rest of its session (a bar touching both counts the stop).">
         <div className={grid}>

@@ -453,6 +453,81 @@ async function gradeShadowExits(now: number): Promise<number> {
   return rows.length;
 }
 
+/**
+ * Pure: MFE / MAE (in R) of a candidate over the bars that open at or after
+ * its decision, up to and including the bar that resolved it (stop or target,
+ * a bar touching both counts the stop) or the session's last bar.
+ */
+export function excursionR(c: { direction: string; entry: number; stop: number; target: number | null; decisionTime: number }, bars: readonly GradeBar[]): { mfeR: number | null; maeR: number | null } {
+  const sg = c.direction === 'BULLISH' ? 1 : -1;
+  const risk = sg * (c.entry - c.stop);
+  if (!(risk > 0)) return { mfeR: null, maeR: null };
+  const after = bars.filter((b) => b.time >= c.decisionTime).sort((a, b) => a.time - b.time);
+  if (!after.length) return { mfeR: null, maeR: null };
+  let mfe = 0;
+  let mae = 0;
+  for (const b of after) {
+    mfe = Math.max(mfe, sg > 0 ? b.high - c.entry : c.entry - b.low);
+    mae = Math.max(mae, sg > 0 ? c.entry - b.low : b.high - c.entry);
+    const stopHit = sg > 0 ? b.low <= c.stop : b.high >= c.stop;
+    const targetHit = c.target != null && (sg > 0 ? b.high >= c.target : b.low <= c.target);
+    if (stopHit || targetHit) break;
+  }
+  const r = (v: number) => Math.round((v / risk) * 1000) / 1000;
+  return { mfeR: r(mfe), maeR: r(mae) };
+}
+
+/**
+ * OF1 candidates (shadow) of ended sessions: the hypothetical outcome on the
+ * day's closed bars, MFE / MAE, and the candidate that actually won the slot
+ * on the same decision bar (slot_decisions) — does OF1 add, or duplicate?
+ */
+async function gradeOf1Candidates(now: number): Promise<number> {
+  const today = new Date(istDayStart(now));
+  const rows = await sql<any[]>`
+    SELECT id, symbol, exchange, mode, decision_bar_time, direction, entry, stop, target FROM of1_candidates
+    WHERE graded_at IS NULL AND decision_bar_time >= ${new Date(now - LOOKBACK_DAYS * 86_400_000)} AND decision_bar_time < ${today}
+    ORDER BY decision_bar_time
+    LIMIT ${BATCH}
+  `;
+  const barsCache = new Map<string, GradeBar[]>();
+  for (const r of rows) {
+    try {
+      const barOpen = new Date(r.decision_bar_time).getTime();
+      const decisionTime = barOpen + BAR_MS;
+      const dayStart = istDayStart(barOpen);
+      const key = `${r.exchange}:${r.symbol}:${r.mode}:${dayStart}`;
+      let bars = barsCache.get(key);
+      if (!bars) {
+        const snap = await sql<{ bars: GradeBar[] | null }[]>`
+          SELECT inputs->'ohlcv15m' AS bars FROM signal_decision_snapshots
+          WHERE symbol = ${r.symbol} AND exchange = ${r.exchange} AND mode = ${r.mode}
+            AND decision_bar_time >= ${new Date(dayStart)} AND decision_bar_time < ${new Date(dayStart + 86_400_000)}
+          ORDER BY decision_bar_time DESC LIMIT 1
+        `;
+        bars = (snap[0]?.bars ?? []).filter((b) => b.time >= dayStart && b.time + BAR_MS <= dayStart + 86_400_000);
+        barsCache.set(key, bars);
+      }
+      const c = { direction: r.direction, entry: Number(r.entry), stop: Number(r.stop), objective: r.target != null ? Number(r.target) : null, decisionTime };
+      const g = gradeLevels(c, bars);
+      const x = excursionR({ ...c, target: c.objective }, bars);
+      const won = await sql<{ selected_source: string | null; selected_candidate_id: string | null }[]>`
+        SELECT selected_source, selected_candidate_id FROM slot_decisions
+        WHERE symbol = ${r.symbol} AND exchange = ${r.exchange} AND mode = ${r.mode} AND outcome = 'MINTED' AND decision_bar_time = ${new Date(decisionTime)}
+        ORDER BY time LIMIT 1
+      `;
+      await sql`
+        UPDATE of1_candidates SET outcome = ${g.outcome}, outcome_r = ${g.r}, mfe_r = ${x.mfeR}, mae_r = ${x.maeR},
+          existing_source_that_won = ${won[0]?.selected_source ?? null}, existing_candidate_that_won = ${won[0]?.selected_candidate_id ?? null}, graded_at = NOW()
+        WHERE id = ${r.id}
+      `;
+    } catch (err: any) {
+      logger.warn({ error: err.message, of1CandidateId: r.id }, 'Forward validation: OF1 grading failed');
+    }
+  }
+  return rows.length;
+}
+
 /** Tapes are bulky: kept DECISION_TAPE_RETENTION_DAYS; the snapshot and its record stay. */
 async function pruneTapes(now: number): Promise<void> {
   await sql`DELETE FROM decision_tapes WHERE created_at < ${new Date(now - DECISION_TAPE_RETENTION_DAYS * 86_400_000)}`;
@@ -463,6 +538,7 @@ export async function runForwardValidation(now = Date.now()): Promise<{ trades: 
   const trades = await gradeClosedTrades(now).catch((err: any) => (logger.warn({ error: err.message }, 'Forward validation: trades pass failed'), 0));
   const slots = await gradeSlotDecisions(now).catch((err: any) => (logger.warn({ error: err.message }, 'Forward validation: slots pass failed'), 0));
   await gradeShadowExits(now).catch((err: any) => logger.warn({ error: err.message }, 'Forward validation: shadow exits pass failed'));
+  if (schemaFileReady('038_order_blocks_order_flow_of1.sql')) await gradeOf1Candidates(now).catch((err: any) => logger.warn({ error: err.message }, 'Forward validation: OF1 pass failed'));
   await pruneTapes(now).catch((err: any) => logger.warn({ error: err.message }, 'Forward validation: tape prune failed'));
   if (trades || slots) logger.info({ trades, slots }, 'Forward validation: graded');
   return { trades, slots };

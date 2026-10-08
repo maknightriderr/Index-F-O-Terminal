@@ -162,13 +162,13 @@ describe('boot registrations and shutdown order (index.ts)', () => {
     'alertScanner', 'patternScanner', 'institutionalFlowScanner', 'tradeSetupPriceMonitor', 'marketScanner', 'fiiDiiTracker', 'abandonedSetupSweep', 'oiCloseSnapshot', 'cacheWarmer',
     'strategyTracker', 'positionalStockScan', 'backgroundBiasEvaluator', 'marketStateCapture', 'missedWinnerAudit', 'setupEventsGrading', 'opportunityCensus', 'holidayCalendarCheck', 'systemLearningAudit',
   ];
-  it('registers exactly the 18 existing services, plus two justified COMPONENT extras', () => {
+  it('registers exactly the 18 existing services, plus three justified COMPONENT extras', () => {
     const timer = [...src.matchAll(/timerService\('(\w+)'/g)].map((m) => m[1]);
     expect(timer).toEqual(EXISTING);
     expect(new Set(timer).size).toBe(18);
     const components = [...src.matchAll(/name: '(\w+)', critical: (true|false)[^\n]*kind: 'COMPONENT'/g)].map((m) => m[1]);
-    expect(components).toEqual(['signalEngine', 'setupLifecycle']);
-    expect((src.match(/note: 'Extra:/g) ?? []).length).toBe(2);
+    expect(components).toEqual(['signalEngine', 'setupLifecycle', 'orderFlowFeed']);
+    expect((src.match(/note: 'Extra:/g) ?? []).length).toBe(3);
     // No start*() is called outside the supervisor any more.
     for (const n of EXISTING) {
       const fn = `start${n[0].toUpperCase()}${n.slice(1)}(`;

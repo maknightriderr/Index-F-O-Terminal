@@ -216,7 +216,7 @@ describe('flags, stamp and schema', () => {
     expect(off.logicVersion).toBe(LOGIC_VERSION);
     // The live stamp also carries the indicator engine's EVIDENCE mode (2026-10-01).
     // …and, since 2026-10-05, the R:R-display-only bump (RISK-2.0) and the parent-identity bump (PARENT-2.0).
-    expect(liveLogicStamp().logicVersion).toBe(`${STRUCTURE_LOGIC_VERSION}+indicator-evidence.1+location-evidence.1+rr-display-only.1+parent-identity.1+demote-a4.1`);
+    expect(liveLogicStamp().logicVersion).toBe(`${STRUCTURE_LOGIC_VERSION}+indicator-evidence.1+location-evidence.1+rr-display-only.1+parent-identity.1+demote-a4.1+ob1-paper.1+of1-paper.1`);
   });
   it('CONSENSUS_OFF is classified as not eligible', () => {
     expect(classifyRefusal('CONSENSUS_OFF')).toBe('NOT_ELIGIBLE');

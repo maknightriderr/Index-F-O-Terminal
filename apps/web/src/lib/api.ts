@@ -423,6 +423,11 @@ class ApiClient {
     return this.get<import('../components/signal-diagnostics/signal-engine-panel').FullReplayReport>(`/api/diagnostics/decision/${encodeURIComponent(snapshotId)}/replay-full`);
   }
 
+  /** Order blocks (OB-2.0) beside the live vote, the Dhan order-flow feed and OF1 candidates — shadow only. */
+  async getOrderFlowReport(opts: DiagnosticsFilter = {}) {
+    return this.get<import('../components/signal-diagnostics/order-flow-panel').OrderFlowReport>(`/api/diagnostics/order-flow${this.diagnosticsQuery(opts)}`);
+  }
+
   /** Pre-registered shadow experiments: entry filters and exit rules, measured on the paper trades — never traded. */
   async getShadowRules(opts: DiagnosticsFilter = {}) {
     return this.get<import('../components/signal-diagnostics/signal-engine-panel').ShadowRulesReport>(`/api/diagnostics/shadow-rules${this.diagnosticsQuery(opts)}`);

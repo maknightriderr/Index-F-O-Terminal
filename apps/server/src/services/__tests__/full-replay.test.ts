@@ -176,6 +176,22 @@ describe('full replay of the real decision path', () => {
     for (const ch of ['redis', 'provider', 'input']) expect(chs.has(ch), ch).toBe(true);
   });
 
+  // Regression guard (2026-10-09): the whole live decision of the indicator
+  // engine + S1 + families + arbitration + option leg on this market, hashed
+  // on main before the Order Block fix / OF1 (main's full hash 872813b6a2bd4d8c,
+  // reproduced exactly with ORDER_BLOCK_MODE=SHADOW OF1_TRADING=false). With
+  // OB1 / OF1 paper-trading on, the decision must still be identical; only the
+  // logic stamp gains its +ob1-paper.1 / +of1-paper.1 suffix.
+  it('the live decision is identical to main (end-to-end fingerprint, logic stamps aside)', async () => {
+    const { stripVolatile } = await import('../full-replay.js');
+    const { createHash } = await import('node:crypto');
+    const noStamp = JSON.parse(JSON.stringify(live, (k, v) => (k === 'logicVersion' || k === 'logic' ? undefined : v)));
+    const fp = createHash('sha256').update(JSON.stringify(stripVolatile(noStamp))).digest('hex').slice(0, 16);
+    if (process.env.PRINT_FINGERPRINT) console.log(`FP e2e '${fp}'`);
+    expect(fp).toBe('3fc2838a0e7fc273');
+    expect(live.tradeSetup).toMatchObject({ available: true, strategy: 'STRUCTURE', strike: 24950, researchTrigger: 'F3' });
+  });
+
   it('replays to the same result — no divergence, no real I/O, days later on the wall clock', () => {
     expect(report.error).toBeNull();
     expect(report.divergences).toEqual([]);
