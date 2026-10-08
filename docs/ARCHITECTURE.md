@@ -230,14 +230,14 @@ replay(snapshotId)   (decision-record-store.ts)
 ### 6b. Full replay — the whole decision path from an I/O tape
 
 ```
-live poll: buildMarketBias → pollWithTape (DECISION_TAPE, default on)
+live poll: buildMarketBias → pollWithTape (when DECISION_TAPE=1)
   decision clock frozen at the poll instant (withDecisionTime)
   runRecording: every read at the boundaries is taped with its result —
     redis (tapedRedis) · sql (tapedSql, recorded on execution) · broker (tapedProvider) ·
     in-process state (tapedValue: dataQualityBlock, lastSnapshotBar, the mint-lock token) ·
     whole inputs (tapedInput: option chain, futures, IV rank, corporate actions)
   writes: matched on target + a SHA-1 of the payload (the payload itself is not stored)
-  persisted beside the snapshot: decision_tapes (gzip; ≤ 8 MB; kept DECISION_TAPE_RETENTION_DAYS, default 7)
+  persisted beside the snapshot ONLY when DECISION_TAPE=1 (off by default - tapes are MBs each and filled the database volume on 2026-10-08): decision_tapes (gzip; ≤ 512 KB; kept DECISION_TAPE_RETENTION_DAYS, default 2)
 replayFull(snapshotId)   (full-replay.ts; GET /api/diagnostics/decision/:id/replay-full)
   runReplay at the snapshot's polledAt: the UNCHANGED buildMarketBias — indicators, safety gates,
     option build, arbitration, pre-mint, settlement / lifecycle — with every read served from the
