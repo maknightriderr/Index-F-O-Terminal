@@ -27,6 +27,12 @@
 // ============================================================
 
 export const SHADOW_RULES_VERSION = 'SHADOW-1.0';
+/**
+ * When these rules were registered (midnight IST, 9 Oct 2026). Three of them
+ * (COST_EDGE_2X, MCX_EVENING, RICH_IV) were suggested by the trades before
+ * this instant, so only trades minted after it are a fair, out-of-sample test.
+ */
+export const SHADOW_RULES_REGISTERED_AT = Date.parse('2026-10-09T00:00:00+05:30');
 
 export const ENTRY_RULES = ['COST_EDGE_2X', 'MCX_EVENING', 'RICH_IV'] as const;
 export type EntryRule = (typeof ENTRY_RULES)[number];
