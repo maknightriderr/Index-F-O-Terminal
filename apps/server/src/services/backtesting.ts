@@ -218,6 +218,7 @@ function toTradeSetupRecord(row: SignalRow): TradeSetupRecord {
     // Validation review: which rules minted this setup, and how it closed.
     logicVersion: typeof inputs.logic?.logicVersion === 'string' ? inputs.logic.logicVersion : null,
     closeReason: typeof inputs.closeReason === 'string' ? inputs.closeReason : inputs.abandoned === true ? 'ABANDONED' : null,
+    source: typeof inputs.source === 'string' ? inputs.source : null,
   };
 }
 
@@ -261,6 +262,11 @@ function bucketStats(records: TradeSetupRecord[]): Omit<WinRateBucket, 'period'>
   const profitableCloses = wins + records.filter((r) => r.outcome === 'EXPIRED' && (netReturnPercent(r) ?? 0) > 0).length;
   const unprofitableCloses = losses + records.filter((r) => r.outcome === 'EXPIRED' && netReturnPercent(r) != null && netReturnPercent(r)! < 0).length;
   const profitableDecisive = profitableCloses + unprofitableCloses;
+  // Net of cost, EXPIRED included at its real exit — the expectancy beside the closed-only win rate.
+  const nets = records
+    .filter((r) => r.outcome === 'WIN' || r.outcome === 'LOSS' || r.outcome === 'EXPIRED')
+    .map(netReturnPercent)
+    .filter((x): x is number => x != null);
 
   return {
     total: records.length,
@@ -274,6 +280,8 @@ function bucketStats(records: TradeSetupRecord[]): Omit<WinRateBucket, 'period'>
     profitableCloses,
     unprofitableCloses,
     profitableCloseRatePercent: profitableDecisive > 0 ? Math.round((profitableCloses / profitableDecisive) * 1000) / 10 : null,
+    netExpectancyPercent: nets.length > 0 ? Math.round((nets.reduce((a, b) => a + b, 0) / nets.length) * 100) / 100 : null,
+    winsBelowCost: records.filter((r) => r.outcome === 'WIN' && (netReturnPercent(r) ?? 1) <= 0).length,
   };
 }
 
@@ -453,7 +461,23 @@ export async function getWinRateAnalytics(modeFilter?: TradingMode | 'ALL', sinc
     logicVersionFilter,
     byLogicVersion: logicVersionBuckets(splitPool),
     byStrategy: strategyBuckets(splitPool),
+    bySource: strategyBuckets(splitPool, sourceOfSetup),
   };
+}
+
+/**
+ * The engine / trigger that minted a setup: the recorded source (2026-10-08 on),
+ * else derived — a paper-research trigger from its logic version, a spread,
+ * S1 (structure without a trigger), the momentum break, else the indicator engine.
+ */
+export function sourceOfSetup(r: Pick<TradeSetupRecord, 'strategy'> & Partial<Pick<TradeSetupRecord, 'logicVersion' | 'source' | 'structureType'>>): string {
+  if (r.source) return r.source;
+  const trigger = researchTriggerOf(r.logicVersion);
+  if (trigger) return trigger;
+  if (r.structureType === 'SPREAD') return 'SPREAD';
+  if (r.strategy === 'STRUCTURE') return 'S1';
+  if (r.strategy === 'MOMENTUM_BREAK') return 'MOMENTUM_BREAK';
+  return 'INDICATOR';
 }
 
 /**
@@ -469,10 +493,10 @@ export function strategyFamilyOfSetup(r: Pick<TradeSetupRecord, 'strategy'> & Pa
 }
 
 /** Headline figures per setup family (MOMENTUM_BREAK / STRUCTURE / CONSENSUS), beside the logic-version split — never pooled. */
-export function strategyBuckets(records: readonly TradeSetupRecord[]): StrategyBucket[] {
+export function strategyBuckets(records: readonly TradeSetupRecord[], keyOf: (r: TradeSetupRecord) => string = strategyFamilyOfSetup): StrategyBucket[] {
   const groups = new Map<string, TradeSetupRecord[]>();
   for (const r of records) {
-    const key = strategyFamilyOfSetup(r);
+    const key = keyOf(r);
     const g = groups.get(key);
     if (g) g.push(r);
     else groups.set(key, [r]);

@@ -32,6 +32,8 @@ import { insertOnce } from '../lib/insert-once.js';
 import { schemaFileReady } from './ensure-capture-schema.js';
 import { DECISION_TAPE_RETENTION_DAYS } from './decision-record-store.js';
 import { ARBITRATION_VERSION, OPTION_SELECTION_VERSION, OPTION_VERSION } from '../config/trading-flags.js';
+import { ESTIMATED_ROUND_TRIP_COST_PCT } from '@fno/shared';
+import { SHADOW_RULES_VERSION, simulateExits } from './shadow-rules.js';
 
 export const FORWARD_VALIDATION_MIGRATION = '037_replay_tapes_forward_validation.sql';
 const BAR_MS = 15 * 60 * 1000;
@@ -405,6 +407,52 @@ async function gradeSlotDecisions(now: number): Promise<number> {
   return rows.length;
 }
 
+/**
+ * SHADOW_EXITS (shadow-rules.ts): each closed single-leg paper trade of an
+ * ended session, replayed against the pre-registered exit rules on its own
+ * recorded marks. Measurement only.
+ */
+async function gradeShadowExits(now: number): Promise<number> {
+  const today = new Date(istDayStart(now));
+  const rows = await sql<any[]>`
+    SELECT s.id, s.time, s.symbol, s.inputs FROM signals s
+    WHERE s.signal_type = 'TRADE_SETUP' AND s.inputs->>'outcome' IS NOT NULL AND s.inputs->>'voided' IS NULL
+      AND coalesce(s.inputs->>'structureType', 'NAKED_LONG') <> 'SPREAD'
+      AND s.time >= ${new Date(now - LOOKBACK_DAYS * 86_400_000)} AND s.time < ${today}
+      AND NOT EXISTS (SELECT 1 FROM forward_outcomes f WHERE f.kind = 'SHADOW_EXITS' AND f.subject_id = s.id::text)
+    ORDER BY s.time
+    LIMIT ${BATCH}
+  `;
+  for (const r of rows) {
+    try {
+      const i = r.inputs ?? {};
+      const entry = Number(i.entry);
+      const exitPrice = i.exitPrice != null ? Number(i.exitPrice) : null;
+      const exitAt = Number(i.exitTime);
+      const start = new Date(r.time);
+      const exchange = String(i.exchange ?? '');
+      const cost = i.estimatedCostPct != null ? Number(i.estimatedCostPct) : ESTIMATED_ROUND_TRIP_COST_PCT;
+      const base = { snapshotId: null, signalId: r.id, symbol: r.symbol, exchange, decidedAt: start, versions: { ...VERSIONS(), shadowRules: SHADOW_RULES_VERSION } };
+      if (!(entry > 0) || exitPrice == null || !(exitAt > start.getTime()) || (i.side !== 'CE' && i.side !== 'PE')) {
+        await store('SHADOW_EXITS', String(r.id), { ...base, predicted: {}, actual: { measured: false, reason: 'no entry / exit / side' } });
+        continue;
+      }
+      const chains = await chainsBetween(r.symbol, exchange, String(i.mode ?? 'INTRADAY'), start, new Date(exitAt));
+      const path = premiumPath(chains, i.side, Number(i.strike), i.expiry ?? null, start.getTime(), exitAt);
+      const actualNetPct = Math.round((((exitPrice - entry) / entry) * 100 - cost) * 100) / 100;
+      const exits = simulateExits({ entry, target: i.target != null ? Number(i.target) : null, costPct: cost, entryAt: start.getTime(), exitAt, actualNetPct, path });
+      await store('SHADOW_EXITS', String(r.id), {
+        ...base,
+        predicted: { entry, target: i.target ?? null, cost, outcome: i.outcome, closeReason: i.closeReason ?? null },
+        actual: { measured: path.length > 0, marks: path.length, actualNetPct, exits },
+      });
+    } catch (err: any) {
+      logger.warn({ error: err.message, signalId: r.id }, 'Forward validation: shadow exit grading failed');
+    }
+  }
+  return rows.length;
+}
+
 /** Tapes are bulky: kept DECISION_TAPE_RETENTION_DAYS; the snapshot and its record stay. */
 async function pruneTapes(now: number): Promise<void> {
   await sql`DELETE FROM decision_tapes WHERE created_at < ${new Date(now - DECISION_TAPE_RETENTION_DAYS * 86_400_000)}`;
@@ -414,6 +462,7 @@ export async function runForwardValidation(now = Date.now()): Promise<{ trades: 
   if (!schemaFileReady(FORWARD_VALIDATION_MIGRATION)) return { trades: 0, slots: 0 };
   const trades = await gradeClosedTrades(now).catch((err: any) => (logger.warn({ error: err.message }, 'Forward validation: trades pass failed'), 0));
   const slots = await gradeSlotDecisions(now).catch((err: any) => (logger.warn({ error: err.message }, 'Forward validation: slots pass failed'), 0));
+  await gradeShadowExits(now).catch((err: any) => logger.warn({ error: err.message }, 'Forward validation: shadow exits pass failed'));
   await pruneTapes(now).catch((err: any) => logger.warn({ error: err.message }, 'Forward validation: tape prune failed'));
   if (trades || slots) logger.info({ trades, slots }, 'Forward validation: graded');
   return { trades, slots };

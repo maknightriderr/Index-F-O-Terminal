@@ -576,9 +576,10 @@ describe('12. no broker / live-order path', () => {
     expect(files.length).toBeGreaterThan(50);
     for (const f of files) expect(readFileSync(f, 'utf8'), f).not.toMatch(/placeOrder|place_order|\/orders\b|modifyOrder|kite\.place/i);
   });
-  it('no family has been promoted to PAPER or ACTIVE; research families are PAPER_RESEARCH', () => {
+  it('no family has been promoted to PAPER or ACTIVE; research families are PAPER_RESEARCH (A4 demoted to SHADOW)', () => {
     for (const [id, st] of Object.entries(liveTriggerStages())) {
       if (id === 'S1') expect(st).toBe('ACTIVE');
+      else if (id === 'A4') expect(st).toBe('SHADOW');
       else expect(['PAPER_RESEARCH', 'RETIRED'], id).toContain(st);
     }
   });

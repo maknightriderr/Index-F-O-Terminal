@@ -25,7 +25,7 @@ import {
   EVENT_ENGINE_TRIGGER_IDS,
   type MomentumBar,
 } from '@fno/analytics';
-import { resolveTriggerStage, parseTriggerStages, TRIGGER_PROMOTIONS, TRIGGER_VERSION, RESEARCH_PAPER_TRADING, PAPER_TRADING_STAGES } from '../../config/trading-flags.js';
+import { resolveTriggerStage, parseTriggerStages, TRIGGER_PROMOTIONS, TRIGGER_DEMOTIONS, TRIGGER_VERSION, RESEARCH_PAPER_TRADING, PAPER_TRADING_STAGES } from '../../config/trading-flags.js';
 import { liveTriggerStages, liveRoutedTriggerIds, validateCandidateRisk, lifecycleFromCandidate, routedLifecycleId, type RoutedCandidate } from '../../services/trigger-router.js';
 import { structureSequenceRefusal } from '../../services/structure-live.js';
 
@@ -106,14 +106,17 @@ describe('no universal displacement gate', () => {
 });
 
 describe('stages: research families paper-trade, nothing has earned PAPER', () => {
-  it('defaults: S1 ACTIVE, the SWEEP_CLOSE restatements RETIRED, every other family PAPER_RESEARCH, nothing promoted to PAPER', () => {
+  it('defaults: S1 ACTIVE, the SWEEP_CLOSE restatements RETIRED, A4 demoted to SHADOW, every other family PAPER_RESEARCH, nothing promoted to PAPER', () => {
     expect(RESEARCH_PAPER_TRADING).toBe(true);
     expect(TRIGGER_PROMOTIONS).toEqual({});
     const stages = liveTriggerStages();
     expect(stages.S1).toBe('ACTIVE');
     expect(stages.A1).toBe('RETIRED');
     expect(stages.F4).toBe('RETIRED');
-    for (const [id, st] of Object.entries(stages)) if (!['S1', 'A1', 'F4'].includes(id)) expect(st, id).toBe('PAPER_RESEARCH');
+    // Demoted on its forward record (TRIGGER_DEMOTIONS, 2026-10-08): it keeps running in SHADOW.
+    expect(stages.A4).toBe('SHADOW');
+    expect(Object.keys(TRIGGER_DEMOTIONS)).toEqual(['A4']);
+    for (const [id, st] of Object.entries(stages)) if (!['S1', 'A1', 'F4', 'A4'].includes(id)) expect(st, id).toBe('PAPER_RESEARCH');
     expect(Object.values(stages).filter((x) => x === 'PAPER')).toEqual([]);
     expect(PAPER_TRADING_STAGES).toEqual(['PAPER_RESEARCH', 'PAPER', 'ACTIVE']);
   });
@@ -121,6 +124,14 @@ describe('stages: research families paper-trade, nothing has earned PAPER', () =
     expect(resolveTriggerStage('A3', 'SHADOW', {}, {}, false)).toBe('SHADOW');
     expect(resolveTriggerStage('A3', 'SHADOW', {}, {}, true)).toBe('PAPER_RESEARCH');
     expect(resolveTriggerStage('A1', 'RETIRED', {}, {}, true)).toBe('RETIRED');
+  });
+  it('a code-level demotion only lowers a stage; a promotion above it is capped, an env demotion below it still applies', () => {
+    const demo = { X1: { stage: 'SHADOW' as const, evidence: 'test', approvedOn: '2026-10-08' } };
+    expect(resolveTriggerStage('X1', 'SHADOW', {}, {}, true, demo)).toBe('SHADOW');
+    expect(resolveTriggerStage('X1', 'SHADOW', { X1: { stage: 'PAPER', evidence: 'e', approvedOn: 'd' } }, {}, true, demo)).toBe('SHADOW');
+    expect(resolveTriggerStage('X1', 'SHADOW', {}, { X1: 'RETIRED' }, true, demo)).toBe('RETIRED');
+    expect(resolveTriggerStage('X1', 'RETIRED', {}, {}, true, demo)).toBe('RETIRED');
+    expect(resolveTriggerStage('Y1', 'SHADOW', {}, {}, true, demo)).toBe('PAPER_RESEARCH');
   });
   it('the router evaluates paper-research families live, never RETIRED ones', () => {
     const ids = liveRoutedTriggerIds();

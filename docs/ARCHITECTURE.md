@@ -261,6 +261,16 @@ Runs on the opportunity census's post-session tick (no new service); grades only
 
 `GET /api/diagnostics/signal-engine?from=&to=&instrument=` (signal-engine-metrics.ts) aggregates: NO TRADE rate, fallback success (bars whose #1 failed its final check that still minted), candidates and strikes rejected for theta / cost and for liquidity, missed opportunities (opportunity census), and the three forward measurements. Signal Diagnostics → "Signal Engine"; Decision Record → "Full replay".
 
+### 6d. Profitability review (2026-10-08) — demotion, source split, shadow experiments
+
+- **A4 demoted to SHADOW** (`TRIGGER_DEMOTIONS`, trading-flags.ts): the mirror of a promotion — a code-level entry that names its forward evidence (INDEX 81 trades, net −0.42R, PF 0.71; MCX 20 trades, net −0.79R). A demotion only lowers a stage; A4 keeps producing SHADOW candidates and can earn its way back through `TRIGGER_PROMOTIONS`. Live stamps carry `+demote-a4.1`. F3 (25 forward trades) and the B / D / F1 families stay on watch until they reach 30.
+- **Source on every trade:** `signals.inputs.source` (INDICATOR, S1, MOMENTUM_BREAK, the trigger id) and `candidateId`; `slot_decisions.snapshot_id` is filled from the poll's snapshot scope.
+- **Reporting:** every win-rate bucket adds `netExpectancyPercent` (per closed trade, EXPIRED included at its exit, after its own estimated cost) and `winsBelowCost`; the win rate itself stays WIN ÷ (WIN + LOSS). `bySource` splits results by the source above (Backtesting → "By Source").
+- **Shadow experiments** (`shadow-rules.ts`, `SHADOW-1.0`, measurement only — nothing here changes what is traded). Pre-registered, untuned:
+  entry filters on decision-time fields — `COST_EDGE_2X` (target gain < 2× round-trip cost), `MCX_EVENING` (MCX from 18:00 IST), `RICH_IV`;
+  exit rules on the option's recorded marks strictly before the actual exit — `TIME_STOP_60` (first mark ≥ 60 min below entry → exit there), `BREAKEVEN_AT_HALF` (after entry + ½(target − entry), a mark at or below entry exits at entry).
+  Exit rules are graded per closed trade into `forward_outcomes` (kind `SHADOW_EXITS`) by the forward-validation pass; `GET /api/diagnostics/shadow-rules` reports skipped vs kept and with-rule expectancy (Signal Diagnostics → Signal Engine → "Shadow experiments"). A rule is considered for live use only after 30+ forward trades show a material gain — a human decision.
+
 ## 8. Background services (18) — supervised (Phase 6)
 
 `ServiceSupervisor` (lib/service-supervisor.ts) starts, watches and stops every service. Each registers
@@ -402,3 +412,4 @@ Observation only: `startSystemLearningAudit` → `learningDetectors.ts` → `lea
 - **2026-10-05 — Phase 8: DecisionRecord research view.** `/api/diagnostics/decisions`, `/api/diagnostics/decision/:snapshotId` (`decision-diagnostics.ts`), Signal Diagnostics "Decision Record" tab.
 - **2026-10-05 — Signal engine fallback + realistic options + NO TRADE diagnostics.** Per-trigger and per-candidate isolation, next-best slot walk with a pre-mint check, confirmations criterion (ARB-2.0), realistic payoff (OPTION-2.0), strike comparison on the common underlying risk (OPTSEL-2.0), `noTradeDiagnostics` on every NO TRADE.
 - **2026-10-05 — Full replay, momentum in arbitration, forward validation.** Migration `037_replay_tapes_forward_validation.sql` (decision_tapes, slot_decisions, forward_outcomes). `io-tape.ts` + `full-replay.ts`: the whole decision path replayed from the poll's I/O tape (no network, no writes, no current data). The momentum break builds a DEFERRED slot entry and competes in the arbitration (never mints on its own). `slot-decisions.ts`, `forward-validation.ts`, `signal-engine-metrics.ts`; API `/api/diagnostics/signal-engine`, `/api/diagnostics/decision/:id/replay-full`; Signal Diagnostics "Signal Engine" tab. No threshold, weight, gate or protected constant changed.
+- **2026-10-08 — Profitability review.** A4 demoted to SHADOW (`TRIGGER_DEMOTIONS`, `+demote-a4.1`); trade source recorded on signals and slot decisions linked to their snapshot; net expectancy (EXPIRED included, after cost), wins below cost and a by-source split in the win-rate report; pre-registered shadow experiments (`SHADOW-1.0`: three entry filters, two exit rules) measured, never traded.

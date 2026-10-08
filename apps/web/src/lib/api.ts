@@ -423,6 +423,11 @@ class ApiClient {
     return this.get<import('../components/signal-diagnostics/signal-engine-panel').FullReplayReport>(`/api/diagnostics/decision/${encodeURIComponent(snapshotId)}/replay-full`);
   }
 
+  /** Pre-registered shadow experiments: entry filters and exit rules, measured on the paper trades — never traded. */
+  async getShadowRules(opts: DiagnosticsFilter = {}) {
+    return this.get<import('../components/signal-diagnostics/signal-engine-panel').ShadowRulesReport>(`/api/diagnostics/shadow-rules${this.diagnosticsQuery(opts)}`);
+  }
+
   /** The slot's behaviour (NO TRADE, fallback, rejections) and forward validation. */
   async getSignalEngineMetrics(opts: DiagnosticsFilter = {}) {
     return this.get<import('../components/signal-diagnostics/signal-engine-panel').SignalEngineMetrics>(`/api/diagnostics/signal-engine${this.diagnosticsQuery(opts)}`);

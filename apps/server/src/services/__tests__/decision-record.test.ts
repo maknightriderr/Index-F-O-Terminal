@@ -166,7 +166,7 @@ describe('SignalDecisionSnapshot', () => {
     const v = build().versions;
     for (const k of ['gitCommit', 'analyticsVersion', 'signalEngineVersion', 'optionModelVersion', 'parentingVersion', 'arbitrationVersion', 'ruleVersion', 'strategyVersion', 'costModelVersion', 'snapshotSchemaVersion'])
       expect(v, k).toHaveProperty(k);
-    expect(v.signalEngineVersion).toMatch(/\+rr-display-only\.1\+parent-identity\.1$/);
+    expect(v.signalEngineVersion).toMatch(/\+rr-display-only\.1\+parent-identity\.1\+demote-a4\.1$/);
     expect(v.parentingVersion).toBe('PARENT-2.0');
   });
 

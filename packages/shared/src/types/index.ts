@@ -1741,6 +1741,8 @@ export interface TradeSetupRecord {
   logicVersion?: string | null;
   /** How the position closed (TradeCloseReason, e.g. SESSION_ENDED, BIAS_REVERSED); null when not recorded. */
   closeReason?: string | null;
+  /** The engine / trigger that won the slot (signals.inputs.source, recorded from 2026-10-08); null before. */
+  source?: string | null;
 }
 
 /** One EXPIRED close reason and how those closes went (net premium R, after costs). */
@@ -1815,6 +1817,14 @@ export interface WinRateBucket {
   profitableCloses: number;
   unprofitableCloses: number;
   profitableCloseRatePercent: number | null;
+  /**
+   * Mean return per CLOSED trade after its estimated round-trip cost, with
+   * EXPIRED closes counted at their real exit (open trades excluded). The
+   * "does it make money" figure beside winRatePercent, which ignores EXPIRED.
+   */
+  netExpectancyPercent?: number | null;
+  /** WINs whose gain did not cover the estimated round-trip cost (a win in name only). */
+  winsBelowCost?: number;
 }
 
 export interface SymbolWinRate extends WinRateBucket {
@@ -1878,6 +1888,8 @@ export interface WinRateAnalytics {
   byLogicVersion?: LogicVersionBucket[];
   /** Momentum-break round: headline figures per setup family (MOMENTUM_BREAK vs CONSENSUS), same scope as byLogicVersion. */
   byStrategy?: StrategyBucket[];
+  /** Per source that won the slot — INDICATOR, S1, MOMENTUM_BREAK, each trigger family (A2…F3), SPREAD — same scope. */
+  bySource?: StrategyBucket[];
 }
 
 /** Headline figures for the setups minted by one family. */
