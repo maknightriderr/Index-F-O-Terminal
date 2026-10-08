@@ -176,6 +176,17 @@ describe('full replay of the real decision path', () => {
     for (const ch of ['redis', 'provider', 'input']) expect(chs.has(ch), ch).toBe(true);
   });
 
+  // Regression guard (2026-10-09): the whole live decision of the indicator
+  // engine + S1 + families + arbitration + option leg on this market, hashed
+  // on main before the Order Block fix / OF1. It must not change.
+  it('the live decision is identical to main (end-to-end fingerprint)', async () => {
+    const { stripVolatile } = await import('../full-replay.js');
+    const { createHash } = await import('node:crypto');
+    const fp = createHash('sha256').update(JSON.stringify(stripVolatile(JSON.parse(JSON.stringify(live))))).digest('hex').slice(0, 16);
+    if (process.env.PRINT_FINGERPRINT) console.log(`FP e2e '${fp}'`);
+    expect(fp).toBe('872813b6a2bd4d8c');
+  });
+
   it('replays to the same result — no divergence, no real I/O, days later on the wall clock', () => {
     expect(report.error).toBeNull();
     expect(report.divergences).toEqual([]);
