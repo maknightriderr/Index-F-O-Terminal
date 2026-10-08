@@ -19,6 +19,8 @@ export * from './historical-volatility/index.js';
 export * from './fvg/index.js';
 export * from './vcp/index.js';
 export * from './market-structure/index.js';
+export * from './order-flow/index.js';
+export * from './order-flow/of1.js';
 export * from './ema-trend/index.js';
 // Momentum-break trigger (a separate setup family; see its file header).
 export * from './momentum-break/index.js';

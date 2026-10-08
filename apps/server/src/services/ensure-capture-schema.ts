@@ -117,6 +117,8 @@ export const FILES = [
   // Full replay tapes, slot decisions and forward outcomes (written by the poll
   // and the forward-validation job), so ensured at boot too.
   '037_replay_tapes_forward_validation.sql',
+  // Order Block shadow (OB-2.0), Order Flow bars, OF1 candidates — measurement only (2026-10-09).
+  '038_order_blocks_order_flow_of1.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */

@@ -56,6 +56,7 @@ import { startMarketStateCapture } from './services/market-state-capture.js';
 import { startMissedWinnerAudit } from './services/missed-winner-audit.js';
 import { startSetupEventsGrading } from './services/setup-events-grading.js';
 import { startOpportunityCensus } from './services/opportunity-census-job.js';
+import { orderFlowFeedActive, startOrderFlowFeed } from './services/dhan-feed.js';
 import { createDiagnosticsRoutes } from './api/diagnostics.js';
 import { ensureCaptureSchema } from './services/ensure-capture-schema.js';
 
@@ -327,6 +328,10 @@ for (const spec of [
   {
     name: 'setupLifecycle', critical: true, startupTimeoutMs: 5_000, heartbeatIntervalMs: 20 * 60_000, kind: 'COMPONENT' as const, start: () => undefined, activeWhen: (now: number) => isMarketOpen('NSE', now) || isMarketOpen('MCX', now),
     note: 'Extra: the structure lifecycle advance runs inside the signal computation, not as one of the 18. Heartbeat = a completed advance.',
+  },
+  {
+    name: 'orderFlowFeed', critical: false, startupTimeoutMs: 5_000, heartbeatIntervalMs: 5 * 60_000, kind: 'COMPONENT' as const, start: () => startOrderFlowFeed(), activeWhen: orderFlowFeedActive,
+    note: 'Extra: the Dhan market-data feed for Order Flow (OF1 shadow) — data only, never orders. Active only with DHAN credentials during the NSE session. Heartbeat = a feed packet.',
   },
 ] satisfies ServiceSpec[]) serviceSupervisor.register(spec);
 void serviceSupervisor.startAll();

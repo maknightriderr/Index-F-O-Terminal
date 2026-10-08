@@ -51,6 +51,7 @@ import { TRIGGER_REGISTRY, DISPLACEMENT_REQUIRED_BY } from '@fno/analytics';
 import { liveTriggerStages } from '../services/trigger-router.js';
 import { EVENT_ENGINE_VERSION } from '../config/trading-flags.js';
 import { shadowRulesReport, signalEngineMetrics } from '../services/signal-engine-metrics.js';
+import { orderFlowReport } from '../services/order-flow-metrics.js';
 import { replayFull } from '../services/full-replay.js';
 
 /** One full replay at a time: it re-runs the whole decision path in this process. */
@@ -257,6 +258,16 @@ export function createDiagnosticsRoutes(): Router {
       res.json({ success: true, data: { note: SIMULATION_NOTE, ...(await signalEngineMetrics(parseQuery(req))) } });
     } catch (err: any) {
       logger.error({ error: err.message }, 'Signal diagnostics signal-engine metrics failed');
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Order Block (OB-2.0) shadow, Dhan Order Flow bars and OF1 candidates — measurement only.
+  router.get('/order-flow', async (req: Request, res: Response) => {
+    try {
+      res.json({ success: true, data: { note: SIMULATION_NOTE, ...(await orderFlowReport(parseQuery(req))) } });
+    } catch (err: any) {
+      logger.error({ error: err.message }, 'Signal diagnostics order-flow report failed');
       res.status(500).json({ success: false, error: err.message });
     }
   });

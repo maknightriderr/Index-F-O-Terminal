@@ -30,6 +30,7 @@
 // ============================================================
 
 import { findSwingPoints, type SwingPoint } from '../patterns/index.js';
+import { atr } from '../indicators/index.js';
 
 // --- Break of Structure / Change of Character ---
 
@@ -150,7 +151,15 @@ export function detectLiquiditySweep(highs: number[], lows: number[], closes: nu
   return null;
 }
 
-// --- Order blocks ---
+// --- Order blocks: LEGACY (OB-1.0, frozen) ---
+//
+// KNOWN BROKEN. Kept byte-identical ONLY because the indicator engine's live
+// structure vote still reads it while ORDER_BLOCK_MODE=SHADOW, so the paper
+// trades cannot change. Measured 2026-10-08 on 11,146 replayed polls over 76
+// symbols, it never fired: (1) the current candle is part of the series, so a
+// block price sits inside is always marked mitigated by that same candle;
+// (2) 2% over three 15m closes never happens on the indices; (3) a candle's
+// direction is read from the previous close, not its open. Use OB-2.0 below.
 
 export type OrderBlockType = 'BULLISH' | 'BEARISH';
 
@@ -174,7 +183,7 @@ const ORDER_BLOCK_IMPULSE_MIN_PCT = 0.02;
  * block found, oldest first, each flagged with whether a later candle
  * has already traded back into it ("mitigated").
  */
-export function detectOrderBlocks(highs: number[], lows: number[], closes: number[]): OrderBlock[] {
+export function detectOrderBlocksLegacy(highs: number[], lows: number[], closes: number[]): OrderBlock[] {
   const n = closes.length;
   const candidates: OrderBlock[] = [];
 
@@ -227,7 +236,7 @@ export interface OrderBlockTest {
 }
 
 /** Same "most recent unmitigated zone only" logic as fvg/index.ts's testActiveFvg. */
-export function testActiveOrderBlock(blocks: OrderBlock[], currentPrice: number): OrderBlockTest | null {
+export function testActiveOrderBlockLegacy(blocks: OrderBlock[], currentPrice: number): OrderBlockTest | null {
   const active = blocks.filter((b) => !b.mitigated);
   if (active.length === 0) return null;
 
@@ -238,6 +247,174 @@ export function testActiveOrderBlock(blocks: OrderBlock[], currentPrice: number)
   if (span <= 0) return null;
   const raw = latest.type === 'BULLISH' ? (latest.top - currentPrice) / span : (currentPrice - latest.bottom) / span;
   return { block: latest, penetrationPct: Math.max(0, Math.min(1, raw)) };
+}
+
+// --- Order blocks: OB-2.0 (2026-10-09) ---
+//
+// The last opposing candle before a displacement that leaves it, on CLOSED
+// candles only, with its lifecycle FRESH -> FIRST_TOUCH -> MITIGATED. Fixed,
+// documented rule (ORDER_BLOCK_RULES), deterministic and replayable: every
+// value as of bar k reads bars <= k only, so appending later bars never
+// changes what was known at k. (The reaction fields are measurement: filled
+// in from bars after the first touch and never read by a decision.)
+//
+// Bullish (bearish mirrors):
+//   block candle i      a down candle: close < open (the REAL open)
+//   displacement bar j  within displacementWithinBars after i, every bar
+//                       between i and j not a down candle (i is the LAST
+//                       opposing candle), and j an up candle whose body is
+//                       >= displacementBodyAtr x ATR(14) as of bar i, closing
+//                       in the outer displacementCloseFrac of its own range,
+//                       and closing above the high of bar i (it leaves the block)
+//   the block           [low_i, high_i]; it exists from bar j + 1, so the
+//                       candles that formed it can never touch or mitigate it
+//   FIRST_TOUCH         the first later bar whose low reaches the block top
+//   MITIGATED           the first bar from the first touch on that closes
+//                       below the block bottom (the block failed)
+// The decision signal (orderBlockSignalAt): at a closed decision bar, the
+// newest block first touched ON that bar and not mitigated by its close.
+
+export const ORDER_BLOCK_VERSION = 'OB-2.0';
+
+export const ORDER_BLOCK_RULES = Object.freeze({
+  atrPeriod: 14,
+  /** The displacement bar must close within this many bars after the block candle. */
+  displacementWithinBars: 3,
+  /** Displacement body (|close - open|) in ATR(14) as of the block candle. */
+  displacementBodyAtr: 1.0,
+  /** The displacement bar closes in this outer fraction of its own range. */
+  displacementCloseFrac: 0.3,
+  /** Reaction (measurement only): bars after the first touch over which MFE / MAE are measured. */
+  reactionBars: 8,
+});
+
+export type OrderBlockState = 'FRESH' | 'FIRST_TOUCH' | 'MITIGATED';
+
+export interface OhlcBar {
+  time?: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
+export interface OrderBlockV2 {
+  type: OrderBlockType;
+  /** Index of the block (opposing) candle. */
+  blockIndex: number;
+  /** Index of the displacement bar; the block exists from the bar after it. */
+  displacementIndex: number;
+  top: number;
+  bottom: number;
+  /** ATR(14) as of the block candle. */
+  atr: number;
+  /** The displacement bar's body, in ATR. */
+  displacementAtr: number;
+  state: OrderBlockState;
+  firstTouchIndex: number | null;
+  mitigatedIndex: number | null;
+  /**
+   * Measurement only: from the first touch's close over the next
+   * reactionBars bars available, the best move in the block's direction and
+   * the worst against it, in ATR; held = it gave >= 1 ATR before failing.
+   * Null before the first touch.
+   */
+  reaction: { barsMeasured: number; mfeAtr: number; maeAtr: number; held: boolean | null } | null;
+}
+
+/** ATR(period) as of each bar (Wilder), null before it is defined. Bar k reads bars <= k. */
+export function atrAsOf(bars: readonly OhlcBar[], period: number = ORDER_BLOCK_RULES.atrPeriod): Array<number | null> {
+  const series = atr(bars.map((b) => b.high), bars.map((b) => b.low), bars.map((b) => b.close), period);
+  return bars.map((_, k) => (k >= period && series[k - period] != null ? series[k - period] : null));
+}
+
+/**
+ * Every OB-2.0 block known at the close of bar `uptoIndex` (default: the
+ * last bar), oldest first, with its lifecycle as of that bar. Pass CLOSED
+ * bars only.
+ */
+export function detectOrderBlocks(bars: readonly OhlcBar[], uptoIndex: number = bars.length - 1): OrderBlockV2[] {
+  const R = ORDER_BLOCK_RULES;
+  const upto = Math.min(uptoIndex, bars.length - 1);
+  const atrs = atrAsOf(bars.slice(0, upto + 1));
+  const blocks: OrderBlockV2[] = [];
+  for (let i = 0; i < upto; i++) {
+    const b = bars[i];
+    const a = atrs[i];
+    if (a == null || !(a > 0)) continue;
+    // A down candle is a bullish block, an up candle a bearish one.
+    const dir: 1 | -1 | 0 = b.close < b.open ? 1 : b.close > b.open ? -1 : 0;
+    if (dir === 0) continue;
+    for (let j = i + 1; j <= Math.min(upto, i + R.displacementWithinBars); j++) {
+      const d = bars[j];
+      const up = d.close > d.open;
+      const down = d.close < d.open;
+      // A later opposing candle before the displacement: i is not the last one.
+      if ((dir === 1 && down) || (dir === -1 && up)) break;
+      const body = Math.abs(d.close - d.open);
+      const range = d.high - d.low;
+      const closesOuter = range > 0 && (dir === 1 ? d.high - d.close <= R.displacementCloseFrac * range : d.close - d.low <= R.displacementCloseFrac * range);
+      const leaves = dir === 1 ? d.close > b.high : d.close < b.low;
+      if (((dir === 1 && up) || (dir === -1 && down)) && body >= R.displacementBodyAtr * a && closesOuter && leaves) {
+        blocks.push(lifecycle({ type: dir === 1 ? 'BULLISH' : 'BEARISH', blockIndex: i, displacementIndex: j, top: b.high, bottom: b.low, atr: a, displacementAtr: Math.round((body / a) * 1000) / 1000 }, bars, upto));
+        break;
+      }
+    }
+  }
+  return blocks;
+}
+
+function lifecycle(
+  base: Pick<OrderBlockV2, 'type' | 'blockIndex' | 'displacementIndex' | 'top' | 'bottom' | 'atr' | 'displacementAtr'>,
+  bars: readonly OhlcBar[],
+  upto: number
+): OrderBlockV2 {
+  const bull = base.type === 'BULLISH';
+  let firstTouchIndex: number | null = null;
+  let mitigatedIndex: number | null = null;
+  for (let k = base.displacementIndex + 1; k <= upto; k++) {
+    const b = bars[k];
+    if (firstTouchIndex == null && (bull ? b.low <= base.top : b.high >= base.bottom)) firstTouchIndex = k;
+    if (firstTouchIndex != null && (bull ? b.close < base.bottom : b.close > base.top)) {
+      mitigatedIndex = k;
+      break;
+    }
+  }
+  const state: OrderBlockState = mitigatedIndex != null ? 'MITIGATED' : firstTouchIndex != null ? 'FIRST_TOUCH' : 'FRESH';
+  let reaction: OrderBlockV2['reaction'] = null;
+  if (firstTouchIndex != null) {
+    const ref = bars[firstTouchIndex].close;
+    const after = bars.slice(firstTouchIndex + 1, Math.min(upto, firstTouchIndex + ORDER_BLOCK_RULES.reactionBars) + 1);
+    const best = after.length ? (bull ? Math.max(...after.map((x) => x.high)) - ref : ref - Math.min(...after.map((x) => x.low))) : 0;
+    const worst = after.length ? (bull ? ref - Math.min(...after.map((x) => x.low)) : Math.max(...after.map((x) => x.high)) - ref) : 0;
+    const inAtr = (v: number) => Math.round((Math.max(0, v) / base.atr) * 1000) / 1000;
+    const mitigatedInWindow = mitigatedIndex != null && mitigatedIndex <= firstTouchIndex + ORDER_BLOCK_RULES.reactionBars;
+    reaction = {
+      barsMeasured: after.length,
+      mfeAtr: inAtr(best),
+      maeAtr: inAtr(worst),
+      held: best >= base.atr ? true : mitigatedInWindow || after.length >= ORDER_BLOCK_RULES.reactionBars ? false : null,
+    };
+  }
+  return { ...base, state, firstTouchIndex, mitigatedIndex, reaction };
+}
+
+export interface OrderBlockSignal {
+  block: OrderBlockV2;
+  /** +1 bullish, -1 bearish. */
+  vote: 1 | -1;
+}
+
+/**
+ * The OB-2.0 decision signal at closed bar `i`: the newest block that was
+ * FRESH before bar i, is first touched ON bar i, and is not mitigated by
+ * bar i's close. Reads bars <= i only.
+ */
+export function orderBlockSignalAt(bars: readonly OhlcBar[], i: number): OrderBlockSignal | null {
+  const touched = detectOrderBlocks(bars, i).filter((b) => b.firstTouchIndex === i && b.mitigatedIndex == null);
+  if (touched.length === 0) return null;
+  const latest = touched.reduce((a, b) => (b.displacementIndex > a.displacementIndex ? b : a));
+  return { block: latest, vote: latest.type === 'BULLISH' ? 1 : -1 };
 }
 
 // --- Premium / discount ---

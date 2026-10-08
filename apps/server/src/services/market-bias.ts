@@ -37,8 +37,8 @@ import {
   detectVcp,
   analyzeMarketStructure,
   detectLiquiditySweep,
-  detectOrderBlocks,
-  testActiveOrderBlock,
+  detectOrderBlocksLegacy,
+  testActiveOrderBlockLegacy,
   classifyPremiumDiscount,
   detectEmaTrendStructure,
 } from '@fno/analytics';
@@ -105,6 +105,9 @@ import { dataQualityBlock } from './data-quality.js';
 import { notifyTradeSetup } from './telegram.js';
 import { trackSymbolForOiSnapshot } from './oi-close-snapshot.js';
 import { riskOffReason } from './risk-circuit-breaker.js';
+import { orderBlockSignalAt } from '@fno/analytics';
+import { directionWithOrderBlockVote, recordOrderBlockShadow } from './order-block-shadow.js';
+import { recordOf1Shadow } from './of1-live.js';
 import { assessLocation, assessRoom, type StructuralLevel } from './location-quality.js';
 import { TRADING_FLAGS, TRADING_PARAMS, COVERAGE_LAG_FLAGS, COVERAGE_LAG_PARAMS, liveLogicStamp, paperResearchStamp, FNO_VALIDATION, FNO_VALIDATION_PARAMS, type LogicStamp } from '../config/trading-flags.js';
 import { bandVote, type Vote } from './vote-bands.js';
@@ -815,8 +818,10 @@ async function computeMarketBias(
   // fair value gaps already had. Costs one bar of latency, which is the
   // honest price of the signal meaning what it says.
   const liquiditySweep = detectLiquiditySweep(c15.highs.slice(0, -1), c15.lows.slice(0, -1), c15.closes.slice(0, -1));
-  const orderBlocks = detectOrderBlocks(c15.highs, c15.lows, c15.closes);
-  const activeOrderBlock = testActiveOrderBlock(orderBlocks, spot);
+  // The live vote reads the FROZEN legacy detector (OB-1.0) so paper trades are
+  // unchanged while ORDER_BLOCK_MODE=SHADOW; OB-2.0 is recorded in shadow (order-block-shadow.ts).
+  const orderBlocks = detectOrderBlocksLegacy(c15.highs, c15.lows, c15.closes);
+  const activeOrderBlock = testActiveOrderBlockLegacy(orderBlocks, spot);
   const premiumDiscount = classifyPremiumDiscount(c15.highs, c15.lows, spot);
 
   // Classic pivot points from the prior session's H/L/C — price-based S/R
@@ -2228,6 +2233,36 @@ async function computeMarketBias(
     );
   }
   const setupWatch = watchRowsForDisplay(await readSetupWatch(setupWatchKey(exchange, underlying, mode, decisionIstDate())));
+
+  // SHADOW MEASUREMENT ONLY (2026-10-09) — after the decision above is final,
+  // never read by it: OB-2.0 beside the live (legacy) order-block vote, and
+  // OF1 (Order Flow Confirmation). Closed bars only; failures are logged.
+  if (!isPositional && closedNow.length > 0) {
+    try {
+      const obSignal = orderBlockSignalAt(closedNow, closedNow.length - 1);
+      await recordOrderBlockShadow({
+        underlying,
+        exchange,
+        mode,
+        bars: closedNow,
+        legacyVote: orderBlockVote,
+        signal: obSignal,
+        liveDirection: direction,
+        directionWithV2: directionWithOrderBlockVote({ chartVotes, positioningVotes, legacyVote: orderBlockVote, v2Vote: obSignal?.vote ?? 0, cap: CLUSTER_MAX_WEIGHT }),
+      });
+      await recordOf1Shadow({
+        underlying,
+        exchange,
+        mode,
+        bars: closedNow,
+        chain,
+        gates: { session: sessionGateReason(exchange, mode)?.reason ?? null, riskOff: await riskOffReason(exchange, mode) },
+        sessionHours: sessionHoursFor(exchange),
+      });
+    } catch (err: any) {
+      logger.warn({ error: err.message, underlying, exchange }, 'Shadow measurement (OB-2.0 / OF1) failed — the decision is unaffected');
+    }
+  }
 
   const result: MarketBiasResult = {
     bias,
