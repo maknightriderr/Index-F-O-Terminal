@@ -24,8 +24,8 @@ import { inferTradeSide, type TradeSide } from '@fno/analytics';
 import { isMarketOpen } from '@fno/shared';
 import { logger } from '../lib/logger.js';
 import { serviceHeartbeat } from '../lib/service-supervisor.js';
-import { DHAN_RESPONSE, dhanFeedUrl, fullSubscription, parseDhanFrame, resolveIndexFutures, type DhanFullPacket } from '../lib/dhan-feed-packets.js';
-import { dhanCredentials, ORDER_BLOCK_MODE, ORDER_BLOCK_MODE_REJECTED, OF1_TRADING_REQUESTED, ORDER_FLOW_SYMBOLS, ORDER_FLOW_SYMBOLS_REJECTED } from '../config/order-flow-flags.js';
+import { DHAN_RESPONSE, DHAN_SEGMENT_CODE, dhanFeedUrl, fullSubscription, parseDhanFrame, resolveNearestFutures, type DhanFullPacket, type DhanSegment } from '../lib/dhan-feed-packets.js';
+import { dhanCredentials, ORDER_BLOCK_MODE, ORDER_BLOCK_MODE_REJECTED, OF1_TRADING_REQUESTED, ORDER_FLOW_SUPPORTED, ORDER_FLOW_SYMBOLS, ORDER_FLOW_SYMBOLS_REJECTED } from '../config/order-flow-flags.js';
 import { closeFlowBars, recordFlowTrade, registerFlowSymbol, setFlowFeedConnected } from './order-flow-store.js';
 
 export const DHAN_SCRIP_MASTER_URL = 'https://images.dhan.co/api-data/api-scrip-master.csv';
@@ -44,8 +44,9 @@ const state = {
   configured: false,
   connected: false,
   ws: null as WebSocket | null,
-  instruments: new Map<number, InstrumentState>(),
-  resolved: {} as Record<string, { securityId: string; tradingSymbol: string; expiry: string }>,
+  /** Keyed `${segmentCode}:${securityId}` (ids are only unique within a segment). */
+  instruments: new Map<string, InstrumentState>(),
+  resolved: {} as Record<string, { securityId: string; tradingSymbol: string; expiry: string; segment: DhanSegment; exchange: 'NSE' | 'MCX' }>,
   resolvedOn: null as string | null,
   packets: 0,
   trades: 0,
@@ -73,17 +74,19 @@ export function tradeFromFullPacket(s: InstrumentState, p: Pick<DhanFullPacket, 
 }
 
 const istDate = (t: number) => new Date(t).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-const inSessionWindow = (now: number) => isMarketOpen('NSE', now) || isMarketOpen('NSE', now + SESSION_MARGIN_MS) || isMarketOpen('NSE', now - SESSION_MARGIN_MS);
+const openNear = (ex: 'NSE' | 'MCX', now: number) => isMarketOpen(ex, now) || isMarketOpen(ex, now + SESSION_MARGIN_MS) || isMarketOpen(ex, now - SESSION_MARGIN_MS);
+/** NSE or MCX in session (± a few minutes): the feed's connection window. */
+const inSessionWindow = (now: number) => openNear('NSE', now) || openNear('MCX', now);
 
 async function resolveInstruments(now: number): Promise<void> {
   if (state.resolvedOn === istDate(now) && Object.keys(state.resolved).length) return;
   const res = await axios.get<string>(DHAN_SCRIP_MASTER_URL, { responseType: 'text', timeout: 60_000 });
-  state.resolved = resolveIndexFutures(res.data, ORDER_FLOW_SYMBOLS, now);
+  state.resolved = resolveNearestFutures(res.data, ORDER_FLOW_SYMBOLS.map((symbol) => ({ symbol, exchange: ORDER_FLOW_SUPPORTED[symbol] })), now);
   state.resolvedOn = istDate(now);
   state.instruments.clear();
   for (const [symbol, r] of Object.entries(state.resolved)) {
-    state.instruments.set(Number(r.securityId), { symbol, prevVolume: null, prevLtp: null, prevSide: null, prevQuote: null });
-    registerFlowSymbol(symbol, { exchange: 'NSE', instrument: r.tradingSymbol, source: 'DHAN', mode: 'INFERRED', startedAt: now });
+    state.instruments.set(`${DHAN_SEGMENT_CODE[r.segment]}:${r.securityId}`, { symbol, prevVolume: null, prevLtp: null, prevSide: null, prevQuote: null });
+    registerFlowSymbol(symbol, { exchange: r.exchange, instrument: r.tradingSymbol, source: 'DHAN', mode: 'INFERRED', startedAt: now });
   }
   logger.info({ instruments: state.resolved }, 'Dhan feed: index futures resolved for order flow');
 }
@@ -99,10 +102,11 @@ function onFrame(data: WebSocket.RawData): void {
       continue;
     }
     if (p.kind !== 'FULL' || p.header.code !== DHAN_RESPONSE.FULL) continue;
-    const s = state.instruments.get(p.header.securityId);
+    const ikey = `${p.header.segment}:${p.header.securityId}`;
+    const s = state.instruments.get(ikey);
     if (!s) continue;
     const { trade, next } = tradeFromFullPacket(s, p, Date.now());
-    state.instruments.set(p.header.securityId, next);
+    state.instruments.set(ikey, next);
     if (trade) {
       state.trades++;
       recordFlowTrade(s.symbol, trade);
@@ -119,7 +123,7 @@ function connect(creds: { clientId: string; accessToken: string }): void {
     setFlowFeedConnected(true);
     state.backoffMs = 5_000;
     state.lastError = null;
-    const ids = Object.values(state.resolved).map((r) => r.securityId);
+    const ids = Object.values(state.resolved).map((r) => ({ securityId: r.securityId, segment: r.segment }));
     if (ids.length) ws.send(fullSubscription(ids));
     logger.info({ instruments: ids.length }, 'Dhan feed: connected and subscribed (FULL packets, data only)');
   });
@@ -188,4 +192,4 @@ export function orderFlowFeedStatus() {
 }
 
 /** Whether the supervisor should expect heartbeats right now. */
-export const orderFlowFeedActive = (now: number) => dhanCredentials() != null && isMarketOpen('NSE', now);
+export const orderFlowFeedActive = (now: number) => dhanCredentials() != null && (isMarketOpen('NSE', now) || isMarketOpen('MCX', now));

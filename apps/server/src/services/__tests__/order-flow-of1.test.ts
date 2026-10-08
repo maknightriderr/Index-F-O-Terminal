@@ -123,12 +123,13 @@ describe('OF1: paper trading switch and hypothesis', () => {
     expect(of1TradeVerdict({ ...base, target: null }, null, { session: null, riskOff: null }, 6.25).reasons.join()).toMatch(/NO_TARGET/);
     expect(of1TradeVerdict({ ...base, target: { kind: 'PDH', price: 104, role: 'RESISTANCE' } }, null, { session: 'closing guard', riskOff: null }, 6.25).reasons.join()).toMatch(/SESSION/);
   });
-  it('OF1 paper-trades by default (OF1_TRADING=false rolls back to shadow); MCX symbols are refused until verified', () => {
+  it('OF1 paper-trades by default (OF1_TRADING=false rolls back to shadow); NSE and MCX symbols are supported, others refused', () => {
     expect(flags.OF1_TRADING).toBe(true);
     expect(flags.orderFlowLogicSuffix(true, true)).toBe('+ob1-paper.1+of1-paper.1');
     expect(flags.orderFlowLogicSuffix(false, false)).toBe('');
-    expect(flags.parseOrderFlowSymbols('NIFTY,CRUDEOIL,banknifty')).toEqual({ symbols: ['NIFTY', 'BANKNIFTY'], rejected: ['CRUDEOIL'] });
-    expect(flags.parseOrderFlowSymbols(undefined).symbols).toEqual(['NIFTY', 'BANKNIFTY']);
+    expect(flags.parseOrderFlowSymbols('NIFTY,CRUDEOIL,banknifty,RELIANCE')).toEqual({ symbols: ['NIFTY', 'CRUDEOIL', 'BANKNIFTY'], rejected: ['RELIANCE'] });
+    expect(flags.parseOrderFlowSymbols(undefined).symbols).toEqual(['NIFTY', 'BANKNIFTY', 'CRUDEOIL', 'GOLD', 'SILVER', 'NATURALGAS']);
+    expect(flags.ORDER_FLOW_SUPPORTED.CRUDEOIL).toBe('MCX');
   });
 });
 

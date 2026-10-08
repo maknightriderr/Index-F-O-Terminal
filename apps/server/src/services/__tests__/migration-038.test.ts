@@ -82,12 +82,14 @@ describe('migration 038', () => {
     expect(FILES.indexOf(F038)).toBe(FILES.indexOf('037_replay_tapes_forward_validation.sql') + 1);
     expect(await apply(db, F038)).toEqual([]);
     const tables = (await db.query<{ t: string }>(`SELECT table_name AS t FROM information_schema.tables WHERE table_schema = 'public'`)).rows.map((r) => r.t);
-    for (const t of ['order_blocks', 'order_block_shadow', 'order_flow_bars', 'of1_candidates']) expect(tables).toContain(t);
+    for (const t of ['order_blocks', 'order_block_shadow', 'order_flow_bars', 'of1_candidates', 'bar_anomalies']) expect(tables).toContain(t);
+    expect(FILES.indexOf('039_bar_anomalies.sql')).toBe(FILES.indexOf(F038) + 1);
+    expect(await apply(db, '039_bar_anomalies.sql')).toEqual([]);
   });
 
   it('every statement the new services issue is valid against the schema', async () => {
     let checked = 0;
-    for (const f of ['order-block-shadow.ts', 'order-flow-store.ts', 'of1-live.ts', 'order-flow-metrics.ts', 'forward-validation.ts']) {
+    for (const f of ['order-block-shadow.ts', 'order-flow-store.ts', 'of1-live.ts', 'order-flow-metrics.ts', 'forward-validation.ts', 'bar-anomaly.ts', 'pending-outcomes.ts', 'state-recovery.ts', 'signal-engine-metrics.ts']) {
       const src = readFileSync(path.join(HERE, '..', f), 'utf8');
       for (const body of sqlBodies(src)) {
         const stmt = nullParams(body).trim();

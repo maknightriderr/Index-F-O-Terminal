@@ -109,6 +109,9 @@ import { orderBlockSignalAt } from '@fno/analytics';
 import { directionWithOrderBlockVote, recordOrderBlockShadow } from './order-block-shadow.js';
 import { recordOf1Shadow } from './of1-live.js';
 import { orderFlowPaperCandidates, orderFlowSourcesOn } from './order-flow-candidates.js';
+import { delSlotIfSame, setSlotIfSame, slotIdentity } from '../lib/slot-cas.js';
+import { queuePendingOutcome } from './pending-outcomes.js';
+import { recordCloseBarAnomaly } from './bar-anomaly.js';
 import { footprintsFor } from './order-flow-store.js';
 import { ORDER_FLOW_SOURCE_VERSIONS, ORDER_FLOW_SYMBOLS } from '../config/order-flow-flags.js';
 import { assessLocation, assessRoom, type StructuralLevel } from './location-quality.js';
@@ -2259,6 +2262,8 @@ async function computeMarketBias(
   // OF1 (Order Flow Confirmation). Closed bars only; failures are logged.
   if (!isPositional && closedNow.length > 0) {
     try {
+      // Data quality: an anomalous session-close bar is recorded (the engines are unchanged by it).
+      await recordCloseBarAnomaly(underlying, exchange, closedNow);
       const obSignal = orderBlockSignalAt(closedNow, closedNow.length - 1);
       await recordOrderBlockShadow({
         underlying,
@@ -2582,6 +2587,8 @@ interface BiasVoteSnapshot {
 }
 
 interface StoredTradeSetup extends TradeSetup {
+  /** Shadow measurement: the option mid in the session's last minutes (an exit-before-close comparison). */
+  squareOffShadow?: { at: number; mid: number; bid: number; ask: number; minutesToClose: number };
   direction: BiasDirection;
   voteSnapshot?: BiasVoteSnapshot; // the votes that minted this setup — persisted with its Backtesting row
   entryContext?: SetupEntryContext; // regime/IV/VWAP/room context at entry — persisted with its Backtesting row
@@ -2676,6 +2683,8 @@ function deriveTrailState(setup: TradeSetup): NonNullable<TradeSetup['trailState
 }
 
 const STICKY_TRADE_SETUP_TTL_SECONDS = 60 * 60 * 24 * 2;
+/** Square-off shadow: the session's last minutes in which the exit-before-close mid is recorded. */
+const SQUARE_OFF_SHADOW_MINUTES = 10;
 const STICKY_TRADE_SETUP_TTL_SECONDS_POSITIONAL = 60 * 60 * 24 * 30; // a positional hold is meant to run days/weeks, not roll over after 2 days
 
 // 40% for a positional hold vs the 30% intraday default — the same option's
@@ -3200,9 +3209,10 @@ async function resolveStickyTradeSetup(
       stored.logic ?? null
     );
     if (backfilledId) {
+      const before = slotIdentity(stored);
       stored = { ...stored, signalId: backfilledId };
       try {
-        await redis.set(key, JSON.stringify(stored), 'EX', setupTtl);
+        await setSlotIfSame(key, before, stored, setupTtl);
       } catch (err: any) {
         logger.warn({ error: err.message, underlying }, 'Sticky trade setup signalId backfill write failed');
       }
@@ -3276,7 +3286,7 @@ async function resolveStickyTradeSetup(
             const beforeTrail = stored!;
             stored = { ...stored!, stopLoss: newStopLoss, reason: `${stored!.reason} ${trailNote}` };
             try {
-              await redis.set(key, JSON.stringify(stored), 'EX', setupTtl);
+              await setSlotIfSame(key, slotIdentity(beforeTrail), stored, setupTtl);
             } catch (err: any) {
               logger.warn({ error: err.message, underlying }, 'Sticky trade setup trailing-stop write failed');
             }
@@ -3330,7 +3340,7 @@ async function resolveStickyTradeSetup(
       if (!stored!.reversalStreak) return surfaceSticky(stored!, currentValue, isSpread, storedChain, underlying);
       const reset: StoredTradeSetup = { ...stored!, reversalStreak: 0, reversalSince: undefined };
       try {
-        await redis.set(key, JSON.stringify(reset), 'EX', setupTtl);
+        await setSlotIfSame(key, slotIdentity(stored), reset, setupTtl);
       } catch (err: any) {
         logger.warn({ error: err.message, underlying }, 'Sticky trade setup reversal-streak reset failed');
       }
@@ -3350,7 +3360,7 @@ async function resolveStickyTradeSetup(
       if (streak < REVERSAL_CONFIRM_POLLS || now - since < confirmMs) {
         const bumped: StoredTradeSetup = { ...stored!, reversalStreak: streak, reversalSince: since };
         try {
-          await redis.set(key, JSON.stringify(bumped), 'EX', setupTtl);
+          await setSlotIfSame(key, slotIdentity(stored), bumped, setupTtl);
         } catch (err: any) {
           logger.warn({ error: err.message, underlying }, 'Sticky trade setup reversal-streak write failed');
         }
@@ -3977,7 +3987,7 @@ async function resolveStickyTradeSetup(
     }
     if (unreliableReason != null) {
       try {
-        await redis.del(key);
+        await delSlotIfSame(key, slotIdentity(stored));
       } catch (err: any) {
         logger.warn({ error: err.message, underlying }, 'Sticky trade setup clear failed');
       }
@@ -4140,8 +4150,9 @@ async function resolveStickyTradeSetup(
       // Clear any previously locked setup now that conditions no longer
       // support one — otherwise a stale setup from earlier today could
       // resurface with an outdated entry price if direction swings back.
+      // Only the trade this poll read — never one another caller just minted.
       try {
-        await redis.del(key);
+        await delSlotIfSame(key, slotIdentity(stored));
       } catch (err: any) {
         logger.warn({ error: err.message, underlying }, 'Sticky trade setup clear failed');
       }
@@ -5899,7 +5910,9 @@ async function recordTradeSetupGenerated(
   votes?: BiasVoteSnapshot,
   context?: SetupEntryContext,
   logic: LogicStamp | null = null,
-  origin: { source: string; candidateId: string | null; sourceVersion?: string | null } | null = null
+  origin: { source: string; candidateId: string | null; sourceVersion?: string | null } | null = null,
+  /** A late-written row (its trade was minted earlier): its real generation time. */
+  at: number | null = null
 ): Promise<string | undefined> {
   try {
     // mode is persisted here (found missing in a re-audit) so backtesting
@@ -5912,7 +5925,7 @@ async function recordTradeSetupGenerated(
     const rows = await sql<{ id: string }[]>`
       INSERT INTO signals (time, symbol, signal_type, direction, confidence, inputs, reasoning, market_regime, intelligence_score${snapshotId ? sql`, snapshot_id` : sql``})
       VALUES (
-        NOW(), ${underlying}, 'TRADE_SETUP', ${direction}, ${confidence},
+        ${at != null ? new Date(at) : sql`NOW()`}, ${underlying}, 'TRADE_SETUP', ${direction}, ${confidence},
         ${sql.json(
           // sql.json()'s JSONValue type doesn't structurally accept a
           // nested typed array like SpreadLeg[] (readonly index-signature
@@ -5983,7 +5996,7 @@ async function recordTradeSetupOutcome(
   outcome: 'WIN' | 'LOSS' | 'EXPIRED',
   exitValue: number | null,
   close: TradeCloseContext
-): Promise<void> {
+): Promise<'RECORDED' | 'DUPLICATE' | 'QUEUED' | 'NO_ROW'> {
   // A naked long's return% is the % change in the option's own premium.
   // A spread has no single "entry price" to measure against that way —
   // maxLoss (the capital genuinely at risk) is the meaningful reference,
@@ -5999,32 +6012,51 @@ async function recordTradeSetupOutcome(
     }
   }
 
-  // No signalId: pre-dates Backtesting or failed to record on generation —
-  // no row to update, but the position still closed, so it's still notified.
+  // A trade whose row never got written (its insert failed) gets one now, at its real entry time,
+  // so its result is not lost (2026-10-09).
+  if (!stored.signalId) {
+    const id = await recordTradeSetupGenerated(
+      close.underlying, close.exchange, stored, stored.direction, (stored as any).confidence ?? 0, (stored.entryContext?.regime ?? 'RANGE_BOUND') as MarketRegime, 0, close.mode,
+      stored.voteSnapshot, stored.entryContext, stored.logic ?? null, null, stored.generatedAt ?? null
+    ).catch(() => null);
+    if (id) stored = { ...stored, signalId: id };
+  }
+
+  let status: 'RECORDED' | 'DUPLICATE' | 'QUEUED' | 'NO_ROW' = 'NO_ROW';
   if (stored.signalId) {
+    const patch = {
+      outcome,
+      exitPrice: exitValue,
+      exitTime: decisionNow(),
+      closeReason: close.reason,
+      holdMinutes: stored.generatedAt ? Math.round((decisionNow() - stored.generatedAt) / 60000) : null,
+      excursion: stored.excursion ? { ...stored.excursion } : null,
+      healthAtExit: stored.health ? { ...stored.health } : null,
+      ...(outcome === 'LOSS' ? { stopOvershootPct: stopOvershootPct(stored, exitValue) } : {}),
+    };
     try {
-      await sql`
+      // Idempotent: only an OPEN row is closed. A second closer (the monitor and a poll racing)
+      // finds it closed and records nothing — no double exit, no double loss count.
+      const rows = await sql<{ id: string }[]>`
         UPDATE signals
-        SET inputs = inputs || ${sql.json({
-          outcome,
-          exitPrice: exitValue,
-          exitTime: decisionNow(),
-          // Structured, not guessed: every exit says which kind it was.
-          closeReason: close.reason,
-          holdMinutes: stored.generatedAt ? Math.round((decisionNow() - stored.generatedAt) / 60000) : null,
-          excursion: stored.excursion ? { ...stored.excursion } : null,
-          healthAtExit: stored.health ? { ...stored.health } : null,
-          // Validation review, fix 3 — measurement only, no fill change. How far
-          // past the stop a losing exit filled, as a share of entry: the gap-
-          // through part of the −1R average loser, separate from costs.
-          ...(outcome === 'LOSS' ? { stopOvershootPct: stopOvershootPct(stored, exitValue) } : {}),
-        })}, fwd_1d_return = ${returnPercent}
-        WHERE id = ${stored.signalId}
+        SET inputs = inputs || ${sql.json(patch as any)}, fwd_1d_return = ${returnPercent}
+        WHERE id = ${stored.signalId} AND (inputs->>'outcome') IS NULL
+        RETURNING id
       `;
+      status = rows.length > 0 ? 'RECORDED' : 'DUPLICATE';
     } catch (err: any) {
-      logger.warn({ error: err.message, signalId: stored.signalId }, 'Backtesting: failed to record trade setup outcome');
+      // The database refused the write (outage): queue it, never drop it. Applied by the
+      // monitor sweep and before state recovery on boot (pending-outcomes.ts).
+      logger.warn({ error: err.message, signalId: stored.signalId }, 'Backtesting: outcome write failed — queued for retry');
+      await queuePendingOutcome({ signalId: stored.signalId, patch, returnPercent }).catch((e: any) =>
+        logger.error({ error: e.message, signalId: stored.signalId }, 'Backtesting: outcome could not be queued either')
+      );
+      status = 'QUEUED';
     }
-    // Phase 3: the plan's last event — closed at these levels (the exit is in the reason).
+    if (status === 'DUPLICATE') {
+      logger.info({ signalId: stored.signalId, outcome, reason: close.reason }, 'Trade already closed by another caller — duplicate close ignored');
+      return status;
+    }
     void recordOptionPlanEvent({
       planId: planIdFor(stored.signalId),
       at: decisionNow(),
@@ -6117,6 +6149,7 @@ async function recordTradeSetupOutcome(
     generatedAt: stored.generatedAt ?? null,
     dedupeId,
   });
+  return status;
 }
 
 function closeReasonForPriceHit(stored: StoredTradeSetup, isSpread: boolean, hitTarget: boolean): TradeCloseReason {
@@ -6323,7 +6356,7 @@ export async function checkLockedSetupPriceLevels(
     // resolveStickyTradeSetup itself uses for a same-poll day rollover.
     await recordTradeSetupOutcome(stored, 'EXPIRED', currentExitValue(pricingChain, stored), { underlying, exchange, mode: 'INTRADAY', reason: 'SESSION_ENDED' });
     try {
-      await redis.del(key);
+      await delSlotIfSame(key, slotIdentity(stored));
     } catch (err: any) {
       logger.warn({ error: err.message, underlying }, 'Price-level monitor: stale-day sticky setup clear failed');
     }
@@ -6402,9 +6435,11 @@ export async function checkLockedSetupPriceLevels(
         excursion,
         health: { state: health.state, score: health.score, wouldExit: health.wouldExit, reason: health.reason, at: decisionNow() },
       };
+      const before = slotIdentity(stored);
       stored = updated;
       try {
-        await redis.set(key, JSON.stringify(updated), 'EX', mode === 'POSITIONAL' ? STICKY_TRADE_SETUP_TTL_SECONDS_POSITIONAL : STICKY_TRADE_SETUP_TTL_SECONDS);
+        // Only if the slot still holds this trade: a stale copy must never overwrite a newer trade.
+        await setSlotIfSame(key, before, updated, mode === 'POSITIONAL' ? STICKY_TRADE_SETUP_TTL_SECONDS_POSITIONAL : STICKY_TRADE_SETUP_TTL_SECONDS);
       } catch (err: any) {
         logger.warn({ error: err.message, underlying }, 'Trade health: excursion write failed');
       }
@@ -6416,6 +6451,26 @@ export async function checkLockedSetupPriceLevels(
       const dead = deadTradeMarker(health, excursion, decisionNow());
       if (dead && stored.decisionId) {
         void markDecisionDead(stored.decisionId, dead.deadAt, dead.mfeAtDeadAtr, dead.maeAtDeadAtr);
+      }
+    }
+  }
+
+  // Shadow measurement (2026-10-09): what squaring off before the close would have
+  // fetched — the option mid in the session's last SQUARE_OFF_SHADOW_MINUTES, recorded
+  // once per trade beside the actual exit. Changes no exit.
+  if (mode === 'INTRADAY' && !isSpread && !stored.squareOffShadow && pricingChain) {
+    const toClose = minutesToSessionClose(exchange, decisionNow());
+    const leg = findLeg(pricingChain, stored.strike!, stored.side as 'CE' | 'PE');
+    const mid = leg && leg.bid > 0 && leg.ask >= leg.bid ? (leg.bid + leg.ask) / 2 : null;
+    if (toClose != null && toClose > 0 && toClose <= SQUARE_OFF_SHADOW_MINUTES && mid != null) {
+      const shadow = { at: decisionNow(), mid: Math.round(mid * 100) / 100, bid: leg!.bid, ask: leg!.ask, minutesToClose: Math.round(toClose * 10) / 10 };
+      const before = slotIdentity(stored);
+      stored = { ...stored, squareOffShadow: shadow };
+      try {
+        await setSlotIfSame(key, before, stored, STICKY_TRADE_SETUP_TTL_SECONDS);
+        if (stored.signalId) await sql`UPDATE signals SET inputs = inputs || ${sql.json({ squareOffShadow: shadow } as any)} WHERE id = ${stored.signalId} AND (inputs->>'outcome') IS NULL`;
+      } catch (err: any) {
+        logger.warn({ error: err.message, underlying }, 'Square-off shadow: record failed');
       }
     }
   }
@@ -6437,7 +6492,7 @@ export async function checkLockedSetupPriceLevels(
   // setup that's already resolved in the DB as if it were still open —
   // exactly the bug this monitor exists to prevent, just relocated.
   try {
-    await redis.del(key);
+    await delSlotIfSame(key, slotIdentity(stored));
   } catch (err: any) {
     logger.warn({ error: err.message, underlying }, 'Price-level monitor: sticky setup clear failed after recording outcome');
   }

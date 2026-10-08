@@ -116,9 +116,14 @@ export function parseDhanFrame(frame: Buffer): DhanPacket[] {
   return out;
 }
 
-/** The subscription request for FULL packets on NSE F&O instruments. */
-export function fullSubscription(securityIds: readonly string[]): string {
-  return JSON.stringify({ RequestCode: DHAN_REQUEST.FULL, InstrumentCount: securityIds.length, InstrumentList: securityIds.map((id) => ({ ExchangeSegment: 'NSE_FNO', SecurityId: id })) });
+export type DhanSegment = 'NSE_FNO' | 'MCX_COMM';
+/** The packet header's numeric exchange segment for each subscription segment (Dhan v2). */
+export const DHAN_SEGMENT_CODE: Readonly<Record<DhanSegment, number>> = Object.freeze({ NSE_FNO: 2, MCX_COMM: 5 });
+
+/** The subscription request for FULL packets (plain ids = NSE F&O). */
+export function fullSubscription(instruments: ReadonlyArray<string | { securityId: string; segment: DhanSegment }>): string {
+  const list = instruments.map((x) => (typeof x === 'string' ? { ExchangeSegment: 'NSE_FNO', SecurityId: x } : { ExchangeSegment: x.segment, SecurityId: x.securityId }));
+  return JSON.stringify({ RequestCode: DHAN_REQUEST.FULL, InstrumentCount: list.length, InstrumentList: list });
 }
 
 /** The feed URL. The token is a query parameter per Dhan's API — never log the result. */
@@ -128,20 +133,37 @@ export function dhanFeedUrl(clientId: string, accessToken: string): string {
 
 /** Nearest-expiry NSE index future per symbol from Dhan's public instrument master (CSV text). */
 export function resolveIndexFutures(csv: string, symbols: readonly string[], now: number): Record<string, { securityId: string; tradingSymbol: string; expiry: string }> {
+  const r = resolveNearestFutures(csv, symbols.map((symbol) => ({ symbol, exchange: 'NSE' as const })), now);
+  return Object.fromEntries(Object.entries(r).map(([s, v]) => [s, { securityId: v.securityId, tradingSymbol: v.tradingSymbol, expiry: v.expiry }]));
+}
+
+/**
+ * Nearest-expiry future per symbol: NSE index futures (segment D, FUTIDX) and
+ * MCX commodity futures (segment M, FUTCOM). The trading symbol's root must
+ * equal the symbol exactly (CRUDEOIL is not CRUDEOILM).
+ */
+export function resolveNearestFutures(
+  csv: string,
+  wants: ReadonlyArray<{ symbol: string; exchange: 'NSE' | 'MCX' }>,
+  now: number
+): Record<string, { securityId: string; tradingSymbol: string; expiry: string; segment: DhanSegment; exchange: 'NSE' | 'MCX' }> {
   const lines = csv.split(/\r?\n/);
   const head = lines[0].split(',');
   const col = (name: string) => head.indexOf(name);
   const [ex, seg, id, inst, ts, exp] = ['SEM_EXM_EXCH_ID', 'SEM_SEGMENT', 'SEM_SMST_SECURITY_ID', 'SEM_INSTRUMENT_NAME', 'SEM_TRADING_SYMBOL', 'SEM_EXPIRY_DATE'].map(col);
   if ([ex, seg, id, inst, ts, exp].some((c) => c < 0)) return {};
-  const best: Record<string, { securityId: string; tradingSymbol: string; expiry: string; t: number }> = {};
+  const wanted = new Map(wants.map((w) => [w.symbol, w.exchange]));
+  const best: Record<string, { securityId: string; tradingSymbol: string; expiry: string; segment: DhanSegment; exchange: 'NSE' | 'MCX'; t: number }> = {};
   for (let k = 1; k < lines.length; k++) {
     const r = lines[k].split(',');
-    if (r[ex] !== 'NSE' || r[seg] !== 'D' || r[inst] !== 'FUTIDX') continue;
+    const isNse = r[ex] === 'NSE' && r[seg] === 'D' && r[inst] === 'FUTIDX';
+    const isMcx = r[ex] === 'MCX' && r[seg] === 'M' && r[inst] === 'FUTCOM';
+    if (!isNse && !isMcx) continue;
     const sym = r[ts]?.split('-')[0];
-    if (!sym || !symbols.includes(sym)) continue;
+    if (!sym || wanted.get(sym) !== (isNse ? 'NSE' : 'MCX')) continue;
     const t = Date.parse(`${r[exp].replace(' ', 'T')}+05:30`);
     if (!Number.isFinite(t) || t <= now) continue;
-    if (!best[sym] || t < best[sym].t) best[sym] = { securityId: r[id], tradingSymbol: r[ts], expiry: r[exp], t };
+    if (!best[sym] || t < best[sym].t) best[sym] = { securityId: r[id], tradingSymbol: r[ts], expiry: r[exp], segment: isNse ? 'NSE_FNO' : 'MCX_COMM', exchange: isNse ? 'NSE' : 'MCX', t };
   }
-  return Object.fromEntries(Object.entries(best).map(([s, v]) => [s, { securityId: v.securityId, tradingSymbol: v.tradingSymbol, expiry: v.expiry }]));
+  return Object.fromEntries(Object.entries(best).map(([s, { t: _t, ...v }]) => [s, v]));
 }

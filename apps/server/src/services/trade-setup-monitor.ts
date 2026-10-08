@@ -47,6 +47,12 @@ import type { MarketDataProvider } from '../providers/interface.js';
 import type { FeedGap, SubscriptionManager, SubscriptionTarget } from '../lib/subscription-manager.js';
 import { istMinute, runGapCheck } from './feed-gap-check.js';
 import { serviceFailure, TICK_FAILED } from '../lib/service-supervisor.js';
+import { drainPendingOutcomes } from './pending-outcomes.js';
+import { sweepLostTrades } from './state-recovery.js';
+
+/** How often the lost-trade sweep runs (intraday rows from earlier sessions no slot tracks). */
+const LOST_TRADE_SWEEP_MS = 30 * 60 * 1000;
+let lastLostTradeSweep = 0;
 
 // Tighter than the institutional scanner's 15 minutes, and independent of
 // whether any browser happens to be polling — still comfortably clear of
@@ -113,6 +119,12 @@ async function runMonitor(provider: MarketDataProvider, subscriptions?: Subscrip
 }
 
 async function sweep(provider: MarketDataProvider, subscriptions?: SubscriptionManager): Promise<void> {
+  // A close that failed to write (database outage) is applied as soon as the database accepts it.
+  await drainPendingOutcomes().catch((err: any) => logger.warn({ error: err.message }, 'Pending outcomes: drain failed'));
+  if (Date.now() - lastLostTradeSweep >= LOST_TRADE_SWEEP_MS) {
+    lastLostTradeSweep = Date.now();
+    await sweepLostTrades().catch((err: any) => logger.warn({ error: err.message }, 'Lost-trade sweep failed'));
+  }
   const next = new Map<string, LockedSetupWatch>();
   const keys = await scanKeys('trade_setup:*');
   for (const key of keys) {

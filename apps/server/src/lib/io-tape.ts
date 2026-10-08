@@ -225,9 +225,9 @@ export function tapedInput<T>(name: string, args: unknown, load: () => Promise<T
 
 // ---------------- Redis ----------------
 
-const REDIS_WRITE = new Set(['set', 'setex', 'psetex', 'del', 'unlink', 'expire', 'pexpire', 'persist', 'incr', 'incrby', 'decr', 'decrby', 'zadd', 'zrem', 'zremrangebyscore', 'hset', 'hdel', 'hincrby', 'lpush', 'rpush', 'ltrim', 'sadd', 'srem', 'mset', 'publish', 'getset', 'getdel']);
+const REDIS_WRITE = new Set(['eval', 'set', 'setex', 'psetex', 'del', 'unlink', 'expire', 'pexpire', 'persist', 'incr', 'incrby', 'decr', 'decrby', 'zadd', 'zrem', 'zremrangebyscore', 'hset', 'hdel', 'hincrby', 'lpush', 'rpush', 'ltrim', 'sadd', 'srem', 'mset', 'publish', 'getset', 'getdel']);
 const REDIS_READ = new Set(['get', 'mget', 'exists', 'ttl', 'pttl', 'type', 'scan', 'keys', 'zrange', 'zrangebyscore', 'zrevrange', 'zscore', 'zcard', 'hget', 'hgetall', 'hmget', 'smembers', 'sismember', 'scard', 'lrange', 'llen', 'strlen']);
-const REDIS_FALLBACK: Record<string, unknown> = { set: 'OK', setex: 'OK', psetex: 'OK', mset: 'OK', del: 1, unlink: 1, expire: 1, pexpire: 1, persist: 1, incr: 1, incrby: 1, decr: 0, decrby: 0, zadd: 1, zrem: 1, zremrangebyscore: 0, hset: 1, hdel: 1, hincrby: 1, lpush: 1, rpush: 1, ltrim: 'OK', sadd: 1, srem: 1, publish: 0, getset: null, getdel: null };
+const REDIS_FALLBACK: Record<string, unknown> = { eval: 1, set: 'OK', setex: 'OK', psetex: 'OK', mset: 'OK', del: 1, unlink: 1, expire: 1, pexpire: 1, persist: 1, incr: 1, incrby: 1, decr: 0, decrby: 0, zadd: 1, zrem: 1, zremrangebyscore: 0, hset: 1, hdel: 1, hincrby: 1, lpush: 1, rpush: 1, ltrim: 'OK', sadd: 1, srem: 1, publish: 0, getset: null, getdel: null };
 
 /** The Redis client, taped inside a scope and untouched outside one. */
 export function tapedRedis<T extends object>(raw: T): T {
@@ -243,7 +243,9 @@ export function tapedRedis<T extends object>(raw: T): T {
           if (scope?.mode === 'REPLAY') throw new Error(`Redis ${prop} is not available during replay`);
           return value.apply(target, args);
         }
-        return taped('redis', prop, args, { write: isWrite, async: true, target: String(args[0]), fallback: REDIS_FALLBACK[prop] }, () => value.apply(target, args));
+        // eval(script, numKeys, key, …): the key is its target, not the script text.
+        const tgt = prop === 'eval' ? String(args[2]) : String(args[0]);
+        return taped('redis', prop, args, { write: isWrite, async: true, target: tgt, fallback: REDIS_FALLBACK[prop] }, () => value.apply(target, args));
       };
     },
   });
