@@ -25,6 +25,16 @@
 // Every lifecycle transition is already written to PostgreSQL (lifecycle rows,
 // setup_events LIFECYCLE / ARBITRATION rows, signals, option_plan_events).
 // The merge rules are pure; the IO is a thin shell.
+//
+// 2026-10-09 (a trade must never be revived or lost):
+//   * queued closes (pending-outcomes.ts) are applied FIRST, so a trade whose
+//     close failed to write during an outage is closed, not revived;
+//   * an open row that a LATER trade on the same slot has superseded is never
+//     written back — its tracking was lost; it is closed TRACKING_LOST and
+//     voided (excluded from every statistic: its real exit is unknown);
+//   * an INTRADAY open row from an earlier session that no slot tracks is
+//     closed TRACKING_LOST the same way (sweepLostTrades, also run by the
+//     price monitor periodically).
 // ============================================================
 
 import type { SetupWatchRow } from '@fno/shared';
@@ -33,8 +43,53 @@ import { redis, scanKeys } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
 import { schemaFileReady } from './ensure-capture-schema.js';
 import { canonicalJson } from './decision-record.js';
+import { drainPendingOutcomes } from './pending-outcomes.js';
 
 const istDate = (t: number) => new Date(t).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+/** Pure: an open row is superseded when a later trade exists on the same slot (symbol, exchange, mode). */
+export function isSuperseded(row: { id: string; time: Date | string }, laterOnSlot: ReadonlyArray<{ id: string; time: Date | string }>): boolean {
+  const t = new Date(row.time).getTime();
+  return laterOnSlot.some((o) => o.id !== row.id && new Date(o.time).getTime() > t);
+}
+
+/** Close lost trades (open rows no slot tracks) as TRACKING_LOST, voided — their real exit is unknown. */
+export async function voidLostTrades(ids: readonly string[], why: string): Promise<number> {
+  if (ids.length === 0) return 0;
+  const rows = await sql<{ id: string }[]>`
+    UPDATE signals SET inputs = inputs || ${sql.json({ outcome: 'EXPIRED', closeReason: 'TRACKING_LOST', exitPrice: null, voided: true, voidReason: `TRACKING_LOST: ${why}` } as any)}
+    WHERE id = ANY(${ids as string[]}) AND (inputs->>'outcome') IS NULL
+    RETURNING id
+  `;
+  if (rows.length) logger.warn({ ids: rows.map((r) => r.id), why }, 'Trade tracking lost — closed TRACKING_LOST (voided, excluded from statistics)');
+  return rows.length;
+}
+
+/**
+ * INTRADAY open rows from an earlier session that no trade_setup slot holds:
+ * nothing will ever close them at a real price. Run on boot and periodically.
+ */
+export async function sweepLostTrades(now = Date.now()): Promise<number> {
+  const today = istDate(now);
+  const open = await sql<{ id: string; time: Date; symbol: string; inputs: any }[]>`
+    SELECT id, time, symbol, inputs FROM signals
+    WHERE signal_type = 'TRADE_SETUP' AND (inputs->>'outcome') IS NULL AND coalesce(inputs->>'mode', 'INTRADAY') = 'INTRADAY'
+      AND time > NOW() - INTERVAL '35 days'
+  `;
+  const stale = open.filter((r) => istDate(new Date(r.time).getTime()) !== today);
+  if (stale.length === 0) return 0;
+  const held = new Set<string>();
+  for (const k of await scanKeys('trade_setup:*')) {
+    const raw = await redis.get(k);
+    try {
+      const v = raw ? JSON.parse(raw) : null;
+      if (v?.signalId) held.add(v.signalId);
+    } catch {
+      /* unreadable slot: holds nothing we can match */
+    }
+  }
+  return voidLostTrades(stale.filter((r) => !held.has(r.id)).map((r) => r.id), 'an intraday trade from an earlier session that no slot tracks');
+}
 const INTRADAY_TTL = 60 * 60 * 24 * 2;
 const POSITIONAL_TTL = 60 * 60 * 24 * 30;
 
@@ -182,6 +237,11 @@ export async function rehydrateFromPostgres(now = Date.now()): Promise<Rehydrati
     }
   };
 
+  // Queued closes first: a trade whose close failed to write must be closed, not revived.
+  await step('pending_outcomes', async () => {
+    await drainPendingOutcomes();
+  });
+
   await step('trade_setup', async () => {
     const open = await sql<OpenTradeRow[]>`
       SELECT id, time, symbol, direction, inputs, reasoning FROM signals
@@ -217,6 +277,26 @@ export async function rehydrateFromPostgres(now = Date.now()): Promise<Rehydrati
         ? []
         : (await sql<{ id: string }[]>`SELECT id FROM signals WHERE id = ANY(${cachedIds}) AND (inputs->>'outcome') IS NOT NULL`).map((r) => r.id)
     );
+    // A later trade on the same slot supersedes an open row: never revive it.
+    const latestRows = [...latest.values()];
+    const later = latestRows.length
+      ? await sql<{ id: string; time: Date; symbol: string; exchange: string; mode: string }[]>`
+          SELECT id, time, symbol, inputs->>'exchange' AS exchange, coalesce(inputs->>'mode', 'INTRADAY') AS mode FROM signals
+          WHERE signal_type = 'TRADE_SETUP' AND time > ${new Date(Math.min(...latestRows.map((r) => new Date(r.time).getTime())))}
+        `
+      : [];
+    const heldIds = new Set([...cached.values()].map((v) => v?.signalId).filter((x): x is string => typeof x === 'string'));
+    const superseded: string[] = [];
+    for (const [k, row] of [...latest]) {
+      const mode = row.inputs?.mode ?? 'INTRADAY';
+      const sameSlot = later.filter((o) => o.symbol === row.symbol && o.exchange === row.inputs?.exchange && o.mode === mode);
+      if (!heldIds.has(row.id) && isSuperseded(row, sameSlot)) {
+        superseded.push(row.id);
+        latest.delete(k);
+      }
+    }
+    await voidLostTrades(superseded, 'a later trade on the same slot superseded it while its close was never recorded');
+
     for (const k of keys) {
       const row = latest.get(k) ?? null;
       const pg = row ? storedSetupFromSignal(row, tsl.get(row.id) ?? null) : null;
@@ -234,6 +314,10 @@ export async function rehydrateFromPostgres(now = Date.now()): Promise<Rehydrati
         report.tradeSetups.written++;
       }
     }
+  });
+
+  await step('lost_trades', async () => {
+    await sweepLostTrades(now);
   });
 
   await step('structure_outcome', async () => {

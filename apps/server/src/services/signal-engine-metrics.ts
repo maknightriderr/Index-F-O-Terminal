@@ -268,9 +268,26 @@ export async function shadowRulesReport(q: DiagnosticsQuery) {
       AND (${q.until}::timestamptz IS NULL OR decided_at < ${q.until})
       AND (${q.instrument}::text IS NULL OR symbol = ${q.instrument})
   `;
+  // Square-off shadow (2026-10-09): the option mid in the session's last 10 minutes vs the actual exit.
+  const sq = await sql<{ entry: string; exit: string | null; mid: string; cost: string | null; cr: string | null }[]>`
+    SELECT inputs->>'entry' AS entry, inputs->>'exitPrice' AS exit, inputs->'squareOffShadow'->>'mid' AS mid, inputs->>'estimatedCostPct' AS cost, inputs->>'closeReason' AS cr
+    FROM signals WHERE signal_type = 'TRADE_SETUP' AND inputs ? 'squareOffShadow' AND (inputs->>'outcome') IS NOT NULL AND coalesce(inputs->>'voided', '') <> 'true'
+      AND (${q.since}::timestamptz IS NULL OR time >= ${q.since}) AND (${q.until}::timestamptz IS NULL OR time < ${q.until}) AND (${q.instrument}::text IS NULL OR symbol = ${q.instrument})
+  `;
+  const sqRows = sq
+    .map((r) => ({ e: Number(r.entry), x: r.exit != null ? Number(r.exit) : null, m: Number(r.mid), c: r.cost != null ? Number(r.cost) : ESTIMATED_ROUND_TRIP_COST_PCT, cr: r.cr }))
+    .filter((r) => r.e > 0 && r.x != null && r.m > 0);
+  const avgOf = (xs: number[]) => (xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 100) / 100 : null);
+  const squareOff = {
+    trades: sqRows.length,
+    sessionEnded: sqRows.filter((r) => r.cr === 'SESSION_ENDED').length,
+    actualNetPerTrade: avgOf(sqRows.map((r) => ((r.x! - r.e) / r.e) * 100 - r.c)),
+    squareOffNetPerTrade: avgOf(sqRows.map((r) => ((r.m - r.e) / r.e) * 100 - r.c)),
+  };
   return {
     version: SHADOW_RULES_VERSION,
     params: SHADOW_PARAMS,
+    squareOff,
     registeredAt: SHADOW_RULES_REGISTERED_AT,
     entry: {
       // The fair test: trades minted after the rules were registered (out of sample).

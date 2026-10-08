@@ -34,6 +34,7 @@ import { DECISION_TAPE_RETENTION_DAYS } from './decision-record-store.js';
 import { ARBITRATION_VERSION, OPTION_SELECTION_VERSION, OPTION_VERSION } from '../config/trading-flags.js';
 import { ESTIMATED_ROUND_TRIP_COST_PCT } from '@fno/shared';
 import { SHADOW_RULES_VERSION, simulateExits } from './shadow-rules.js';
+import { sanitizeSessionCloseBars } from './bar-anomaly.js';
 
 export const FORWARD_VALIDATION_MIGRATION = '037_replay_tapes_forward_validation.sql';
 const BAR_MS = 15 * 60 * 1000;
@@ -387,7 +388,8 @@ async function gradeSlotDecisions(now: number): Promise<number> {
             AND decision_bar_time >= ${new Date(dayStart)} AND decision_bar_time < ${new Date(dayStart + 86_400_000)}
           ORDER BY decision_bar_time DESC LIMIT 1
         `;
-        bars = (snap[0]?.bars ?? []).filter((b) => b.time >= dayStart && b.time + BAR_MS <= dayStart + 86_400_000);
+        // Grading reads the day's bars with any anomalous session-close bar flattened (bar-anomaly.ts).
+        bars = sanitizeSessionCloseBars((snap[0]?.bars ?? []).filter((b) => b.time >= dayStart && b.time + BAR_MS <= dayStart + 86_400_000) as any, r.exchange) as GradeBar[];
         barsCache.set(key, bars);
       }
       const cands = ((r.diagnostics?.candidates ?? []) as EvidenceCandidate[]).filter((c) => c.direction === 'BULLISH' || c.direction === 'BEARISH');
@@ -505,7 +507,8 @@ async function gradeOf1Candidates(now: number): Promise<number> {
             AND decision_bar_time >= ${new Date(dayStart)} AND decision_bar_time < ${new Date(dayStart + 86_400_000)}
           ORDER BY decision_bar_time DESC LIMIT 1
         `;
-        bars = (snap[0]?.bars ?? []).filter((b) => b.time >= dayStart && b.time + BAR_MS <= dayStart + 86_400_000);
+        // Grading reads the day's bars with any anomalous session-close bar flattened (bar-anomaly.ts).
+        bars = sanitizeSessionCloseBars((snap[0]?.bars ?? []).filter((b) => b.time >= dayStart && b.time + BAR_MS <= dayStart + 86_400_000) as any, r.exchange) as GradeBar[];
         barsCache.set(key, bars);
       }
       const c = { direction: r.direction, entry: Number(r.entry), stop: Number(r.stop), objective: r.target != null ? Number(r.target) : null, decisionTime };

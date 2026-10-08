@@ -18,8 +18,11 @@
 //                     candidate source in the slot arbitration; false = shadow
 //                     only (rollback without a deploy). Paper only: nothing
 //                     here, or anywhere in the terminal, places a broker order.
-//   ORDER_FLOW_SYMBOLS  NIFTY,BANKNIFTY (default). MCX symbols are refused
-//                     until the Dhan MCX feed has been verified.
+//   ORDER_FLOW_SYMBOLS  NIFTY,BANKNIFTY,CRUDEOIL,GOLD,SILVER,NATURALGAS
+//                     (default; MCX added 2026-10-09 at the user's request). Each
+//                     symbol's flow is read from its nearest-expiry future on
+//                     Dhan (NSE_FNO / MCX_COMM). Symbols outside the supported
+//                     list are refused.
 //   DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN  the Dhan market-feed credentials (data
 //                     only — no order API is ever called). Absent → the feed is
 //                     NOT_CONFIGURED and every order-flow measure UNAVAILABLE.
@@ -69,9 +72,13 @@ export function orderFlowLogicSuffix(ob1: boolean = OB1_TRADING, of1: boolean = 
   return `${ob1 ? '+ob1-paper.1' : ''}${of1 ? '+of1-paper.1' : ''}`;
 }
 
-export const ORDER_FLOW_DEFAULT_SYMBOLS = ['NIFTY', 'BANKNIFTY'] as const;
-/** Symbols whose Dhan order flow has been verified (NSE index futures). */
-export const ORDER_FLOW_VERIFIED_SYMBOLS: ReadonlySet<string> = new Set(['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY']);
+export const ORDER_FLOW_DEFAULT_SYMBOLS = ['NIFTY', 'BANKNIFTY', 'CRUDEOIL', 'GOLD', 'SILVER', 'NATURALGAS'] as const;
+/** Symbols with a Dhan futures mapping, and their exchange (NSE index futures, MCX commodity futures). */
+export const ORDER_FLOW_SUPPORTED: Readonly<Record<string, 'NSE' | 'MCX'>> = Object.freeze({
+  NIFTY: 'NSE', BANKNIFTY: 'NSE', FINNIFTY: 'NSE', MIDCPNIFTY: 'NSE',
+  CRUDEOIL: 'MCX', CRUDEOILM: 'MCX', GOLD: 'MCX', GOLDM: 'MCX', SILVER: 'MCX', SILVERM: 'MCX', NATURALGAS: 'MCX', NATGASMINI: 'MCX',
+});
+export const ORDER_FLOW_VERIFIED_SYMBOLS: ReadonlySet<string> = new Set(Object.keys(ORDER_FLOW_SUPPORTED));
 
 export function parseOrderFlowSymbols(raw: string | undefined): { symbols: string[]; rejected: string[] } {
   const asked = (raw == null || raw.trim() === '' ? [...ORDER_FLOW_DEFAULT_SYMBOLS] : raw.split(',')).map((s) => s.trim().toUpperCase()).filter(Boolean);
@@ -82,7 +89,11 @@ export const ORDER_FLOW_SYMBOLS: readonly string[] = Object.freeze(parsedSymbols
 export const ORDER_FLOW_SYMBOLS_REJECTED: readonly string[] = Object.freeze(parsedSymbols.rejected);
 
 /** Volume-by-price bucket (index points) per symbol. */
-export const ORDER_FLOW_PRICE_STEP: Readonly<Record<string, number>> = Object.freeze({ NIFTY: 5, BANKNIFTY: 10, FINNIFTY: 5, MIDCPNIFTY: 5 });
+// Sized to roughly 1/20th of a typical 15m range (CRUDEOIL ≈ 40, GOLD ≈ 230, SILVER ≈ 570 points).
+export const ORDER_FLOW_PRICE_STEP: Readonly<Record<string, number>> = Object.freeze({
+  NIFTY: 5, BANKNIFTY: 10, FINNIFTY: 5, MIDCPNIFTY: 5,
+  CRUDEOIL: 2, CRUDEOILM: 2, GOLD: 10, GOLDM: 10, SILVER: 25, SILVERM: 25, NATURALGAS: 0.2, NATGASMINI: 0.2,
+});
 
 export function dhanCredentials(env: NodeJS.ProcessEnv = process.env): { clientId: string; accessToken: string } | null {
   const clientId = env.DHAN_CLIENT_ID?.trim();

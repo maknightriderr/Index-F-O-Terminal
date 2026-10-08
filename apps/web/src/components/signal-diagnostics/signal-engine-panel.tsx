@@ -56,6 +56,7 @@ export interface ShadowRulesReport {
   version: string;
   params: Record<string, number>;
   registeredAt?: number;
+  squareOff?: { trades: number; sessionEnded: number; actualNetPerTrade: number | null; squareOffNetPerTrade: number | null };
   entry: { sinceRegistered?: EntryBlock; all: EntryBlock; sinceArchitectureChange: EntryBlock };
   exit: {
     trades: number;
@@ -127,6 +128,18 @@ export function ShadowRulesPanel({ filter }: { filter: DiagnosticsFilter }) {
         <h4 className={`text-[11px] uppercase tracking-wide ${muted}`}>Entry filters — all history ({data.entry.all.trades} closed trades, baseline {signedPct(data.entry.all.baselineNetPerTrade)} / trade)</h4>
         <Rows head={head} rows={entryRows(data.entry.all)} />
       </div>
+      {data.squareOff && (
+        <div className="space-y-1">
+          <h4 className={`text-[11px] uppercase tracking-wide ${muted}`}>Square-off before the close — {data.squareOff.trades} intraday trades open in the last 10 minutes ({data.squareOff.sessionEnded} then closed at the session end)</h4>
+          <Rows
+            head={['', 'Net / trade']}
+            rows={[
+              ['Actual exit', <span key="a" className={tone(data.squareOff.actualNetPerTrade)}>{signedPct(data.squareOff.actualNetPerTrade)}</span>],
+              ['Square-off at the mid before the close', <span key="s" className={tone(data.squareOff.squareOffNetPerTrade)}>{signedPct(data.squareOff.squareOffNetPerTrade)}</span>],
+            ]}
+          />
+        </div>
+      )}
       <div className="space-y-1">
         <h4 className={`text-[11px] uppercase tracking-wide ${muted}`}>Exit rules — {data.exit.trades} trades with recorded option marks (baseline {signedPct(data.exit.baselineNetPerTrade)} / trade)</h4>
         <Rows

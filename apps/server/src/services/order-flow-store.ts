@@ -9,7 +9,7 @@
 // ============================================================
 
 import { buildFootprint, unavailableFootprint, ORDER_FLOW_VERSION, type DeltaMode, type FlowTrade, type FootprintBar } from '@fno/analytics';
-import { isMarketOpen } from '@fno/shared';
+import { isMarketOpen, type Exchange } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 import { tapedInput } from '../lib/io-tape.js';
@@ -70,7 +70,7 @@ export async function closeFlowBars(now: number, connected: boolean = feedConnec
     const current = flowBarStart(now);
     for (let bar = (f.lastClosed ?? current - FLOW_BAR_MS) + FLOW_BAR_MS; bar < current; bar += FLOW_BAR_MS) {
       f.lastClosed = bar;
-      if (!isMarketOpen('NSE', bar + 1)) continue;
+      if (!isMarketOpen(f.exchange as Exchange, bar + 1)) continue;
       const fp = f.trades.some((t) => t.time >= bar && t.time < bar + FLOW_BAR_MS)
         ? buildFootprint(f.trades, bar, FLOW_BAR_MS, ORDER_FLOW_PRICE_STEP[symbol] ?? 5, f.mode)
         : unavailableFootprint(bar, FLOW_BAR_MS);
