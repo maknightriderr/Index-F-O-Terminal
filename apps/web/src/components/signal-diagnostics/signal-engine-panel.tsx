@@ -46,6 +46,91 @@ export interface SignalEngineMetrics {
   truncated: boolean;
 }
 
+type EntryRuleStats = { measured: number; skipped: number; skippedNetPerTrade: number | null; keptNetPerTrade: number | null; totalNetWithRule: number; improvementTotalNet: number };
+type EntryBlock = { trades: number; baselineNetPerTrade: number | null; baselineTotalNet: number; rules: Record<string, EntryRuleStats> };
+
+/** Mirrors apps/server/src/services/signal-engine-metrics.ts shadowRulesReport(). */
+export interface ShadowRulesReport {
+  note: string;
+  version: string;
+  params: Record<string, number>;
+  entry: { all: EntryBlock; sinceArchitectureChange: EntryBlock };
+  exit: {
+    trades: number;
+    baselineNetPerTrade: number | null;
+    rules: Record<string, { fired: number; netPerTradeWithRule: number | null; firedActualNetPerTrade: number | null; firedRuleNetPerTrade: number | null }>;
+  };
+}
+
+const ENTRY_RULE_TEXT: Record<string, string> = {
+  COST_EDGE_2X: 'Skip when the target gain is under 2× the round-trip cost',
+  MCX_EVENING: 'Skip MCX entries from 18:00 IST',
+  RICH_IV: 'Skip entries with rich implied volatility',
+};
+const EXIT_RULE_TEXT: Record<string, string> = {
+  TIME_STOP_60: 'Exit at 60 min if the premium is below entry',
+  BREAKEVEN_AT_HALF: 'Stop to entry once half the target distance is reached',
+};
+const signedPct = (v: number | null | undefined) => (v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(2)}%`);
+const tone = (v: number | null | undefined) => (v == null ? '' : v > 0 ? 'text-emerald-400 light:text-emerald-700' : v < 0 ? 'text-red-400 light:text-red-700' : '');
+
+/** Pre-registered shadow experiments: what each candidate rule would have done to the trades the system actually made. */
+export function ShadowRulesPanel({ filter }: { filter: DiagnosticsFilter }) {
+  const [data, setData] = useState<ShadowRulesReport | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const key = JSON.stringify(filter);
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getShadowRules(filter)
+      .then((d) => !cancelled && (setData(d), setError(null)))
+      .catch((e) => !cancelled && setError(e?.message ?? 'Could not load the shadow experiments.'));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  if (error) return <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded px-3 py-2">{error}</div>;
+  if (!data) return null;
+  const entryRows = (b: EntryBlock) =>
+    Object.entries(b.rules).map(([rule, r]) => [
+      ENTRY_RULE_TEXT[rule] ?? rule,
+      `${r.skipped} of ${r.measured}`,
+      <span key="s" className={tone(r.skippedNetPerTrade)}>{signedPct(r.skippedNetPerTrade)}</span>,
+      <span key="k" className={tone(r.keptNetPerTrade)}>{signedPct(r.keptNetPerTrade)}</span>,
+      <span key="i" className={tone(r.improvementTotalNet)}>{signedPct(r.improvementTotalNet)}</span>,
+    ]);
+  const head = ['Rule', 'Would skip', 'Skipped: net / trade', 'Kept: net / trade', 'Change in total net'];
+  return (
+    <Block
+      title="Shadow experiments"
+      subtitle={`${data.version}. Candidate rules fixed in advance and measured on the trades the system actually made — none of them changes what it trades. A rule is considered for live use only after 30+ forward trades show a material gain.`}
+    >
+      <div className="space-y-1">
+        <h4 className={`text-[11px] uppercase tracking-wide ${muted}`}>Entry filters — since the 5 Oct change ({data.entry.sinceArchitectureChange.trades} closed trades, baseline {signedPct(data.entry.sinceArchitectureChange.baselineNetPerTrade)} / trade)</h4>
+        <Rows head={head} rows={entryRows(data.entry.sinceArchitectureChange)} />
+      </div>
+      <div className="space-y-1">
+        <h4 className={`text-[11px] uppercase tracking-wide ${muted}`}>Entry filters — all history ({data.entry.all.trades} closed trades, baseline {signedPct(data.entry.all.baselineNetPerTrade)} / trade)</h4>
+        <Rows head={head} rows={entryRows(data.entry.all)} />
+      </div>
+      <div className="space-y-1">
+        <h4 className={`text-[11px] uppercase tracking-wide ${muted}`}>Exit rules — {data.exit.trades} trades with recorded option marks (baseline {signedPct(data.exit.baselineNetPerTrade)} / trade)</h4>
+        <Rows
+          head={['Rule', 'Fired on', 'Net / trade with rule', 'Those trades: actual', 'Those trades: with rule']}
+          rows={Object.entries(data.exit.rules).map(([rule, r]) => [
+            EXIT_RULE_TEXT[rule] ?? rule,
+            r.fired,
+            <span key="w" className={tone(r.netPerTradeWithRule)}>{signedPct(r.netPerTradeWithRule)}</span>,
+            <span key="a" className={tone(r.firedActualNetPerTrade)}>{signedPct(r.firedActualNetPerTrade)}</span>,
+            <span key="r" className={tone(r.firedRuleNetPerTrade)}>{signedPct(r.firedRuleNetPerTrade)}</span>,
+          ])}
+        />
+      </div>
+    </Block>
+  );
+}
+
 /** Mirrors apps/server/src/services/full-replay.ts FullReplayReport. */
 export interface FullReplayReport {
   snapshotId: string;
@@ -189,6 +274,8 @@ export function SignalEnginePanel({ filter }: { filter: DiagnosticsFilter }) {
           <Stat label="Rank agreement" value={num(forward.strikeSelection.avgRankVsRealised)} />
         </div>
       </Block>
+
+      <ShadowRulesPanel filter={filter} />
 
       <Block title="Evidence-count ranking" subtitle="ARB-2.0. Every arbitrated candidate graded on its own stop and objective over the rest of its session (a bar touching both counts the stop).">
         <div className={grid}>

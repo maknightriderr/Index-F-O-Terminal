@@ -50,7 +50,7 @@ import {
 import { TRIGGER_REGISTRY, DISPLACEMENT_REQUIRED_BY } from '@fno/analytics';
 import { liveTriggerStages } from '../services/trigger-router.js';
 import { EVENT_ENGINE_VERSION } from '../config/trading-flags.js';
-import { signalEngineMetrics } from '../services/signal-engine-metrics.js';
+import { shadowRulesReport, signalEngineMetrics } from '../services/signal-engine-metrics.js';
 import { replayFull } from '../services/full-replay.js';
 
 /** One full replay at a time: it re-runs the whole decision path in this process. */
@@ -257,6 +257,16 @@ export function createDiagnosticsRoutes(): Router {
       res.json({ success: true, data: { note: SIMULATION_NOTE, ...(await signalEngineMetrics(parseQuery(req))) } });
     } catch (err: any) {
       logger.error({ error: err.message }, 'Signal diagnostics signal-engine metrics failed');
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Pre-registered shadow experiments (shadow-rules.ts): measured, never traded.
+  router.get('/shadow-rules', async (req: Request, res: Response) => {
+    try {
+      res.json({ success: true, data: { note: SIMULATION_NOTE, ...(await shadowRulesReport(parseQuery(req))) } });
+    } catch (err: any) {
+      logger.error({ error: err.message }, 'Signal diagnostics shadow rules failed');
       res.status(500).json({ success: false, error: err.message });
     }
   });

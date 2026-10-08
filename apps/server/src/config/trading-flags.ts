@@ -568,6 +568,28 @@ export interface TriggerPromotion {
 /** Empty: no trigger family has EARNED a promotion (their paper trades come from RESEARCH_PAPER_TRADING). */
 export const TRIGGER_PROMOTIONS: Readonly<Record<string, TriggerPromotion>> = Object.freeze({});
 
+// ---- Code-level demotions (2026-10-08) ----
+// The mirror of a promotion: a trigger whose forward record is clearly
+// negative after the same 30-forward-trade bar is taken off the paper slot.
+// It keeps running at SHADOW, so its candidates and forward record continue
+// to accumulate and it can earn its way back through TRIGGER_PROMOTIONS.
+export interface TriggerDemotion {
+  stage: 'SHADOW' | 'RESEARCH' | 'RETIRED';
+  /** The forward record that justified it (net of costs, ≥ 30 forward trades). */
+  evidence: string;
+  approvedOn: string;
+}
+
+export const TRIGGER_DEMOTIONS: Readonly<Record<string, TriggerDemotion>> = Object.freeze({
+  A4: {
+    stage: 'SHADOW',
+    evidence:
+      'Forward paper record to 2026-10-08 (Signal Diagnostics shadow view): INDEX 81 trades, 25% win, avg net -0.42R, PF 0.71; ' +
+      'MCX 20 trades, 35% win, avg net -0.79R, PF 0.67. Both arms past the 30-trade bar and negative well beyond 0.10R.',
+    approvedOn: '2026-10-08',
+  },
+});
+
 export function parseTriggerStages(raw: string | undefined): { overrides: Record<string, LiveTriggerStage>; rejected: string[] } {
   const overrides: Record<string, LiveTriggerStage> = {};
   const rejected: string[] = [];
@@ -589,9 +611,10 @@ export function resolveTriggerStage(
   registryStatus: LiveTriggerStage,
   promotions: Readonly<Record<string, TriggerPromotion>> = TRIGGER_PROMOTIONS,
   overrides: Readonly<Record<string, LiveTriggerStage>> = parsedTriggerStages.overrides,
-  researchPaper: boolean = RESEARCH_PAPER_TRADING
+  researchPaper: boolean = RESEARCH_PAPER_TRADING,
+  demotions: Readonly<Record<string, TriggerDemotion>> = TRIGGER_DEMOTIONS
 ): LiveTriggerStage {
-  const earned: LiveTriggerStage =
+  const promoted: LiveTriggerStage =
     registryStatus === 'RETIRED'
       ? 'RETIRED'
       : promotions[triggerId]
@@ -599,6 +622,9 @@ export function resolveTriggerStage(
         : registryStatus === 'SHADOW' && researchPaper
           ? 'PAPER_RESEARCH'
           : registryStatus;
+  // A code-level demotion only ever lowers the stage.
+  const demotion = demotions[triggerId];
+  const earned: LiveTriggerStage = demotion && STAGE_RANK[demotion.stage] < STAGE_RANK[promoted] ? demotion.stage : promoted;
   const asked = overrides[triggerId];
   return asked && STAGE_RANK[asked] < STAGE_RANK[earned] ? asked : earned;
 }
@@ -911,6 +937,11 @@ export const RR_DISPLAY_ONLY_LOGIC_SUFFIX = '+rr-display-only.1';
  * groups than before — every live stamp carries this suffix after the R:R one.
  */
 export const PARENT_IDENTITY_LOGIC_SUFFIX = '+parent-identity.1';
+/**
+ * 2026-10-08: A4 demoted to SHADOW (TRIGGER_DEMOTIONS) — the pool of paper
+ * candidates changed, so every live stamp after it carries this suffix.
+ */
+export const TRIGGER_DEMOTION_LOGIC_SUFFIX = '+demote-a4.1';
 export function paperResearchStamp(stamp: LogicStamp, triggerId: string | null | undefined): LogicStamp {
   return triggerId ? { ...stamp, logicVersion: `${stamp.logicVersion}${PAPER_RESEARCH_LOGIC_SUFFIX}.${triggerId}` } : stamp;
 }
@@ -923,5 +954,5 @@ export function liveLogicStamp(): LogicStamp {
     versions: { strategyVersion: STRATEGY_VERSION, triggerVersion: TRIGGER_VERSION, riskVersion: RISK_VERSION, optionVersion: OPTION_VERSION, costVersion: COST_VERSION },
     indicator: { confidenceMode: INDICATOR_CONFIDENCE_MODE, locationMode: INDICATOR_LOCATION_MODE },
   });
-  return { ...stamp, logicVersion: `${stamp.logicVersion}${RR_DISPLAY_ONLY_LOGIC_SUFFIX}${PARENT_IDENTITY_LOGIC_SUFFIX}` };
+  return { ...stamp, logicVersion: `${stamp.logicVersion}${RR_DISPLAY_ONLY_LOGIC_SUFFIX}${PARENT_IDENTITY_LOGIC_SUFFIX}${TRIGGER_DEMOTION_LOGIC_SUFFIX}` };
 }

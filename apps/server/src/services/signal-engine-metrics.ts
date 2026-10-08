@@ -15,6 +15,9 @@
 
 import { sql } from '../lib/db.js';
 import type { DiagnosticsQuery } from './signal-diagnostics.js';
+import { ESTIMATED_ROUND_TRIP_COST_PCT, type TradeSetupRecord } from '@fno/shared';
+import { getTradeSetupHistory } from './backtesting.js';
+import { SHADOW_PARAMS, SHADOW_RULES_VERSION, aggregateEntryRules, aggregateExitRules, entryFlags, type EntryRuleTrade } from './shadow-rules.js';
 
 /** Option-plan stages that are time decay / cost, and that are liquidity (OptionCandidate.rejectedAt). */
 export const STRIKE_THETA_COST_STAGES: ReadonlySet<string> = new Set(['TARGET_POTENTIAL', 'PREMIUM_RISK', 'NET_RR']);
@@ -226,3 +229,53 @@ export async function signalEngineMetrics(q: DiagnosticsQuery) {
     truncated: slotRows.length === ROW_LIMIT || plans.length === ROW_LIMIT || forward.length === ROW_LIMIT,
   };
 }
+
+// ---------------- shadow rules (shadow-rules.ts) ----------------
+
+/** The 2026-10-05 architecture change (one trade per parent, no R:R gate, ARB-2.0): results are reported before and since. */
+export const ARCHITECTURE_CHANGE_AT = Date.parse('2026-10-05T12:00:00Z');
+
+/** Pure: the closed single-leg trades the entry rules are judged on, net of each trade's own estimated cost. */
+export function entryRuleTrades(records: readonly TradeSetupRecord[]): EntryRuleTrade[] {
+  return records
+    .filter((r) => !r.voided && !r.generatedOffSession && r.structureType !== 'SPREAD')
+    .filter((r) => (r.outcome === 'WIN' || r.outcome === 'LOSS' || r.outcome === 'EXPIRED') && r.returnPercent != null)
+    .map((r) => ({
+      netPct: r.returnPercent! - (r.estimatedCostPct ?? ESTIMATED_ROUND_TRIP_COST_PCT),
+      flags: entryFlags({
+        exchange: r.exchange,
+        generatedAt: r.generatedAt,
+        entry: r.entry ?? null,
+        target: r.target ?? null,
+        estimatedCostPct: r.estimatedCostPct ?? null,
+        ivVsHv: (r.entryContext as { ivVsHv?: string } | null)?.ivVsHv ?? null,
+      }),
+    }));
+}
+
+/** The Signal Diagnostics "Shadow experiments" block. */
+export async function shadowRulesReport(q: DiagnosticsQuery) {
+  const history = (await getTradeSetupHistory()).filter(
+    (r) =>
+      (q.since == null || r.generatedAt >= q.since.getTime()) &&
+      (q.until == null || r.generatedAt < q.until.getTime()) &&
+      (q.instrument == null || r.symbol === q.instrument)
+  );
+  const exits = await sql<{ actual: any }[]>`
+    SELECT actual FROM forward_outcomes
+    WHERE kind = 'SHADOW_EXITS' AND (actual->>'measured')::boolean
+      AND (${q.since}::timestamptz IS NULL OR decided_at >= ${q.since})
+      AND (${q.until}::timestamptz IS NULL OR decided_at < ${q.until})
+      AND (${q.instrument}::text IS NULL OR symbol = ${q.instrument})
+  `;
+  return {
+    version: SHADOW_RULES_VERSION,
+    params: SHADOW_PARAMS,
+    entry: {
+      all: aggregateEntryRules(entryRuleTrades(history)),
+      sinceArchitectureChange: aggregateEntryRules(entryRuleTrades(history.filter((r) => r.generatedAt >= ARCHITECTURE_CHANGE_AT))),
+    },
+    exit: aggregateExitRules(exits.map((e) => ({ actualNetPct: Number(e.actual.actualNetPct), exits: e.actual.exits }))),
+  };
+}
+

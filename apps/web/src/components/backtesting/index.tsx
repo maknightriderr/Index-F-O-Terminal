@@ -194,6 +194,16 @@ export function BacktestingPage() {
             </Collapsible>
           )}
 
+          {analytics.bySource && analytics.bySource.length > 0 && (
+            <Collapsible
+              title="By Source"
+              subtitle="which engine or trigger made the trade — indicator, S1, momentum break, each trigger family. Win % counts closed WIN / LOSS only; net / trade counts expired closes too, after costs"
+              count={analytics.bySource.length}
+            >
+              <LogicVersionTable rows={analytics.bySource.map((b) => ({ ...b, logicVersion: b.strategy }))} keyLabel="Source" formatKey={(k) => k} />
+            </Collapsible>
+          )}
+
           <Collapsible
             title="Results Over Time"
             subtitle="grouped by the day each setup was generated"
@@ -618,6 +628,10 @@ function LogicVersionTable({
             <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
               <th className="text-left px-2 py-1.5 font-medium">{keyLabel}</th>
               <th className="text-right px-2 py-1.5 font-medium">Setups</th>
+              <th className="text-right px-2 py-1.5 font-medium" title="Won / lost / expired (still open not shown)">W / L / Exp</th>
+              <th className="text-right px-2 py-1.5 font-medium" title="Wins ÷ (wins + losses). Expired and open trades are excluded.">Win % (closed)</th>
+              <th className="text-right px-2 py-1.5 font-medium" title="Average return per closed trade after the estimated round-trip cost, expired closes included at their real exit.">Net / trade</th>
+              <th className="text-right px-2 py-1.5 font-medium" title="Wins whose gain did not cover the estimated round-trip cost.">Wins below cost</th>
               <th className="text-right px-3 py-1.5 font-medium">Profitable Close Rate</th>
               <th className="text-right px-2 py-1.5 font-medium" title={PREMIUM_R_NET_TITLE}>
                 Avg {PREMIUM_R_NET}
@@ -633,6 +647,14 @@ function LogicVersionTable({
               <tr key={r.logicVersion} className="border-t border-gray-800/40 light:border-slate-200">
                 <td className="px-2 py-2 font-mono text-gray-200 light:text-slate-800">{formatKey(r.logicVersion)}</td>
                 <td className="text-right px-2 py-2 tabular-nums text-gray-400 light:text-slate-600">{r.total}</td>
+                <td className="text-right px-2 py-2 tabular-nums text-gray-300 light:text-slate-700">
+                  {r.wins} / {r.losses} / {r.expired}
+                </td>
+                <td className="text-right px-2 py-2 tabular-nums text-gray-200 light:text-slate-800">{r.winRatePercent != null ? `${r.winRatePercent}%` : '—'}</td>
+                <td className={`text-right px-2 py-2 tabular-nums font-semibold ${rTone(r.netExpectancyPercent ?? null)}`}>
+                  {r.netExpectancyPercent != null ? `${r.netExpectancyPercent > 0 ? '+' : ''}${r.netExpectancyPercent.toFixed(2)}%` : '—'}
+                </td>
+                <td className="text-right px-2 py-2 tabular-nums text-gray-400 light:text-slate-600">{r.winsBelowCost ?? '—'}</td>
                 <td className="text-right px-3 py-2 tabular-nums text-gray-200 light:text-slate-800">
                   {r.profitableCloseRatePercent != null ? `${r.profitableCloseRatePercent}%` : '—'}
                 </td>

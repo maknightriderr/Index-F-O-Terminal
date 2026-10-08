@@ -5690,7 +5690,12 @@ async function mintTradeSetup(ctx: {
   // Which rules and flags minted this setup — carried on the sticky setup and
   // written to signals.inputs.logic so pre- and post-review trades are never pooled.
   const logic = paperResearchStamp(liveLogicStamp(), ctx.structure?.triggerId);
-  const signalId = await recordTradeSetupGenerated(underlying, exchange, fresh, direction, confidence, regime, intelligenceScore, mode, voteSnapshot, entryContext, logic);
+  const origin = ctx.structure
+    ? { source: ctx.structure.triggerId ?? 'S1', candidateId: ctx.structure.lifecycleId }
+    : ctx.momentumBreak
+      ? { source: 'MOMENTUM_BREAK', candidateId: `${ctx.momentumBreak.direction}:${ctx.momentumBreak.barTime}` }
+      : { source: 'INDICATOR', candidateId: null };
+  const signalId = await recordTradeSetupGenerated(underlying, exchange, fresh, direction, confidence, regime, intelligenceScore, mode, voteSnapshot, entryContext, logic, origin);
 
   logDecision({
     at: decisionNow(),
@@ -5838,7 +5843,8 @@ async function recordTradeSetupGenerated(
   mode: TradingMode,
   votes?: BiasVoteSnapshot,
   context?: SetupEntryContext,
-  logic: LogicStamp | null = null
+  logic: LogicStamp | null = null,
+  origin: { source: string; candidateId: string | null } | null = null
 ): Promise<string | undefined> {
   try {
     // mode is persisted here (found missing in a re-audit) so backtesting
@@ -5891,6 +5897,10 @@ async function recordTradeSetupGenerated(
             // Validation review: logicVersion + the flag set (and tunables)
             // this setup was minted under. Null = minted before stamping.
             logic,
+            // Which engine / trigger won the slot and its candidate id (2026-10-08) —
+            // performance by source without matching on time.
+            source: origin?.source ?? null,
+            candidateId: origin?.candidateId ?? null,
           } as any
         )},
         ${fresh.reason}, ${regime}, ${intelligenceScore}${snapshotId ? sql`, ${snapshotId}` : sql``}

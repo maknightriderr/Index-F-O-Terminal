@@ -266,7 +266,7 @@ describe('Phase 1 — net R:R never decides confirmation, eligibility or minting
   it('versions are bumped: RISK-2.0 and +rr-display-only.1 on every live stamp', () => {
     expect(RISK_VERSION).toBe('RISK-2.0');
     // Since Phase 4 the parent-identity suffix follows it (PARENT-2.0).
-    expect(liveLogicStamp().logicVersion.endsWith(`${RR_DISPLAY_ONLY_LOGIC_SUFFIX}+parent-identity.1`)).toBe(true);
+    expect(liveLogicStamp().logicVersion.endsWith(`${RR_DISPLAY_ONLY_LOGIC_SUFFIX}+parent-identity.1+demote-a4.1`)).toBe(true);
     expect(liveLogicStamp().versions?.riskVersion).toBe('RISK-2.0');
   });
 });
