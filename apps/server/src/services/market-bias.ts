@@ -111,6 +111,8 @@ import { recordOf1Shadow } from './of1-live.js';
 import { orderFlowPaperCandidates, orderFlowSourcesOn } from './order-flow-candidates.js';
 import { delSlotIfSame, setSlotIfSame, slotIdentity } from '../lib/slot-cas.js';
 import { queuePendingOutcome } from './pending-outcomes.js';
+import { recordTradeCosts } from './trade-costs.js';
+import { registerPostExitWatch } from './post-exit-tracker.js';
 import { recordCloseBarAnomaly } from './bar-anomaly.js';
 import { footprintsFor } from './order-flow-store.js';
 import { ORDER_FLOW_SOURCE_VERSIONS, ORDER_FLOW_SYMBOLS } from '../config/order-flow-flags.js';
@@ -5876,6 +5878,8 @@ async function mintTradeSetup(ctx: {
       }),
       toStore.generatedAt ?? decisionNow()
     );
+    // Measurement only (2026-10-09): the estimated cost of this trade by component, written once beside the plan.
+    recordTradeCosts({ signalId, symbol: underlying, exchange, mode, source, mintedAt: toStore.generatedAt ?? decisionNow(), setup: fresh, chain });
   }
 
   // Push exactly here and nowhere else. This branch is the ONLY one that
@@ -6060,6 +6064,16 @@ async function recordTradeSetupOutcome(
       logger.info({ signalId: stored.signalId, outcome, reason: close.reason }, 'Trade already closed by another caller — duplicate close ignored');
       return status;
     }
+    // Measurement only (2026-10-09): watch the contract and its underlying for the rest of the session. Changes nothing about this close.
+    registerPostExitWatch(stored, {
+      symbol: close.underlying,
+      exchange: close.exchange,
+      mode: close.mode,
+      outcome,
+      reason: close.reason,
+      exitPrice: exitValue,
+      exitAt: patch.exitTime,
+    });
     void recordOptionPlanEvent({
       planId: planIdFor(stored.signalId),
       at: decisionNow(),

@@ -53,6 +53,7 @@ import { EVENT_ENGINE_VERSION } from '../config/trading-flags.js';
 import { shadowRulesReport, signalEngineMetrics } from '../services/signal-engine-metrics.js';
 import { orderFlowReport } from '../services/order-flow-metrics.js';
 import { replayFull } from '../services/full-replay.js';
+import { measurementReport } from '../services/measurement-report.js';
 
 /** One full replay at a time: it re-runs the whole decision path in this process. */
 let fullReplayRunning = false;
@@ -278,6 +279,18 @@ export function createDiagnosticsRoutes(): Router {
       res.json({ success: true, data: { note: SIMULATION_NOTE, ...(await shadowRulesReport(parseQuery(req))) } });
     } catch (err: any) {
       logger.error({ error: err.message }, 'Signal diagnostics shadow rules failed');
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Measurement gaps (2026-10-09): cost components, post-exit excursion, payoff grader V2 and the
+  // conservative-fill scenario — by cohort, family and instrument, with denominators. Read-only.
+  router.get('/measurement', async (req: Request, res: Response) => {
+    try {
+      const q = parseQuery(req);
+      res.json({ success: true, data: await measurementReport({ since: q.since, until: q.until, instrument: q.instrument }) });
+    } catch (err: any) {
+      logger.error({ error: err.message }, 'Signal diagnostics measurement report failed');
       res.status(500).json({ success: false, error: err.message });
     }
   });

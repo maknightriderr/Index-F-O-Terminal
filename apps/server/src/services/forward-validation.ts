@@ -35,6 +35,7 @@ import { ARBITRATION_VERSION, OPTION_SELECTION_VERSION, OPTION_VERSION } from '.
 import { ESTIMATED_ROUND_TRIP_COST_PCT } from '@fno/shared';
 import { SHADOW_RULES_VERSION, simulateExits } from './shadow-rules.js';
 import { sanitizeSessionCloseBars } from './bar-anomaly.js';
+import { PAYOFF_GRADER_VERSION, gradeOptionPayoffV2, monitorExtremes, type PriceObservation } from './payoff-grader-v2.js';
 
 export const FORWARD_VALIDATION_MIGRATION = '037_replay_tapes_forward_validation.sql';
 const BAR_MS = 15 * 60 * 1000;
@@ -364,6 +365,63 @@ async function gradeClosedTrades(now: number): Promise<number> {
   return rows.length;
 }
 
+/**
+ * OPTION_PAYOFF_V2 (payoff-grader-v2.ts): every closed single-leg paper trade of an ended
+ * session, graded against ALL its timestamped option-price observations (the monitor's own
+ * extremes and the chain snapshots), with missing data stated rather than inferred. Stored
+ * beside — never over — the first grader's row. Measurement only.
+ */
+async function gradeClosedTradesV2(now: number): Promise<number> {
+  const today = new Date(istDayStart(now));
+  const rows = await sql<any[]>`
+    SELECT s.id, s.time, s.symbol, s.inputs, f.actual AS legacy
+    FROM signals s
+    LEFT JOIN forward_outcomes f ON f.kind = 'OPTION_PAYOFF' AND f.subject_id = s.id::text
+    WHERE s.signal_type = 'TRADE_SETUP' AND s.inputs->>'outcome' IS NOT NULL AND s.inputs->>'voided' IS NULL
+      AND coalesce(s.inputs->>'structureType', 'NAKED_LONG') <> 'SPREAD'
+      AND s.time >= ${new Date(now - LOOKBACK_DAYS * 86_400_000)} AND s.time < ${today}
+      AND NOT EXISTS (SELECT 1 FROM forward_outcomes g WHERE g.kind = 'OPTION_PAYOFF_V2' AND g.subject_id = s.id::text)
+    ORDER BY s.time
+    LIMIT ${BATCH}
+  `;
+  for (const r of rows) {
+    try {
+      const i = r.inputs ?? {};
+      const entry = Number(i.entry);
+      const start = new Date(r.time);
+      const exitAt = Number(i.exitTime) > 0 ? Number(i.exitTime) : null;
+      const exchange = String(i.exchange ?? '');
+      const base = { snapshotId: null, signalId: r.id, symbol: r.symbol, exchange, decidedAt: start, versions: { ...VERSIONS(), payoffGrader: PAYOFF_GRADER_VERSION } };
+      if (!(entry > 0) || (i.side !== 'CE' && i.side !== 'PE')) {
+        await store('OPTION_PAYOFF_V2', String(r.id), { ...base, predicted: {}, actual: { grader: 'OPTION_PAYOFF_V2', verdict: 'NOT_APPLICABLE', verdictBasis: 'no entry / side' } });
+        continue;
+      }
+      const observations: PriceObservation[] = monitorExtremes(entry, i.excursion);
+      if (exitAt != null) {
+        const chains = await chainsBetween(r.symbol, exchange, String(i.mode ?? 'INTRADAY'), start, new Date(exitAt));
+        for (const p of premiumPath(chains, i.side, Number(i.strike), i.expiry ?? null, start.getTime(), exitAt)) observations.push({ at: p.at, premium: p.premium, source: 'CHAIN_SNAPSHOT' });
+      }
+      const graded = gradeOptionPayoffV2({
+        entry,
+        target: i.target != null ? Number(i.target) : null,
+        initialStop: i.stopLoss != null ? Number(i.stopLoss) : null,
+        outcome: i.outcome ?? null,
+        closeReason: i.closeReason ?? null,
+        exitPrice: i.exitPrice != null ? Number(i.exitPrice) : null,
+        entryAt: start.getTime(),
+        exitAt,
+        projectedPayoff: i.projectedPayoff ?? null,
+        observations,
+        legacy: r.legacy ? { targetReached: typeof r.legacy.targetReached === 'boolean' ? r.legacy.targetReached : null, marks: r.legacy.marks ?? null } : null,
+      });
+      await store('OPTION_PAYOFF_V2', String(r.id), { ...base, ...graded });
+    } catch (err: any) {
+      logger.warn({ error: err.message, signalId: r.id }, 'Forward validation: payoff V2 grading failed');
+    }
+  }
+  return rows.length;
+}
+
 /** Slot decisions of ended sessions: EVIDENCE_RANK, on the day's last snapshotted bars. */
 async function gradeSlotDecisions(now: number): Promise<number> {
   const today = new Date(istDayStart(now));
@@ -541,6 +599,7 @@ export async function runForwardValidation(now = Date.now()): Promise<{ trades: 
   const trades = await gradeClosedTrades(now).catch((err: any) => (logger.warn({ error: err.message }, 'Forward validation: trades pass failed'), 0));
   const slots = await gradeSlotDecisions(now).catch((err: any) => (logger.warn({ error: err.message }, 'Forward validation: slots pass failed'), 0));
   await gradeShadowExits(now).catch((err: any) => logger.warn({ error: err.message }, 'Forward validation: shadow exits pass failed'));
+  await gradeClosedTradesV2(now).catch((err: any) => logger.warn({ error: err.message }, 'Forward validation: payoff V2 pass failed'));
   if (schemaFileReady('038_order_blocks_order_flow_of1.sql')) await gradeOf1Candidates(now).catch((err: any) => logger.warn({ error: err.message }, 'Forward validation: OF1 pass failed'));
   await pruneTapes(now).catch((err: any) => logger.warn({ error: err.message }, 'Forward validation: tape prune failed'));
   if (trades || slots) logger.info({ trades, slots }, 'Forward validation: graded');

@@ -121,6 +121,8 @@ export const FILES = [
   '038_order_blocks_order_flow_of1.sql',
   // Data quality: anomalous broker bars (session-close bar), recorded by the poll (2026-10-09).
   '039_bar_anomalies.sql',
+  // Measurement only: estimated cost components per trade, post-exit excursion (2026-10-09).
+  '040_trade_measurement.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */
