@@ -170,9 +170,11 @@ export interface Tally {
   winRateClosedOnly: number | null;
   winRateAllTrades: number | null;
   expiredShare: number | null;
-  baseline: { grossR: number | null; netR: number | null; nNet: number };
+  baseline: { grossR: number | null; netR: number | null; nNet: number; grossRSameTradesAsNet: number | null };
   /** MODELLED_SENSITIVITY: a what-if on the paper fills — not execution performance. */
-  conservative: { basis: 'MODELLED_SENSITIVITY'; grossR: number | null; netR: number | null; nNet: number };
+  conservative: { basis: 'MODELLED_SENSITIVITY'; grossR: number | null; netR: number | null; nNet: number; grossRSameTradesAsNet: number | null };
+  /** The number of trades behind each metric. Net R covers only trades with a recorded cost %, so compare it only with grossRSameTradesAsNet or between groups with equal nNet. */
+  denominators: { winRateClosedOnly: number; winRateAllTrades: number; expiredShare: number; grossR: number; netR: number };
   /** Mean R given back to the haircut, over the target exits it applies to. */
   targetExits: { n: number; meanHaircut: number | null; becomeLosses: number; spreadFromQuote: number; spreadFallback: number };
 }
@@ -188,6 +190,8 @@ export function tallyOf(trades: readonly MeasuredTrade[]): Tally {
   let expired = 0;
   const bg: number[] = [];
   const bn: number[] = [];
+  const bgN: number[] = [];
+  const cgN: number[] = [];
   const cg: number[] = [];
   const cn: number[] = [];
   let tx = 0;
@@ -210,6 +214,8 @@ export function tallyOf(trades: readonly MeasuredTrade[]): Tally {
     if (f.baselineNetR != null && f.conservativeNetR != null) {
       bn.push(f.baselineNetR);
       cn.push(f.conservativeNetR);
+      bgN.push(f.baselineGrossR);
+      cgN.push(f.conservativeGrossR);
     }
     if (f.appliesToExit) {
       tx++;
@@ -230,8 +236,9 @@ export function tallyOf(trades: readonly MeasuredTrade[]): Tally {
     winRateClosedOnly: rate(wins, wins + losses),
     winRateAllTrades: rate(wins, n),
     expiredShare: rate(expired, n),
-    baseline: { grossR: mean(bg), netR: mean(bn), nNet: bn.length },
-    conservative: { basis: 'MODELLED_SENSITIVITY', grossR: mean(cg), netR: mean(cn), nNet: cn.length },
+    baseline: { grossR: mean(bg), netR: mean(bn), nNet: bn.length, grossRSameTradesAsNet: mean(bgN) },
+    conservative: { basis: 'MODELLED_SENSITIVITY', grossR: mean(cg), netR: mean(cn), nNet: cn.length, grossRSameTradesAsNet: mean(cgN) },
+    denominators: { winRateClosedOnly: wins + losses, winRateAllTrades: n, expiredShare: n, grossR: n, netR: bn.length },
     targetExits: { n: tx, meanHaircut: mean(hair), becomeLosses: becomeLoss, spreadFromQuote: quote, spreadFallback: fallback },
   };
 }
