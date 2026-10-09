@@ -93,10 +93,14 @@ export async function measurementReport(q: MeasurementQuery) {
       AND (${q.instrument}::text IS NULL OR s.symbol = ${q.instrument})
     ORDER BY s.time DESC LIMIT ${ROW_LIMIT}
   `;
-  const trades = rows.map(measuredTradeOf);
+  const all = rows.map(measuredTradeOf);
+  // Two populations, never mixed: trades from before the measurements existed, and the measurement-reliable sample.
+  const trades = all.filter((t) => t.mintedAt < MEASUREMENT_RELIABLE_FROM);
+  const reliable = all.filter((t) => t.mintedAt >= MEASUREMENT_RELIABLE_FROM);
   const grouped = groupTallies(trades);
+  const reliableGrouped = groupTallies(reliable);
 
-  const sinceReliable = trades.filter((t) => t.mintedAt >= MEASUREMENT_RELIABLE_FROM);
+  const sinceReliable = reliable;
   const eligibleSinceReliable = sinceReliable.filter((t) => eligibilityOf(t) === 'ELIGIBLE' || eligibilityOf(t) === 'OPEN');
   const withCost = eligibleSinceReliable.filter((t) => t.cost != null).length;
 
@@ -154,9 +158,17 @@ export async function measurementReport(q: MeasurementQuery) {
       limitation: 'The modelled cost already contains a full spread, so this partly double-counts it: read the conservative result as a lower bound on net R. Parameters were fixed before any result was computed and are not tuned.',
     },
     payoffGraderV2: { denseGapSeconds: DENSE_MAX_GAP_MS / 1000 },
+    populations: {
+      historical: 'Trades minted before the measurement release (no cost record, no post-exit row). byCohort / byFamily / byInstrument below.',
+      measurementReliable: 'Trades minted from measurementsReliableFrom. Reported separately in reliableSample; never merged with the historical groups.',
+      netR: 'Net R covers only trades with a recorded cost %. Compare it with grossRSameTradesAsNet, never with grossR of a different set. The denominator of each metric is in denominators.',
+      historicalRows: trades.length,
+      measurementReliableRows: reliable.length,
+    },
     byCohort: grouped.byCohort,
     byFamily: grouped.byFamily,
     byInstrument: grouped.byInstrument,
+    reliableSample: { byCohort: reliableGrouped.byCohort, byFamily: reliableGrouped.byFamily, byInstrument: reliableGrouped.byInstrument },
     costs,
     postExit,
     payoff,

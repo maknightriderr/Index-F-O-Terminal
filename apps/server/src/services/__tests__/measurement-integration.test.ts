@@ -252,6 +252,31 @@ describe('post-exit watch: register → sample → finalise', () => {
     expect(await snapshotOf(id)).toBe(before);
   });
 
+  it('two closers, repeated sweeps and a re-run after the end leave exactly one watch and one row (same trade id)', async () => {
+    const id = await insertTrade();
+    const src = { signalId: id, side: 'CE' as const, strike: 25000, expiry: '2026-10-15', entry: 100, initialStopLoss: 70, target: 111 };
+    const close = { symbol: 'NIFTY', exchange: 'NSE', mode: 'INTRADAY', outcome: 'WIN', reason: 'TARGET', exitPrice: 111, exitAt: T_EXIT };
+    P.registerPostExitWatch(src, close);
+    P.registerPostExitWatch(src, close); // a second closer (monitor and a poll racing)
+    await vi.waitFor(() => expect(store.size).toBe(1));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(store.size).toBe(1);
+    fakeChain = { expiry: '2026-10-15', spotPrice: 25030, strikes: [leg(115)] };
+    for (let k = 1; k <= 4; k++) {
+      vi.setSystemTime(T_EXIT + k * 90_000);
+      await P.samplePostExitWatches({} as any, undefined, T_EXIT + k * 90_000);
+    }
+    const end = Date.parse('2026-10-12T15:31:00+05:30');
+    vi.setSystemTime(end);
+    for (let k = 0; k < 3; k++) await P.samplePostExitWatches({} as any, undefined, end + k * 1000);
+    P.registerPostExitWatch(src, close); // re-registered after the end: the row already exists, so it can only conflict, never duplicate
+    await new Promise((r) => setTimeout(r, 30));
+    vi.setSystemTime(end + 5000);
+    await P.samplePostExitWatches({} as any, undefined, end + 5000);
+    const rows = (await pg.query<{ signal_id: string }>(`SELECT signal_id FROM trade_post_exit WHERE signal_id = $1`, [id])).rows;
+    expect(rows).toEqual([{ signal_id: id }]);
+  });
+
   it('a close with no session left writes an explicit NOT_WATCHED row', async () => {
     const id = await insertTrade({ outcome: 'EXPIRED', closeReason: 'SESSION_ENDED', exitPrice: 90 });
     P.registerPostExitWatch(
@@ -335,8 +360,15 @@ describe('the report', () => {
     expect(cohort('POST_A')).toMatchObject({ n: 1, expired: 1, wins: 0, losses: 0, rows: 3 });
     expect(cohort('POST_A').excluded).toMatchObject({ VOIDED: 1, TRACKING_LOST: 1 });
     expect(cohort('POST_A').winRateClosedOnly).toBeNull(); // no closed wins/losses: not 0
-    expect(cohort('POST_B')).toMatchObject({ n: 1, wins: 1 });
-    expect(r.byFamily.filter((f) => f.cohort === 'POST_B').map((f) => f.family)).toEqual(['S1']);
+    // The 12 Oct trade is in the measurement-reliable sample, never merged with the historical groups.
+    expect(r.byCohort.find((x) => x.cohort === 'POST_B')).toBeUndefined();
+    expect(r.populations).toMatchObject({ historicalRows: 5, measurementReliableRows: 1 });
+    const rel = r.reliableSample.byCohort.find((x) => x.cohort === 'POST_B')!.tally;
+    expect(rel).toMatchObject({ n: 1, wins: 1 });
+    expect(r.reliableSample.byFamily.map((f) => f.family)).toEqual(['S1']);
+    // every metric names its denominator
+    expect(cohort('PRE').denominators).toEqual({ winRateClosedOnly: 2, winRateAllTrades: 2, expiredShare: 2, grossR: 2, netR: 2 });
+    expect(cohort('POST_A').denominators).toEqual({ winRateClosedOnly: 0, winRateAllTrades: 1, expiredShare: 1, grossR: 1, netR: 1 });
     expect(r.schemaReady).toBe(true);
     expect(r.versions.conservativeFill).toBe('CONSERVATIVE_FILL_V1');
     expect(r.cohortBoundaries.PRE).toMatch(/before/);

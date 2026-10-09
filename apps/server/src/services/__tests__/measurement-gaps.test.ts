@@ -438,6 +438,16 @@ describe('eligibility and denominators', () => {
     expect(t.expiredShare).toBe(40);
   });
 
+  it('names the denominator of every metric; net R is comparable only with gross R over the same trades', () => {
+    const rows = [...mixed, trade({ id: 'nc', estimatedCostPct: null })];
+    const t = M.tallyOf(rows);
+    expect(t.denominators).toEqual({ winRateClosedOnly: 4, winRateAllTrades: 6, expiredShare: 6, grossR: 6, netR: 5 });
+    expect(t.baseline.nNet).toBe(5);
+    // gross over all 6 differs from gross over the 5 that have a net: the report gives both, labelled
+    expect(t.baseline.grossRSameTradesAsNet).not.toBe(t.baseline.grossR);
+    expect(t.baseline.netR!).toBeLessThan(t.baseline.grossRSameTradesAsNet!);
+  });
+
   it('baseline and conservative results come from the same trades', () => {
     const t = M.tallyOf(mixed);
     expect(t.baseline.nNet).toBe(t.conservative.nNet);
