@@ -207,3 +207,28 @@ describe('Dhan feed packets (data only)', () => {
     expect(flags.dhanCredentials({ DHAN_CLIENT_ID: 'x', DHAN_ACCESS_TOKEN: 'y' } as any)).toEqual({ clientId: 'x', accessToken: 'y' });
   });
 });
+
+describe('Dhan feed: never hammer Dhan; no connection without the Data API plan (2026-10-09)', async () => {
+  const F = await import('../dhan-feed.js');
+  it('backs off exponentially after connections that bring no data, much longer after a 429, and resets only on real data', () => {
+    expect(F.nextReconnectDelay(F.RECONNECT_MIN_MS, 'NO_DATA')).toBe(2 * F.RECONNECT_MIN_MS);
+    let d = F.RECONNECT_MIN_MS;
+    for (let k = 0; k < 20; k++) d = F.nextReconnectDelay(d, 'NO_DATA');
+    expect(d).toBe(F.RECONNECT_MAX_MS);
+    expect(F.nextReconnectDelay(d, 'RATE_LIMITED')).toBe(F.RATE_LIMIT_BACKOFF_MS);
+    expect(F.nextReconnectDelay(d, 'GOT_DATA')).toBe(F.RECONNECT_MIN_MS);
+    expect(F.RECONNECT_MIN_MS).toBeGreaterThanOrEqual(30_000);
+  });
+  it('reads the Data API plan from the Dhan profile (the 9 Oct account: Deactive)', () => {
+    expect(F.dataPlanActive({ dataPlan: 'Deactive' })).toBe(false);
+    expect(F.dataPlanActive({ dataPlan: 'Active' })).toBe(true);
+    expect(F.dataPlanActive({})).toBeNull();
+  });
+  it('a disconnect packet keeps its reason even when its length field is not 10', () => {
+    const b = Buffer.alloc(10);
+    b.writeUInt8(50, 0);
+    b.writeInt16LE(0, 1);
+    b.writeInt16LE(806, 8);
+    expect(P.parseDhanFrame(b)).toEqual([{ kind: 'DISCONNECT', header: { code: 50, length: 0, segment: 0, securityId: 0 }, reason: 806 }]);
+  });
+});

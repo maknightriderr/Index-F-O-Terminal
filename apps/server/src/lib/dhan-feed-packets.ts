@@ -90,8 +90,17 @@ export function parseDhanFrame(frame: Buffer): DhanPacket[] {
   let at = 0;
   while (at + 8 <= frame.length) {
     const header = readHeader(frame, at);
+    // A disconnect packet is 10 bytes whatever its length field says (never drop the reason).
     const size =
-      header.code === DHAN_RESPONSE.FULL ? DHAN_FULL_PACKET_BYTES : header.code === DHAN_RESPONSE.QUOTE ? DHAN_QUOTE_PACKET_BYTES : header.length > 0 ? header.length : 0;
+      header.code === DHAN_RESPONSE.FULL
+        ? DHAN_FULL_PACKET_BYTES
+        : header.code === DHAN_RESPONSE.QUOTE
+          ? DHAN_QUOTE_PACKET_BYTES
+          : header.code === DHAN_RESPONSE.DISCONNECT
+            ? Math.min(Math.max(header.length, 10), frame.length - at)
+            : header.length > 0
+              ? header.length
+              : 0;
     if (size < 8 || at + size > frame.length) break;
     const p = frame.subarray(at, at + size);
     if (header.code === DHAN_RESPONSE.FULL) {

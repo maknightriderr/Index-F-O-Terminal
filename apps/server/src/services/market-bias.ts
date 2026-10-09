@@ -196,6 +196,7 @@ import {
   liveRoutedTriggerIds,
   familyRouterSession,
   readFamilyRouterState,
+  paperCandidatesForSlot,
 } from './trigger-router.js';
 import {
   setupWatchKey,
@@ -2148,7 +2149,9 @@ async function computeMarketBias(
     try {
       const of1Here = ofSources.of1 && ORDER_FLOW_SYMBOLS.includes(underlying);
       const footprints = of1Here ? await footprintsFor(underlying, closedNow.slice(-60).map((b) => b.time)) : new Map();
-      orderFlowPaper = orderFlowPaperCandidates({ underlying, exchange, bars: closedNow, chain, footprints, ob1: ofSources.ob1, of1: of1Here });
+      // The router's own slot filter (newest bar, paper stage, risk.wouldTrade — a target, a valid stop,
+      // the session window, the cost cap), exactly as the trigger families' candidates get it.
+      orderFlowPaper = paperCandidatesForSlot(orderFlowPaperCandidates({ underlying, exchange, bars: closedNow, chain, footprints, ob1: ofSources.ob1, of1: of1Here }), closedNow.length - 1);
     } catch (err: any) {
       logger.warn({ error: err.message, underlying, exchange }, 'OB1 / OF1 candidates failed — the other engines are unaffected');
     }

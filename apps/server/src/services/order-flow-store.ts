@@ -64,7 +64,7 @@ export function recordFlowTrade(symbol: string, trade: FlowTrade): void {
  * (inside the NSE session). `connected` says whether the feed was up — it
  * only labels an empty bar's reason.
  */
-export async function closeFlowBars(now: number, connected: boolean = feedConnected): Promise<number> {
+export async function closeFlowBars(now: number, connected: boolean = feedConnected, unavailableReason: string | null = null): Promise<number> {
   let written = 0;
   for (const [symbol, f] of flows) {
     const current = flowBarStart(now);
@@ -75,7 +75,7 @@ export async function closeFlowBars(now: number, connected: boolean = feedConnec
         ? buildFootprint(f.trades, bar, FLOW_BAR_MS, ORDER_FLOW_PRICE_STEP[symbol] ?? 5, f.mode)
         : unavailableFootprint(bar, FLOW_BAR_MS);
       f.footprints.set(bar, fp);
-      await persistFootprint(symbol, f, fp, fp.deltaMode === 'UNAVAILABLE' ? (connected ? 'NO_TRADES' : 'FEED_DOWN') : null);
+      await persistFootprint(symbol, f, fp, fp.deltaMode === 'UNAVAILABLE' ? unavailableReason ?? (connected ? 'NO_TRADES' : 'FEED_DOWN') : null);
       written++;
     }
     f.trades = f.trades.filter((t) => t.time >= current);

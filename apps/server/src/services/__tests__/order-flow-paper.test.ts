@@ -120,3 +120,13 @@ describe('wiring and tagging', () => {
     expect(sourceOfSetup({ strategy: 'STRUCTURE', logicVersion: 'x+paper-research.OF1' })).toBe('OF1');
   });
 });
+
+describe('OB1 / OF1 reach the slot only through the router\'s own filter (fix 2026-10-09)', () => {
+  it('a candidate the router would not hand the slot (e.g. NO_TARGET) never reaches it — the 9 Oct ENGINE_ERRORs', async () => {
+    const { paperCandidatesForSlot } = await import('../trigger-router.js');
+    const mk = (wouldTrade: boolean, decisionIndex = 9) => ({ candidate: { decisionIndex } as any, stage: 'PAPER_RESEARCH' as const, risk: { wouldTrade } as any, cost: null, lifecycleId: String(wouldTrade) });
+    expect(paperCandidatesForSlot([mk(false), mk(true), mk(true, 8)], 9).map((r) => r.lifecycleId)).toEqual(['true']);
+    const mb = readFileSync(path.join(HERE, '../market-bias.ts'), 'utf8');
+    expect(mb).toMatch(/orderFlowPaper = paperCandidatesForSlot\(orderFlowPaperCandidates\(\{[^)]*\}\), closedNow\.length - 1\);/);
+  });
+});
