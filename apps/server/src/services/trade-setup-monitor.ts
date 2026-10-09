@@ -49,6 +49,8 @@ import { istMinute, runGapCheck } from './feed-gap-check.js';
 import { serviceFailure, TICK_FAILED } from '../lib/service-supervisor.js';
 import { drainPendingOutcomes } from './pending-outcomes.js';
 import { sweepLostTrades } from './state-recovery.js';
+import { onPostExitTick, samplePostExitWatches } from './post-exit-tracker.js';
+import { drainPendingCostRecords } from './trade-costs.js';
 
 /** How often the lost-trade sweep runs (intraday rows from earlier sessions no slot tracks). */
 const LOST_TRADE_SWEEP_MS = 30 * 60 * 1000;
@@ -153,6 +155,9 @@ async function sweep(provider: MarketDataProvider, subscriptions?: SubscriptionM
 
   await syncSubscriptions(subscriptions, next);
   await recheckBias(provider, keys);
+  // Measurement only: what the contracts of already-closed trades did afterwards. Never awaited by the sweep, never throws.
+  void drainPendingCostRecords();
+  void samplePostExitWatches(provider, subscriptions).catch((err: any) => logger.warn({ error: err.message }, 'Post-exit tracker: pass failed'));
 }
 
 async function recheckBias(provider: MarketDataProvider, keys: string[]): Promise<void> {
@@ -267,6 +272,11 @@ async function checkGaps(provider: MarketDataProvider, subscriptions: Subscripti
 
 function onTicks(provider: MarketDataProvider, subscriptions: SubscriptionManager, ticks: Tick[]): void {
   for (const tick of ticks) {
+    try {
+      onPostExitTick(tick, subscriptions.feedStateOfToken(tick.token));
+    } catch {
+      /* measurement must never disturb the monitor */
+    }
     const watch = watchesByToken.get(tick.token);
     if (!watch || !(tick.ltp > 0)) continue;
     // Never evaluate a level on a token whose data is stale, in a gap, or not yet gap-checked.
