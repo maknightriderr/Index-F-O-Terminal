@@ -59,11 +59,11 @@ export function ChartPatternsPanel({ patterns, loading }: { patterns: DetectedCh
             <h2 className="text-sm font-bold text-gray-100 light:text-slate-900">
               AI Structural Chart Patterns &amp; Breakouts
             </h2>
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/15 text-purple-400 light:text-purple-700 font-semibold">
+            <span className="text-xs px-2 py-0.5 rounded-full bg-purple-500/15 text-purple-400 light:text-purple-700 font-semibold">
               {filtered.length} Formations
             </span>
           </div>
-          <p className="text-[10px] text-gray-400 light:text-slate-600 mt-0.5">
+          <p className="text-sm text-gray-400 light:text-slate-600 mt-1">
             Algorithmic swing-pivot geometry detected across 15m &amp; 1h candle structures
           </p>
         </div>
@@ -72,7 +72,7 @@ export function ChartPatternsPanel({ patterns, loading }: { patterns: DetectedCh
         <div className="flex items-center bg-gray-900/60 light:bg-slate-100 p-0.5 rounded-lg border border-gray-800/40 light:border-slate-200">
           <button
             onClick={() => setFilter('ALL')}
-            className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors ${
+            className={`px-2.5 py-1 text-xs font-semibold rounded-md transition-colors ${
               filter === 'ALL' ? 'bg-purple-500/20 text-purple-400' : 'text-gray-400'
             }`}
           >
@@ -80,7 +80,7 @@ export function ChartPatternsPanel({ patterns, loading }: { patterns: DetectedCh
           </button>
           <button
             onClick={() => setFilter('BULLISH')}
-            className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors ${
+            className={`px-2.5 py-1 text-xs font-semibold rounded-md transition-colors ${
               filter === 'BULLISH' ? 'bg-emerald-500/20 text-emerald-400' : 'text-gray-400'
             }`}
           >
@@ -88,7 +88,7 @@ export function ChartPatternsPanel({ patterns, loading }: { patterns: DetectedCh
           </button>
           <button
             onClick={() => setFilter('BEARISH')}
-            className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors ${
+            className={`px-2.5 py-1 text-xs font-semibold rounded-md transition-colors ${
               filter === 'BEARISH' ? 'bg-red-500/20 text-red-400' : 'text-gray-400'
             }`}
           >
@@ -131,18 +131,18 @@ export function ChartPatternsPanel({ patterns, loading }: { patterns: DetectedCh
                     <span className="text-xs font-bold text-gray-100 light:text-slate-900 truncate group-hover:text-purple-400 transition-colors">
                       {p.symbol}
                     </span>
-                    <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-gray-800 light:bg-slate-100 text-gray-400 light:text-slate-600 shrink-0 font-mono">
+                    <span className="text-xs font-bold px-1.5 py-0.2 rounded bg-gray-800 light:bg-slate-100 text-gray-400 light:text-slate-600 shrink-0 font-mono">
                       {p.interval}
                     </span>
                   </div>
-                  <div className="text-[11px] text-gray-400 light:text-slate-600 font-medium truncate">
+                  <div className="text-xs text-gray-400 light:text-slate-600 font-medium truncate">
                     {PATTERN_LABELS[p.pattern] ?? p.pattern}
                   </div>
                 </div>
 
                 <div className="text-right shrink-0 space-y-1">
                   <div
-                    className={`text-[11px] font-bold ${
+                    className={`text-xs font-bold ${
                       isBull ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700'
                     }`}
                   >
@@ -159,7 +159,7 @@ export function ChartPatternsPanel({ patterns, loading }: { patterns: DetectedCh
                         style={{ width: `${p.confidence}%` }}
                       />
                     </div>
-                    <span className="text-[10px] font-bold text-gray-400 light:text-slate-600 tabular-nums">
+                    <span className="text-xs font-bold text-gray-400 light:text-slate-600 tabular-nums">
                       {p.confidence}%
                     </span>
                   </div>

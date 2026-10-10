@@ -7,6 +7,7 @@ import { SeverityBadge } from '@/components/common/badges';
 import { FilterPills } from '@/components/common/filter-pills';
 import { Skeleton } from '@/components/common/skeleton';
 import { useAssetTabsStore } from '@/stores';
+import { Pagination } from '@/components/ui/data-table';
 import type { Exchange, SignalType } from '@fno/shared';
 
 type SeverityFilter = 'ALL' | 'CRITICAL' | 'WARNING' | 'INFO';
@@ -46,6 +47,7 @@ export function AlertsPage() {
   const [severityFilter, setSeverityFilter] = useState<SeverityFilter>('ALL');
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('ALL');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [page, setPage] = useState(0);
 
   const { alerts, isLive, loading } = useAlerts(100, {
     type: typeFilter === 'ALL' ? undefined : typeFilter,
@@ -61,6 +63,12 @@ export function AlertsPage() {
     return q ? alerts.filter((a) => a.symbol.includes(q)) : alerts;
   }, [alerts, query]);
 
+  // Long lists page instead of rendering every alert at once (the feed holds up to 100).
+  const PAGE_SIZE = 20;
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  const visible = filtered.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
+
   const toggleExpanded = (id: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -71,23 +79,24 @@ export function AlertsPage() {
   };
 
   return (
-    <div className="p-4 space-y-4 min-h-full">
+    <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-lg font-bold text-gray-100 light:text-slate-900">Alerts</h1>
-          <p className="text-xs text-gray-400 light:text-slate-600 mt-0.5">
+          <h1 className="text-xl font-semibold tracking-tight text-gray-100 light:text-slate-900">Alerts</h1>
+          <p className="text-sm text-gray-400 light:text-slate-600 mt-1">
             Unusual futures OI moves, IV extremes, and Trade Setup closures — scanned every 2 minutes across the NSE F&O
             universe. OI/IV extremes are digested into one summary per type per day, not one row per stock.
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-[11px] text-gray-400 light:text-slate-600">
+          <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-xs text-gray-400 light:text-slate-600">
             <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
             {isLive ? `${filtered.length} of ${alerts.length}` : loading ? 'Loading…' : 'Unreachable'}
           </span>
           <input
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => { setQuery(e.target.value); setPage(0); }}
+            aria-label="Filter alerts by symbol"
             placeholder="Filter symbol…"
             className="bg-gray-900/70 light:bg-slate-50 border border-gray-700/60 light:border-slate-200 rounded-lg px-3 py-1.5 text-xs text-gray-200 light:text-slate-800 placeholder-gray-600 light:placeholder-slate-400 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/20 transition-colors w-40"
           />
@@ -131,7 +140,7 @@ export function AlertsPage() {
 
       {filtered.length > 0 && (
         <div className="bg-gradient-to-b from-[#141420] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 rounded-xl overflow-hidden shadow-[0_12px_36px_-16px_rgba(0,0,0,0.8)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.15)] divide-y divide-gray-800/40 light:divide-slate-100">
-          {filtered.map((a) => {
+          {visible.map((a) => {
             // Digest alerts (OI Spike / IV Spike / IV Crush) carry the full
             // per-symbol breakdown in data.symbols — the message text only
             // names the first few, this is what "show all" expands into.
@@ -154,7 +163,7 @@ export function AlertsPage() {
                         {a.symbol === 'NSE_FNO_UNIVERSE' ? 'F&O Universe' : a.symbol}
                       </span>
                       <SeverityBadge severity={a.severity} />
-                      <span className="text-[10px] text-gray-400 light:text-slate-600 uppercase tracking-wide">{a.type.replace(/_/g, ' ')}</span>
+                      <span className="text-xs text-gray-400 light:text-slate-600 uppercase tracking-wide">{a.type.replace(/_/g, ' ')}</span>
                     </div>
                     <p className="text-xs text-gray-400 light:text-slate-600 leading-snug">{a.message}</p>
                     {symbols && (
@@ -163,7 +172,7 @@ export function AlertsPage() {
                           e.stopPropagation();
                           toggleExpanded(a.id);
                         }}
-                        className="text-[11px] font-semibold text-indigo-500 light:text-indigo-700 mt-1.5 hover:underline"
+                        className="text-xs font-semibold text-indigo-500 light:text-indigo-700 mt-1.5 hover:underline"
                       >
                         {isOpen ? '▾ Hide' : '▸ Show'} all {symbols.length} symbols
                       </button>
@@ -178,7 +187,7 @@ export function AlertsPage() {
                               const exch = (s.exchange as string) ?? 'NSE';
                               openTab(s.symbol as string, exch as Exchange);
                             }}
-                            className="text-[11px] font-medium px-2 py-1 rounded-md bg-gray-800/60 light:bg-slate-100 text-gray-300 light:text-slate-700 hover:bg-gray-700/60 light:hover:bg-slate-200 tabular-nums"
+                            className="text-xs font-medium px-2 py-1 rounded-md bg-gray-800/60 light:bg-slate-100 text-gray-300 light:text-slate-700 hover:bg-gray-700/60 light:hover:bg-slate-200 tabular-nums"
                           >
                             {s.symbol as string}
                             {s.changePercent != null && ` ${(s.changePercent as number) >= 0 ? '+' : ''}${(s.changePercent as number).toFixed(1)}%`}
@@ -188,13 +197,14 @@ export function AlertsPage() {
                       </div>
                     )}
                   </div>
-                  <span className="text-[11px] text-gray-400 light:text-slate-600 shrink-0 whitespace-nowrap">{relativeTime(a.createdAt)}</span>
+                  <span className="text-xs text-gray-400 light:text-slate-600 shrink-0 whitespace-nowrap">{relativeTime(a.createdAt)}</span>
                 </div>
               </div>
             );
           })}
         </div>
       )}
+      {filtered.length > PAGE_SIZE && <Pagination page={safePage} pageCount={pageCount} total={filtered.length} pageSize={PAGE_SIZE} onPage={setPage} />}
     </div>
   );
 }

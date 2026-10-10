@@ -89,16 +89,16 @@ export function IndicesPage() {
   }, [filtered]);
 
   return (
-    <div className="p-4 space-y-4 min-h-full">
+    <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-lg font-bold text-gray-100 light:text-slate-900">Indices</h1>
-          <p className="text-xs text-gray-400 light:text-slate-600 mt-0.5">
+          <h1 className="text-xl font-semibold tracking-tight text-gray-100 light:text-slate-900">Indices</h1>
+          <p className="text-sm text-gray-400 light:text-slate-600 mt-1">
             Every broad-market and sectoral index this terminal tracks, across NSE, BSE, and MCX's commodity benchmark indices.
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-[11px] text-gray-400 light:text-slate-600">
+          <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-xs text-gray-400 light:text-slate-600">
             <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
             {isLive ? `${filtered.length} of ${indices.length}` : loading ? 'Loading…' : 'Unreachable'}
           </span>
@@ -203,14 +203,14 @@ function IndexGroup({
                   </td>
                   <td className="text-right px-3 py-2.5 whitespace-nowrap">
                     <div className="flex items-center gap-1.5 justify-end">
-                      <span className="text-[10px] text-gray-400 light:text-slate-600 tabular-nums">{formatIndianNumber(row.low, 0)}</span>
+                      <span className="text-xs text-gray-400 light:text-slate-600 tabular-nums">{formatIndianNumber(row.low, 0)}</span>
                       <div className="w-14 h-1.5 bg-gray-800 light:bg-slate-200 rounded-full overflow-hidden">
                         <div
                           className={`h-full rounded-full bar-animated ${isPositive ? 'bg-gradient-to-r from-emerald-600 to-emerald-400' : 'bg-gradient-to-r from-red-600 to-red-400'}`}
                           style={{ width: `${positionInRange}%` }}
                         />
                       </div>
-                      <span className="text-[10px] text-gray-400 light:text-slate-600 tabular-nums">{formatIndianNumber(row.high, 0)}</span>
+                      <span className="text-xs text-gray-400 light:text-slate-600 tabular-nums">{formatIndianNumber(row.high, 0)}</span>
                     </div>
                   </td>
                   <td className="text-right px-3 py-2.5">

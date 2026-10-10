@@ -66,6 +66,7 @@ import { computeMarketBreadth } from './market-breadth.js';
 import { neutralSectorRank, rankSectors, sectorForSymbol } from './sector-strength.js';
 import { cached } from '../lib/cache.js';
 import { redis } from '../lib/redis.js';
+import { MARKET_SCAN_LAST_KEY, MARKET_SCAN_LAST_TTL_SECONDS } from './read-only-views.js';
 import { logger } from '../lib/logger.js';
 
 // Wider than the old single-sector top-5 — this is now drawn from the
@@ -109,7 +110,7 @@ const STOCK_SPECIFIC_SCORE_FLOOR = Math.round(SCORE_SURFACE_FLOOR * (STOCK_SPECI
 // sessions have run under the new metric.
 const NIFTY_TREND_MIN_CONFIDENCE = 65;
 
-const SCAN_CACHE_KEY = 'market_scan:latest';
+export const SCAN_CACHE_KEY = 'market_scan:latest';
 const SCAN_CACHE_TTL_SECONDS = 360; // a little over the 5-minute background interval, so the API never serves a fully-expired read
 
 // Tiers are judged against what the candidate could ACTUALLY have scored,
@@ -789,6 +790,18 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/**
+ * An EXPLICIT scan, requested by a person pressing "Run scan" (POST /api/market-scanner/refresh) — never by a
+ * page opening. It runs the same pipeline as the background job (so it records the same decision rows) and
+ * stores the result where the read-only GET looks.
+ */
+export async function refreshMarketScan(provider: MarketDataProvider, exchange: Exchange = 'NSE'): Promise<MarketScanResult> {
+  const result = await runMarketScan(provider, exchange);
+  await redis.set(SCAN_CACHE_KEY, JSON.stringify(result), 'EX', SCAN_CACHE_TTL_SECONDS).catch(() => undefined);
+  await redis.set(MARKET_SCAN_LAST_KEY, JSON.stringify(result), 'EX', MARKET_SCAN_LAST_TTL_SECONDS).catch(() => undefined);
+  return result;
+}
+
 export async function getMarketScan(provider: MarketDataProvider, exchange: Exchange = 'NSE'): Promise<MarketScanResult> {
   return cached(SCAN_CACHE_KEY, SCAN_CACHE_TTL_SECONDS, () => runMarketScan(provider, exchange));
 }
@@ -812,7 +825,10 @@ export function startMarketScanner(provider: MarketDataProvider): void {
         // API request between ticks gets this fresh result instead of
         // recomputing (cached() would only recompute once the TTL expires,
         // so this keeps the two paths' data in lockstep).
-        redis.set(SCAN_CACHE_KEY, JSON.stringify(result), 'EX', SCAN_CACHE_TTL_SECONDS)
+        redis
+          .set(SCAN_CACHE_KEY, JSON.stringify(result), 'EX', SCAN_CACHE_TTL_SECONDS)
+          // The last-known copy the read-only API serves once the live cache has expired (display only).
+          .then(() => redis.set(MARKET_SCAN_LAST_KEY, JSON.stringify(result), 'EX', MARKET_SCAN_LAST_TTL_SECONDS))
       )
       .catch((err: any) => logger.error({ error: err.message }, 'Market scanner tick failed'));
   };

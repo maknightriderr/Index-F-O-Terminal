@@ -186,8 +186,10 @@ export function useMarketWebSocket(): void {
           subscriptionCount: health.subscriptionCount,
           queueSize: 0,
         },
+        // A connected socket is NOT evidence that data is current: lastUpdate is only ever a real tick time the server
+        // reported (0 = none), never "now". Freshness is judged from timestamps (lib/freshness.ts).
         dataFreshness: health.connected
-          ? { status: 'LIVE', lastUpdate: health.lastTickAt || Date.now(), missingDataPercent: 0 }
+          ? { status: 'LIVE', lastUpdate: health.lastTickAt || 0, missingDataPercent: 0 }
           : { status: 'DISCONNECTED', lastUpdate: health.lastTickAt || 0, missingDataPercent: 0 },
       });
     });

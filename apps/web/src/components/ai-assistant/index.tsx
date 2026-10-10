@@ -57,8 +57,8 @@ export function AiAssistantPage() {
   return (
     <div className="p-4 flex flex-col h-full min-h-0">
       <div className="mb-3">
-        <h1 className="text-lg font-bold text-gray-100 light:text-slate-900">AI Assistant</h1>
-        <p className="text-xs text-gray-400 light:text-slate-600 mt-0.5">
+        <h1 className="text-xl font-semibold tracking-tight text-gray-100 light:text-slate-900">AI Assistant</h1>
+        <p className="text-sm text-gray-400 light:text-slate-600 mt-1">
           Grounded in a live snapshot of indices, the F&O universe scan, and recent alerts — ask about current conditions,
           signals, or strategies. Not investment advice.
         </p>

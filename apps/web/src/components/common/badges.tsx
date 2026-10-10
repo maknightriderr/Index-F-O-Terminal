@@ -19,7 +19,7 @@ const SEVERITY_COLORS: Record<string, string> = {
 
 export function SeverityBadge({ severity }: { severity: string }) {
   return (
-    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium badge-glass ${
+    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium badge-glass ${
       SEVERITY_COLORS[severity] || SEVERITY_COLORS.INFO
     }`}>
       {severity}
@@ -115,7 +115,7 @@ export function OIBadge({ type, futuresChangePercent }: { type: OIInterpretation
 
   return (
     <span
-      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold badge-glass ${info.color}`}
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold badge-glass ${info.color}`}
       title={hasFut ? `Classified from the nearest future: price ${futuresChangePercent! >= 0 ? '+' : ''}${futuresChangePercent!.toFixed(2)}% with OI change` : undefined}
     >
       <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${info.dot}`} />
@@ -145,8 +145,8 @@ export function BiasBadge({ bias, large }: { bias: BiasDirection | string; large
   return (
     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold badge-glass ${
       BIAS_COLORS[bias] || BIAS_COLORS.NEUTRAL
-    } ${large ? 'text-xs' : 'text-[10px]'}`}>
-      <span className="text-[10px]">{BIAS_ARROWS[bias] || '—'}</span>
+    } ${large ? 'text-xs' : 'text-xs'}`}>
+      <span className="text-xs">{BIAS_ARROWS[bias] || '—'}</span>
       <span>{bias}</span>
     </span>
   );
@@ -162,7 +162,7 @@ export function ScoreBadge({ score, large }: { score: number; large?: boolean })
 
   return (
     <span className={`inline-flex items-center justify-center px-2 py-0.5 rounded-md font-bold tabular-nums badge-glass ${color} ${
-      large ? 'text-xs min-w-[32px]' : 'text-[10px] min-w-[26px]'
+      large ? 'text-xs min-w-[32px]' : 'text-xs min-w-[26px]'
     }`}>
       {score}
     </span>

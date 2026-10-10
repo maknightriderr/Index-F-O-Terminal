@@ -75,7 +75,7 @@ export function ActivityList({
                 style={{ '--stagger-index': idx } as React.CSSProperties}
               >
                 {/* Rank badge */}
-                <span className={`w-5 h-5 flex items-center justify-center rounded-md text-[10px] font-bold shrink-0 badge-glass ${accent.rankBg} ${accent.rankText}`}>
+                <span className={`w-5 h-5 flex items-center justify-center rounded-md text-xs font-bold shrink-0 badge-glass ${accent.rankBg} ${accent.rankText}`}>
                   {idx < 3 ? MEDALS[idx] : idx + 1}
                 </span>
                 <span className="text-gray-200 light:text-slate-800 font-bold flex-1 truncate group-hover:text-white transition-colors">{s.symbol}</span>
@@ -87,7 +87,7 @@ export function ActivityList({
                   <span className={`tabular-nums font-bold ${s.changePercent >= 0 ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700'}`}>
                     {formatPercent(s.changePercent)}
                   </span>
-                  <span className="text-gray-400 light:text-slate-600 tabular-nums text-[10px] font-medium w-11 text-right">{formatCompact(s.futuresChangeOi)}</span>
+                  <span className="text-gray-400 light:text-slate-600 tabular-nums text-xs font-medium w-11 text-right">{formatCompact(s.futuresChangeOi)}</span>
                 </div>
               </div>
             );

@@ -7,8 +7,12 @@ import type { MarketQuote } from '@fno/shared';
 
 const POLL_INTERVAL_MS = 20000;
 
-/** Live NIFTY/BANKNIFTY/SENSEX/etc quotes. Starts empty — never shows sample prices; isLive says whether the last poll succeeded. */
-export function useLiveIndices(): { indices: MarketQuote[]; isLive: boolean } {
+/**
+ * Live NIFTY/BANKNIFTY/SENSEX/etc quotes. Starts empty — never shows sample prices; isLive says whether the last poll
+ * succeeded. `observedAt` is the newest quote's own observation time (epoch ms) — what freshness is judged from,
+ * not whether a request succeeded.
+ */
+export function useLiveIndices(): { indices: MarketQuote[]; isLive: boolean; observedAt: number | null } {
   const [indices, setIndices] = useState<MarketQuote[]>([]);
   const [isLive, setIsLive] = useState(false);
 
@@ -41,5 +45,6 @@ export function useLiveIndices(): { indices: MarketQuote[]; isLive: boolean } {
     };
   }, []);
 
-  return { indices, isLive };
+  const observedAt = indices.length ? Math.max(...indices.map((q) => q.timestamp || 0)) || null : null;
+  return { indices, isLive, observedAt };
 }

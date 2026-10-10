@@ -201,7 +201,7 @@ export function AddAssetModal({ isOpen, onClose }: AddAssetModalProps) {
                     </div>
                   </div>
                   {selected === item && (
-                    <div className="mt-2 grid grid-cols-3 gap-2 text-[10px] text-gray-400 light:text-slate-600">
+                    <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-gray-400 light:text-slate-600">
                       <div>Type: <span className="text-gray-400 light:text-slate-600">{item.instrumentType || assetType}</span></div>
                       <div>Token: <span className="text-gray-400 light:text-slate-600">{item.token || '—'}</span></div>
                       <div>Segment: <span className="text-gray-400 light:text-slate-600">{item.segment || '—'}</span></div>

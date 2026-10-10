@@ -41,7 +41,7 @@ const STAGE_MEANING_5M: Record<string, string> = {
 
 export function StageBadge({ stage }: { stage: string }) {
   const s = STAGE_STYLES[stage] ?? { label: stage, className: 'bg-gray-500/15 text-gray-400' };
-  return <span className={`text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded ${s.className}`}>{s.label}</span>;
+  return <span className={`text-xs font-bold uppercase tracking-wide px-1.5 py-0.5 rounded ${s.className}`}>{s.label}</span>;
 }
 
 export function stageMeaning(stage: string, timeframe?: string | null): string {
@@ -53,7 +53,7 @@ export function TimeframeTag({ timeframe }: { timeframe?: string | null }) {
   const five = timeframe === '5m';
   return (
     <span
-      className={`text-[10px] font-semibold px-1.5 py-0.5 rounded tabular-nums ${five ? 'bg-violet-500/15 text-violet-300 light:text-violet-700' : 'bg-gray-500/10 text-gray-400 light:text-slate-600'}`}
+      className={`text-xs font-semibold px-1.5 py-0.5 rounded tabular-nums ${five ? 'bg-violet-500/15 text-violet-300 light:text-violet-700' : 'bg-gray-500/10 text-gray-400 light:text-slate-600'}`}
       title={five ? 'Pools from 15m bars; sweep, displacement, zone and fill on 5m bars' : 'Pools and the reaction on 15m bars'}
     >
       {five ? '5m entry' : '15m'}
@@ -79,7 +79,7 @@ export function PatternLabel({ row }: { row: Pick<StructureLifecycleView, 'patte
     'Candle shapes of the sweep and the displacement — descriptive only.' +
     (c ? ` Score candle points: ${parts.length ? parts.join(', ') : 'none'}${c.applied !== c.rejection + c.engulfing + c.star ? ` (${c.applied} after the Tier-1 cap)` : ''}; the score never gates.` : '');
   return (
-    <span className="block text-[11px] text-sky-300 light:text-sky-700 mt-0.5" title={title}>
+    <span className="block text-xs text-sky-300 light:text-sky-700 mt-0.5" title={title}>
       {row.patterns.label}
       {c && c.applied > 0 ? <span className="text-gray-400 light:text-slate-600"> · +{c.applied} score</span> : null}
     </span>
@@ -94,7 +94,7 @@ export function PatternLabel({ row }: { row: Pick<StructureLifecycleView, 'patte
  */
 export function LifecycleReason({ row }: { row: Pick<StructureLifecycleView, 'reason'> }) {
   if (!row.reason) return null;
-  return <span className="block text-[11px] text-amber-300 light:text-amber-700 mt-0.5 italic">{row.reason}</span>;
+  return <span className="block text-xs text-amber-300 light:text-amber-700 mt-0.5 italic">{row.reason}</span>;
 }
 
 /**
@@ -139,7 +139,7 @@ export function TradePreviewPanel({ row }: { row: StructureLifecycleView }) {
 
   if (!preview.available) {
     return (
-      <div className="mt-2 rounded border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-[11px] text-amber-300 light:text-amber-700">
+      <div className="mt-2 rounded border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-xs text-amber-300 light:text-amber-700">
         If it fills now, F&amp;O validation would refuse it: {preview.reason ?? 'reason unavailable'}.
       </div>
     );
@@ -153,7 +153,7 @@ export function TradePreviewPanel({ row }: { row: StructureLifecycleView }) {
   const expiryLabel = preview.expiry ? `${formatExpiryDate(preview.expiry)}${preview.dte != null ? `, ${preview.dte} DTE` : ''}` : null;
 
   return (
-    <div className="mt-2 rounded border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 text-[11px] space-y-1">
+    <div className="mt-2 rounded border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 text-xs space-y-1">
       <div className="font-semibold text-cyan-300 light:text-cyan-700">
         ORDER PENDING (est.) — Buy {row.symbol} {preview.strike} {preview.side}
         {expiryLabel ? ` (${expiryLabel})` : ''} if price returns to {zoneLabel}
@@ -235,7 +235,7 @@ export function ExplanationBlock({ row }: { row: StructureLifecycleView }) {
   const { forLines, against, invalidation, wouldBeValidIf } = explanationLines(row);
   if (forLines.length === 0 && against.length === 0) return null;
   return (
-    <div className="mt-1.5 text-[10px] space-y-0.5">
+    <div className="mt-1.5 text-xs space-y-0.5">
       {forLines.map((l, i) => (
         <div key={`for-${i}`} className="text-emerald-400 light:text-emerald-700">+ {l}</div>
       ))}
@@ -280,7 +280,7 @@ export function SetupExplanationPanel({ input }: { input: SetupExplanationInput 
     </>,
   ]);
   return (
-    <div className="mt-2 rounded border border-gray-700/60 light:border-slate-300 px-2 py-1.5 text-[10px] space-y-1">
+    <div className="mt-2 rounded border border-gray-700/60 light:border-slate-300 px-2 py-1.5 text-xs space-y-1">
       <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
         {rows.map(([k, v]) => (
           <React.Fragment key={k}>
@@ -314,7 +314,7 @@ export function SetupExplanationPanel({ input }: { input: SetupExplanationInput 
 /** One-line description of a lifecycle's levels: pool, zone, stop, T1. */
 export function LifecycleLevels({ row }: { row: StructureLifecycleView }) {
   return (
-    <span className="text-[11px] text-gray-400 light:text-slate-600 tabular-nums">
+    <span className="text-xs text-gray-400 light:text-slate-600 tabular-nums">
       {pretty(row.pool?.kind)} {num(row.pool?.price)}
       {row.zone && (
         <>

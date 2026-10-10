@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import { themeBootstrapScript } from "@/lib/theme";
 
 // There was no viewport meta at all, which is the single biggest reason the
 // terminal was unusable on a phone: with none declared, mobile browsers
@@ -29,8 +30,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" className="dark" data-theme="dark" suppressHydrationWarning>
       <head>
+        {/* Applies the stored theme (dark by default) before first paint — no flash of the wrong theme. */}
+        <script dangerouslySetInnerHTML={{ __html: themeBootstrapScript() }} />
         <link
           href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
           rel="stylesheet"

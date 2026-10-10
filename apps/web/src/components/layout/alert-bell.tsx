@@ -65,7 +65,7 @@ export function AlertBell() {
       >
         🔔
         {unreadCount > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 min-w-[15px] h-[15px] px-0.5 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center leading-none">
+          <span className="absolute -top-0.5 -right-0.5 min-w-[15px] h-[15px] px-0.5 rounded-full bg-red-500 text-white text-xs font-bold flex items-center justify-center leading-none">
             {unreadCount > 9 ? '9+' : unreadCount}
           </span>
         )}
@@ -80,7 +80,7 @@ export function AlertBell() {
                 setActiveTab('alerts');
                 setOpen(false);
               }}
-              className="text-[11px] text-emerald-400 light:text-emerald-700 hover:text-emerald-300 light:hover:text-emerald-600 font-medium"
+              className="text-xs text-emerald-400 light:text-emerald-700 hover:text-emerald-300 light:hover:text-emerald-600 font-medium"
             >
               View all →
             </button>
@@ -101,10 +101,10 @@ export function AlertBell() {
                     </span>
                     <div className="flex items-center gap-1.5 shrink-0">
                       <SeverityBadge severity={a.severity} />
-                      <span className="text-[10px] text-gray-400 light:text-slate-600">{relativeTime(a.createdAt)}</span>
+                      <span className="text-xs text-gray-400 light:text-slate-600">{relativeTime(a.createdAt)}</span>
                     </div>
                   </div>
-                  <p className="text-[11px] text-gray-400 light:text-slate-600 leading-snug">{a.message}</p>
+                  <p className="text-xs text-gray-400 light:text-slate-600 leading-snug">{a.message}</p>
                 </div>
               ))}
             </div>

@@ -1,17 +1,34 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
 import { recordPrice } from './price-history-store';
-import type { FnoScannerRow } from '@fno/shared';
+import type { FnoScannerRow, ReadOnlyMeta } from '@fno/shared';
 
 const POLL_INTERVAL_MS = 60000;
 
-/** Live F&O stock universe scanner — server caches a full scan for a few minutes. Starts empty; no sample rows (they used to seed fake points into every sparkline). */
-export function useFnoScanner(exchange = 'NSE'): { rows: FnoScannerRow[]; isLive: boolean; loading: boolean } {
+/**
+ * The F&O stock universe as the server last recorded it. READ-ONLY: the server never starts a scan because a page
+ * asked, so `meta` says where the rows came from (live cache / last-known copy) and how old they are. Starts empty;
+ * no sample rows.
+ *
+ * isLive: the rows came from the live cache (the scan is currently being refreshed by the server).
+ * asOf:   when the newest row was observed (epoch ms), null when unknown.
+ */
+export function useFnoScanner(exchange = 'NSE'): {
+  rows: FnoScannerRow[];
+  isLive: boolean;
+  loading: boolean;
+  error: string | null;
+  meta: ReadOnlyMeta | null;
+  asOf: number | null;
+  reload: () => void;
+} {
   const [rows, setRows] = useState<FnoScannerRow[]>([]);
-  const [isLive, setIsLive] = useState(false);
+  const [meta, setMeta] = useState<ReadOnlyMeta | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -19,21 +36,19 @@ export function useFnoScanner(exchange = 'NSE'): { rows: FnoScannerRow[]; isLive
     const poll = () => {
       api
         .getFnoScanner(exchange)
-        .then((data) => {
+        .then(({ data, meta: m }) => {
           if (cancelled) return;
-          if (!data || data.length === 0) {
-            setIsLive(false);
-            setLoading(false);
-            return;
-          }
-          setRows(data);
-          setIsLive(true);
+          setMeta(m ?? null);
+          setError(null);
           setLoading(false);
-          for (const r of data) recordPrice(r.symbol, r.price);
+          if (data && data.length > 0) {
+            setRows(data);
+            for (const r of data) recordPrice(r.symbol, r.price);
+          }
         })
-        .catch(() => {
+        .catch((err) => {
           if (cancelled) return;
-          setIsLive(false);
+          setError(err?.message ?? 'Request failed');
           setLoading(false);
         });
     };
@@ -44,8 +59,12 @@ export function useFnoScanner(exchange = 'NSE'): { rows: FnoScannerRow[]; isLive
       cancelled = true;
       clearInterval(interval);
     };
-  }, [exchange]);
+  }, [exchange, tick]);
 
-  return { rows, isLive, loading };
+  const reload = useCallback(() => {
+    setLoading(true);
+    setTick((n) => n + 1);
+  }, []);
+
+  return { rows, isLive: rows.length > 0 && meta?.source === 'CACHE', loading, error, meta, asOf: meta?.asOf ?? null, reload };
 }
-

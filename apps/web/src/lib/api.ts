@@ -5,6 +5,7 @@
 // All API calls go through this module.
 // ============================================================
 
+import type { MeasurementReport } from './use-measurement';
 import type {
   OptionChain,
   FuturesChainResponse,
@@ -30,6 +31,9 @@ import type {
   StructureBlock,
   SetupWatchRow,
   StructureLifecycleView,
+  BiasSnapshot,
+  PaperTradesResponse,
+  ReadOnlyMeta,
 } from '@fno/shared';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
@@ -85,6 +89,22 @@ class ApiClient {
     return data.data;
   }
 
+  /** Like request(), but keeps the response's `meta` (read-only source, as-of time, age) beside the data. */
+  async requestEnvelope<T>(endpoint: string, options: ApiOptions = {}): Promise<{ data: T; meta: ReadOnlyMeta | undefined }> {
+    const { method = 'GET', body, headers = {}, signal } = options;
+    const response = await fetch(`${this.baseUrl}${endpoint}`, {
+      method,
+      headers: { 'Content-Type': 'application/json', ...(this.sessionToken ? { Authorization: `Bearer ${this.sessionToken}` } : {}), ...headers },
+      body: body ? JSON.stringify(body) : undefined,
+      signal,
+    });
+    const json = await response.json();
+    if (!response.ok || !json.success) {
+      throw new ApiError(json.error?.message || `API error: ${response.status}`, json.error?.code || 'UNKNOWN_ERROR', response.status);
+    }
+    return { data: json.data as T, meta: json.meta as ReadOnlyMeta | undefined };
+  }
+
   // --- Convenience Methods ---
 
   get<T>(endpoint: string, signal?: AbortSignal): Promise<T> {
@@ -133,12 +153,29 @@ class ApiClient {
     return this.get<any[]>('/api/instruments/fno');
   }
 
+  /** The newest F&O scan the server has recorded (read-only; `meta` says where it came from and how old it is). */
   async getFnoScanner(exchange = 'NSE') {
-    return this.get<FnoScannerRow[]>(`/api/instruments/fno-scanner?exchange=${exchange}`);
+    return this.requestEnvelope<FnoScannerRow[]>(`/api/instruments/fno-scanner?exchange=${exchange}`);
   }
 
+  /** The newest market scan the server has recorded. Read-only: opening a page never runs a scan. */
   async getMarketScan() {
-    return this.get<MarketScanResult>('/api/market-scanner');
+    return this.requestEnvelope<MarketScanResult | null>('/api/market-scanner');
+  }
+
+  /** An EXPLICIT scan (the "Run scan" button). It records decision rows like the background scan; a page load never calls it. */
+  async runMarketScan() {
+    return this.requestEnvelope<MarketScanResult>('/api/market-scanner/refresh', { method: 'POST', body: {} });
+  }
+
+  /** Every paper trade (open and closed) with live tracking, estimated costs and an explicit status. Read-only. */
+  async getPaperTrades(limit = 500) {
+    return this.get<PaperTradesResponse>(`/api/paper-trades?limit=${limit}`);
+  }
+
+  /** The measurement report: cohorts, denominators, cost availability, conservative-fill sensitivity, payoff grading. Read-only. */
+  async getMeasurement() {
+    return this.get<MeasurementReport>('/api/diagnostics/measurement');
   }
 
   /** Structure engine: every symbol's running lifecycle (WATCH → DEVELOPING → CONFIRMED → ENTRY/ACTIVE). Read-only. */
@@ -234,10 +271,19 @@ class ApiClient {
     return this.get<FuturesChainResponse>(`/api/futures/${symbol}?exchange=${exchange}`);
   }
 
+  /**
+   * @deprecated The terminal no longer calls this. GET /api/market/bias/:symbol runs the decision engine (it can mint a
+   * paper trade and writes decision records), so a page load must not use it. Kept only for external callers.
+   */
   async getMarketBias(symbol: string, exchange = 'NSE', mode: 'INTRADAY' | 'POSITIONAL' = 'INTRADAY') {
     return this.get<{ bias: MarketBias; score: IntelligenceScore; tradeSetup: TradeSetup; structure?: StructureBlock; setupWatch?: SetupWatchRow[] }>(
       `/api/market/bias/${symbol}?exchange=${exchange}&mode=${mode}`
     );
+  }
+
+  /** The last assessment of a symbol (the engine's cached result, else the last decision record). Read-only. */
+  async getBiasSnapshot(symbol: string, exchange = 'NSE', mode: 'INTRADAY' | 'POSITIONAL' = 'INTRADAY') {
+    return this.requestEnvelope<BiasSnapshot | null>(`/api/market/bias-snapshot/${symbol}?exchange=${exchange}&mode=${mode}`);
   }
 
   async getNews(symbol: string) {

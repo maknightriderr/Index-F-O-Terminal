@@ -272,7 +272,8 @@ export const useSystemHealthStore = create<SystemHealthState>((set) => ({
 
 // --- UI Settings Store ---
 
-export type ThemeName = 'dark' | 'light' | 'system';
+import { migrateUiSettings, UI_SETTINGS_VERSION, type ThemeName } from '@/lib/theme';
+export type { ThemeName };
 
 interface UISettingsState {
   sidebarOpen: boolean;
@@ -301,7 +302,7 @@ export const useUISettingsStore = create<UISettingsState>()(
       rightPanelOpen: true,
       bottomPanelOpen: false,
       bottomPanelHeight: 350,
-      theme: 'light',
+      theme: 'dark',
       addAssetModalOpen: false,
       lastAlertsSeenAt: 0,
 
@@ -316,6 +317,9 @@ export const useUISettingsStore = create<UISettingsState>()(
     }),
     {
       name: 'fno-ui-settings',
+      // v2: the default theme is dark (v1 stored 'light' as the unchosen default) — see lib/theme.ts.
+      version: UI_SETTINGS_VERSION,
+      migrate: (persisted, version) => migrateUiSettings(persisted, version) as never,
       // Never persist transient UI state like an open modal across reloads.
       partialize: (state) => ({
         sidebarOpen: state.sidebarOpen,
@@ -328,3 +332,18 @@ export const useUISettingsStore = create<UISettingsState>()(
     }
   )
 );
+
+// --- Navigation sub-state (not persisted: the URL carries it) ---
+
+import type { ExplorerView } from '@/lib/nav';
+
+interface NavState {
+  /** Which view of the F&O Explorer is showing (F&O Stocks / OI Intelligence / IV & Greeks). */
+  explorerView: ExplorerView;
+  setExplorerView: (v: ExplorerView) => void;
+}
+
+export const useNavStore = create<NavState>()((set) => ({
+  explorerView: 'overview',
+  setExplorerView: (v) => set({ explorerView: v }),
+}));
