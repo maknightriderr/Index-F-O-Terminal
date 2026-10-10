@@ -181,7 +181,7 @@ export function AssetWorkspace() {
   const marketOpen = isMarketOpen(selectedExchange as Exchange);
 
   return (
-    <div className="p-4 space-y-4 min-h-full animate-fade-in">
+    <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6 animate-fade-in">
       {/* Asset Header */}
       <div className="relative overflow-hidden flex items-center justify-between flex-wrap gap-3 px-5 py-4 rounded-2xl bg-gradient-to-br from-[#161624] via-[#12121c] to-[#0d0d14] light:from-white light:via-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 shadow-[0_12px_40px_-18px_rgba(0,0,0,0.8)] light:shadow-[0_4px_20px_-10px_rgba(0,0,0,0.12)]">
         <div className="absolute inset-0 bg-gradient-to-r from-emerald-500/[0.04] via-transparent to-cyan-500/[0.04] pointer-events-none" />
@@ -550,7 +550,7 @@ function LegCells({
       className={`text-right px-2 py-1.5 tabular-nums ${bg} ${noGreeks ? 'text-gray-500 light:text-slate-400' : ivCalculated ? 'text-amber-400' : 'text-gray-300 light:text-slate-700'}`}
       title={noGreeks ? 'IV not solvable — premium is at or below intrinsic value, or the leg has no usable quote' : ivCalculated ? 'Calculated internally — broker Greeks unavailable for this leg' : 'Broker-provided'}
     >
-      {noGreeks ? '—' : <>{leg.iv.toFixed(1)}%{ivCalculated && <sup>~</sup>}</>}
+      {noGreeks ? '—' : <>{leg.iv.toFixed(1)}%{ivCalculated && <sup className="text-xs" aria-label="calculated, not broker-provided">~</sup>}</>}
     </td>
   );
   const deltaCell = <td className={`text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600 ${bg}`}>{noGreeks ? '—' : leg.delta.toFixed(2)}</td>;

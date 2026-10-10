@@ -159,7 +159,7 @@ export function DataTable<T>({
                     {c.sortValue ? (
                       <button type="button" onClick={() => toggleSort(c.id)} className="inline-flex items-center gap-1 font-semibold" aria-label={`Sort by ${c.label ?? (typeof c.header === 'string' ? c.header : c.id)}`}>
                         {c.header}
-                        <span aria-hidden="true" className="text-[10px]">
+                        <span aria-hidden="true" className="text-xs">
                           {active ? (sort!.dir === 'asc' ? '▲' : '▼') : '↕'}
                         </span>
                       </button>
