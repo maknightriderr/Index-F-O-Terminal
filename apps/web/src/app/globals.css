@@ -2,7 +2,7 @@
 
 /* ============================================================
    F&O TERMINAL — GLOBAL STYLES
-   Multi-theme trading terminal — Light (default), Dark, and
+   Multi-theme trading terminal — Dark (default), Light, and
    System (follows OS). Themed via a `data-theme` attribute on
    <html>, set by ThemeEffect (components/theme-effect.tsx) from
    the persisted useUISettingsStore theme value.
@@ -54,6 +54,24 @@
   --positive: #34d399;
   --negative: #f87171;
   --neutral: #6b7280;
+
+  /* Status colours: one set, one meaning (see components/ui/status-badge.tsx). Each is also paired with a
+     text label and a glyph wherever it appears, so colour is never the only signal. */
+  --status-ok: #34d399;
+  --status-warn: #fbbf24;
+  --status-bad: #f87171;
+  --status-info: #60a5fa;
+  --status-off: #9ca3af;
+  --focus-ring: #a5b4fc;
+
+  /* Surfaces and spacing used by the shared primitives */
+  --surface-card: #12121a;
+  --surface-card-alt: rgba(255, 255, 255, 0.025);
+  --surface-row-alt: rgba(255, 255, 255, 0.025);
+  --surface-sticky: #0f0f17;
+  --space-card: 1rem;
+  --space-section: 1.25rem;
+  --radius-card: 0.75rem;
 }
 
 [data-theme="light"] {
@@ -89,13 +107,78 @@
   --positive: #059669;
   --negative: #dc2626;
   --neutral: #64748b;
+
+  --status-ok: #047857;
+  --status-warn: #b45309;
+  --status-bad: #b91c1c;
+  --status-info: #1d4ed8;
+  --status-off: #475569;
+  --focus-ring: #4338ca;
+
+  --surface-card: #ffffff;
+  --surface-card-alt: rgba(15, 23, 42, 0.03);
+  --surface-row-alt: rgba(15, 23, 42, 0.035);
+  --surface-sticky: #f1f5f9;
 }
 
-/* Base */
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+/* ============================================================
+   SHARED TABLE BEHAVIOUR (components/ui/data-table.tsx)
+   Sticky headers inside a scroll container, subtle zebra rows and a
+   comfortable row height, so long tables stay readable.
+   ============================================================ */
+.ui-table-wrap {
+  overflow: auto;
+  max-width: 100%;
+}
+.ui-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+.ui-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-sticky);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-align: left;
+  white-space: nowrap;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-secondary);
+}
+.ui-table tbody td {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+  border-bottom: 1px solid var(--border-primary);
+  vertical-align: top;
+}
+.ui-table tbody tr:nth-child(even) td {
+  background: var(--surface-row-alt);
+}
+.ui-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--accent-indigo) 10%, transparent);
+}
+.ui-table th.num,
+.ui-table td.num {
+  text-align: right;
+}
+
+/* Base
+   Tailwind v4's preflight (in the base layer) already zeroes margin/padding and sets border-box.
+   A plain unlayered `* { margin: 0; padding: 0 }` here BEATS every layered utility regardless of
+   specificity — so `p-4`, `px-3`, `space-y-4`, `m-2` all computed to 0 and every card was flush
+   against its content. Anything global that must not override utilities belongs in @layer base. */
+@layer base {
+  *,
+  ::before,
+  ::after {
+    box-sizing: border-box;
+  }
 }
 
 html, body {
@@ -118,7 +201,7 @@ html, body {
    ============================================================ */
 
 :where(button, a, [role='button'], [role='tab'], input, select, textarea, summary, [tabindex]):focus-visible {
-  outline: 2px solid var(--accent-indigo);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -260,9 +343,9 @@ html, body {
   animation: slide-in 0.2s ease-out;
 }
 
-/* Focus Styles */
+/* Focus Styles — one strong, theme-aware ring (the earlier 50%-opacity green rule overrode the indigo one at ~1.6:1). */
 *:focus-visible {
-  outline: 2px solid rgba(52, 211, 153, 0.5);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
