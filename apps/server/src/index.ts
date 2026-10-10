@@ -36,6 +36,8 @@ import { createBacktestingRoutes } from './api/backtesting.js';
 import { createLearningRoutes } from './api/learning.js';
 import { createLossAttributionRoutes } from './api/loss-attribution.js';
 import { createStructureRoutes } from './api/structure.js';
+import { createPaperTradesRoutes } from './api/paper-trades.js';
+import { orderFlowFeedStatus } from './services/dhan-feed.js';
 import { STRUCTURE, STRUCTURE_ENTRY_TF, STRUCTURE_ENTRY_TF_REJECTED, STRUCTURE_PARAMS, INDICATOR_CONFIDENCE_MODE, INDICATOR_CONFIDENCE_MODE_REJECTED, INDICATOR_LOCATION_MODE, INDICATOR_LOCATION_MODE_REJECTED, RESEARCH_PAPER_TRADING } from './config/trading-flags.js';
 import { startAbandonedSetupSweep } from './services/backtesting.js';
 import { createNewsRoutes } from './api/news.js';
@@ -128,6 +130,7 @@ app.use('/api/learning', createLearningRoutes());
 app.use('/api/loss-attribution', createLossAttributionRoutes());
 app.use('/api/structure', createStructureRoutes());
 app.use('/api/diagnostics', createDiagnosticsRoutes());
+app.use('/api/paper-trades', createPaperTradesRoutes());
 
 // --- Health Check ---
 
@@ -183,15 +186,22 @@ app.get('/api/health', async (_req, res) => {
       ? 'HEALTHY'
       : 'DEGRADED';
 
+  // Read-only evidence for the System Health page: the exchange sessions at this instant (so a closed market is not
+  // read as a failed feed) and the Dhan order-flow feed's own status. In-memory state only; nothing is fetched.
+  const nowMs = Date.now();
+  const sessions = (['NSE', 'BSE', 'MCX'] as const).map((exchange) => ({ exchange, open: isMarketOpen(exchange, nowMs) }));
+
   res.json({
     success: true,
     data: {
       status: overall,
       uptime: process.uptime(),
-      timestamp: Date.now(),
+      timestamp: nowMs,
       services,
       feed,
       supervisor,
+      sessions,
+      orderFlow: orderFlowFeedStatus(),
       version: '0.1.0',
     },
   });

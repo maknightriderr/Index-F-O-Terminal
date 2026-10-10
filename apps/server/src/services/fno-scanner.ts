@@ -28,6 +28,7 @@ import { redis } from '../lib/redis.js';
 import { stockExpiryInForce, ivClockCorrection } from './iv-history-clock.js';
 import { logger } from '../lib/logger.js';
 import { tapedInput } from '../lib/io-tape.js';
+import { fnoScanLastKey, FNO_SCAN_LAST_TTL_SECONDS } from './read-only-views.js';
 
 export type { FnoScannerRow };
 
@@ -58,14 +59,34 @@ function fnoScanTtl(exchange: Exchange): number {
   return isMarketOpen(exchange) ? FNO_SCAN_LIVE_TTL_SECONDS : FNO_SCAN_CLOSED_TTL_SECONDS;
 }
 
+/**
+ * Keeps the newest successful scan beyond the short cache TTL, so the read-only API can still show
+ * the last known universe after the session (the cache itself expires 30 minutes after the close).
+ * Display only: nothing in the engines reads it.
+ */
+async function rememberLastScan(exchange: Exchange, rows: FnoScannerRow[]): Promise<void> {
+  if (rows.length === 0) return;
+  await redis.set(fnoScanLastKey(exchange), JSON.stringify({ at: Date.now(), rows }), 'EX', FNO_SCAN_LAST_TTL_SECONDS).catch(() => undefined);
+}
+
 export function getFnoScan(provider: MarketDataProvider, exchange: Exchange = 'NSE'): Promise<FnoScannerRow[]> {
-  return cached(fnoScanCacheKey(exchange), fnoScanTtl(exchange), () => scanFnoUniverse(provider, exchange), (rows) => rows.length > 0);
+  return cached(
+    fnoScanCacheKey(exchange),
+    fnoScanTtl(exchange),
+    async () => {
+      const rows = await scanFnoUniverse(provider, exchange);
+      await rememberLastScan(exchange, rows);
+      return rows;
+    },
+    (rows) => rows.length > 0
+  );
 }
 
 /** Recomputes the scan and replaces the cached copy — for the warmer, which refreshes before expiry. */
 export async function refreshFnoScan(provider: MarketDataProvider, exchange: Exchange = 'NSE'): Promise<number> {
   const rows = await scanFnoUniverse(provider, exchange);
   if (rows.length > 0) await redis.set(fnoScanCacheKey(exchange), JSON.stringify(rows), 'EX', fnoScanTtl(exchange));
+  await rememberLastScan(exchange, rows);
   return rows.length;
 }
 

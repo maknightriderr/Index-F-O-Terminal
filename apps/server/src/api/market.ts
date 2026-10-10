@@ -11,6 +11,7 @@ import type { CandleInterval, Exchange, TradingMode } from '@fno/shared';
 import { getLiveIndexQuotes, getMcxCommodityQuotes, ALL_INDEX_LIST } from '../services/indices.js';
 import { buildMarketBias } from '../services/market-bias.js';
 import { noteBiasRequest } from '../services/cache-warmer.js';
+import { readBiasSnapshot } from '../services/read-only-views.js';
 import { getCachedPatterns } from '../services/chart-patterns.js';
 
 export function createMarketDataRoutes(provider: MarketDataProvider): Router {
@@ -195,6 +196,25 @@ export function createMarketDataRoutes(provider: MarketDataProvider): Router {
         success: false,
         error: { code: 'MARKET_BIAS_FAILED', message: error.message },
       });
+    }
+  });
+
+  /**
+   * GET /api/market/bias-snapshot/:symbol
+   * The last assessment of a symbol, READ-ONLY: the engine's cached result while it is cached, else the last decision
+   * record. Unlike GET /api/market/bias/:symbol it never runs the engine — which can mint a paper trade and writes
+   * decision records — and never registers the symbol for background warming. The web terminal reads this one.
+   */
+  router.get('/bias-snapshot/:symbol', async (req: Request, res: Response) => {
+    try {
+      const symbol = req.params.symbol.toUpperCase();
+      const exchange = ((req.query.exchange as string) || 'NSE') as Exchange;
+      const mode: TradingMode = String(req.query.mode || '').toUpperCase() === 'POSITIONAL' ? 'POSITIONAL' : 'INTRADAY';
+      const { data, meta } = await readBiasSnapshot(symbol, exchange, mode);
+      res.json({ success: true, data, meta });
+    } catch (error: any) {
+      logger.error({ error: error.message, symbol: req.params.symbol }, 'Bias snapshot read failed');
+      res.status(502).json({ success: false, error: { code: 'BIAS_SNAPSHOT_FAILED', message: error.message } });
     }
   });
 

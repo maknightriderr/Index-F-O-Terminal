@@ -6,7 +6,7 @@ import { Router, type Request, type Response } from 'express';
 import { logger } from '../lib/logger.js';
 import type { MarketDataProvider } from '../providers/interface.js';
 import type { Exchange } from '@fno/shared';
-import { getFnoScan } from '../services/fno-scanner.js';
+import { readFnoScan } from '../services/read-only-views.js';
 
 
 export function createInstrumentRoutes(provider: MarketDataProvider): Router {
@@ -101,19 +101,19 @@ export function createInstrumentRoutes(provider: MarketDataProvider): Router {
 
   /**
    * GET /api/instruments/fno-scanner
-   * Live price/OI/PCR/IV/bias for the whole F&O stock universe. Cached
-   * for a few minutes server-side — a full scan is ~40 quote requests,
-   * fine to run periodically but not on every page load.
+   * Price/OI/PCR/IV/bias for the whole F&O stock universe, from the newest scan the background
+   * warmer already recorded (or the last-known copy). READ-ONLY: a full scan is ~40 quote requests and
+   * records IV history, so it is never started by a page load. `meta` says where the rows came from and how old they are.
    */
   router.get('/fno-scanner', async (req: Request, res: Response) => {
     try {
       const exchange = ((req.query.exchange as string) || 'NSE') as Exchange;
-      const data = await getFnoScan(provider, exchange);
+      const { data, meta } = await readFnoScan(exchange);
 
       res.json({
         success: true,
         data,
-        meta: { count: data.length, timestamp: Date.now(), source: 'LIVE' },
+        meta: { count: data.length, ...meta },
       });
     } catch (error: any) {
       logger.error({ error: error.message }, 'F&O scanner failed');

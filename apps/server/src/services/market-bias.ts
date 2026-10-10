@@ -112,6 +112,7 @@ import { orderFlowPaperCandidates, orderFlowSourcesOn } from './order-flow-candi
 import { delSlotIfSame, setSlotIfSame, slotIdentity } from '../lib/slot-cas.js';
 import { queuePendingOutcome } from './pending-outcomes.js';
 import { recordTradeCosts } from './trade-costs.js';
+import { recordTradeMark } from './trade-marks.js';
 import { registerPostExitWatch } from './post-exit-tracker.js';
 import { recordCloseBarAnomaly } from './bar-anomaly.js';
 import { footprintsFor } from './order-flow-store.js';
@@ -6421,6 +6422,8 @@ export async function checkLockedSetupPriceLevels(
   if (!isSpread && stored.entry != null && stored.entry > 0) {
     const bullish = stored.side !== 'PE';
     const generatedAt = stored.generatedAt ?? decisionNow();
+    // Display only (2026-10-10): the latest price the monitor observed, for the Paper Trades view. Never read by a decision.
+    recordTradeMark(stored.signalId, currentValue, decisionNow());
     const base = stored.excursion ?? emptyExcursion(pricingChain?.spotPrice ?? null, stored.entryContext?.atrPoints ?? null, stored.entry);
     const { excursion, changed } = updateExcursion(base, {
       premium: currentValue,
