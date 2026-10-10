@@ -41,6 +41,8 @@ export interface Tally {
   winRateAllTrades: number | null;
   expiredShare: number | null;
   baseline: { grossR: number | null; netR: number | null; nNet: number; grossRSameTradesAsNet?: number | null };
+  /** Older deployments do not send this; every figure derived from it then reads as unavailable, never 0. */
+  netByOutcome?: { WIN: { n: number; meanNetR: number | null }; LOSS: { n: number; meanNetR: number | null }; EXPIRED: { n: number; meanNetR: number | null }; expiredContributionToMeanNetR: number | null };
   conservative: { basis?: string; grossR: number | null; netR: number | null; nNet: number; grossRSameTradesAsNet?: number | null };
   denominators?: { winRateClosedOnly: number; winRateAllTrades: number; expiredShare: number; grossR: number; netR: number };
   targetExits: { n: number; meanHaircut: number | null; becomeLosses: number; spreadFromQuote: number; spreadFallback: number };
