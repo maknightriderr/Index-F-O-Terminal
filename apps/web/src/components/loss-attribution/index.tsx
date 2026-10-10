@@ -62,7 +62,7 @@ function SampleBadge({ sample }: { sample: string }) {
       : sample === 'LOW'
         ? 'bg-amber-500/15 text-amber-400 border-amber-500/40 light:bg-amber-100 light:text-amber-700 light:border-amber-300'
         : 'bg-red-500/15 text-red-400 border-red-500/40 light:bg-red-100 light:text-red-700 light:border-red-300';
-  return <span className={`inline-block px-1.5 py-0.5 text-[10px] font-mono uppercase border rounded ${cls}`}>{sample}</span>;
+  return <span className={`inline-block px-1.5 py-0.5 text-xs font-mono uppercase border rounded ${cls}`}>{sample}</span>;
 }
 
 function rColor(v: number | null | undefined): string {
@@ -78,7 +78,7 @@ function GroupTable({ groups, keyLabel = 'Group' }: { groups: AttributionGroup[]
     <div className="overflow-x-auto">
       <table className="w-full text-xs">
         <thead>
-          <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+          <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-xs">
             <th className="text-left px-2 py-1.5 font-medium">{keyLabel}</th>
             <th className="text-right px-2 py-1.5 font-medium">n</th>
             <th className="text-left px-2 py-1.5 font-medium">Sample</th>
@@ -116,7 +116,7 @@ function ExitMixTable({ groups }: { groups: AttributionGroup[] }) {
     <div className="overflow-x-auto">
       <table className="w-full text-xs">
         <thead>
-          <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+          <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-xs">
             <th className="text-left px-2 py-1.5 font-medium">Group</th>
             <th className="text-right px-2 py-1.5 font-medium">n</th>
             {EXIT_KEYS.map((k) => (
@@ -145,7 +145,7 @@ function Card({ title, subtitle, children }: { title: string; subtitle?: string;
     <div className="border border-gray-800/60 light:border-slate-200 rounded-xl bg-[#12121a] light:bg-white p-3 space-y-2">
       <div>
         <h2 className="text-sm font-semibold text-gray-200 light:text-slate-800">{title}</h2>
-        {subtitle && <p className="text-[11px] text-gray-500 light:text-slate-500 mt-0.5">{subtitle}</p>}
+        {subtitle && <p className="text-xs text-gray-500 light:text-slate-500 mt-0.5">{subtitle}</p>}
       </div>
       {children}
     </div>
@@ -160,7 +160,7 @@ function ShadowTable({ head, rows }: { head: string[]; rows: Array<{ key: string
     <div className="overflow-x-auto">
       <table className="w-full text-xs">
         <thead>
-          <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+          <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-xs">
             <th className="text-left px-2 py-1.5 font-medium">DTE bucket</th>
             <th className={TH}>n</th>
             <th className="text-left px-2 py-1.5 font-medium">Sample</th>
@@ -194,8 +194,8 @@ function ShadowComparisonView({ shadow }: { shadow: ShadowComparison | null }) {
   return (
     <div className="space-y-3">
       <Card title="Shadow models vs the live engine" subtitle={shadow.note}>
-        <p className="text-[11px] text-gray-400 light:text-slate-600">{shadow.population.rows} taken paper trades carry shadow data.</p>
-        <ul className="list-disc pl-4 text-[11px] text-gray-400 light:text-slate-600 space-y-0.5">
+        <p className="text-xs text-gray-400 light:text-slate-600">{shadow.population.rows} taken paper trades carry shadow data.</p>
+        <ul className="list-disc pl-4 text-xs text-gray-400 light:text-slate-600 space-y-0.5">
           {shadow.caveats.map((c) => (
             <li key={c}>{c}</li>
           ))}
@@ -264,11 +264,11 @@ export function LossAttributionPage() {
   }, [report]);
 
   return (
-    <div className="p-4 space-y-4 min-h-full">
+    <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div className="max-w-3xl">
-          <h1 className="text-lg font-bold text-gray-100 light:text-slate-900">Loss Attribution</h1>
-          <p className="text-xs text-gray-400 light:text-slate-600 mt-0.5">
+          <h1 className="text-xl font-semibold tracking-tight text-gray-100 light:text-slate-900">Loss Attribution</h1>
+          <p className="text-sm text-gray-400 light:text-slate-600 mt-1">
             Where the losing PAPER TRADES come from. Every figure is a SIMULATED OUTCOME — no order was placed and nothing here is account P&amp;L.
             Read-only: this page filters and gates nothing. Sample size is stated per group; ADEQUATE means enough rows to read, not statistical significance.
           </p>
@@ -281,19 +281,19 @@ export function LossAttributionPage() {
                 type="button"
                 onClick={() => setScope(s)}
                 aria-pressed={scope === s}
-                className={`px-2.5 py-1 text-[11px] rounded-md transition-colors ${scope === s ? 'bg-emerald-500/20 text-emerald-300 light:text-emerald-700' : 'text-gray-400 light:text-slate-600 hover:text-gray-200'}`}
+                className={`px-2.5 py-1 text-xs rounded-md transition-colors ${scope === s ? 'bg-emerald-500/20 text-emerald-300 light:text-emerald-700' : 'text-gray-400 light:text-slate-600 hover:text-gray-200'}`}
               >
                 {SCOPE_LABELS[s]}
               </button>
             ))}
           </div>
-          <label className="flex items-center gap-1 text-[11px] text-gray-400 light:text-slate-600">
+          <label className="flex items-center gap-1 text-xs text-gray-400 light:text-slate-600">
             Logic
             <select
               value={logicVersion}
               onChange={(e) => setLogicVersion(e.target.value)}
               aria-label="Filter by logic version"
-              className="bg-gray-800/60 light:bg-slate-100 border border-gray-700 light:border-slate-300 rounded-md px-1.5 py-1 text-[11px] text-gray-200 light:text-slate-800"
+              className="bg-gray-800/60 light:bg-slate-100 border border-gray-700 light:border-slate-300 rounded-md px-1.5 py-1 text-xs text-gray-200 light:text-slate-800"
             >
               <option value="all">All versions</option>
               {knownVersions.map((v) => (
@@ -303,7 +303,7 @@ export function LossAttributionPage() {
               ))}
             </select>
           </label>
-          <button type="button" onClick={refresh} className="px-2.5 py-1 text-[11px] rounded-md border border-gray-700 light:border-slate-300 text-gray-300 light:text-slate-700 hover:bg-gray-800/40 light:hover:bg-slate-100">
+          <button type="button" onClick={refresh} className="px-2.5 py-1 text-xs rounded-md border border-gray-700 light:border-slate-300 text-gray-300 light:text-slate-700 hover:bg-gray-800/40 light:hover:bg-slate-100">
             Refresh
           </button>
         </div>
@@ -333,7 +333,7 @@ export function LossAttributionPage() {
       ) : (
         <>
           {report && (
-            <p className="text-[11px] text-gray-500 light:text-slate-500">
+            <p className="text-xs text-gray-500 light:text-slate-500">
               {report.population?.rows ?? 0} graded decisions · {report.population?.from ? new Date(report.population.from).toLocaleDateString('en-IN') : '—'} → {report.population?.to ? new Date(report.population.to).toLocaleDateString('en-IN') : '—'}
             </p>
           )}
@@ -415,7 +415,7 @@ export function LossAttributionPage() {
               <GroupTable groups={report.byLogicVersion ?? []} keyLabel="Logic version" />
               {report.byStrategy && report.byStrategy.length > 0 && <GroupTable groups={report.byStrategy} keyLabel="Strategy (MOMENTUM_BREAK / STRUCTURE / CONSENSUS)" />}
               {report.rDefinitions && (
-                <ul className="list-disc pl-4 text-[11px] text-gray-400 light:text-slate-600 space-y-0.5">
+                <ul className="list-disc pl-4 text-xs text-gray-400 light:text-slate-600 space-y-0.5">
                   <li>{report.rDefinitions.simR}</li>
                   <li>{report.rDefinitions.premiumR}</li>
                   <li>{report.rDefinitions.backtestingR}</li>
@@ -453,7 +453,7 @@ export function LossAttributionPage() {
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
                     <thead>
-                      <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+                      <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-xs">
                         <th className="text-left px-2 py-1.5 font-medium">Gate</th>
                         <th className="text-right px-2 py-1.5 font-medium">Pass</th>
                         <th className="text-right px-2 py-1.5 font-medium">Fail</th>

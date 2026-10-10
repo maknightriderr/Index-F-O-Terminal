@@ -73,9 +73,9 @@ export function NewsPanel({ symbol }: { symbol: string }) {
                 {a.title}
               </div>
               {a.snippet && (
-                <p className="text-[10px] text-gray-400 light:text-slate-600 mt-1 leading-snug line-clamp-2">{a.snippet}</p>
+                <p className="text-xs text-gray-400 light:text-slate-600 mt-1 leading-snug line-clamp-2">{a.snippet}</p>
               )}
-              <div className="flex items-center gap-2 mt-1.5 text-[10px] text-gray-400 light:text-slate-600">
+              <div className="flex items-center gap-2 mt-1.5 text-xs text-gray-400 light:text-slate-600">
                 <span className="font-medium text-gray-400 light:text-slate-600">{a.source}</span>
                 <span>·</span>
                 <span>{relativeTime(new Date(a.publishedAt).getTime())}</span>

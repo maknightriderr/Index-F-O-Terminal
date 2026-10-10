@@ -7,8 +7,9 @@ import { api } from '@/lib/api';
 import { useMarketTicks } from '@/lib/ws';
 import { detectPattern, detectCandlestickPattern } from '@fno/analytics';
 import type { DetectedPattern } from '@fno/analytics';
-import { CM_SEGMENT, FO_SEGMENT, KNOWN_INDEX_TOKENS } from '@fno/shared';
+import { CM_SEGMENT, FO_SEGMENT, KNOWN_INDEX_TOKENS, isMarketOpen } from '@fno/shared';
 import type { CandleInterval, Exchange } from '@fno/shared';
+import type { ChartOverlayLine, OverlayTone } from '@/lib/chart-overlays';
 
 // Only genuine reversal shapes get marked. detectCandlestickPattern scores
 // Morning/Evening Star at 75, Engulfing at 65, Hammer/Shooting Star at 60,
@@ -133,6 +134,13 @@ const CHART_COLORS = {
   light: { text: '#475569', grid: 'rgba(15,23,42,0.06)', up: '#059669', down: '#dc2626', border: 'rgba(15,23,42,0.1)', support: '#059669', resistance: '#dc2626' },
 };
 
+// Overlay line colours by meaning (same hues as the status tokens; JS values because the chart cannot read CSS variables).
+const OVERLAY_COLORS: Record<'dark' | 'light', Record<OverlayTone, string>> = {
+  dark: { support: '#34d399', resistance: '#f87171', vwap: '#22d3ee', liquidity: '#a78bfa', zone: '#fbbf24', entry: '#a5b4fc', stop: '#f87171', target: '#34d399' },
+  light: { support: '#059669', resistance: '#dc2626', vwap: '#0891b2', liquidity: '#7c3aed', zone: '#b45309', entry: '#4338ca', stop: '#dc2626', target: '#047857' },
+};
+const DASH_STYLE = { solid: LineStyle.Solid, dashed: LineStyle.Dashed, dotted: LineStyle.Dotted } as const;
+
 function formatForApi(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
@@ -155,12 +163,15 @@ export function InstrumentChart({
   hasSpot = true,
   supportLevels = [],
   resistanceLevels = [],
+  overlayLines,
 }: {
   symbol: string;
   exchange: Exchange;
   hasSpot?: boolean;
   supportLevels?: OiLevel[];
   resistanceLevels?: OiLevel[];
+  /** The overlays to draw (already filtered to the groups switched on). When given, the legacy support / resistance props are ignored. */
+  overlayLines?: ChartOverlayLine[];
 }) {
   const theme = useUISettingsStore((s) => s.theme);
   const resolvedTheme = resolveTheme(theme);
@@ -398,16 +409,21 @@ export function InstrumentChart({
     priceLinesRef.current.forEach((line) => series.removePriceLine(line));
     priceLinesRef.current = [];
 
-    const addLine = (price: number, color: string, title: string) => {
+    const addLine = (price: number, color: string, title: string, style: keyof typeof DASH_STYLE = 'dashed') => {
       if (!isFinite(price) || price <= 0) return;
       priceLinesRef.current.push(
-        series.createPriceLine({ price, color, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title })
+        series.createPriceLine({ price, color, lineWidth: 1, lineStyle: DASH_STYLE[style], axisLabelVisible: true, title })
       );
     };
 
+    if (overlayLines) {
+      const oc = OVERLAY_COLORS[resolvedTheme];
+      overlayLines.forEach((l) => addLine(l.price, oc[l.tone], l.label, l.dash));
+      return;
+    }
     supportLevels.slice(0, 2).forEach((lvl, i) => addLine(lvl.strike, c.support, i === 0 ? 'Support' : `Support ${i + 1}`));
     resistanceLevels.slice(0, 2).forEach((lvl, i) => addLine(lvl.strike, c.resistance, i === 0 ? 'Resistance' : `Resistance ${i + 1}`));
-  }, [chartReady, supportLevels, resistanceLevels, resolvedTheme]);
+  }, [chartReady, supportLevels, resistanceLevels, overlayLines, resolvedTheme]);
 
   // Draw whatever pattern was just detected on THIS timeframe's candles —
   // each line is a real 2-point trendline segment (lightweight-charts v4
@@ -455,7 +471,7 @@ export function InstrumentChart({
             <button
               key={tf}
               onClick={() => setTimeframe(tf)}
-              className={`px-2.5 py-1 text-[11px] font-semibold rounded-md whitespace-nowrap transition-colors ${
+              className={`px-2.5 py-1 text-xs font-semibold rounded-md whitespace-nowrap transition-colors ${
                 timeframe === tf
                   ? 'bg-indigo-500/15 text-indigo-500 light:text-indigo-700'
                   : 'text-gray-400 light:text-slate-600 hover:bg-gray-800/40 light:hover:bg-slate-100'
@@ -471,7 +487,7 @@ export function InstrumentChart({
             onClick={() => hasSpot && setMode('SPOT')}
             disabled={!hasSpot}
             title={hasSpot ? undefined : 'No spot instrument for this symbol — futures/options only'}
-            className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors ${
+            className={`px-2.5 py-1 text-xs font-semibold rounded-md transition-colors ${
               mode === 'SPOT' ? 'bg-indigo-500/20 text-indigo-500 light:text-indigo-700' : hasSpot ? 'text-gray-400 light:text-slate-600' : 'text-gray-700 light:text-slate-300 cursor-not-allowed'
             }`}
           >
@@ -479,7 +495,7 @@ export function InstrumentChart({
           </button>
           <button
             onClick={() => setMode('FUTURES')}
-            className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors ${
+            className={`px-2.5 py-1 text-xs font-semibold rounded-md transition-colors ${
               mode === 'FUTURES' ? 'bg-indigo-500/20 text-indigo-500 light:text-indigo-700' : 'text-gray-400 light:text-slate-600'
             }`}
           >
@@ -488,7 +504,7 @@ export function InstrumentChart({
         </div>
       </div>
 
-      <div ref={containerRef} className="w-full h-[360px] relative">
+      <div ref={containerRef} className="relative h-[300px] w-full md:h-[380px]">
         {(loading || !hasData) && (
           <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-400 light:text-slate-600 pointer-events-none">
             {loading ? 'Loading chart…' : 'No chart data for this range'}
@@ -496,7 +512,7 @@ export function InstrumentChart({
         )}
         {detectedPattern && (
           <div
-            className={`absolute top-2 left-2 px-2.5 py-1.5 rounded-lg badge-glass text-[11px] font-semibold pointer-events-none ${
+            className={`absolute top-2 left-2 px-2.5 py-1.5 rounded-lg badge-glass text-xs font-semibold pointer-events-none ${
               detectedPattern.direction === 'BULLISH' ? 'bg-emerald-500/15 text-emerald-500 light:text-emerald-700' : 'bg-red-500/15 text-red-500 light:text-red-700'
             }`}
           >
@@ -511,25 +527,27 @@ export function InstrumentChart({
         {hasData && (
           <div className="absolute top-2 right-2 flex items-center gap-2 pointer-events-none">
             {reversalCount > 0 && (
-              <span className="px-2 py-1 rounded-lg badge-glass text-[10px] font-semibold text-gray-300 light:text-slate-700">
+              <span className="px-2 py-1 rounded-lg badge-glass text-xs font-semibold text-gray-300 light:text-slate-700">
                 {reversalCount} reversal{reversalCount === 1 ? '' : 's'}
               </span>
             )}
             <span
-              className={`flex items-center gap-1.5 px-2 py-1 rounded-lg badge-glass text-[10px] font-semibold ${
+              className={`flex items-center gap-1.5 px-2 py-1 rounded-lg badge-glass text-xs font-semibold ${
                 liveTick ? 'text-emerald-400 light:text-emerald-700' : 'text-gray-400 light:text-slate-600'
               }`}
               title={
                 liveTick
                   ? 'Streaming live ticks — the forming candle updates in real time'
-                  : 'No live ticks for this instrument right now; candles still refresh periodically'
+                  : isMarketOpen(exchange)
+                    ? 'No live ticks for this instrument right now; candles still refresh periodically'
+                    : 'The market is closed: these are the last recorded candles, not a live update'
               }
             >
               <span
                 aria-hidden="true"
                 className={`w-1.5 h-1.5 rounded-full ${liveTick ? 'bg-emerald-400 animate-pulse' : 'bg-gray-500 light:bg-slate-400'}`}
               />
-              {liveTick ? 'Live' : 'Delayed'}
+              {liveTick ? 'Live ticks' : isMarketOpen(exchange) ? 'No live ticks' : 'Market closed'}
             </span>
           </div>
         )}

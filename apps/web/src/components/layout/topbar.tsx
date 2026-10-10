@@ -1,89 +1,60 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
-import { useMarketStore, useSystemHealthStore, useUISettingsStore } from '@/stores';
+import React from 'react';
+import { useMarketStore, useUISettingsStore } from '@/stores';
 import type { ThemeName } from '@/stores';
-import { formatIndianNumber, formatPercent, isMarketOpen } from '@fno/shared';
-import type { Exchange } from '@fno/shared';
+import { formatIndianNumber } from '@fno/shared';
 import { useLiveIndices } from '@/lib/use-live-indices';
+import { useFeedSummary } from '@/lib/use-feed-summary';
+import { formatArrowPercent, formatIstDateTime } from '@/lib/format';
+import { FreshnessBadge } from '@/components/ui/status-badge';
 import { AlertBell } from './alert-bell';
-import { Sparkline } from '@/components/common/sparkline';
-import { getPriceHistory } from '@/lib/price-history-store';
+
+// ============================================================
+// TOP BAR — the two headline indices, one honest data-freshness pill, alerts, theme, clock
+// ============================================================
+// The pill is derived from the newest quote's own timestamp and the exchange session (lib/freshness.ts), never from
+// whether a socket is open. Outside the session it reads "MARKET CLOSED" with the last observation time — a closed
+// market is not a failing feed, and a stored closing price is not a live quote.
+// ============================================================
 
 export function TopBar() {
-  const { selectedExchange } = useMarketStore();
-  const { health } = useSystemHealthStore();
-  const [currentTime, setCurrentTime] = useState('');
-  const [marketOpen, setMarketOpen] = useState(() => isMarketOpen(selectedExchange as Exchange));
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setCurrentTime(
-        new Date().toLocaleTimeString('en-IN', {
-          timeZone: 'Asia/Kolkata',
-          hour12: false,
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-        })
-      );
-      setMarketOpen(isMarketOpen(selectedExchange as Exchange));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [selectedExchange]);
-
-  const { indices, isLive } = useLiveIndices();
+  const { setActiveTab } = useMarketStore();
+  const { indices } = useLiveIndices();
+  const feed = useFeedSummary();
   const nifty = indices.find((i) => i.symbol === 'NIFTY') ?? null;
   const bankNifty = indices.find((i) => i.symbol === 'BANKNIFTY') ?? null;
 
+  const clock = new Date(feed.now).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
   return (
-    // This row carries two index chips, a three-part status cluster, the
-    // alert bell, the theme switcher and a clock. That fits a desktop and
-    // overflows a phone, so the diagnostic bits (exchange/WS/live dots) and
-    // the theme toggle drop away below their breakpoints — the live index
-    // prices, alerts and clock are what's actually worth the width there.
-    <header className="flex items-center h-12 px-2 md:px-4 bg-[#0b0b12]/95 light:bg-white/95 backdrop-blur-sm border-b border-gray-800/40 light:border-slate-200 shrink-0 gap-2 md:gap-5 shadow-[0_1px_0_rgba(255,255,255,0.02)] light:shadow-[0_1px_0_rgba(0,0,0,0.03)] relative z-10">
-      {/* Quick Index Prices */}
-      <div className="flex items-center gap-2 md:gap-4 min-w-0">
-        {nifty ? (
-          <IndexChip symbol="NIFTY" price={nifty.ltp} change={nifty.change} changePercent={nifty.changePercent} />
-        ) : (
-          <span className="text-xs text-gray-400 light:text-slate-600 font-semibold tracking-wide">NIFTY —</span>
-        )}
-        <div className="hidden sm:block w-px h-5 bg-gradient-to-b from-transparent via-gray-700 to-transparent light:via-slate-300" />
-        <div className="hidden sm:block">
-          {bankNifty ? (
-            <IndexChip symbol="BANKNIFTY" price={bankNifty.ltp} change={bankNifty.change} changePercent={bankNifty.changePercent} />
-          ) : (
-            <span className="text-xs text-gray-400 light:text-slate-600 font-semibold tracking-wide">BANKNIFTY —</span>
-          )}
+    <header className="relative z-10 flex h-12 shrink-0 items-center gap-2 overflow-hidden border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 md:gap-4 md:px-4">
+      <div className="flex min-w-0 items-center gap-3">
+        <IndexChip symbol="NIFTY" quote={nifty} />
+        <div className="hidden md:block">
+          <IndexChip symbol="BANKNIFTY" quote={bankNifty} />
         </div>
       </div>
 
-      {/* Spacer */}
       <div className="flex-1" />
 
-      {/* Status Cluster */}
-      <div className="hidden lg:flex items-center gap-1 bg-gray-900/50 light:bg-slate-100 border border-gray-800/40 light:border-slate-200 rounded-full pl-3 pr-1 py-1 backdrop-blur-sm">
-        <StatusDot label={`${selectedExchange} ${marketOpen ? 'Open' : 'Closed'}`} on={marketOpen} pulse={marketOpen} />
-        <Divider />
-        <StatusDot label={health.websocket.connected ? 'WS' : 'WS Off'} on={health.websocket.connected} />
-        <Divider />
-        <StatusDot label={isLive ? 'Live' : 'Offline'} on={isLive} pulse={isLive} />
-      </div>
+      <button
+        type="button"
+        onClick={() => setActiveTab('system-health')}
+        title={`${feed.quotes.detail} Open System Health.`}
+        aria-label={`Data status: ${feed.quotes.label}. ${feed.quotes.detail} Open System Health.`}
+        className="hidden items-center gap-2 rounded-md px-1 py-1 hover:bg-[var(--surface-card-alt)] sm:flex"
+      >
+        <FreshnessBadge state={feed.quotes.state} label={feed.quotes.state === 'MARKET_CLOSED' ? `NSE CLOSED · last ${formatIstDateTime(feed.quotesObservedAt, feed.now)}` : feed.quotes.label} />
+      </button>
 
       <AlertBell />
-
       <ThemeSwitcher />
 
-      {/* Clock — JetBrains Mono with subtle glow */}
-      <div className="text-xs md:text-sm font-mono text-gray-300 light:text-slate-600 tabular-nums min-w-[62px] md:min-w-[70px] text-right tracking-wide shrink-0" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
-        {currentTime.split(':').map((part, i) => (
-          <span key={i}>
-            {i > 0 && <span className="animate-colon-blink">:</span>}
-            {part}
-          </span>
-        ))}
+      <div className="shrink-0 text-right font-mono text-sm tabular-nums text-[var(--text-secondary)]" style={{ fontFamily: "'JetBrains Mono', monospace" }} aria-label={`Current time ${clock} IST`}>
+        <span className="sm:hidden">{clock.slice(0, 5)}</span>
+        <span className="hidden sm:inline">{clock}</span>
+        <span className="ml-1 hidden text-xs sm:inline">IST</span>
       </div>
     </header>
   );
@@ -97,108 +68,61 @@ const THEME_OPTIONS: Array<{ value: ThemeName; icon: string; label: string }> = 
   { value: 'system', icon: '🖥️', label: 'System' },
 ];
 
+const NEXT_THEME: Record<ThemeName, ThemeName> = { dark: 'light', light: 'system', system: 'dark' };
+
 function ThemeSwitcher() {
   const { theme, setTheme } = useUISettingsStore();
-
+  const current = THEME_OPTIONS.find((o) => o.value === theme) ?? THEME_OPTIONS[0];
   return (
-    <div className="flex items-center gap-0.5 bg-gray-900/50 light:bg-slate-100 border border-gray-800/40 light:border-slate-200 rounded-full p-0.5 backdrop-blur-sm">
+    <>
+      {/* Phones: one button that cycles the theme, so the top bar does not overflow. */}
+      <button
+        type="button"
+        onClick={() => setTheme(NEXT_THEME[theme])}
+        aria-label={`Theme: ${current.label}. Switch to ${THEME_OPTIONS.find((o) => o.value === NEXT_THEME[theme])!.label}.`}
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--border-secondary)] bg-[var(--surface-card-alt)] text-sm sm:hidden"
+      >
+        <span aria-hidden="true">{current.icon}</span>
+      </button>
+      <ThemeRadios theme={theme} setTheme={setTheme} />
+    </>
+  );
+}
+
+function ThemeRadios({ theme, setTheme }: { theme: ThemeName; setTheme: (t: ThemeName) => void }) {
+  return (
+    <div role="radiogroup" aria-label="Theme" className="hidden items-center gap-0.5 rounded-full border border-[var(--border-secondary)] bg-[var(--surface-card-alt)] p-0.5 sm:flex">
       {THEME_OPTIONS.map((opt) => (
         <button
           key={opt.value}
+          type="button"
+          role="radio"
+          aria-checked={theme === opt.value}
+          aria-label={`${opt.label} theme`}
           onClick={() => setTheme(opt.value)}
-          title={opt.label}
-          className={`w-6 h-6 flex items-center justify-center rounded-full text-[11px] transition-all duration-200 ${
-            theme === opt.value
-              ? 'bg-emerald-500/20 light:bg-emerald-500/15 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.35),0_0_8px_-2px_rgba(16,185,129,0.3)] scale-110'
-              : 'hover:bg-gray-800/60 light:hover:bg-slate-200/70 hover:scale-105'
-          }`}
+          title={`${opt.label} theme`}
+          className={`flex h-7 w-7 items-center justify-center rounded-full text-sm transition-colors ${theme === opt.value ? 'bg-[var(--accent-indigo)]/25 ring-1 ring-[var(--accent-indigo)]' : 'hover:bg-[var(--surface-card-alt)]'}`}
         >
-          {opt.icon}
+          <span aria-hidden="true">{opt.icon}</span>
         </button>
       ))}
     </div>
   );
 }
 
-// --- Status Cluster Helpers ---
+// --- Index chip: the arrow carries the sign, so the percent has none ("▲ 1.30%", not "▲ +1.30%") ---
 
-function Divider() {
-  return <div className="w-px h-3.5 bg-gradient-to-b from-transparent via-gray-700 to-transparent light:via-slate-300 mx-1" />;
-}
-
-function StatusDot({ label, on, pulse }: { label: string; on: boolean; pulse?: boolean }) {
+function IndexChip({ symbol, quote }: { symbol: string; quote: { ltp: number; change: number; changePercent: number } | null }) {
+  if (!quote) return <span className="text-sm font-semibold text-[var(--text-secondary)]">{symbol} —</span>;
+  const up = quote.change >= 0;
   return (
-    <div className="flex items-center gap-1.5 text-[11px] px-1">
-      <span className="relative flex items-center justify-center">
-        <span className={`w-1.5 h-1.5 rounded-full ${on ? 'bg-emerald-400' : 'bg-gray-600 light:bg-slate-400'}`} />
-        {/* Outer ring */}
-        {on && (
-          <span className="absolute inset-[-2px] rounded-full border border-emerald-400/30" />
-        )}
-        {/* Pulsing ring */}
-        {pulse && on && (
-          <span className="absolute inset-[-2px] rounded-full border border-emerald-400/40 animate-breathe" />
-        )}
+    <div className="flex items-center gap-2 text-sm" aria-label={`${symbol} ${formatIndianNumber(quote.ltp, 2)}, ${up ? 'up' : 'down'} ${Math.abs(quote.changePercent).toFixed(2)} percent`}>
+      <span className="font-semibold tracking-wide text-[var(--text-secondary)]">{symbol}</span>
+      <span className="font-bold tabular-nums text-[var(--text-primary)]">{formatIndianNumber(quote.ltp, 2)}</span>
+      <span className={`hidden rounded px-1.5 py-0.5 text-xs font-medium tabular-nums min-[420px]:inline ${up ? 'bg-[var(--status-ok)]/10 text-[var(--status-ok)]' : 'bg-[var(--status-bad)]/10 text-[var(--status-bad)]'}`}>
+        {formatArrowPercent(quote.changePercent)}
       </span>
-      <span className={`${on ? 'text-gray-300 light:text-slate-700' : 'text-gray-400 light:text-slate-600'}`}>{label}</span>
-    </div>
-  );
-}
-
-// --- Index Chip Component (with Sparkline & Flash) ---
-
-function IndexChip({
-  symbol,
-  price,
-  change,
-  changePercent,
-}: {
-  symbol: string;
-  price: number;
-  change: number;
-  changePercent: number;
-}) {
-  const isPositive = change >= 0;
-  const prevPriceRef = useRef(price);
-  const [flashClass, setFlashClass] = useState('');
-
-  useEffect(() => {
-    if (prevPriceRef.current !== price) {
-      const direction = price > prevPriceRef.current ? 'animate-flash-green' : 'animate-flash-red';
-      setFlashClass(direction);
-      prevPriceRef.current = price;
-      const timer = setTimeout(() => setFlashClass(''), 600);
-      return () => clearTimeout(timer);
-    }
-  }, [price]);
-
-  return (
-    <div className={`flex items-center gap-2.5 text-xs rounded-lg px-2 py-1 -mx-1 ${flashClass} transition-colors`}>
-      {/* Decoration before information: on a phone this 32px sparkline
-          competes with the price it decorates, so it's the first thing to go. */}
-      <div className="hidden sm:block">
-        <Sparkline
-          data={getPriceHistory(symbol)}
-          symbol={symbol}
-          width={32}
-          height={16}
-          color={isPositive ? '#34d399' : '#f87171'}
-          showArea={false}
-          strokeWidth={1.2}
-          points={20}
-        />
-      </div>
-      <span className="text-gray-400 light:text-slate-600 font-semibold tracking-wide">{symbol}</span>
-      <span className={`text-gray-50 light:text-slate-900 font-bold tabular-nums text-sm ${isPositive ? 'text-glow-emerald' : 'text-glow-red'}`}>
-        {formatIndianNumber(price, 2)}
-      </span>
-      <span
-        className={`font-medium tabular-nums px-1.5 py-0.5 rounded-md badge-glass ${
-          isPositive ? 'text-emerald-400 light:text-emerald-700 bg-emerald-500/10' : 'text-red-400 light:text-red-700 bg-red-500/10'
-        }`}
-      >
-        {isPositive ? '▲' : '▼'} {Math.abs(change).toFixed(2)} ({formatPercent(changePercent)})
-      </span>
+      <span aria-hidden="true" className={`min-[420px]:hidden ${up ? 'text-[var(--status-ok)]' : 'text-[var(--status-bad)]'}`}>{up ? '▲' : '▼'}</span>
     </div>
   );
 }

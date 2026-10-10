@@ -111,26 +111,26 @@ export function ShadowRulesPanel({ filter }: { filter: DiagnosticsFilter }) {
     >
       {data.entry.sinceRegistered && (
         <div className="space-y-1">
-          <h4 className={`text-[11px] uppercase tracking-wide ${muted}`}>
+          <h4 className={`text-xs uppercase tracking-wide ${muted}`}>
             Entry filters — fair test: trades after the rules were registered ({data.entry.sinceRegistered.trades} closed trades, baseline {signedPct(data.entry.sinceRegistered.baselineNetPerTrade)} / trade)
           </h4>
           <Rows head={head} rows={entryRows(data.entry.sinceRegistered)} />
         </div>
       )}
-      <p className={`text-[11px] ${muted}`}>
+      <p className={`text-xs ${muted}`}>
         The two tables below are in sample: the cost-edge, MCX-evening and rich-IV filters were suggested by these same trades, so their improvement there is overstated. Judge the rules on the fair test above.
       </p>
       <div className="space-y-1">
-        <h4 className={`text-[11px] uppercase tracking-wide ${muted}`}>Entry filters — since the 5 Oct change ({data.entry.sinceArchitectureChange.trades} closed trades, baseline {signedPct(data.entry.sinceArchitectureChange.baselineNetPerTrade)} / trade)</h4>
+        <h4 className={`text-xs uppercase tracking-wide ${muted}`}>Entry filters — since the 5 Oct change ({data.entry.sinceArchitectureChange.trades} closed trades, baseline {signedPct(data.entry.sinceArchitectureChange.baselineNetPerTrade)} / trade)</h4>
         <Rows head={head} rows={entryRows(data.entry.sinceArchitectureChange)} />
       </div>
       <div className="space-y-1">
-        <h4 className={`text-[11px] uppercase tracking-wide ${muted}`}>Entry filters — all history ({data.entry.all.trades} closed trades, baseline {signedPct(data.entry.all.baselineNetPerTrade)} / trade)</h4>
+        <h4 className={`text-xs uppercase tracking-wide ${muted}`}>Entry filters — all history ({data.entry.all.trades} closed trades, baseline {signedPct(data.entry.all.baselineNetPerTrade)} / trade)</h4>
         <Rows head={head} rows={entryRows(data.entry.all)} />
       </div>
       {data.squareOff && (
         <div className="space-y-1">
-          <h4 className={`text-[11px] uppercase tracking-wide ${muted}`}>Square-off before the close — {data.squareOff.trades} intraday trades open in the last 10 minutes ({data.squareOff.sessionEnded} then closed at the session end)</h4>
+          <h4 className={`text-xs uppercase tracking-wide ${muted}`}>Square-off before the close — {data.squareOff.trades} intraday trades open in the last 10 minutes ({data.squareOff.sessionEnded} then closed at the session end)</h4>
           <Rows
             head={['', 'Net / trade']}
             rows={[
@@ -141,7 +141,7 @@ export function ShadowRulesPanel({ filter }: { filter: DiagnosticsFilter }) {
         </div>
       )}
       <div className="space-y-1">
-        <h4 className={`text-[11px] uppercase tracking-wide ${muted}`}>Exit rules — {data.exit.trades} trades with recorded option marks (baseline {signedPct(data.exit.baselineNetPerTrade)} / trade)</h4>
+        <h4 className={`text-xs uppercase tracking-wide ${muted}`}>Exit rules — {data.exit.trades} trades with recorded option marks (baseline {signedPct(data.exit.baselineNetPerTrade)} / trade)</h4>
         <Rows
           head={['Rule', 'Fired on', 'Net / trade with rule', 'Those trades: actual', 'Those trades: with rule']}
           rows={Object.entries(data.exit.rules).map(([rule, r]) => [
@@ -177,7 +177,7 @@ function Block({ title, subtitle, children }: { title: string; subtitle?: string
     <section className="bg-gray-900/40 light:bg-white border border-gray-800/60 light:border-slate-200 rounded-lg p-4 space-y-3">
       <header>
         <h3 className="text-sm font-semibold text-gray-200 light:text-slate-800">{title}</h3>
-        {subtitle && <p className={`text-[11px] ${muted}`}>{subtitle}</p>}
+        {subtitle && <p className={`text-xs ${muted}`}>{subtitle}</p>}
       </header>
       {children}
     </section>
@@ -187,9 +187,9 @@ function Block({ title, subtitle, children }: { title: string; subtitle?: string
 function Stat({ label, value, hint }: { label: string; value: React.ReactNode; hint?: string }) {
   return (
     <div className="min-w-0">
-      <div className={`text-[10px] uppercase tracking-wide ${muted}`}>{label}</div>
+      <div className={`text-xs uppercase tracking-wide ${muted}`}>{label}</div>
       <div className="text-base font-semibold tabular-nums text-gray-100 light:text-slate-900">{value}</div>
-      {hint && <div className={`text-[10px] ${muted}`}>{hint}</div>}
+      {hint && <div className={`text-xs ${muted}`}>{hint}</div>}
     </div>
   );
 }
@@ -245,7 +245,7 @@ export function SignalEnginePanel({ filter }: { filter: DiagnosticsFilter }) {
 
   return (
     <div className="space-y-3">
-      <p className={`text-[11px] ${muted}`}>{data.note}{data.truncated ? ' Showing the most recent 20,000 rows of a table — narrow the dates for the full range.' : ''}</p>
+      <p className={`text-xs ${muted}`}>{data.note}{data.truncated ? ' Showing the most recent 20,000 rows of a table — narrow the dates for the full range.' : ''}</p>
 
       <Block title="The slot" subtitle="Each decision bar whose slot was free: one row per bar (a bar that minted counts as minted once). A bar held by an open trade is not a decision.">
         <div className={grid}>
@@ -283,7 +283,7 @@ export function SignalEnginePanel({ filter }: { filter: DiagnosticsFilter }) {
         </div>
       </Block>
 
-      <Block title="Expected vs actual option payoff" subtitle="OPTION-2.0. The theta-adjusted target each closed paper trade was built with, against the premium its contract showed at each recorded bar until the exit.">
+      <Block title="Expected vs actual option payoff (legacy grader)" subtitle="OPTION-2.0, graded the first way: the best 15-minute option-chain MID between entry and exit against the target. A limit exit can fill between two snapshots, so this often says 'target not reached' for trades recorded as target exits. It is kept for history; the V2 grader (every timestamped price, with missing data stated, never inferred) is reported on the Measurement page, and the two are never combined.">
         <div className={grid}>
           <Stat label="Trades graded" value={forward.optionPayoff.n} />
           <Stat label="Projected gain" value={pct(forward.optionPayoff.avgProjectedGainPct)} hint={`theta over the hold ${num(forward.optionPayoff.avgProjectedTheta)} pts`} />

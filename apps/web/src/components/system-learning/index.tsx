@@ -46,7 +46,7 @@ function Pill({ children, tone = 'flat' }: { children: React.ReactNode; tone?: '
           ? 'bg-red-500/15 text-red-400 border-red-500/40 light:bg-red-100 light:text-red-700 light:border-red-300'
           : 'bg-gray-700/40 text-gray-300 border-gray-600/50 light:bg-slate-200 light:text-slate-700 light:border-slate-300';
   return (
-    <span className={`inline-block px-1.5 py-0.5 text-[10px] font-mono uppercase tracking-wide border rounded ${cls}`}>
+    <span className={`inline-block px-1.5 py-0.5 text-xs font-mono uppercase tracking-wide border rounded ${cls}`}>
       {children}
     </span>
   );
@@ -60,7 +60,7 @@ function Stat({ label, value, tone }: { label: string; value: React.ReactNode; t
     : 'text-gray-100 light:text-slate-900';
   return (
     <div className="border border-gray-700/60 light:border-slate-300 rounded-lg bg-gray-800/40 light:bg-white px-3 py-2">
-      <div className="text-[10px] uppercase tracking-wider text-gray-500 light:text-slate-500 font-mono">{label}</div>
+      <div className="text-xs uppercase tracking-wider text-gray-500 light:text-slate-500 font-mono">{label}</div>
       <div className={`text-xl font-bold tabular-nums mt-0.5 ${valueCls}`}>{value}</div>
     </div>
   );
@@ -93,10 +93,10 @@ function EventCard({ e }: { e: any }) {
       <div className="flex items-start justify-between gap-2 flex-wrap">
         <div className="min-w-0">
           <div className="text-sm font-medium text-gray-100 light:text-slate-900">{e.error_title}</div>
-          <div className="text-[11px] font-mono text-gray-500 light:text-slate-500 break-all">{e.error_signature}</div>
+          <div className="text-xs font-mono text-gray-500 light:text-slate-500 break-all">{e.error_signature}</div>
         </div>
         <div className="flex items-center gap-1 flex-wrap">
-          <span className={`inline-block px-1.5 py-0.5 text-[10px] font-mono uppercase border rounded ${SEV_CLASS[e.severity] ?? SEV_CLASS.INFO}`}>
+          <span className={`inline-block px-1.5 py-0.5 text-xs font-mono uppercase border rounded ${SEV_CLASS[e.severity] ?? SEV_CLASS.INFO}`}>
             {e.severity}
           </span>
           <Pill tone={e.status === 'EXPECTED' ? 'good' : 'flat'}>{e.status}</Pill>
@@ -113,7 +113,7 @@ function EventCard({ e }: { e: any }) {
             so the difference is visible rather than implied. */}
         <div><dt className="text-gray-500 light:text-slate-500 inline">days seen </dt><dd className="inline text-gray-300 light:text-slate-700 tabular-nums">{e.audit_days_seen ?? e.occurrence_count} <span className="text-gray-500 light:text-slate-500">({e.audit_runs_seen ?? e.occurrence_count} audit run{(e.audit_runs_seen ?? e.occurrence_count) === 1 ? '' : 's'})</span></dd></div>
         {e.contract_generation && (
-          <div><dt className="text-gray-500 light:text-slate-500 inline">contract </dt><dd className="inline text-gray-300 light:text-slate-700 font-mono text-[11px]">{e.contract_generation}</dd></div>
+          <div><dt className="text-gray-500 light:text-slate-500 inline">contract </dt><dd className="inline text-gray-300 light:text-slate-700 font-mono text-xs">{e.contract_generation}</dd></div>
         )}
         {e.evidence_quality && (
           <div><dt className="text-gray-500 light:text-slate-500 inline">evidence </dt><dd className="inline"><Pill tone={e.evidence_quality === 'INSUFFICIENT' ? 'bad' : e.evidence_quality === 'HIGH' ? 'good' : 'warn'}>{e.evidence_quality}</Pill></dd></div>
@@ -129,12 +129,12 @@ function EventCard({ e }: { e: any }) {
       </dl>
 
       {e.classification_reason && (
-        <p className="text-[11px] text-gray-400 light:text-slate-600 border-l-2 border-emerald-500/40 pl-2">
+        <p className="text-xs text-gray-400 light:text-slate-600 border-l-2 border-emerald-500/40 pl-2">
           {e.classification_reason}
         </p>
       )}
       {e.review_note && (
-        <p className="text-[11px] text-amber-400/90 light:text-amber-700 border-l-2 border-amber-500/50 pl-2">
+        <p className="text-xs text-amber-400/90 light:text-amber-700 border-l-2 border-amber-500/50 pl-2">
           blocked by: {e.review_note}
         </p>
       )}
@@ -173,10 +173,10 @@ export function SystemLearningPage() {
   };
 
   return (
-    <div className="p-4 space-y-4 min-h-full">
+    <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-lg font-bold text-gray-100 light:text-slate-900">🧠 System Learning</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-gray-100 light:text-slate-900">🧠 System Learning</h1>
           <p className="text-xs text-gray-400 light:text-slate-600 mt-0.5 max-w-3xl">
             What went wrong, why, whether it has happened before, and whether the protection put in place actually worked.
             This engine records and proposes — it does not change trading logic. Anything in the trading path stops at a
@@ -265,7 +265,7 @@ export function SystemLearningPage() {
                 {alerts.map((a) => (
                   <div key={a.error_signature} className="border border-red-500/40 light:border-red-300 bg-red-500/10 light:bg-red-50 rounded-lg p-3 text-xs space-y-1">
                     <div className="font-medium text-red-300 light:text-red-700">{a.error}</div>
-                    <div className="font-mono text-[11px] text-red-400/80 light:text-red-600 break-all">{a.error_signature}</div>
+                    <div className="font-mono text-xs text-red-400/80 light:text-red-600 break-all">{a.error_signature}</div>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-gray-300 light:text-slate-700">
                       <div>occurrences <span className="tabular-nums font-semibold">{a.occurrences}</span></div>
                       <div>first seen {new Date(a.first_seen).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short' })}</div>
@@ -283,7 +283,7 @@ export function SystemLearningPage() {
             <div className="overflow-x-auto border border-gray-700/60 light:border-slate-300 rounded-lg">
               <table className="w-full text-xs">
                 <thead className="bg-gray-800/60 light:bg-slate-100">
-                  <tr className="text-left text-[10px] uppercase tracking-wider text-gray-500 light:text-slate-500 font-mono">
+                  <tr className="text-left text-xs uppercase tracking-wider text-gray-500 light:text-slate-500 font-mono">
                     <th className="px-3 py-2">Cause</th>
                     <th className="px-3 py-2 text-right">Today</th>
                     <th className="px-3 py-2 text-right">7 days</th>
@@ -326,7 +326,7 @@ export function SystemLearningPage() {
                 <Stat label="Protection coverage" value={learning.protection_coverage == null ? '—' : `${learning.protection_coverage}%`} />
                 <Stat label="Regression coverage" value={learning.regression_coverage == null ? '—' : `${learning.regression_coverage}%`} />
               </div>
-              <p className="text-[11px] text-gray-500 light:text-slate-500">{learning.formula.note}</p>
+              <p className="text-xs text-gray-500 light:text-slate-500">{learning.formula.note}</p>
             </Section>
           )}
 
@@ -334,19 +334,19 @@ export function SystemLearningPage() {
             <Section title="Safety boundary" subtitle="What this engine may change by itself, and what it may not.">
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 text-xs">
                 <div className="border border-gray-700/60 light:border-slate-300 rounded-lg p-3">
-                  <div className="text-[10px] uppercase tracking-wider text-emerald-400 light:text-emerald-700 font-mono mb-1">Automatic — observation only</div>
+                  <div className="text-xs uppercase tracking-wider text-emerald-400 light:text-emerald-700 font-mono mb-1">Automatic — observation only</div>
                   <div className="flex flex-wrap gap-1">
                     {(data.safety.auto_safe_scopes ?? []).map((s: string) => <Pill key={s} tone="good">{s}</Pill>)}
                   </div>
                 </div>
                 <div className="border border-amber-500/40 light:border-amber-300 rounded-lg p-3">
-                  <div className="text-[10px] uppercase tracking-wider text-amber-400 light:text-amber-700 font-mono mb-1">Human approval required</div>
+                  <div className="text-xs uppercase tracking-wider text-amber-400 light:text-amber-700 font-mono mb-1">Human approval required</div>
                   <div className="flex flex-wrap gap-1">
                     {(data.safety.trading_logic_categories ?? []).map((s: string) => <Pill key={s} tone="warn">{s}</Pill>)}
                   </div>
                 </div>
               </div>
-              <p className="text-[11px] text-gray-500 light:text-slate-500">{data.safety.note}</p>
+              <p className="text-xs text-gray-500 light:text-slate-500">{data.safety.note}</p>
             </Section>
           )}
         </div>
@@ -405,7 +405,7 @@ export function SystemLearningPage() {
             <div className="overflow-x-auto border border-gray-700/60 light:border-slate-300 rounded-lg">
               <table className="w-full text-xs">
                 <thead className="bg-gray-800/60 light:bg-slate-100">
-                  <tr className="text-left text-[10px] uppercase tracking-wider text-gray-500 light:text-slate-500 font-mono">
+                  <tr className="text-left text-xs uppercase tracking-wider text-gray-500 light:text-slate-500 font-mono">
                     <th className="px-3 py-2">Type</th>
                     <th className="px-3 py-2">Protection</th>
                     <th className="px-3 py-2">Rule</th>
@@ -418,9 +418,9 @@ export function SystemLearningPage() {
                       <td className="px-3 py-1.5"><Pill>{p.protection_type}</Pill></td>
                       <td className="px-3 py-1.5 text-gray-200 light:text-slate-800">
                         {p.title}
-                        <div className="text-[10px] font-mono text-gray-500 light:text-slate-500">{p.implemented_in}</div>
+                        <div className="text-xs font-mono text-gray-500 light:text-slate-500">{p.implemented_in}</div>
                       </td>
-                      <td className="px-3 py-1.5 font-mono text-[11px] text-gray-400 light:text-slate-600 break-all">{p.rule}</td>
+                      <td className="px-3 py-1.5 font-mono text-xs text-gray-400 light:text-slate-600 break-all">{p.rule}</td>
                       <td className="px-3 py-1.5 text-right">
                         {Number(p.failure_count ?? 0) > 0
                           ? <Pill tone="bad">{p.failure_count} — ineffective</Pill>
@@ -442,7 +442,7 @@ export function SystemLearningPage() {
             <div className="overflow-x-auto border border-gray-700/60 light:border-slate-300 rounded-lg">
               <table className="w-full text-xs">
                 <thead className="bg-gray-800/60 light:bg-slate-100">
-                  <tr className="text-left text-[10px] uppercase tracking-wider text-gray-500 light:text-slate-500 font-mono">
+                  <tr className="text-left text-xs uppercase tracking-wider text-gray-500 light:text-slate-500 font-mono">
                     <th className="px-3 py-2">Status</th>
                     <th className="px-3 py-2">Case</th>
                     <th className="px-3 py-2">Assertion</th>
@@ -456,14 +456,14 @@ export function SystemLearningPage() {
                       <td className="px-3 py-1.5"><Pill tone={r.status === 'FAIL' ? 'bad' : r.status === 'PASS' ? 'good' : 'flat'}>{r.status}</Pill></td>
                       <td className="px-3 py-1.5 text-gray-200 light:text-slate-800">
                         {r.test_name}
-                        <div className="text-[10px] font-mono text-gray-500 light:text-slate-500 break-all">{r.test_id}</div>
+                        <div className="text-xs font-mono text-gray-500 light:text-slate-500 break-all">{r.test_id}</div>
                         {r.status === 'FAIL' && (
-                          <div className="text-[11px] text-red-400 light:text-red-600 mt-0.5">
+                          <div className="text-xs text-red-400 light:text-red-600 mt-0.5">
                             expected {r.expected_behavior} · observed {r.current_behavior}
                           </div>
                         )}
                       </td>
-                      <td className="px-3 py-1.5 font-mono text-[11px] text-gray-400 light:text-slate-600 break-all">{r.assertion_key}</td>
+                      <td className="px-3 py-1.5 font-mono text-xs text-gray-400 light:text-slate-600 break-all">{r.assertion_key}</td>
                       <td className="px-3 py-1.5 text-right tabular-nums text-gray-300 light:text-slate-700">{r.pass_count}</td>
                       <td className="px-3 py-1.5 text-right tabular-nums text-gray-300 light:text-slate-700">{r.fail_count}</td>
                     </tr>
@@ -503,9 +503,9 @@ export function SystemLearningPage() {
                   <div className="flex items-start justify-between gap-2 flex-wrap">
                     <div>
                       <div className="text-sm font-medium text-gray-100 light:text-slate-900">#{r.event_id} {r.issue}</div>
-                      <div className="text-[11px] text-gray-500 light:text-slate-500">{r.category} · {r.module ?? '—'} · {r.occurrences} occurrence(s)</div>
+                      <div className="text-xs text-gray-500 light:text-slate-500">{r.category} · {r.module ?? '—'} · {r.occurrences} occurrence(s)</div>
                     </div>
-                    <span className={`inline-block px-1.5 py-0.5 text-[10px] font-mono uppercase border rounded ${SEV_CLASS[r.severity] ?? SEV_CLASS.INFO}`}>{r.severity}</span>
+                    <span className={`inline-block px-1.5 py-0.5 text-xs font-mono uppercase border rounded ${SEV_CLASS[r.severity] ?? SEV_CLASS.INFO}`}>{r.severity}</span>
                   </div>
                   <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-xs">
                     <div><dt className="text-gray-500 light:text-slate-500 inline">expected </dt><dd className="inline font-mono text-gray-300 light:text-slate-700">{r.evidence?.expected ?? '—'}</dd></div>
@@ -523,7 +523,7 @@ export function SystemLearningPage() {
                         type="button"
                         disabled={busy === r.event_id}
                         onClick={() => decide(r.event_id, d)}
-                        className={`text-[11px] px-2 py-1 rounded border transition-colors disabled:opacity-50 ${
+                        className={`text-xs px-2 py-1 rounded border transition-colors disabled:opacity-50 ${
                           d === 'APPROVE'
                             ? 'border-emerald-500/50 text-emerald-400 light:text-emerald-700 hover:bg-emerald-500/10'
                             : d === 'REJECT'
@@ -549,7 +549,7 @@ export function SystemLearningPage() {
             <div className="overflow-x-auto border border-gray-700/60 light:border-slate-300 rounded-lg">
               <table className="w-full text-xs">
                 <thead className="bg-gray-800/60 light:bg-slate-100">
-                  <tr className="text-left text-[10px] uppercase tracking-wider text-gray-500 light:text-slate-500 font-mono">
+                  <tr className="text-left text-xs uppercase tracking-wider text-gray-500 light:text-slate-500 font-mono">
                     <th className="px-3 py-2">Date</th>
                     <th className="px-3 py-2">Status</th>
                     <th className="px-3 py-2 text-right">Found</th>

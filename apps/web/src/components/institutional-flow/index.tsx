@@ -21,15 +21,15 @@ export function InstitutionalFlowPage() {
   const { predictions, accuracy, loading: accuracyLoading } = usePredictionAccuracy(accuracySymbol);
 
   return (
-    <div className="p-4 space-y-4 min-h-full">
+    <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-lg font-bold text-gray-100 light:text-slate-900">Institutional Flow Intelligence</h1>
-          <p className="text-xs text-gray-400 light:text-slate-600 mt-0.5">
+          <h1 className="text-xl font-semibold tracking-tight text-gray-100 light:text-slate-900">Institutional Flow Intelligence</h1>
+          <p className="text-sm text-gray-400 light:text-slate-600 mt-1">
             Sentiment, next-day bias, and prediction tracking built from what's genuinely live — India VIX, PCR, F&O universe OI activity, and the existing market-bias engine.
           </p>
         </div>
-        <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-[11px] text-gray-400 light:text-slate-600">
+        <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-xs text-gray-400 light:text-slate-600">
           <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
           {isLive ? 'Live' : loading ? 'Loading…' : 'Unreachable'}
         </span>
@@ -92,7 +92,7 @@ function SectionHeader({ title, subtitle }: { title: string; subtitle: string })
   return (
     <div className="pt-1">
       <h2 className="text-sm font-bold text-gray-200 light:text-slate-800">{title}</h2>
-      <p className="text-[11px] text-gray-400 light:text-slate-600 mt-0.5">{subtitle}</p>
+      <p className="text-sm text-gray-400 light:text-slate-600 mt-1">{subtitle}</p>
     </div>
   );
 }
@@ -117,7 +117,7 @@ function SentimentGauge({ score, label, confidence }: { score: number; label: Se
   const meta = SENTIMENT_META[label];
   return (
     <Card accent="border-t-cyan-500/50">
-      <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-3">Market Sentiment Score</div>
+      <div className="text-xs font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-3">Market Sentiment Score</div>
       <div className={`text-4xl font-bold tabular-nums ${meta.color} mb-1`}>{score}</div>
       <div className={`text-sm font-semibold mb-3 ${meta.color}`}>{meta.label}</div>
       <div className="h-2.5 bg-gray-800 light:bg-slate-200 rounded-full overflow-hidden relative mb-1">
@@ -130,7 +130,7 @@ function SentimentGauge({ score, label, confidence }: { score: number; label: Se
         </div>
         <div className="absolute top-0 bottom-0 w-1 bg-white shadow-[0_0_6px_rgba(255,255,255,0.8)] rounded-full" style={{ left: `calc(${score}% - 2px)` }} />
       </div>
-      <div className="flex justify-between text-[10px] text-gray-400 light:text-slate-600 mb-3">
+      <div className="flex justify-between text-xs text-gray-400 light:text-slate-600 mb-3">
         <span>Extremely Bearish</span>
         <span>Extremely Bullish</span>
       </div>
@@ -149,7 +149,7 @@ function SentimentGauge({ score, label, confidence }: { score: number; label: Se
 function SentimentBreakdown({ snapshot }: { snapshot: NonNullable<ReturnType<typeof useInstitutionalFlow>['snapshot']> }) {
   return (
     <Card>
-      <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-2.5">Reasoning</div>
+      <div className="text-xs font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-2.5">Reasoning</div>
       <ul className="space-y-1.5 mb-3">
         {snapshot.sentimentReasoning.map((r, i) => (
           <li key={i} className="text-xs text-gray-300 light:text-slate-700 leading-snug flex gap-1.5">
@@ -160,10 +160,10 @@ function SentimentBreakdown({ snapshot }: { snapshot: NonNullable<ReturnType<typ
       </ul>
       <div className="flex flex-wrap gap-1.5 pt-2.5 border-t border-gray-800/60 light:border-slate-200">
         {snapshot.availableInputs.map((i) => (
-          <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 light:text-emerald-700 font-medium">✓ {i}</span>
+          <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 light:text-emerald-700 font-medium">✓ {i}</span>
         ))}
         {snapshot.unavailableInputs.map((i) => (
-          <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-gray-800 light:bg-slate-100 text-gray-400 light:text-slate-600 font-medium">
+          <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-gray-800 light:bg-slate-100 text-gray-400 light:text-slate-600 font-medium">
             ✕ {i}
           </span>
         ))}
@@ -177,7 +177,7 @@ function SentimentBreakdown({ snapshot }: { snapshot: NonNullable<ReturnType<typ
 function ProbabilityBar({ label, value, color }: { label: string; value: number; color: string }) {
   return (
     <div>
-      <div className="flex items-center justify-between text-[11px] mb-1">
+      <div className="flex items-center justify-between text-xs mb-1">
         <span className="text-gray-400 light:text-slate-600">{label}</span>
         <span className="font-semibold text-gray-200 light:text-slate-800 tabular-nums">{value}%</span>
       </div>
@@ -229,19 +229,19 @@ function NextDayBiasCard({ bias }: { bias: NextDayBias }) {
       <div className="flex items-start justify-between gap-3 mb-3">
         <div>
           <div className="text-sm font-bold text-gray-200 light:text-slate-800">{bias.symbol}</div>
-          <div className="text-[11px] text-gray-400 light:text-slate-600">
+          <div className="text-xs text-gray-400 light:text-slate-600">
             {ev.basisFinal ? `From the ${formatShortDate(ev.basisDate)} close` : `Preview — ${formatShortDate(ev.basisDate)} is still trading`}
           </div>
         </div>
         <span
-          className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-800/70 light:bg-slate-100 text-gray-300 light:text-slate-700 whitespace-nowrap"
+          className="text-xs font-semibold px-2 py-0.5 rounded-full bg-gray-800/70 light:bg-slate-100 text-gray-300 light:text-slate-700 whitespace-nowrap"
           title="No tested price rule predicted the next close’s direction out of sample (2023–2026), so none is given."
         >
           No direction call
         </span>
       </div>
 
-      <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5">
+      <div className="text-xs font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5">
         Next open vs close · last {ev.gapSample} sessions
       </div>
       <div className="grid grid-cols-3 gap-3 mb-3">
@@ -256,7 +256,7 @@ function NextDayBiasCard({ bias }: { bias: NextDayBias }) {
       </div>
 
       <div className="flex items-center justify-between pt-3 border-t border-gray-800/60 light:border-slate-200">
-        <span className="text-[11px] text-gray-400 light:text-slate-600">
+        <span className="text-xs text-gray-400 light:text-slate-600">
           Expected close range
           {ev.atmIvPct != null && <span className="tabular-nums"> · ±1σ, ATM IV {ev.atmIvPct.toFixed(1)}%</span>}
         </span>
@@ -265,7 +265,7 @@ function NextDayBiasCard({ bias }: { bias: NextDayBias }) {
         </span>
       </div>
 
-      <div className="mt-2.5 text-[11px] leading-snug text-gray-400 light:text-slate-600 space-y-0.5">
+      <div className="mt-2.5 text-xs leading-snug text-gray-400 light:text-slate-600 space-y-0.5">
         {record && graded(record.rangeCount) ? (
           <>
             <div className="tabular-nums">
@@ -290,13 +290,13 @@ function NextDayBiasCard({ bias }: { bias: NextDayBias }) {
       <button
         type="button"
         onClick={() => setShowWhy((v) => !v)}
-        className="mt-2.5 text-[11px] font-semibold text-gray-400 light:text-slate-600 hover:text-gray-200 light:hover:text-slate-800"
+        className="mt-2.5 text-xs font-semibold text-gray-400 light:text-slate-600 hover:text-gray-200 light:hover:text-slate-800"
         aria-expanded={showWhy}
       >
         {showWhy ? 'Hide how these are measured' : 'How these are measured'}
       </button>
       {showWhy && (
-        <ul className="mt-1.5 space-y-1 text-[11px] leading-snug text-gray-400 light:text-slate-600 list-disc pl-4">
+        <ul className="mt-1.5 space-y-1 text-xs leading-snug text-gray-400 light:text-slate-600 list-disc pl-4">
           {bias.reasoning.map((r, i) => (
             <li key={i}>{r}</li>
           ))}
@@ -322,17 +322,17 @@ function CommentaryCard({ commentary }: { commentary: NonNullable<ReturnType<typ
       <p className="text-xs text-gray-300 light:text-slate-700 leading-relaxed mb-3">{commentary.detailedAnalysis}</p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
         <div className="bg-emerald-500/[0.06] border border-emerald-500/20 rounded-lg p-2.5">
-          <div className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider mb-1">Bull Case</div>
+          <div className="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-1">Bull Case</div>
           <p className="text-xs text-gray-300 light:text-slate-700 leading-snug">{commentary.bullCase}</p>
         </div>
         <div className="bg-red-500/[0.06] border border-red-500/20 rounded-lg p-2.5">
-          <div className="text-[10px] font-bold text-red-400 uppercase tracking-wider mb-1">Bear Case</div>
+          <div className="text-xs font-bold text-red-400 uppercase tracking-wider mb-1">Bear Case</div>
           <p className="text-xs text-gray-300 light:text-slate-700 leading-snug">{commentary.bearCase}</p>
         </div>
       </div>
       {commentary.riskFactors.length > 0 && (
         <div className="pt-2.5 border-t border-gray-800/60 light:border-slate-200">
-          <div className="text-[10px] font-bold text-amber-400 uppercase tracking-wider mb-1.5">Risk Factors</div>
+          <div className="text-xs font-bold text-amber-400 uppercase tracking-wider mb-1.5">Risk Factors</div>
           <ul className="space-y-1">
             {commentary.riskFactors.map((r, i) => (
               <li key={i} className="text-xs text-gray-400 light:text-slate-600 flex gap-1.5">
@@ -388,7 +388,7 @@ function AccuracySection({
       )}
 
       <Card>
-        <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-2.5">Recent Predictions — {symbol}</div>
+        <div className="text-xs font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-2.5">Recent Predictions — {symbol}</div>
         {predictions.length === 0 ? (
           <p className="text-xs text-gray-400 light:text-slate-600 py-4 text-center">
             {loading ? 'Loading…' : 'No predictions yet — the tracking scanner logs one per trading day. Check back after the next session.'}
@@ -397,7 +397,7 @@ function AccuracySection({
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+                <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-xs">
                   <th className="text-left px-2 py-1.5 font-medium">Date</th>
                   <th className="text-center px-2 py-1.5 font-medium">Prediction</th>
                   <th className="text-right px-2 py-1.5 font-medium">Close range</th>
@@ -415,7 +415,7 @@ function AccuracySection({
                       {p.model === 'empirical-v2' ? (
                         <span className="text-gray-300 light:text-slate-700">↑{p.gapUpProbability} ↓{p.gapDownProbability} · vol {p.volatileSessionProbability}%</span>
                       ) : (
-                        <span title="Old intraday-bias direction call">{p.predictedDirection} <span className="text-[10px] text-gray-500">legacy</span></span>
+                        <span title="Old intraday-bias direction call">{p.predictedDirection} <span className="text-xs text-gray-500">legacy</span></span>
                       )}
                     </td>
                     <td className="text-right px-2 py-1.5 tabular-nums text-gray-400 light:text-slate-600 whitespace-nowrap">
@@ -450,16 +450,16 @@ function AccuracyWindowCard({ title, window: w }: { title: string; window: Predi
   const legacyCalls = w.directionCallCount ?? 0;
   return (
     <Card>
-      <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-2">{title}</div>
+      <div className="text-xs font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-2">{title}</div>
       {w.resolvedCount === 0 ? (
-        <p className="text-[11px] text-gray-400 light:text-slate-600">Nothing graded yet</p>
+        <p className="text-xs text-gray-400 light:text-slate-600">Nothing graded yet</p>
       ) : (
         <>
           <div className="text-2xl font-bold tabular-nums text-gray-100 light:text-slate-900">{ranges > 0 ? `${w.rangeAccuracyPercent}%` : '—'}</div>
-          <div className="text-[10px] text-gray-400 light:text-slate-600 mb-2">
+          <div className="text-xs text-gray-400 light:text-slate-600 mb-2">
             {ranges > 0 ? `close inside range · ${ranges} graded · ≈${RANGE_TARGET_PCT}% expected` : 'no empirical-model predictions graded yet'}
           </div>
-          <div className="space-y-0.5 text-[10px] text-gray-400 light:text-slate-600 tabular-nums">
+          <div className="space-y-0.5 text-xs text-gray-400 light:text-slate-600 tabular-nums">
             {w.gapUpPredictedPercent != null && (
               <div>Gap up {w.gapUpPredictedPercent}% predicted · {w.gapUpActualPercent}% actual</div>
             )}
@@ -487,17 +487,17 @@ function AlertsStatusCard({ onViewAlerts }: { onViewAlerts: () => void }) {
       <div className="flex items-center justify-between mb-3">
         <div className="flex flex-wrap gap-1.5">
           {live.map((l) => (
-            <span key={l} className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 light:text-emerald-700 font-medium">✓ {l}</span>
+            <span key={l} className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 light:text-emerald-700 font-medium">✓ {l}</span>
           ))}
           {pending.map((l) => (
-            <span key={l} className="text-[10px] px-2 py-0.5 rounded-full bg-gray-800 light:bg-slate-100 text-gray-400 light:text-slate-600 font-medium">✕ {l} (needs FII data)</span>
+            <span key={l} className="text-xs px-2 py-0.5 rounded-full bg-gray-800 light:bg-slate-100 text-gray-400 light:text-slate-600 font-medium">✕ {l} (needs FII data)</span>
           ))}
         </div>
-        <button onClick={onViewAlerts} className="text-[11px] text-emerald-400 light:text-emerald-700 hover:text-emerald-300 font-medium shrink-0 ml-3">
+        <button onClick={onViewAlerts} className="text-xs text-emerald-400 light:text-emerald-700 hover:text-emerald-300 font-medium shrink-0 ml-3">
           View all alerts →
         </button>
       </div>
-      <p className="text-[11px] text-gray-400 light:text-slate-600">Delivered via Terminal + Telegram, same channel as every other alert in this app.</p>
+      <p className="text-xs text-gray-400 light:text-slate-600">Delivered via Terminal + Telegram, same channel as every other alert in this app.</p>
     </Card>
   );
 }
@@ -517,11 +517,11 @@ function NotConnectedPanel() {
         {rows.map((r) => (
           <div key={r.section} className="bg-gray-900/40 light:bg-slate-50 rounded-lg p-3 border border-gray-800/40 light:border-slate-200">
             <div className="text-xs font-semibold text-gray-400 light:text-slate-600 mb-1">{r.section}</div>
-            <div className="text-[11px] text-gray-400 light:text-slate-600">Needs: {r.needs}</div>
+            <div className="text-xs text-gray-400 light:text-slate-600">Needs: {r.needs}</div>
           </div>
         ))}
       </div>
-      <p className="text-[11px] text-gray-400 light:text-slate-600 mt-3 pt-3 border-t border-gray-800/60 light:border-slate-200">
+      <p className="text-xs text-gray-400 light:text-slate-600 mt-3 pt-3 border-t border-gray-800/60 light:border-slate-200">
         None of this is available through Angel One's API. Connecting an NSE data source (official feed, paid vendor, or a manual daily import) would unlock these sections without changing anything else on this page.
       </p>
     </Card>

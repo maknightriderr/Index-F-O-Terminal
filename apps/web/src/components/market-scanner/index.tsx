@@ -6,6 +6,12 @@ import { useAssetTabsStore } from '@/stores';
 import { formatIndianNumber } from '@fno/shared';
 import type { ScannedCandidate, ScanPortfolioRisk, ScannerScoreBreakdown } from '@fno/shared';
 import { ScoreBadge } from '@/components/common/badges';
+import { formatArrowPercent, formatIstDateTime } from '@/lib/format';
+import { classifyFreshness, FRESH_WITHIN_MS } from '@/lib/freshness';
+import { useNow } from '@/lib/use-health';
+import { FreshnessBadge } from '@/components/ui/status-badge';
+import { ActionButton } from '@/components/ui/controls';
+import { isMarketOpen } from '@fno/shared';
 import { useStructureWatchlist } from '@/lib/use-structure-watchlist';
 import { ExplanationBlock, LifecycleLevels, LifecycleReason, PatternLabel, StageBadge, stageMeaning, stageOneLiner, TimeframeTag, TradePreviewPanel } from '@/components/common/structure-stage';
 
@@ -34,34 +40,47 @@ const BREAKDOWN_LABELS: Array<{ key: keyof ScannerScoreBreakdown; label: string;
 ];
 
 export function MarketScannerPage() {
-  const { data, isLive, loading } = useMarketScanner();
+  const { data, loading, error, meta, scannedAt, running, runScan } = useMarketScanner();
   const openTab = useAssetTabsStore((s) => s.openTab);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const now = useNow(5000);
+  const freshness = classifyFreshness({ observedAt: scannedAt, now, sessionOpen: isMarketOpen('NSE', now), transportConnected: error ? false : null, freshWithinMs: FRESH_WITHIN_MS.scan });
 
   return (
-    <div className="p-4 space-y-4 min-h-full">
+    <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-lg font-bold text-gray-100 light:text-slate-900">Market Scanner</h1>
-          <p className="text-xs text-gray-400 light:text-slate-600 mt-0.5">
-            NIFTY trend → strongest/weakest sector → top liquid F&amp;O stocks, scored 0-100 across 8 categories. Refreshes every 5 minutes.
+          <h1 className="text-xl font-semibold tracking-tight text-gray-100 light:text-slate-900">Structure Scanner</h1>
+          <p className="text-sm text-gray-400 light:text-slate-600 mt-1">
+            The market scan (the Market Scanner): NIFTY trend → strongest/weakest sector → top liquid F&amp;O stocks, scored 0-100 across 8 categories, plus the structure engine's developing setups. For stock-by-stock option-buying leans see Option-Buying Leans; for one ranked list see Best Setups.
           </p>
         </div>
-        <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-[11px] text-gray-400 light:text-slate-600">
-          <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
-          {isLive ? `Scanned ${data ? new Date(data.scannedAt).toLocaleTimeString('en-IN') : ''}` : loading ? 'Loading…' : 'Unreachable'}
-        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <FreshnessBadge state={freshness.state} detail={freshness.detail} />
+          <span className="text-xs text-gray-400 light:text-slate-600">{scannedAt ? `Scan recorded ${formatIstDateTime(scannedAt, now)}${meta?.source === 'LAST_KNOWN' ? ' (last known)' : ''}` : ''}</span>
+          <ActionButton onClick={() => void runScan()} disabled={running} title="Runs the market scan now. It records the same decision rows as the background scan (every 5 minutes while NSE is open), so it only happens when you press this; opening this page never runs a scan.">
+            {running ? 'Running scan…' : 'Run scan now'}
+          </ActionButton>
+        </div>
       </div>
 
-      {!isLive && !loading && (
-        <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2.5 text-amber-400 light:text-amber-700 text-xs font-medium">
-          ⚠️ Market Scanner unreachable right now — it'll pick back up on the next successful poll.
+      {error && !data && (
+        <div role="alert" className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2.5 text-amber-400 light:text-amber-700 text-sm font-medium">
+          Could not read the recorded scan: {error}. It will be read again shortly.
         </div>
       )}
 
-      {loading && !data && (
-        <div className="bg-gradient-to-b from-[#141420] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 rounded-xl p-8 text-center text-xs text-gray-400 light:text-slate-600 animate-pulse">
-          Running the top-down scan…
+      {!data && !loading && !error && (
+        <div className="rounded-xl border border-dashed border-gray-700/60 light:border-slate-300 p-8 text-center text-sm text-gray-400 light:text-slate-600">
+          No market scan has been recorded yet. The background scan runs every five minutes while NSE is open; opening this page never starts one. {meta?.unavailableReason}
+        </div>
+      )}
+
+      {loading && !data && <div className="h-24 animate-pulse rounded-xl bg-gray-800/40 light:bg-slate-100" role="status" aria-label="Loading the recorded scan" />}
+
+      {data && freshness.state === 'MARKET_CLOSED' && (
+        <div role="status" className="rounded-xl border border-sky-500/30 bg-sky-500/10 px-4 py-2.5 text-sm text-gray-200 light:text-slate-800">
+          {freshness.detail} These are the last recorded candidates, not live opportunities.
         </div>
       )}
 
@@ -80,7 +99,7 @@ export function MarketScannerPage() {
       {data && data.marketTrend.trend !== 'SIDEWAYS' && data.sector && (
         <div className="bg-gray-900/40 light:bg-slate-100 border border-gray-800/50 light:border-slate-200 rounded-xl px-4 py-3 flex items-center justify-between flex-wrap gap-2">
           <div>
-            <span className="text-[10px] text-gray-400 light:text-slate-600 uppercase tracking-wide">
+            <span className="text-xs text-gray-400 light:text-slate-600 uppercase tracking-wide">
               {data.marketTrend.trend === 'BULLISH' ? 'Strongest sector' : 'Weakest sector'}
             </span>
             <div className="text-sm font-bold text-gray-100 light:text-slate-900">{data.sector.sector}</div>
@@ -122,7 +141,7 @@ export function MarketScannerPage() {
             <h2 className="text-xs font-bold text-gray-300 light:text-slate-700 uppercase tracking-wide">
               Moving — but not buyable as a naked long
             </h2>
-            <p className="text-[11px] text-gray-400 light:text-slate-600 mt-0.5">
+            <p className="text-sm text-gray-400 light:text-slate-600 mt-1">
               These cleared the liquidity and momentum filters on a real move, then failed on structure. Shown so a scan with no
               candidates doesn&apos;t look the same as a quiet market — the move is real, the option just can&apos;t pay for it.
             </p>
@@ -136,13 +155,12 @@ export function MarketScannerPage() {
                     m.changePercent >= 0 ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700'
                   }`}
                 >
-                  {m.changePercent >= 0 ? '▲ +' : '▼ '}
-                  {m.changePercent.toFixed(2)}%
+                  {formatArrowPercent(m.changePercent)}
                 </span>
-                <span className="text-[11px] text-gray-400 light:text-slate-600 tabular-nums w-32 shrink-0">
+                <span className="text-xs text-gray-400 light:text-slate-600 tabular-nums w-32 shrink-0">
                   {m.direction} {m.confidence}%{m.dte != null ? ` · ${m.dte} DTE` : ''}
                 </span>
-                <span className="text-[11px] text-gray-400 light:text-slate-600 flex-1 min-w-[16rem]">{m.reason}</span>
+                <span className="text-xs text-gray-400 light:text-slate-600 flex-1 min-w-[16rem]">{m.reason}</span>
               </div>
             ))}
           </div>
@@ -155,7 +173,7 @@ export function MarketScannerPage() {
         <div className="space-y-2 pt-2">
           <div>
             <h2 className="text-xs font-bold text-gray-300 light:text-slate-700 uppercase tracking-wide">Stock-Specific Movers</h2>
-            <p className="text-[11px] text-gray-400 light:text-slate-600 mt-0.5">
+            <p className="text-sm text-gray-400 light:text-slate-600 mt-1">
               Setups moving on their own strength, independent of (or against) today's overall market read — their
               Market Trend score is zeroed since the broader tape doesn't confirm them.
             </p>
@@ -185,7 +203,7 @@ function MarketStatusBanner({ data }: { data: NonNullable<ReturnType<typeof useM
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${trend.dot}`} />
           <span className={`text-sm font-bold ${trend.className}`}>{trend.label}</span>
-          <span className="text-[10px] text-gray-400 light:text-slate-600">Market Trend score {score}/15</span>
+          <span className="text-xs text-gray-400 light:text-slate-600">Market Trend score {score}/15</span>
         </div>
       </div>
       <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
@@ -197,7 +215,7 @@ function MarketStatusBanner({ data }: { data: NonNullable<ReturnType<typeof useM
       </div>
       <ul className="mt-3 space-y-1">
         {data.marketTrend.reasoning.map((r, i) => (
-          <li key={i} className="text-[11px] text-gray-400 light:text-slate-600 flex gap-1.5">
+          <li key={i} className="text-xs text-gray-400 light:text-slate-600 flex gap-1.5">
             <span className="text-gray-400 light:text-slate-600">▸</span>
             {r}
           </li>
@@ -216,20 +234,20 @@ function PortfolioRiskPanel({ risk }: { risk: ScanPortfolioRisk }) {
     <div className="bg-amber-500/10 border border-amber-500/25 rounded-xl px-4 py-3 space-y-2">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <span className="text-xs font-bold text-amber-400 light:text-amber-700">⚠️ Book-level risk</span>
-        <span className="text-[11px] text-gray-400 light:text-slate-600 tabular-nums">
+        <span className="text-xs text-gray-400 light:text-slate-600 tabular-nums">
           {risk.positions} setups · ₹{formatIndianNumber(risk.totalRiskAmount)} at risk ({risk.totalRiskPct}% of capital) · ₹
           {formatIndianNumber(risk.totalPremiumOutlay)} premium ({risk.totalPremiumPct}%)
         </span>
       </div>
       <ul className="space-y-1">
         {risk.warnings.map((w, i) => (
-          <li key={i} className="text-[11px] text-amber-300/90 light:text-amber-800 flex gap-1.5">
+          <li key={i} className="text-xs text-amber-300/90 light:text-amber-800 flex gap-1.5">
             <span className="opacity-60">▸</span>
             {w}
           </li>
         ))}
       </ul>
-      <div className="text-[11px] text-gray-400 light:text-slate-600">
+      <div className="text-xs text-gray-400 light:text-slate-600">
         Top <span className="font-semibold text-gray-200 light:text-slate-800">{risk.withinLimits}</span> of {risk.positions} fit inside your
         configured {risk.maxPositions}-position / ₹{formatIndianNumber(risk.maxDailyLoss)} daily-loss limits.
       </div>
@@ -239,7 +257,7 @@ function PortfolioRiskPanel({ risk }: { risk: ScanPortfolioRisk }) {
 
 function StatChip({ label, value, valueClassName }: { label: string; value: string; valueClassName?: string }) {
   return (
-    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-gray-900/60 light:bg-slate-100 border border-gray-800/60 light:border-slate-200 text-[11px] tabular-nums">
+    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-gray-900/60 light:bg-slate-100 border border-gray-800/60 light:border-slate-200 text-xs tabular-nums">
       <span className="text-gray-400 light:text-slate-600">{label}</span>
       <span className={`font-semibold text-gray-200 light:text-slate-800 ${valueClassName ?? ''}`}>{value}</span>
     </span>
@@ -249,7 +267,7 @@ function StatChip({ label, value, valueClassName }: { label: string; value: stri
 function StatCell({ label, value }: { label: string; value: string }) {
   return (
     <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-2">
-      <div className="text-gray-400 light:text-slate-600 mb-1 text-[10px] uppercase tracking-wide">{label}</div>
+      <div className="text-gray-400 light:text-slate-600 mb-1 text-xs uppercase tracking-wide">{label}</div>
       <div className="text-gray-200 light:text-slate-800 font-semibold text-xs tabular-nums">{value}</div>
     </div>
   );
@@ -287,20 +305,20 @@ function CandidateCard({
         >
           {candidate.symbol}
         </button>
-        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-gray-800 light:bg-slate-100 text-gray-400 light:text-slate-600">
+        <span className="text-xs font-bold px-1.5 py-0.5 rounded bg-gray-800 light:bg-slate-100 text-gray-400 light:text-slate-600">
           {candidate.sector}
         </span>
         <span className={`text-xs font-bold ${isCE ? 'text-emerald-400' : 'text-red-400'}`}>{candidate.side}</span>
         {/* A counter-index setup must never read as though the index agreed with it. */}
         {candidate.tradeSetup.counterIndex && (
           <span
-            className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 light:text-amber-700 shadow-[0_0_0_1px_rgba(245,158,11,0.3)_inset]"
+            className="text-xs font-bold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 light:text-amber-700 shadow-[0_0_0_1px_rgba(245,158,11,0.3)_inset]"
             title={`NIFTY is ${candidate.tradeSetup.counterIndex} — this setup runs against the broader market and stands on this stock's own move alone.`}
           >
             ⚠ vs NIFTY
           </span>
         )}
-        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold badge-glass ${tier.className}`}>{tier.label}</span>
+        <span className={`text-xs px-2 py-0.5 rounded-full font-bold badge-glass ${tier.className}`}>{tier.label}</span>
 
         <div className="ml-auto">
           <ScoreBadge score={candidate.score} large />
@@ -329,21 +347,21 @@ function CandidateCard({
       {expanded && (
         <div className="px-4 pb-4 pt-1 border-t border-gray-800/40 light:border-slate-200 grid md:grid-cols-2 gap-4">
           <div>
-            <div className="text-[10px] text-gray-400 light:text-slate-600 uppercase tracking-wide mb-2">Score breakdown</div>
+            <div className="text-xs text-gray-400 light:text-slate-600 uppercase tracking-wide mb-2">Score breakdown</div>
             <div className="space-y-1.5">
               {BREAKDOWN_LABELS.map(({ key, label, max }) => {
                 const value = candidate.scoreBreakdown[key];
                 const pct = Math.round((value / max) * 100);
                 return (
                   <div key={key} className="flex items-center gap-2">
-                    <span className="text-[10px] text-gray-400 light:text-slate-600 w-24 shrink-0">{label}</span>
+                    <span className="text-xs text-gray-400 light:text-slate-600 w-24 shrink-0">{label}</span>
                     <div className="flex-1 h-1.5 bg-gray-800/80 light:bg-slate-200 rounded-full overflow-hidden">
                       <div
                         className={`h-full rounded-full ${pct >= 70 ? 'bg-emerald-500' : pct >= 40 ? 'bg-yellow-500' : 'bg-red-500'}`}
                         style={{ width: `${pct}%` }}
                       />
                     </div>
-                    <span className="text-[10px] text-gray-400 light:text-slate-600 tabular-nums w-10 text-right">
+                    <span className="text-xs text-gray-400 light:text-slate-600 tabular-nums w-10 text-right">
                       {value}/{max}
                     </span>
                   </div>
@@ -352,10 +370,10 @@ function CandidateCard({
             </div>
           </div>
           <div>
-            <div className="text-[10px] text-gray-400 light:text-slate-600 uppercase tracking-wide mb-2">Reasoning</div>
+            <div className="text-xs text-gray-400 light:text-slate-600 uppercase tracking-wide mb-2">Reasoning</div>
             <ul className="space-y-1">
               {candidate.reasoning.map((r, i) => (
-                <li key={i} className="text-[11px] text-gray-400 light:text-slate-600 flex gap-1.5">
+                <li key={i} className="text-xs text-gray-400 light:text-slate-600 flex gap-1.5">
                   <span className="text-gray-400 light:text-slate-600">▸</span>
                   {r}
                 </li>
@@ -381,7 +399,7 @@ function DevelopingSetups({ onOpen }: { onOpen: (symbol: string, exchange: 'NSE'
     <div className="space-y-2 pt-2">
       <div>
         <h2 className="text-xs font-bold text-gray-300 light:text-slate-700 uppercase tracking-wide">Developing setups</h2>
-        <p className="text-[11px] text-gray-400 light:text-slate-600 mt-0.5">
+        <p className="text-sm text-gray-400 light:text-slate-600 mt-1">
           Liquidity sweep → displacement → fair-value-gap retrace, per symbol and direction. A setup becomes a paper trade only when its
           limit fills and every gate passes; the score (0-100) describes it and never gates.
         </p>
@@ -411,17 +429,17 @@ function DevelopingSetups({ onOpen }: { onOpen: (symbol: string, exchange: 'NSE'
                 {r.direction === 'BULLISH' ? '▲ Bullish' : '▼ Bearish'}
               </span>
               <span className="flex-1 min-w-[16rem]">
-                <span className="block text-[11px] text-gray-300 light:text-slate-700">{stageOneLiner(r)}</span>
+                <span className="block text-xs text-gray-300 light:text-slate-700">{stageOneLiner(r)}</span>
                 <LifecycleLevels row={r} />
                 <PatternLabel row={r} />
                 <LifecycleReason row={r} />
                 {r.liveOutcome === 'REFUSED' && r.liveReason && (
-                  <span className="block text-[11px] text-amber-400 light:text-amber-700 mt-0.5">Fill refused: {r.liveReason}</span>
+                  <span className="block text-xs text-amber-400 light:text-amber-700 mt-0.5">Fill refused: {r.liveReason}</span>
                 )}
                 <TradePreviewPanel row={r} />
                 {(r.stage === 'CONFIRMED' || r.stage === 'ENTRY' || r.stage === 'ACTIVE') && <ExplanationBlock row={r} />}
               </span>
-              <span className="text-[11px] text-gray-400 light:text-slate-600 tabular-nums w-24 shrink-0 text-right" title="Ranks lifecycles for which one fills first; never gates a fill.">
+              <span className="text-xs text-gray-400 light:text-slate-600 tabular-nums w-24 shrink-0 text-right" title="Ranks lifecycles for which one fills first; never gates a fill.">
                 {r.score != null ? `quality ${r.score}/100` : ''}
               </span>
             </button>

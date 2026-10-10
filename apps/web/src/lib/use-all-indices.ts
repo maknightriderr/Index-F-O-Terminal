@@ -8,7 +8,7 @@ import type { MarketQuote } from '@fno/shared';
 const POLL_INTERVAL_MS = 30000;
 
 /** Live quotes for every NSE/BSE/MCX index the terminal tracks — no mock fallback, starts empty. */
-export function useAllIndices(): { indices: MarketQuote[]; isLive: boolean; loading: boolean } {
+export function useAllIndices(): { indices: MarketQuote[]; isLive: boolean; loading: boolean; observedAt: number | null } {
   const [indices, setIndices] = useState<MarketQuote[]>([]);
   const [isLive, setIsLive] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -41,5 +41,6 @@ export function useAllIndices(): { indices: MarketQuote[]; isLive: boolean; load
     };
   }, []);
 
-  return { indices, isLive, loading };
+  const observedAt = indices.length ? Math.max(...indices.map((q) => q.timestamp || 0)) || null : null;
+  return { indices, isLive, loading, observedAt };
 }

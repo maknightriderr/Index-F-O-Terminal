@@ -41,6 +41,7 @@ import {
   TradePreviewPanel,
 } from '@/components/common/structure-stage';
 import { useSetupOutcomes, type SetupOutcome } from '@/lib/use-setup-outcomes';
+import { formatSignedPercent } from '@/lib/format';
 
 const STRIKE_RANGE_OPTIONS = [5, 10, 15, 20];
 const REFRESH_INTERVAL_MS = 15000;
@@ -188,10 +189,10 @@ export function AssetWorkspace() {
           <div>
             <div className="flex items-center gap-2 mb-1">
               <h1 className="text-2xl font-bold text-gray-50 light:text-slate-900 tracking-tight">{selectedSymbol}</h1>
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-800/70 light:bg-slate-100 text-gray-400 light:text-slate-600 border border-gray-700/50 light:border-slate-200">
+              <span className="px-1.5 py-0.5 rounded text-xs font-semibold bg-gray-800/70 light:bg-slate-100 text-gray-400 light:text-slate-600 border border-gray-700/50 light:border-slate-200">
                 {selectedExchange}
               </span>
-              <span className="flex items-center gap-1.5 text-[10px] text-gray-400 light:text-slate-600 bg-gray-900/50 light:bg-slate-100 rounded-full px-2 py-0.5">
+              <span className="flex items-center gap-1.5 text-xs text-gray-400 light:text-slate-600 bg-gray-900/50 light:bg-slate-100 rounded-full px-2 py-0.5">
                 <span className={`w-1.5 h-1.5 rounded-full ${marketOpen ? 'bg-emerald-400 shadow-[0_0_6px_rgba(16,185,129,0.7)] animate-pulse' : 'bg-gray-600 light:bg-slate-400'}`} />
                 {marketOpen ? 'Market Open' : 'Market Closed'}
               </span>
@@ -220,11 +221,10 @@ export function AssetWorkspace() {
                     chain.underlyingChangePercent >= 0 ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700'
                   }`}
                 >
-                  {chain.underlyingChangePercent >= 0 ? '▲ +' : '▼ '}
-                  {formatIndianNumber(chain.underlyingChange, 2)} ({chain.underlyingChangePercent >= 0 ? '+' : ''}
-                  {chain.underlyingChangePercent.toFixed(2)}%)
+                  {chain.underlyingChangePercent >= 0 ? '▲ ' : '▼ '}
+                  {formatIndianNumber(Math.abs(chain.underlyingChange), 2)} ({formatSignedPercent(chain.underlyingChangePercent)})
                 </span>
-                <span className="text-[10px] text-gray-400 light:text-slate-600">today</span>
+                <span className="text-xs text-gray-400 light:text-slate-600">today</span>
               </div>
             )}
           </div>
@@ -273,7 +273,7 @@ export function AssetWorkspace() {
                 type="button"
                 onClick={() => setBiasMode(m)}
                 title={m === 'INTRADAY' ? '15m/1H candles, 30% SL — tuned for same-session moves' : '1H/Daily candles, wider SL — tuned for a multi-day/week hold'}
-                className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wide transition-colors ${
+                className={`px-2.5 py-1 rounded-md text-xs font-bold uppercase tracking-wide transition-colors ${
                   biasMode === m
                     ? 'bg-emerald-500/90 text-white'
                     : 'text-gray-400 light:text-slate-600 hover:text-gray-200 light:hover:text-slate-700'
@@ -450,8 +450,8 @@ function FuturesCard({ contract }: { contract: FuturesData }) {
   return (
     <div className="bg-gradient-to-b from-[#151522] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 rounded-xl p-4 shadow-[0_8px_28px_-14px_rgba(0,0,0,0.75)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.12)] hover:border-gray-700/80 light:hover:border-slate-300 hover:shadow-[0_14px_36px_-14px_rgba(0,0,0,0.85)] transition-all duration-200">
       <div className="flex items-center justify-between mb-2">
-        <span className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider">{EXPIRY_LABEL_TEXT[contract.expiryLabel]}</span>
-        <span className="text-[10px] text-gray-400 light:text-slate-600">DTE {contract.dte}</span>
+        <span className="text-xs font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider">{EXPIRY_LABEL_TEXT[contract.expiryLabel]}</span>
+        <span className="text-xs text-gray-400 light:text-slate-600">DTE {contract.dte}</span>
       </div>
       <div
         className={`text-xl font-bold tabular-nums text-gray-50 light:text-slate-900 mb-1.5 ${
@@ -463,7 +463,7 @@ function FuturesCard({ contract }: { contract: FuturesData }) {
       <div className="flex items-center gap-2 mb-1.5">
         {contract.change != null && contract.changePercent != null && (
           <span
-            className={`text-[11px] font-medium px-1.5 py-0.5 rounded ${
+            className={`text-xs font-medium px-1.5 py-0.5 rounded ${
               contract.change >= 0 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'
             }`}
             title="Today's move for this contract vs its own previous close"
@@ -474,14 +474,14 @@ function FuturesCard({ contract }: { contract: FuturesData }) {
         <OIBadge type={contract.interpretation} />
       </div>
       <div
-        className="text-[10px] text-gray-400 light:text-slate-600 mb-3 tabular-nums"
+        className="text-xs text-gray-400 light:text-slate-600 mb-3 tabular-nums"
         title="Basis = this contract's price minus the spot reference. On MCX there is no cash market, so the nearest future is the spot reference."
       >
         {contract.isSpotReference
           ? 'Spot reference contract'
           : `Basis vs spot ${contract.basis >= 0 ? '+' : ''}${contract.basis.toFixed(2)} (${contract.basis >= 0 ? '+' : '-'}${contract.premiumDiscount.toFixed(2)}%)`}
       </div>
-      <div className="grid grid-cols-3 gap-2 text-[11px] pt-2.5 border-t border-gray-800/60 light:border-slate-200">
+      <div className="grid grid-cols-3 gap-2 text-xs pt-2.5 border-t border-gray-800/60 light:border-slate-200">
         <div>
           <div className="text-gray-400 light:text-slate-600 mb-0.5">OI</div>
           <div className="text-gray-300 light:text-slate-700 font-medium tabular-nums">{formatCompact(contract.oi)}</div>
@@ -582,9 +582,9 @@ function SummaryTile({ label, value, sub, accent }: { label: string; value: stri
   const glow = accent === 'emerald' ? 'text-glow-emerald' : accent === 'red' ? 'text-glow-red' : 'text-glow-cyan';
   return (
     <div className="bg-gradient-to-b from-[#151522] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 rounded-xl p-3.5 shadow-[0_8px_28px_-14px_rgba(0,0,0,0.75)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.12)] hover:border-gray-700/80 light:hover:border-slate-300 hover:shadow-[0_14px_36px_-14px_rgba(0,0,0,0.85)] transition-all duration-200">
-      <div className="text-[10px] text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5">{label}</div>
+      <div className="text-xs text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5">{label}</div>
       <div className={`text-2xl font-bold tabular-nums tracking-tight ${color} ${glow}`}>{value}</div>
-      {sub && <div className="text-[10px] text-gray-400 light:text-slate-600 mt-1">{sub}</div>}
+      {sub && <div className="text-xs text-gray-400 light:text-slate-600 mt-1">{sub}</div>}
     </div>
   );
 }
@@ -593,7 +593,7 @@ function SectionLabel({ children, icon }: { children: React.ReactNode; icon?: st
   return (
     <div className="flex items-center gap-2 mb-2.5">
       {icon && <span className="text-xs leading-none opacity-80">{icon}</span>}
-      <span className="text-[11px] font-bold text-gray-400 light:text-slate-600 uppercase tracking-wider whitespace-nowrap">{children}</span>
+      <span className="text-xs font-bold text-gray-400 light:text-slate-600 uppercase tracking-wider whitespace-nowrap">{children}</span>
       <div className="flex-1 h-px bg-gradient-to-r from-gray-700/70 via-gray-800/40 to-transparent" />
     </div>
   );
@@ -612,7 +612,7 @@ const INTEL_ACCENT: Record<string, string> = {
 function IntelCard({ title, children, accent = 'amber' }: { title: string; children: React.ReactNode; accent?: keyof typeof INTEL_ACCENT }) {
   return (
     <div className={`bg-gradient-to-b from-[#151522] to-[#0d0d14] light:from-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 border-t-2 ${INTEL_ACCENT[accent]} rounded-xl p-3.5 shadow-[0_8px_28px_-14px_rgba(0,0,0,0.75)] light:shadow-[0_4px_16px_-8px_rgba(0,0,0,0.12)] hover:border-gray-700/80 light:hover:border-slate-300 hover:shadow-[0_14px_36px_-14px_rgba(0,0,0,0.85)] transition-all duration-200`}>
-      <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-2.5">{title}</div>
+      <div className="text-xs font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-2.5">{title}</div>
       {children}
     </div>
   );
@@ -626,7 +626,7 @@ function OiTrapCard({ trap }: { trap: OiTrapAnalysis }) {
         <TrapPill label="Call side" side={trap.call} color="emerald" />
         <TrapPill label="Put side" side={trap.put} color="red" />
       </div>
-      <p className={`text-[11px] leading-snug ${active ? 'text-gray-300 light:text-slate-700' : 'text-gray-400 light:text-slate-600'}`}>{trap.summary}</p>
+      <p className={`text-xs leading-snug ${active ? 'text-gray-300 light:text-slate-700' : 'text-gray-400 light:text-slate-600'}`}>{trap.summary}</p>
     </IntelCard>
   );
 }
@@ -635,11 +635,11 @@ function TrapPill({ label, side, color }: { label: string; side: { active: boole
   const activeClass = color === 'emerald' ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' : 'bg-red-500/15 text-red-400 border-red-500/30';
   return (
     <div className={`flex-1 text-center rounded-lg border px-2 py-2 ${side.active ? activeClass : 'bg-gray-900/40 light:bg-slate-100 text-gray-400 light:text-slate-600 border-gray-800/60 light:border-slate-200'}`}>
-      <div className="text-[10px] font-medium mb-0.5">{label}</div>
+      <div className="text-xs font-medium mb-0.5">{label}</div>
       {side.active ? (
         <div className="text-sm font-bold tabular-nums">{side.strength}</div>
       ) : (
-        <div className="text-[10px] tracking-wide">Inactive</div>
+        <div className="text-xs tracking-wide">Inactive</div>
       )}
     </div>
   );
@@ -674,7 +674,7 @@ function MomentumRow({
       <span className={`tabular-nums pr-2 font-medium ${oiChange >= 0 ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700'}`}>
         {oiChange >= 0 ? '+' : ''}{formatCompact(oiChange)}
       </span>
-      <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${activityClass}`}>{activity}</span>
+      <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${activityClass}`}>{activity}</span>
     </div>
   );
 }
@@ -706,7 +706,7 @@ function OiShiftCard({ strikes }: { strikes: OptionChainStrike[] }) {
   if (rows.length === 0) {
     return (
       <IntelCard title="Where OI Is Shifting" accent="violet">
-        <p className="text-[11px] text-gray-400 light:text-slate-600 leading-snug">No OI change yet this session — nothing has moved.</p>
+        <p className="text-xs text-gray-400 light:text-slate-600 leading-snug">No OI change yet this session — nothing has moved.</p>
       </IntelCard>
     );
   }
@@ -718,15 +718,15 @@ function OiShiftCard({ strikes }: { strikes: OptionChainStrike[] }) {
       <div className="space-y-1.5">
         {rows.map((r) => (
           <div key={`${r.strike}-${r.side}`} className="flex items-center gap-2">
-            <span className={`text-[10px] font-bold px-1 py-0.5 rounded shrink-0 ${r.side === 'CE' ? 'text-emerald-400 bg-emerald-500/12' : 'text-red-400 bg-red-500/12'}`}>{r.side}</span>
-            <span className="text-[11px] text-gray-300 light:text-slate-700 tabular-nums w-12 shrink-0">{formatIndianNumber(r.strike, 0)}</span>
+            <span className={`text-xs font-bold px-1 py-0.5 rounded shrink-0 ${r.side === 'CE' ? 'text-emerald-400 bg-emerald-500/12' : 'text-red-400 bg-red-500/12'}`}>{r.side}</span>
+            <span className="text-xs text-gray-300 light:text-slate-700 tabular-nums w-12 shrink-0">{formatIndianNumber(r.strike, 0)}</span>
             <div className="flex-1 h-1.5 bg-gray-900/70 light:bg-slate-200 rounded-full overflow-hidden">
               <div
                 className={`h-full rounded-full ${r.changeOi > 0 ? 'bg-emerald-500' : 'bg-red-500'}`}
                 style={{ width: `${maxAbs > 0 ? (Math.abs(r.changeOi) / maxAbs) * 100 : 0}%` }}
               />
             </div>
-            <span className={`text-[11px] tabular-nums w-14 shrink-0 text-right font-medium ${r.changeOi > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            <span className={`text-xs tabular-nums w-14 shrink-0 text-right font-medium ${r.changeOi > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
               {r.changeOi > 0 ? '+' : ''}{formatCompact(r.changeOi)}
             </span>
             <OIBadge type={r.interpretation} />
@@ -749,15 +749,15 @@ function DecayCard({ decay }: { decay: DecayAnalysis }) {
     <IntelCard title="Time Decay" accent="red">
       <div className="flex items-center justify-between mb-2.5">
         <span className="text-xs text-gray-400 light:text-slate-600">DTE <span className="text-gray-200 light:text-slate-800 font-semibold">{decay.dte}</span></span>
-        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${DECAY_SPEED_CLASS[decay.speed]}`}>{decay.speed}</span>
+        <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${DECAY_SPEED_CLASS[decay.speed]}`}>{decay.speed}</span>
       </div>
       <div className="grid grid-cols-2 gap-2 text-xs">
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-2">
-          <div className="text-gray-400 light:text-slate-600 text-[10px] mb-0.5">ATM Call θ/day</div>
+          <div className="text-gray-400 light:text-slate-600 text-xs mb-0.5">ATM Call θ/day</div>
           <div className="text-red-400 font-semibold tabular-nums">{decay.atmCallThetaPct.toFixed(2)}%</div>
         </div>
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-2">
-          <div className="text-gray-400 light:text-slate-600 text-[10px] mb-0.5">ATM Put θ/day</div>
+          <div className="text-gray-400 light:text-slate-600 text-xs mb-0.5">ATM Put θ/day</div>
           <div className="text-red-400 font-semibold tabular-nums">{decay.atmPutThetaPct.toFixed(2)}%</div>
         </div>
       </div>
@@ -777,14 +777,14 @@ function RejectedToday({ rows, outcomes }: { rows: StructureLifecycleView[]; out
   if (rows.length === 0) return null;
   return (
     <details className="mb-3">
-      <summary className="text-[10px] font-bold uppercase tracking-wide text-red-400 light:text-red-700 cursor-pointer select-none">Rejected today ({rows.length})</summary>
+      <summary className="text-xs font-bold uppercase tracking-wide text-red-400 light:text-red-700 cursor-pointer select-none">Rejected today ({rows.length})</summary>
       <div className="space-y-1.5 mt-1.5">
         {rows.map((r) => (
           <div key={r.id} className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
             <div className="flex items-center gap-2">
               <StageBadge stage={r.liveOutcome === 'REFUSED' ? 'REFUSED' : r.stage} />
               <TimeframeTag timeframe={r.timeframe} />
-              <span className={`text-[11px] font-semibold ${r.direction === 'BULLISH' ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700'}`}>
+              <span className={`text-xs font-semibold ${r.direction === 'BULLISH' ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700'}`}>
                 {r.direction === 'BULLISH' ? '▲ Bullish' : '▼ Bearish'}
               </span>
             </div>
@@ -822,7 +822,7 @@ const rr = (n: number | null | undefined) => (n == null ? '—' : `${n.toFixed(2
 function SetupWatchList({ rows }: { rows: SetupWatchRow[] }) {
   return (
     <IntelCard title="Confirmed setups" accent="emerald">
-      <p className="text-[10px] text-gray-400 light:text-slate-600 mb-2 leading-snug">
+      <p className="text-xs text-gray-400 light:text-slate-600 mb-2 leading-snug">
         Every confirmed setup, re-checked on every closed 15m bar under the same setup until it is invalidated, expires or fills. R:R is display and ranking only — execution is yours. Option levels are premiums (est. when the entry is away from the live price).
       </p>
       <div className="space-y-2">
@@ -834,14 +834,14 @@ function SetupWatchList({ rows }: { rows: SetupWatchRow[] }) {
                 <span className="text-xs font-semibold text-gray-200 light:text-slate-800">
                   {r.source === 'INDICATOR' ? 'Indicator' : r.source === 'S1' ? 'Structure S1' : `Paper research · ${r.source}`} · 15m {r.direction === 'BEARISH' ? '▼ Bearish' : '▲ Bullish'}
                 </span>
-                <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${watchChipStyle(r)}`}>{r.status === 'ENDED' ? 'Ended' : 'Confirmed'}</span>
+                <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${watchChipStyle(r)}`}>{r.status === 'ENDED' ? 'Ended' : 'Confirmed'}</span>
               </div>
-              <div className="flex items-center gap-2 text-[11px] text-gray-300 light:text-slate-700 mb-1">
+              <div className="flex items-center gap-2 text-xs text-gray-300 light:text-slate-700 mb-1">
                 <span>{r.statusText}</span>
-                {r.rrBand && <span className={`text-[10px] px-1.5 py-0.5 rounded ${RR_BAND_STYLE[r.rrBand]}`}>{RR_BAND_LABEL[r.rrBand]}</span>}
+                {r.rrBand && <span className={`text-xs px-1.5 py-0.5 rounded ${RR_BAND_STYLE[r.rrBand]}`}>{RR_BAND_LABEL[r.rrBand]}</span>}
               </div>
               {p ? (
-                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px] tabular-nums">
+                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs tabular-nums">
                   <span className="col-span-2 font-semibold text-gray-100 light:text-slate-900">
                     {p.strike} {p.side} · {p.expiry}
                     {p.estimated ? ' · est.' : ''}
@@ -857,13 +857,13 @@ function SetupWatchList({ rows }: { rows: SetupWatchRow[] }) {
                   <span>Underlying T1: {lvl(p.underlyingT1)}</span>
                   <span>Underlying T2: {lvl(p.underlyingT2)}</span>
                   <span>Gross R:R: {rr(p.grossRR)}</span>
-                  <span className="col-span-2 text-[10px] text-gray-400 light:text-slate-600 leading-snug">{p.tslRule}</span>
+                  <span className="col-span-2 text-xs text-gray-400 light:text-slate-600 leading-snug">{p.tslRule}</span>
                 </div>
               ) : (
-                <div className="text-[11px] text-gray-400 light:text-slate-600">No option leg could be built{r.blockReason ? `: ${r.blockReason}` : '.'}</div>
+                <div className="text-xs text-gray-400 light:text-slate-600">No option leg could be built{r.blockReason ? `: ${r.blockReason}` : '.'}</div>
               )}
               {r.blockReason && p && (
-                <div className="text-[10px] text-gray-400 light:text-slate-600 mt-1">
+                <div className="text-xs text-gray-400 light:text-slate-600 mt-1">
                   Note — not taken by the automatic paper-trade log right now: {r.blockCode ? `${r.blockCode}: ` : ''}
                   {r.blockReason}
                 </div>
@@ -892,16 +892,16 @@ function NoTradePanel({ d }: { d: NoTradeDiagnostics }) {
   const b = d.bestRejected;
   return (
     <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/5 light:bg-amber-50 px-2 py-1.5 space-y-1">
-      <div className="text-[10px] font-bold uppercase tracking-wide text-amber-400 light:text-amber-700">Why no trade</div>
-      <p className="text-[11px] text-gray-300 light:text-slate-700"><span className="text-gray-500 light:text-slate-500">Limiting factor:</span> {d.limitingFactor.summary}</p>
-      {d.missingConfirmation && <p className="text-[11px] text-gray-300 light:text-slate-700"><span className="text-gray-500 light:text-slate-500">Missing:</span> {d.missingConfirmation}</p>}
+      <div className="text-xs font-bold uppercase tracking-wide text-amber-400 light:text-amber-700">Why no trade</div>
+      <p className="text-xs text-gray-300 light:text-slate-700"><span className="text-gray-500 light:text-slate-500">Limiting factor:</span> {d.limitingFactor.summary}</p>
+      {d.missingConfirmation && <p className="text-xs text-gray-300 light:text-slate-700"><span className="text-gray-500 light:text-slate-500">Missing:</span> {d.missingConfirmation}</p>}
       {b && (
-        <p className="text-[11px] text-gray-300 light:text-slate-700">
+        <p className="text-xs text-gray-300 light:text-slate-700">
           <span className="text-gray-500 light:text-slate-500">Best rejected:</span> {b.source} {b.direction === 'BULLISH' ? '▲' : '▼'} — {NO_TRADE_STAGE_LABEL[b.stage]}: {b.reason}
           {b.metrics.confirmations != null && <span className="text-gray-500 light:text-slate-500"> · {b.metrics.confirmations} confirmation(s)</span>}
         </p>
       )}
-      <details className="text-[10px] text-gray-400 light:text-slate-600">
+      <details className="text-xs text-gray-400 light:text-slate-600">
         <summary className="cursor-pointer">{d.candidatesEvaluated} candidate(s) evaluated · engines</summary>
         <ul className="mt-1 space-y-0.5">
           {d.candidates.map((c) => (
@@ -948,27 +948,27 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
       <IntelCard title="Trade Setup" accent="emerald">
         {running.length > 0 && (
           <div className="mb-3">
-            <div className="text-[10px] font-bold uppercase tracking-wide text-cyan-400 light:text-cyan-700 mb-1.5">Structure engine · NEW</div>
+            <div className="text-xs font-bold uppercase tracking-wide text-cyan-400 light:text-cyan-700 mb-1.5">Structure engine · NEW</div>
             <div className="space-y-1.5">
               {running.map((r) => (
                 <div key={r.id} className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5" title={stageMeaning(r.stage, r.timeframe)}>
                   <div className="flex items-center gap-2 mb-0.5">
                     <StageBadge stage={r.stage} />
                     <TimeframeTag timeframe={r.timeframe} />
-                    <span className={`text-[11px] font-semibold ${r.direction === 'BULLISH' ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700'}`}>
+                    <span className={`text-xs font-semibold ${r.direction === 'BULLISH' ? 'text-emerald-400 light:text-emerald-700' : 'text-red-400 light:text-red-700'}`}>
                       {r.direction === 'BULLISH' ? '▲ Bullish' : '▼ Bearish'}
                     </span>
                     {r.score != null && (
-                      <span className="text-[10px] text-gray-400 light:text-slate-600 ml-auto" title="Ranks lifecycles for which one fills first; never gates a fill.">
+                      <span className="text-xs text-gray-400 light:text-slate-600 ml-auto" title="Ranks lifecycles for which one fills first; never gates a fill.">
                         Setup quality {r.score}/100 · ranking only
                       </span>
                     )}
                   </div>
-                  <p className="text-[11px] text-gray-300 light:text-slate-700 mb-0.5">{stageOneLiner(r)}</p>
+                  <p className="text-xs text-gray-300 light:text-slate-700 mb-0.5">{stageOneLiner(r)}</p>
                   <LifecycleLevels row={r} />
                   <PatternLabel row={r} />
                   <LifecycleReason row={r} />
-                  {r.liveOutcome === 'REFUSED' && r.liveReason && <div className="text-[10px] text-amber-400 light:text-amber-700 mt-0.5">Fill refused: {r.liveReason}</div>}
+                  {r.liveOutcome === 'REFUSED' && r.liveReason && <div className="text-xs text-amber-400 light:text-amber-700 mt-0.5">Fill refused: {r.liveReason}</div>}
                   <TradePreviewPanel row={r} />
                   {r.stage !== 'WATCH' && r.stage !== 'DEVELOPING' && <SetupExplanationPanel input={lifecycleExplanationInput(r, outcomes[r.id])} />}
                 </div>
@@ -979,9 +979,9 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
         <RejectedToday rows={rejectedToday} outcomes={outcomes} />
         {setup.noTradeDiagnostics && <NoTradePanel d={setup.noTradeDiagnostics} />}
         <div>
-          <div className="text-[10px] font-bold uppercase tracking-wide text-gray-400 light:text-slate-600 mb-1">Indicator engine · OLD</div>
-          <p className="text-[11px] text-gray-400 light:text-slate-600 leading-snug">{setup.reason}</p>
-          {structure?.enabled && <p className="text-[10px] text-gray-500 light:text-slate-500 mt-0.5 italic">Doesn't block structure setups.</p>}
+          <div className="text-xs font-bold uppercase tracking-wide text-gray-400 light:text-slate-600 mb-1">Indicator engine · OLD</div>
+          <p className="text-xs text-gray-400 light:text-slate-600 leading-snug">{setup.reason}</p>
+          {structure?.enabled && <p className="text-xs text-gray-500 light:text-slate-500 mt-0.5 italic">Doesn't block structure setups.</p>}
         </div>
       </IntelCard>
     );
@@ -999,32 +999,32 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
     const isCredit = (setup.netPremium ?? 0) < 0;
     return (
       <IntelCard title="Trade Setup" accent="emerald">
-        <div className="text-[10px] font-bold uppercase tracking-wide text-emerald-400 light:text-emerald-700 mb-1.5">Active paper trade</div>
+        <div className="text-xs font-bold uppercase tracking-wide text-emerald-400 light:text-emerald-700 mb-1.5">Active paper trade</div>
         <div className="flex items-center justify-between mb-2.5">
           <span className="text-xs font-bold px-2 py-1 rounded-md bg-cyan-500/15 text-cyan-400 shadow-[0_0_10px_-2px_rgba(34,211,238,0.4)]">
             {setup.strategy}
           </span>
-          <span className="text-[10px] text-gray-400 light:text-slate-600 font-medium">R:R {setup.riskReward!.toFixed(2)}</span>
+          <span className="text-xs text-gray-400 light:text-slate-600 font-medium">R:R {setup.riskReward!.toFixed(2)}</span>
         </div>
-        <div className="text-[10px] text-gray-400 light:text-slate-600 mb-2 leading-snug">
+        <div className="text-xs text-gray-400 light:text-slate-600 mb-2 leading-snug">
           {setup.legs?.map((l) => `${l.action} ${l.side} ${formatIndianNumber(l.strike, 0)} @ ${l.premium.toFixed(2)}`).join(' · ')}
         </div>
         <ContractExpiryLine setup={setup} />
         <div className="grid grid-cols-3 gap-1.5">
           <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
-            <div className="text-gray-400 light:text-slate-600 text-[10px]">Net {isCredit ? 'Credit' : 'Debit'}</div>
+            <div className="text-gray-400 light:text-slate-600 text-xs">Net {isCredit ? 'Credit' : 'Debit'}</div>
             <div className="text-gray-200 light:text-slate-800 font-bold tabular-nums text-base text-glow-cyan">{Math.abs(setup.netPremium ?? 0).toFixed(2)}</div>
           </div>
           <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
-            <div className="text-gray-400 light:text-slate-600 text-[10px]">Max Loss</div>
+            <div className="text-gray-400 light:text-slate-600 text-xs">Max Loss</div>
             <div className="text-red-400 font-bold tabular-nums text-base text-glow-red">{setup.maxLoss!.toFixed(2)}</div>
           </div>
           <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
-            <div className="text-gray-400 light:text-slate-600 text-[10px]">Max Profit</div>
+            <div className="text-gray-400 light:text-slate-600 text-xs">Max Profit</div>
             <div className="text-emerald-400 font-bold tabular-nums text-base text-glow-emerald">{setup.maxProfit!.toFixed(2)}</div>
           </div>
         </div>
-        <div className="text-[10px] text-gray-400 light:text-slate-600 mt-1.5">
+        <div className="text-xs text-gray-400 light:text-slate-600 mt-1.5">
           {setup.breakevenLower != null && setup.breakevenUpper != null
             ? `Breakeven range ${formatIndianNumber(setup.breakevenLower, 0)}–${formatIndianNumber(setup.breakevenUpper, 0)}`
             : setup.breakeven != null
@@ -1032,7 +1032,7 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
             : null}
         </div>
         {liveMark}
-        <p className="text-[10px] text-gray-400 mt-2.5 leading-snug">
+        <p className="text-xs text-gray-400 mt-2.5 leading-snug">
           Defined-risk spread — matches Strategy Scanner's IV-regime call for this symbol.{lockedNote}
         </p>
       </IntelCard>
@@ -1045,9 +1045,9 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
   return (
     <IntelCard title="Trade Setup" accent="emerald">
       <div className="flex items-center justify-between mb-1">
-        <span className="text-[10px] font-bold uppercase tracking-wide text-emerald-400 light:text-emerald-700">Active paper trade</span>
+        <span className="text-xs font-bold uppercase tracking-wide text-emerald-400 light:text-emerald-700">Active paper trade</span>
         <span
-          className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+          className={`text-xs font-semibold px-1.5 py-0.5 rounded ${
             badge.key === 'PAPER_RESEARCH'
               ? 'bg-orange-500/15 text-orange-300 light:text-orange-700'
               : badge.key === 'STRUCTURE' ? 'bg-cyan-500/15 text-cyan-400 light:text-cyan-700' : badge.key === 'MOMENTUM_BREAK' ? 'bg-violet-500/15 text-violet-300 light:text-violet-700' : 'bg-gray-500/15 text-gray-300 light:text-slate-700'
@@ -1061,7 +1061,7 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
           {setup.side} {formatIndianNumber(setup.strike!, 0)}
         </span>
         {setup.strategy === 'STRUCTURE' && structure?.enabled && <TimeframeTag timeframe={structure.timeframe} />}
-        <span className="text-[10px] text-gray-400 light:text-slate-600 font-medium">R:R {setup.riskReward!.toFixed(2)}</span>
+        <span className="text-xs text-gray-400 light:text-slate-600 font-medium">R:R {setup.riskReward!.toFixed(2)}</span>
       </div>
       {mintedFrom?.patterns && (
         <div className="-mt-1.5 mb-2">
@@ -1071,21 +1071,21 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
       <ContractExpiryLine setup={setup} />
       <div className="grid grid-cols-3 gap-1.5">
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
-          <div className="text-gray-400 light:text-slate-600 text-[10px]">Entry</div>
+          <div className="text-gray-400 light:text-slate-600 text-xs">Entry</div>
           <div className="text-gray-200 light:text-slate-800 font-bold tabular-nums text-base text-glow-cyan">{setup.entry!.toFixed(2)}</div>
         </div>
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
-          <div className="text-gray-400 light:text-slate-600 text-[10px]">SL</div>
+          <div className="text-gray-400 light:text-slate-600 text-xs">SL</div>
           <div className="text-red-400 font-bold tabular-nums text-base text-glow-red">{setup.stopLoss!.toFixed(2)}</div>
-          {trailed && <div className="text-[9px] text-gray-500 light:text-slate-500">trailed from {setup.initialStopLoss!.toFixed(2)}</div>}
+          {trailed && <div className="text-xs text-gray-500 light:text-slate-500">trailed from {setup.initialStopLoss!.toFixed(2)}</div>}
         </div>
         <div className="bg-gray-900/50 light:bg-slate-100 rounded-lg px-2 py-1.5">
-          <div className="text-gray-400 light:text-slate-600 text-[10px]">Target</div>
+          <div className="text-gray-400 light:text-slate-600 text-xs">Target</div>
           <div className="text-emerald-400 font-bold tabular-nums text-base text-glow-emerald">{setup.target!.toFixed(2)}</div>
         </div>
       </div>
       {setup.trailState && (
-        <div className="mt-1.5 text-[10px] text-gray-400 light:text-slate-600" title="Server-side trailing rule: at +1R the stop moves to entry, at +2R it locks +1x initial risk. Display only.">
+        <div className="mt-1.5 text-xs text-gray-400 light:text-slate-600" title="Server-side trailing rule: at +1R the stop moves to entry, at +2R it locks +1x initial risk. Display only.">
           {setup.trailState.state === 'LOCKED_PROFIT'
             ? `SL locked +1x risk (₹${setup.trailState.lockPremium.toFixed(2)})`
             : setup.trailState.state === 'BREAKEVEN'
@@ -1094,7 +1094,7 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
         </div>
       )}
       {setup.positionSize && (
-        <div className="mt-1.5 bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-1.5 flex items-center justify-between text-[10px]">
+        <div className="mt-1.5 bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-1.5 flex items-center justify-between text-xs">
           <span className="text-gray-400 light:text-slate-600">
             {setup.positionSize.lots > 0
               ? `${setup.positionSize.lots} lot(s) · ${setup.positionSize.quantity} qty`
@@ -1103,6 +1103,11 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
           <span className={setup.positionSize.riskPct > DEFAULT_RISK_CONFIG.maxRiskPerTrade ? 'text-amber-400 font-semibold' : 'text-gray-400 light:text-slate-600 font-semibold'}>
             ₹{setup.positionSize.riskAmount.toFixed(0)} risk ({setup.positionSize.riskPct}% of ₹{(setup.positionSize.capital / 100000).toFixed(1)}L)
           </span>
+        </div>
+      )}
+      {setup.estimatedCostPct != null && (
+        <div className="mt-1.5 text-xs text-gray-400 light:text-slate-600" title="Spread, slippage, statutory charges and brokerage for the round trip, from the quote at the mint. A model; a paper trade has no actual fill.">
+          Estimated round-trip cost: ~{setup.estimatedCostPct}% of premium (an estimate, not an actual fill)
         </div>
       )}
       {liveMark}
@@ -1122,7 +1127,7 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
         />
       )}
       <RejectedToday rows={rejectedToday} outcomes={outcomes} />
-      <p className="text-[10px] text-gray-400 mt-2.5 leading-snug">
+      <p className="text-xs text-gray-400 mt-2.5 leading-snug">
         PAPER TRADE — heuristic from live data, outcomes are simulated. Not investment advice.{lockedNote}
       </p>
     </IntelCard>
@@ -1138,7 +1143,7 @@ function ContractExpiryLine({ setup }: { setup: TradeSetup }) {
   if (!setup.expiry) return null;
   return (
     <div
-      className="text-[10px] text-gray-400 light:text-slate-600 mb-2 tabular-nums"
+      className="text-xs text-gray-400 light:text-slate-600 mb-2 tabular-nums"
       title="The option contract this setup's strike, entry, SL and target are priced from"
     >
       Expiry <span className="text-gray-200 light:text-slate-800 font-semibold">{formatExpiryDate(setup.expiry)}</span>
@@ -1160,7 +1165,7 @@ function LiveMarkRow({ currentValue, unrealizedPnl }: { currentValue: number; un
       className="flex items-center justify-between mt-1.5 bg-gray-900/50 light:bg-slate-100 rounded-lg px-2.5 py-1.5"
       title="Paper trade marked to the live quote. The figure in brackets is SIMULATED P&L — no order was placed."
     >
-      <span className="text-[10px] text-gray-400 light:text-slate-600">Paper mark · simulated P&amp;L</span>
+      <span className="text-xs text-gray-400 light:text-slate-600">Paper mark · simulated P&amp;L</span>
       <span className="text-xs font-semibold tabular-nums">
         <span className="text-gray-200 light:text-slate-800">{currentValue.toFixed(2)}</span>
         {unrealizedPnl != null && (

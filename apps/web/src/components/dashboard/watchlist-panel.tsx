@@ -40,7 +40,7 @@ export function WatchlistPanel({ allIndices, fnoRows }: { allIndices: MarketQuot
     <div className="card-premium overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-800/40 light:border-slate-200 flex items-center justify-between">
         <h3 className="text-sm font-bold text-gray-100 light:text-slate-900">⭐ {activeWatchlist?.name ?? 'Watchlist'}</h3>
-        <span className="text-[10px] text-gray-400 light:text-slate-600">{rows.length} symbols</span>
+        <span className="text-xs text-gray-400 light:text-slate-600">{rows.length} symbols</span>
       </div>
 
       {rows.length === 0 ? (
@@ -69,7 +69,7 @@ export function WatchlistPanel({ allIndices, fnoRows }: { allIndices: MarketQuot
 
                 <div onClick={() => openTab(r.symbol, r.exchange)} className="flex-1 min-w-0 cursor-pointer">
                   <div className="text-xs font-bold text-gray-100 light:text-slate-900 truncate">{r.symbol}</div>
-                  <div className="text-[10px] text-gray-400 light:text-slate-600 tabular-nums">
+                  <div className="text-xs text-gray-400 light:text-slate-600 tabular-nums">
                     {r.exchange}
                     {r.oi != null ? ` · OI ${formatCompact(r.oi)}` : ''}
                     {r.volume != null ? ` · Vol ${formatCompact(r.volume)}` : ''}
@@ -81,7 +81,7 @@ export function WatchlistPanel({ allIndices, fnoRows }: { allIndices: MarketQuot
                     {r.ltp != null ? formatIndianNumber(r.ltp, 2) : '—'}
                   </div>
                   {r.changePercent != null && (
-                    <div className={`text-[10px] font-semibold tabular-nums ${isPos ? 'text-emerald-400' : 'text-red-400'}`}>
+                    <div className={`text-xs font-semibold tabular-nums ${isPos ? 'text-emerald-400' : 'text-red-400'}`}>
                       {isPos ? '+' : ''}
                       {formatPercent(r.changePercent)}
                     </div>

@@ -91,7 +91,7 @@ export function EventCalendarPanel({
       <h3 className="text-xs font-bold text-gray-300 light:text-slate-700 uppercase tracking-wide mb-1">
         Event Calendar <span className="text-gray-400 light:text-slate-600 font-medium normal-case">— {symbol}</span>
       </h3>
-      <p className="text-[10px] text-gray-400 light:text-slate-600 mb-3 leading-snug">
+      <p className="text-xs text-gray-400 light:text-slate-600 mb-3 leading-snug">
         F&amp;O expiries and corporate actions (dividend/bonus/split/rights/buyback) — earnings/RBI/macro dates aren&apos;t tracked yet.
       </p>
 
@@ -124,13 +124,13 @@ export function EventCalendarPanel({
                 <div className="flex items-center gap-2 min-w-0">
                   <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${KIND_DOT[e.kind]}`} />
                   <div className="min-w-0">
-                    <div className="text-[11px] font-medium text-gray-200 light:text-slate-800 truncate">{e.label}</div>
-                    <div className="text-[10px] text-gray-400 light:text-slate-600">
+                    <div className="text-xs font-medium text-gray-200 light:text-slate-800 truncate">{e.label}</div>
+                    <div className="text-xs text-gray-400 light:text-slate-600">
                       {new Date(e.date).toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' })}
                     </div>
                   </div>
                 </div>
-                <span className={`shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full tabular-nums ${badgeClass}`} title={badgeTitle}>
+                <span className={`shrink-0 text-xs font-bold px-2 py-0.5 rounded-full tabular-nums ${badgeClass}`} title={badgeTitle}>
                   {e.dte === 0 ? 'Today' : e.dte === 1 ? '1d' : `${e.dte}d`}
                 </span>
               </div>

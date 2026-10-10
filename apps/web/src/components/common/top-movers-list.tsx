@@ -44,11 +44,11 @@ export function TopMoversList({
               onClick={() => useAssetTabsStore.getState().openTab(item.symbol, item.exchange)}
               className={`flex items-center gap-2.5 text-xs py-2 px-3.5 hover:bg-gray-800/30 light:hover:bg-slate-100 cursor-pointer transition-all duration-150 border-l-2 border-l-transparent hover:border-l-current ${rankText} group`}
             >
-              <span className={`w-5 h-5 flex items-center justify-center rounded-md text-[10px] font-bold shrink-0 badge-glass ${rankBg} ${rankText}`}>
+              <span className={`w-5 h-5 flex items-center justify-center rounded-md text-xs font-bold shrink-0 badge-glass ${rankBg} ${rankText}`}>
                 {idx < 3 ? MEDALS[idx] : idx + 1}
               </span>
               <span className="text-gray-200 light:text-slate-800 font-bold flex-1 truncate group-hover:text-white transition-colors">{item.symbol}</span>
-              <span className="text-gray-400 light:text-slate-600 tabular-nums text-[11px] font-medium">{formatIndianNumber(item.ltp, 2)}</span>
+              <span className="text-gray-400 light:text-slate-600 tabular-nums text-xs font-medium">{formatIndianNumber(item.ltp, 2)}</span>
               <span className={`tabular-nums w-14 text-right font-bold text-xs ${rankText}`}>{formatPercent(item.changePercent)}</span>
             </div>
           ))}

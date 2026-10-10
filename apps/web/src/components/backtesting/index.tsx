@@ -5,6 +5,7 @@ import { DEFAULT_RISK_CONFIG, ESTIMATED_ROUND_TRIP_COST_PCT, TRADE_LOGIC_UPDATED
 import type { WinRateBucket, TradeSetupRecord, RiskMetrics, ExpiredCloseBreakdown, IndependentBetsSummary, LogicVersionBucket, StrategyBucket } from '@fno/shared';
 import { useBacktesting } from '@/lib/use-backtesting';
 import { useAssetTabsStore } from '@/stores';
+import { MetricDefinitions } from '@/components/performance/performance-nav';
 
 type PeriodTab = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
@@ -67,11 +68,11 @@ export function BacktestingPage() {
     outcomeTab === 'ALL' ? history : outcomeTab === 'OPEN' ? history.filter((r) => !r.outcome) : history.filter((r) => !!r.outcome);
 
   return (
-    <div className="p-4 space-y-4 min-h-full">
+    <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-lg font-bold text-gray-100 light:text-slate-900">Backtesting</h1>
-          <p className="text-xs text-gray-400 light:text-slate-600 mt-0.5">
+          <h1 className="text-xl font-semibold tracking-tight text-gray-100 light:text-slate-900">Backtesting</h1>
+          <p className="text-sm text-gray-400 light:text-slate-600 mt-1">
             Win-rate analysis of every PAPER TRADE setup the system has generated, recorded live as it happened. Every outcome here is a SIMULATED OUTCOME against the setup&apos;s own stop/target — no order was placed, so no figure on this page is realised account P&amp;L. Coverage grows with what gets viewed/scanned; there&apos;s no way to backfill history.
           </p>
         </div>
@@ -88,7 +89,7 @@ export function BacktestingPage() {
                     ? 'Only setups generated since trade-selection logic last changed — shows whether the current rules work, without older results mixed in'
                     : 'Every setup ever generated, under whatever logic was live at the time'
                 }
-                className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wide transition-colors ${
+                className={`px-2.5 py-1 rounded-md text-xs font-bold uppercase tracking-wide transition-colors ${
                   scopeFilter === s
                     ? 'bg-emerald-500/90 text-white'
                     : 'text-gray-400 light:text-slate-600 hover:text-gray-200 light:hover:text-slate-700'
@@ -111,7 +112,7 @@ export function BacktestingPage() {
                     ? `Intraday only (${analytics?.intradayCount ?? 0} setups)`
                     : `Positional only (${analytics?.positionalCount ?? 0} setups)`
                 }
-                className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wide transition-colors ${
+                className={`px-2.5 py-1 rounded-md text-xs font-bold uppercase tracking-wide transition-colors ${
                   modeFilter === m
                     ? 'bg-emerald-500/90 text-white'
                     : 'text-gray-400 light:text-slate-600 hover:text-gray-200 light:hover:text-slate-700'
@@ -126,7 +127,7 @@ export function BacktestingPage() {
             onChange={(e) => setLogicVersion(e.target.value)}
             aria-label="Filter by logic version"
             title="Which rule set the setups were minted under. Pre-review = before the validation-review fixes were stamped."
-            className="bg-gray-800/60 light:bg-slate-200/60 border border-gray-700 light:border-slate-300 rounded-lg px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-gray-300 light:text-slate-700"
+            className="bg-gray-800/60 light:bg-slate-200/60 border border-gray-700 light:border-slate-300 rounded-lg px-2 py-1 text-xs font-bold uppercase tracking-wide text-gray-300 light:text-slate-700"
           >
             {logicOptions.map((v) => (
               <option key={v} value={v}>
@@ -134,7 +135,7 @@ export function BacktestingPage() {
               </option>
             ))}
           </select>
-          <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-[11px] text-gray-400 light:text-slate-600">
+          <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-xs text-gray-400 light:text-slate-600">
             <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
             {isLive ? 'Live' : loading ? 'Loading…' : 'Unreachable'}
           </span>
@@ -164,6 +165,11 @@ export function BacktestingPage() {
 
       {analytics && (
         <>
+          <MetricDefinitions />
+          <p className="text-sm text-gray-400 light:text-slate-600">
+            These figures cover every recorded paper trade under the filters above, historical and recent together. For the denominator of every rate and the
+            separate measurement-reliable sample, see the Measurement page.
+          </p>
           <OverallSummary bucket={analytics.overall} />
           <RiskMetricsSummary metrics={analytics.riskMetrics} />
           {analytics.independentBets && <IndependentBetsCard bets={analytics.independentBets} />}
@@ -248,7 +254,7 @@ export function BacktestingPage() {
       <div className="flex items-center justify-between flex-wrap gap-3 pt-1">
         <div>
           <h2 className="text-sm font-bold text-gray-200 light:text-slate-800">Recent Trade Setups</h2>
-          <p className="text-[11px] text-gray-400 light:text-slate-600 mt-0.5">Every setup the system has locked in, newest first, with its outcome once resolved.</p>
+          <p className="text-sm text-gray-400 light:text-slate-600 mt-1">Every setup the system has locked in, newest first, with its outcome once resolved.</p>
         </div>
         <div className="flex items-center gap-0.5 bg-gray-800/60 light:bg-slate-200/60 rounded-lg p-0.5" role="group" aria-label="Filter by outcome">
           {(Object.keys(OUTCOME_TAB_LABELS) as OutcomeTab[]).map((t) => (
@@ -256,7 +262,7 @@ export function BacktestingPage() {
               key={t}
               type="button"
               onClick={() => setOutcomeTab(t)}
-              className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wide transition-colors ${
+              className={`px-2.5 py-1 rounded-md text-xs font-bold uppercase tracking-wide transition-colors ${
                 outcomeTab === t
                   ? 'bg-emerald-500/90 text-white'
                   : 'text-gray-400 light:text-slate-600 hover:text-gray-200 light:hover:text-slate-700'
@@ -327,11 +333,11 @@ function Collapsible({
         <span className={`text-gray-400 light:text-slate-600 text-xs transition-transform ${open ? 'rotate-90' : ''}`}>▶</span>
         <span className="text-sm font-bold text-gray-200 light:text-slate-800">{title}</span>
         {count != null && (
-          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-gray-800 light:bg-slate-100 text-gray-400 light:text-slate-600 tabular-nums">
+          <span className="text-xs font-semibold px-1.5 py-0.5 rounded bg-gray-800 light:bg-slate-100 text-gray-400 light:text-slate-600 tabular-nums">
             {count}
           </span>
         )}
-        {subtitle && <span className="text-[11px] text-gray-400 light:text-slate-600 truncate ml-1">{subtitle}</span>}
+        {subtitle && <span className="text-xs text-gray-400 light:text-slate-600 truncate ml-1">{subtitle}</span>}
       </button>
       {open && <div className="px-4 pb-4">{children}</div>}
     </div>
@@ -373,31 +379,31 @@ function OverallSummary({ bucket }: { bucket: WinRateBucket }) {
         make money" number is the one that belongs first.
       */}
       <Card accent="border-t-violet-500/50">
-        <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5" title="WIN plus any EXPIRED close (bias reversed, or the day rolled over, before target) that was still profitable at the moment it closed — the honest 'did this actually make money' read across every closed position.">
+        <div className="text-xs font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5" title="WIN plus any EXPIRED close (bias reversed, or the day rolled over, before target) that was still profitable at the moment it closed — the honest 'did this actually make money' read across every closed position.">
           Profitable Close Rate
         </div>
         <div className={`text-3xl font-bold tabular-nums ${profitableRateColor}`}>{bucket.profitableCloseRatePercent != null ? `${bucket.profitableCloseRatePercent}%` : '—'}</div>
-        <div className="text-[10px] text-gray-400 light:text-slate-600 mt-1">{bucket.profitableCloses}↑ / {bucket.unprofitableCloses}↓ · after est. costs</div>
+        <div className="text-xs text-gray-400 light:text-slate-600 mt-1">{bucket.profitableCloses}↑ / {bucket.unprofitableCloses}↓ · after est. costs</div>
       </Card>
       <Card accent="border-t-cyan-500/50">
-        <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5" title="Target-hit rate only: counts a position as a win solely if it reached its exact fixed target, and EXCLUDES every EXPIRED close regardless of P&L. Because expiries dominate, this covers only a small slice of closed trades — read Profitable Close Rate for the full picture.">
+        <div className="text-xs font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5" title="Target-hit rate only: counts a position as a win solely if it reached its exact fixed target, and EXCLUDES every EXPIRED close regardless of P&L. Because expiries dominate, this covers only a small slice of closed trades — read Profitable Close Rate for the full picture.">
           Target-Hit Rate
         </div>
         <div className={`text-3xl font-bold tabular-nums ${winRateColor}`}>{bucket.winRatePercent != null ? `${bucket.winRatePercent}%` : '—'}</div>
-        <div className="text-[10px] text-gray-400 light:text-slate-600 mt-1">
+        <div className="text-xs text-gray-400 light:text-slate-600 mt-1">
           {bucket.wins}W / {bucket.losses}L · excludes {bucket.expired} expired
         </div>
       </Card>
       <Card>
-        <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5">Total Setups</div>
+        <div className="text-xs font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5">Total Setups</div>
         <div className="text-3xl font-bold tabular-nums text-gray-100 light:text-slate-900">{bucket.total}</div>
       </Card>
       <Card>
-        <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5">Wins</div>
+        <div className="text-xs font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5">Wins</div>
         <div className="text-3xl font-bold tabular-nums text-emerald-400">{bucket.wins}</div>
       </Card>
       <Card>
-        <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5">Losses</div>
+        <div className="text-xs font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5">Losses</div>
         <div className="text-3xl font-bold tabular-nums text-red-400">{bucket.losses}</div>
       </Card>
       {/*
@@ -409,7 +415,7 @@ function OverallSummary({ bucket }: { bucket: WinRateBucket }) {
       */}
       <Card accent="border-t-emerald-500/50">
         <div
-          className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5"
+          className="text-xs font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5"
           title={`Average result per trade in Premium R (net) — multiples of that trade's own risk — after estimated round-trip costs: each setup's own estimate (spread, slippage, charges, brokerage) where recorded, ~${ESTIMATED_ROUND_TRIP_COST_PCT}% of premium for older setups. Positive means the system makes money per unit of risk; negative means it loses. Drawdown, profit factor and streaks are after the same costs.`}
         >
           Simulated Expectancy · {PREMIUM_R_NET}
@@ -421,15 +427,15 @@ function OverallSummary({ bucket }: { bucket: WinRateBucket }) {
               : `${bucket.avgRMultiple > 0 ? '+' : ''}${bucket.avgRMultiple.toFixed(2)}R`
             : '—'}
         </div>
-        <div className="text-[10px] text-gray-400 light:text-slate-600 mt-1">
+        <div className="text-xs text-gray-400 light:text-slate-600 mt-1">
           {bucket.avgRMultiple != null ? `after costs · ` : ''}
           {bucket.avgReturnPercent != null ? `${bucket.avgReturnPercent >= 0 ? '+' : ''}${bucket.avgReturnPercent}% avg premium move (gross)` : '—'}
         </div>
       </Card>
       <Card>
-        <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5">Unresolved</div>
+        <div className="text-xs font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5">Unresolved</div>
         <div className="text-3xl font-bold tabular-nums text-gray-100 light:text-slate-900">{bucket.open}</div>
-        <div className="text-[10px] text-gray-400 light:text-slate-600 mt-1">{bucket.expired} expired · {bucket.open} open</div>
+        <div className="text-xs text-gray-400 light:text-slate-600 mt-1">{bucket.expired} expired · {bucket.open} open</div>
       </Card>
     </div>
   );
@@ -452,23 +458,23 @@ function RiskMetricsSummary({ metrics }: { metrics: RiskMetrics }) {
   return (
     <div className="grid grid-cols-3 gap-3">
       <Card accent="border-t-red-500/50">
-        <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5" title="Largest peak-to-trough decline of the equity curve in R — multiples of a single trade's own risk — walking resolved trades in the order they happened. At the configured 2% risk per trade, 1R ≈ 2% of capital.">
+        <div className="text-xs font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5" title="Largest peak-to-trough decline of the equity curve in R — multiples of a single trade's own risk — walking resolved trades in the order they happened. At the configured 2% risk per trade, 1R ≈ 2% of capital.">
           Max Drawdown
         </div>
         <div className="text-3xl font-bold tabular-nums text-red-400">-{metrics.maxDrawdownR}R</div>
-        <div className="text-[10px] text-gray-400 light:text-slate-600 mt-1">
+        <div className="text-xs text-gray-400 light:text-slate-600 mt-1">
           ≈ {(metrics.maxDrawdownR * DEFAULT_RISK_CONFIG.maxRiskPerTrade).toFixed(1)}% of capital at {DEFAULT_RISK_CONFIG.maxRiskPerTrade}% risk/trade
         </div>
       </Card>
       <Card accent="border-t-orange-500/50">
-        <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5" title="Longest streak of consecutive unprofitable closes in a row — the same population Profitable Close Rate uses.">
+        <div className="text-xs font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5" title="Longest streak of consecutive unprofitable closes in a row — the same population Profitable Close Rate uses.">
           Max Consecutive Losses
         </div>
         <div className="text-3xl font-bold tabular-nums text-orange-400">{metrics.maxConsecutiveLosses}</div>
-        <div className="text-[10px] text-gray-400 light:text-slate-600 mt-1">{metrics.maxConsecutiveWins} max consecutive wins</div>
+        <div className="text-xs text-gray-400 light:text-slate-600 mt-1">{metrics.maxConsecutiveWins} max consecutive wins</div>
       </Card>
       <Card accent="border-t-violet-500/50">
-        <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5" title="Gross profit ÷ gross loss across resolved trades. Above 1 means total wins outweigh total losses; below 1 means the losses are bigger even if the win rate looks fine.">
+        <div className="text-xs font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider mb-1.5" title="Gross profit ÷ gross loss across resolved trades. Above 1 means total wins outweigh total losses; below 1 means the losses are bigger even if the win rate looks fine.">
           Profit Factor
         </div>
         <div className={`text-3xl font-bold tabular-nums ${profitFactorColor}`}>{metrics.profitFactor != null ? metrics.profitFactor.toFixed(2) : '—'}</div>
@@ -488,7 +494,7 @@ function WinRateTable({ buckets, periodLabel }: { buckets: WinRateBucket[]; peri
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
-              <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+              <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-xs">
                 <th className="text-left px-2 py-1.5 font-medium">Period</th>
                 <th className="text-right px-2 py-1.5 font-medium">Setups</th>
                 <th className="text-right px-2 py-1.5 font-medium">Wins</th>
@@ -549,24 +555,24 @@ function IndependentBetsCard({ bets }: { bets: IndependentBetsSummary }) {
   return (
     <Card accent="border-t-sky-500/50">
       <div className="flex items-baseline justify-between flex-wrap gap-2">
-        <div className="text-[10px] font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider" title={bets.note}>
+        <div className="text-xs font-semibold text-gray-400 light:text-slate-600 uppercase tracking-wider" title={bets.note}>
           Independent Bets
         </div>
-        <div className="text-[10px] text-gray-400 light:text-slate-600">
+        <div className="text-xs text-gray-400 light:text-slate-600">
           {bets.setups} closed setups → {bets.clusters} independent bets · {bets.multiSetupClusters} correlated cluster{bets.multiSetupClusters === 1 ? '' : 's'} (largest {bets.largestCluster})
         </div>
       </div>
       <div className="grid grid-cols-3 gap-3 mt-2">
         <div>
-          <div className="text-[10px] text-gray-400 light:text-slate-600">Profitable close rate (per bet)</div>
+          <div className="text-xs text-gray-400 light:text-slate-600">Profitable close rate (per bet)</div>
           <div className="text-xl font-bold tabular-nums text-gray-100 light:text-slate-900">{bets.profitableCloseRatePercent != null ? `${bets.profitableCloseRatePercent}%` : '—'}</div>
         </div>
         <div>
-          <div className="text-[10px] text-gray-400 light:text-slate-600">Profit factor (per bet)</div>
+          <div className="text-xs text-gray-400 light:text-slate-600">Profit factor (per bet)</div>
           <div className="text-xl font-bold tabular-nums text-gray-100 light:text-slate-900">{bets.profitFactor != null ? bets.profitFactor.toFixed(2) : '—'}</div>
         </div>
         <div>
-          <div className="text-[10px] text-gray-400 light:text-slate-600" title={PREMIUM_R_NET_TITLE}>
+          <div className="text-xs text-gray-400 light:text-slate-600" title={PREMIUM_R_NET_TITLE}>
             {PREMIUM_R_NET} · total / per bet
           </div>
           <div className={`text-xl font-bold tabular-nums ${rTone(bets.netR)}`}>
@@ -584,7 +590,7 @@ function ExpiredBreakdownTable({ rows }: { rows: ExpiredCloseBreakdown[] }) {
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead>
-            <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+            <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-xs">
               <th className="text-left px-2 py-1.5 font-medium">Close reason</th>
               <th className="text-right px-2 py-1.5 font-medium">Expired</th>
               <th className="text-right px-2 py-1.5 font-medium">Profitable</th>
@@ -625,7 +631,7 @@ function LogicVersionTable({
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead>
-            <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+            <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-xs">
               <th className="text-left px-2 py-1.5 font-medium">{keyLabel}</th>
               <th className="text-right px-2 py-1.5 font-medium">Setups</th>
               <th className="text-right px-2 py-1.5 font-medium" title="Won / lost / expired (still open not shown)">W / L / Exp</th>
@@ -681,7 +687,7 @@ function SymbolTable({ symbols, onOpen }: { symbols: Array<WinRateBucket & { sym
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
-              <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+              <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-xs">
                 <th className="text-left px-2 py-1.5 font-medium">Symbol</th>
                 <th className="text-right px-2 py-1.5 font-medium">Setups</th>
                 <th className="text-right px-2 py-1.5 font-medium">W / L</th>
@@ -746,7 +752,7 @@ function TradeSetupHistoryTable({
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
-              <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+              <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-xs">
                 <th className="text-left px-2 py-1.5 font-medium">Generated</th>
                 <th className="text-left px-2 py-1.5 font-medium">Symbol</th>
                 <th className="text-center px-2 py-1.5 font-medium">Mode</th>
@@ -776,7 +782,7 @@ function TradeSetupHistoryTable({
                     {new Date(r.generatedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
                     {r.voided && (
                       <span
-                        className="ml-1.5 inline-block px-1 py-px rounded text-[9px] font-bold text-red-400 light:text-red-700 bg-red-500/10"
+                        className="ml-1.5 inline-block px-1 py-px rounded text-xs font-bold text-red-400 light:text-red-700 bg-red-500/10"
                         title={r.voidReason ?? 'Outcome invalidated — excluded from every statistic above'}
                       >
                         VOID
@@ -784,7 +790,7 @@ function TradeSetupHistoryTable({
                     )}
                     {r.generatedOffSession && (
                       <span
-                        className="ml-1.5 inline-block px-1 py-px rounded text-[9px] font-bold text-amber-400 light:text-amber-700 bg-amber-500/10"
+                        className="ml-1.5 inline-block px-1 py-px rounded text-xs font-bold text-amber-400 light:text-amber-700 bg-amber-500/10"
                         title="Generated outside a live session — excluded from every statistic above"
                       >
                         OFF-HRS
@@ -793,7 +799,7 @@ function TradeSetupHistoryTable({
                   </td>
                   <td className="px-2 py-2 font-semibold text-gray-200 light:text-slate-800">{r.symbol}</td>
                   <td className="text-center px-2 py-2">
-                    <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${r.mode === 'POSITIONAL' ? 'text-purple-400 bg-purple-500/10' : 'text-blue-400 bg-blue-500/10'}`}>
+                    <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-bold ${r.mode === 'POSITIONAL' ? 'text-purple-400 bg-purple-500/10' : 'text-blue-400 bg-blue-500/10'}`}>
                       {r.mode === 'POSITIONAL' ? 'POS' : 'INTRA'}
                     </span>
                   </td>
@@ -802,7 +808,7 @@ function TradeSetupHistoryTable({
                       const badge = engineBadge(isSpread ? null : r.strategy, isSpread ? null : researchTriggerOf(r.logicVersion));
                       return (
                         <span
-                          className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold whitespace-nowrap ${
+                          className={`inline-block px-1.5 py-0.5 rounded text-xs font-bold whitespace-nowrap ${
                             badge.key === 'PAPER_RESEARCH'
                               ? 'text-orange-300 light:text-orange-700 bg-orange-500/10'
                               : badge.key === 'STRUCTURE' ? 'text-cyan-400 bg-cyan-500/10' : badge.key === 'MOMENTUM_BREAK' ? 'text-violet-300 bg-violet-500/10' : 'text-gray-300 light:text-slate-700 bg-gray-500/10'
@@ -832,7 +838,7 @@ function TradeSetupHistoryTable({
                   <td className="text-right px-2 py-2 tabular-nums text-emerald-400/80">{rewardAmount.toFixed(2)}</td>
                   <td className="text-right px-2 py-2 tabular-nums text-gray-400 light:text-slate-600">{r.riskReward.toFixed(2)}</td>
                   <td className="text-center px-2 py-2">
-                    <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${r.outcome ? OUTCOME_STYLE[r.outcome] : 'text-cyan-400 bg-cyan-500/10'}`}>
+                    <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${r.outcome ? OUTCOME_STYLE[r.outcome] : 'text-cyan-400 bg-cyan-500/10'}`}>
                       {r.outcome ?? 'OPEN'}
                     </span>
                   </td>

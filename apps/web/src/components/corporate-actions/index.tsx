@@ -47,16 +47,16 @@ export function CorporateActionsPage() {
   }, [actions, query, typeFilter]);
 
   return (
-    <div className="p-4 space-y-4 min-h-full">
+    <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-lg font-bold text-gray-100 light:text-slate-900">Corporate Actions</h1>
-          <p className="text-xs text-gray-400 light:text-slate-600 mt-0.5">
+          <h1 className="text-xl font-semibold tracking-tight text-gray-100 light:text-slate-900">Corporate Actions</h1>
+          <p className="text-sm text-gray-400 light:text-slate-600 mt-1">
             Upcoming dividends, bonuses, splits, rights issues, and buybacks across NSE — ex-date today or later, nearest first. Sourced from NSE's own corporate-filings data.
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-[11px] text-gray-400 light:text-slate-600">
+          <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-xs text-gray-400 light:text-slate-600">
             <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
             {isLive ? `${filtered.length} of ${actions.length}` : loading ? 'Loading…' : 'Unreachable'}
           </span>
@@ -114,8 +114,8 @@ export function CorporateActionsPage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-sm font-semibold text-gray-200 light:text-slate-800">{a.symbol}</span>
-                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${TYPE_BADGE[a.type]}`}>{a.type}</span>
-                    <span className="text-[10px] text-gray-400 light:text-slate-600 truncate">{a.company}</span>
+                    <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${TYPE_BADGE[a.type]}`}>{a.type}</span>
+                    <span className="text-xs text-gray-400 light:text-slate-600 truncate">{a.company}</span>
                   </div>
                   <p className="text-xs text-gray-400 light:text-slate-600 leading-snug">{a.purpose}</p>
                 </div>
@@ -123,7 +123,7 @@ export function CorporateActionsPage() {
                   <div className="text-xs text-gray-300 light:text-slate-700 font-medium tabular-nums">
                     {new Date(a.exDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' })}
                   </div>
-                  <div className={`text-[10px] font-semibold ${dte <= 3 ? 'text-amber-400' : 'text-gray-400 light:text-slate-600'}`}>
+                  <div className={`text-xs font-semibold ${dte <= 3 ? 'text-amber-400' : 'text-gray-400 light:text-slate-600'}`}>
                     {dte === 0 ? 'Ex-date today' : dte === 1 ? 'Ex-date tomorrow' : `${dte}d to ex-date`}
                   </div>
                 </div>

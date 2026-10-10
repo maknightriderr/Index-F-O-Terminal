@@ -35,7 +35,7 @@ function Panel({ title, subtitle, children }: { title: string; subtitle?: string
     <section className="bg-gray-900/40 light:bg-white border border-gray-800/60 light:border-slate-200 rounded-lg p-4 space-y-2">
       <header>
         <h4 className="text-sm font-semibold text-gray-200 light:text-slate-800">{title}</h4>
-        {subtitle && <p className="text-[11px] text-gray-500 light:text-slate-500">{subtitle}</p>}
+        {subtitle && <p className="text-xs text-gray-500 light:text-slate-500">{subtitle}</p>}
       </header>
       {children}
     </section>

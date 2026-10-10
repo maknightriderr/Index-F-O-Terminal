@@ -102,7 +102,7 @@ function Card({ title, subtitle, children }: { title: string; subtitle?: string;
     <div className="bg-gray-900/40 light:bg-white border border-gray-800/60 light:border-slate-200 rounded-lg p-4">
       <div className="mb-3">
         <h3 className="text-sm font-semibold text-gray-200 light:text-slate-800">{title}</h3>
-        {subtitle && <p className="text-[11px] text-gray-500 light:text-slate-500 mt-0.5">{subtitle}</p>}
+        {subtitle && <p className="text-xs text-gray-500 light:text-slate-500 mt-0.5">{subtitle}</p>}
       </div>
       {children}
     </div>
@@ -132,7 +132,7 @@ function RateCell({ r }: { r: DiagnosticsRate }) {
 
 function Definitions({ keys }: { keys: (keyof typeof DEF)[] }) {
   return (
-    <details className="text-[11px] text-gray-400 light:text-slate-600">
+    <details className="text-xs text-gray-400 light:text-slate-600">
       <summary className="cursor-pointer text-gray-500 light:text-slate-500 select-none">Definitions</summary>
       <ul className="mt-1.5 space-y-0.5 list-disc pl-4">
         {keys.map((k) => (
@@ -144,7 +144,7 @@ function Definitions({ keys }: { keys: (keyof typeof DEF)[] }) {
 }
 
 const SegmentTag = ({ segment }: { segment: string }) => (
-  <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${segment === 'MCX' ? 'bg-amber-500/15 text-amber-300 light:text-amber-700' : 'bg-sky-500/15 text-sky-300 light:text-sky-700'}`}>{segment}</span>
+  <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${segment === 'MCX' ? 'bg-amber-500/15 text-amber-300 light:text-amber-700' : 'bg-sky-500/15 text-sky-300 light:text-sky-700'}`}>{segment}</span>
 );
 
 const bySegmentThenName = <T extends { segment: string; instrument?: string }>(a: T, b: T) => a.segment.localeCompare(b.segment) || (a.instrument ?? '').localeCompare(b.instrument ?? '');
@@ -168,7 +168,7 @@ function OpportunityCells({ s }: { s: DiagnosticsOpportunityStats }) {
 
 function OpportunityHead({ first }: { first: string }) {
   return (
-    <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+    <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-xs">
       <Th align="left">{first}</Th>
       <Th def={DEF.opportunities}>Objective opps</Th>
       <Th def={DEF.detected}>Detected</Th>
@@ -198,7 +198,7 @@ function OpportunityView({ opportunity }: { opportunity: SignalDiagnosticsData['
                   <td className="px-2 py-1.5 font-medium text-gray-200 light:text-slate-800">
                     <span className="mr-1.5">{o.instrument}</span>
                     <SegmentTag segment={o.segment} />
-                    <span className="block text-[10px] text-gray-500 light:text-slate-500 font-normal">
+                    <span className="block text-xs text-gray-500 light:text-slate-500 font-normal">
                       {o.sessions} sessions · {o.correctlyEmptySessions} correctly empty
                     </span>
                   </td>
@@ -232,7 +232,7 @@ function OpportunityView({ opportunity }: { opportunity: SignalDiagnosticsData['
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
-              <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+              <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-xs">
                 <Th align="left">Instrument</Th>
                 <Th def={DEF.dataGap}>Data gap</Th>
                 <Th def={DEF.missedRate}>Missed rate</Th>
@@ -293,7 +293,7 @@ function MajorMovesView({ rows }: { rows: SignalDiagnosticsData['majorMoves'] })
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+                <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-xs">
                   <Th align="left">Date</Th>
                   <Th align="left">Instrument</Th>
                   <Th align="left" def={DEF.majorMove}>Move</Th>
@@ -313,20 +313,20 @@ function MajorMovesView({ rows }: { rows: SignalDiagnosticsData['majorMoves'] })
                     </td>
                     <td className="px-2 py-1.5 tabular-nums text-gray-300 light:text-slate-700 whitespace-nowrap">
                       {m.direction === 'BULLISH' ? '▲' : '▼'} {fmt(m.startPrice)} → {fmt(m.endPrice)}
-                      <span className="block text-[10px] text-gray-500 light:text-slate-500">
+                      <span className="block text-xs text-gray-500 light:text-slate-500">
                         {fmt(m.sizeAdr)}× avg range · {time(m.startTime)}–{time(m.endTime)} · {m.coverage ?? '—'}
                       </span>
                     </td>
                     <td className="px-2 py-1.5 text-gray-400 light:text-slate-600">
                       {m.firstEventType ?? '—'}
-                      {m.firstEventTime != null && <span className="block text-[10px] text-gray-500 light:text-slate-500">{time(m.firstEventTime)}</span>}
+                      {m.firstEventTime != null && <span className="block text-xs text-gray-500 light:text-slate-500">{time(m.firstEventTime)}</span>}
                     </td>
                     <td className="px-2 py-1.5 text-gray-400 light:text-slate-600">{m.familiesRecognized.length ? m.familiesRecognized.join(', ').toLowerCase().replace(/_/g, ' ') : 'none'}</td>
                     <td className="px-2 py-1.5 tabular-nums text-gray-300 light:text-slate-700 whitespace-nowrap">
                       {m.firstActionable ? (
                         <>
                           {m.firstActionable.triggerId} @ {fmt(m.firstActionable.entry)}
-                          <span className="block text-[10px] text-gray-500 light:text-slate-500">
+                          <span className="block text-xs text-gray-500 light:text-slate-500">
                             {Math.round(m.firstActionable.remainingMovePct * 100)}% of the move left{m.firstActionable.decisionTime ? ` · ${time(m.firstActionable.decisionTime)}` : ''}
                           </span>
                         </>
@@ -336,7 +336,7 @@ function MajorMovesView({ rows }: { rows: SignalDiagnosticsData['majorMoves'] })
                     </td>
                     <td className="px-2 py-1.5">
                       <span className={`font-semibold ${MOVE_CLASS_STYLE[m.classification] ?? 'text-red-400 light:text-red-700'}`}>{m.classification}</span>
-                      {m.reason && <span className="block text-[10px] text-gray-500 light:text-slate-500 max-w-xs">{m.reason}</span>}
+                      {m.reason && <span className="block text-xs text-gray-500 light:text-slate-500 max-w-xs">{m.reason}</span>}
                     </td>
                   </tr>
                 ))}
@@ -381,7 +381,7 @@ function RegistryView({
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead>
-            <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+            <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-xs">
               <Th align="left">Trigger</Th>
               <Th align="left">Family</Th>
               <Th align="left" def="The trigger's live stage now: ACTIVE/PAPER trade; SHADOW is live but never trades; RETIRED is off.">Live stage</Th>
@@ -395,11 +395,11 @@ function RegistryView({
             {triggers.map((t) => (
               <tr key={t.triggerId} className="border-t border-gray-800/40 light:border-slate-200 align-top">
                 <td className="px-2 py-1.5 font-medium text-gray-200 light:text-slate-800 whitespace-nowrap">
-                  {t.triggerId} <span className="block text-[10px] font-normal text-gray-400 light:text-slate-600">{t.name} · v{t.version}</span>
+                  {t.triggerId} <span className="block text-xs font-normal text-gray-400 light:text-slate-600">{t.name} · v{t.version}</span>
                 </td>
                 <td className="px-2 py-1.5 text-gray-400 light:text-slate-600 whitespace-nowrap">{t.family.toLowerCase().replace(/_/g, ' ')}</td>
                 <td className="px-2 py-1.5">
-                  <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${STATUS_STYLE[stages[t.triggerId] ?? t.status] ?? ''}`}>{stages[t.triggerId] ?? t.status}</span>
+                  <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${STATUS_STYLE[stages[t.triggerId] ?? t.status] ?? ''}`}>{stages[t.triggerId] ?? t.status}</span>
                 </td>
                 <td className="px-2 py-1.5 text-gray-400 light:text-slate-600 whitespace-nowrap">{displacementRequiredBy.includes(t.triggerId) ? 'required' : 'not required'}</td>
                 <td className="px-2 py-1.5 text-gray-300 light:text-slate-700 tabular-nums whitespace-nowrap">
@@ -413,8 +413,8 @@ function RegistryView({
                 </td>
                 <td className="px-2 py-1.5 text-gray-300 light:text-slate-700 max-w-md">
                   {t.exactRule}
-                  <span className="block text-[10px] text-gray-500 light:text-slate-500">Decides: {t.decisionBar}</span>
-                  {t.priorEvidence && <span className="block text-[10px] text-amber-400 light:text-amber-700">{t.priorEvidence}</span>}
+                  <span className="block text-xs text-gray-500 light:text-slate-500">Decides: {t.decisionBar}</span>
+                  {t.priorEvidence && <span className="block text-xs text-amber-400 light:text-amber-700">{t.priorEvidence}</span>}
                 </td>
                 <td className="px-2 py-1.5 text-gray-400 light:text-slate-600 max-w-xs">{t.stopRule}</td>
               </tr>
@@ -423,7 +423,7 @@ function RegistryView({
         </table>
       </div>
       {forward('ONE_PER_PARENT').length > 0 && (
-        <div className="mt-3 text-[11px] text-gray-300 light:text-slate-700 tabular-nums" title="Each parent move's selected setup only (setup arbitration): what trading one setup per move would have recorded.">
+        <div className="mt-3 text-xs text-gray-300 light:text-slate-700 tabular-nums" title="Each parent move's selected setup only (setup arbitration): what trading one setup per move would have recorded.">
           <span className="font-semibold">One setup per parent move (arbitrated): </span>
           {forward('ONE_PER_PARENT').map((f) => (
             <span key={f.segment} className="mr-3">
@@ -432,7 +432,7 @@ function RegistryView({
           ))}
         </div>
       )}
-      {triggers[0] && <p className="text-[11px] text-gray-500 light:text-slate-500 mt-2">Entry: {triggers[0].entryRule} Target: {triggers[0].targetRule}</p>}
+      {triggers[0] && <p className="text-xs text-gray-500 light:text-slate-500 mt-2">Entry: {triggers[0].entryRule} Target: {triggers[0].targetRule}</p>}
     </Card>
   );
 }
@@ -446,10 +446,10 @@ function DecisionView({ summary, rejections }: { summary: DiagnosticsSummaryRow[
         {summary.map((row) => (
           <Card key={`${row.instrument}:${row.exchange}`} title={`${row.instrument} (${row.exchange})`}>
             <div className="grid grid-cols-4 gap-2 text-xs">
-              <div><div className="text-gray-500 light:text-slate-500 text-[10px] uppercase">Watch</div><div className="font-mono text-gray-300 light:text-slate-700">{row.decision.watch}</div></div>
-              <div><div className="text-gray-500 light:text-slate-500 text-[10px] uppercase">Detected</div><div className="font-mono text-gray-300 light:text-slate-700">{row.decision.detected}</div></div>
-              <div><div className="text-gray-500 light:text-slate-500 text-[10px] uppercase">Rejected</div><div className="font-mono text-red-400">{row.decision.rejected}</div></div>
-              <div><div className="text-gray-500 light:text-slate-500 text-[10px] uppercase">Traded</div><div className="font-mono text-emerald-400">{row.decision.traded}</div></div>
+              <div><div className="text-gray-500 light:text-slate-500 text-xs uppercase">Watch</div><div className="font-mono text-gray-300 light:text-slate-700">{row.decision.watch}</div></div>
+              <div><div className="text-gray-500 light:text-slate-500 text-xs uppercase">Detected</div><div className="font-mono text-gray-300 light:text-slate-700">{row.decision.detected}</div></div>
+              <div><div className="text-gray-500 light:text-slate-500 text-xs uppercase">Rejected</div><div className="font-mono text-red-400">{row.decision.rejected}</div></div>
+              <div><div className="text-gray-500 light:text-slate-500 text-xs uppercase">Traded</div><div className="font-mono text-emerald-400">{row.decision.traded}</div></div>
             </div>
           </Card>
         ))}
@@ -461,7 +461,7 @@ function DecisionView({ summary, rejections }: { summary: DiagnosticsSummaryRow[
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+                <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-xs">
                   <th className="text-left px-2 py-1.5 font-medium">Instrument</th>
                   <th className="text-left px-2 py-1.5 font-medium">Event</th>
                   <th className="text-left px-2 py-1.5 font-medium">Reason</th>
@@ -490,7 +490,7 @@ function DecisionView({ summary, rejections }: { summary: DiagnosticsSummaryRow[
 
 function PerformanceHead({ first }: { first: string }) {
   return (
-    <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+    <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-xs">
       <Th align="left">{first}</Th>
       <Th align="left" def={`${DEF.cohortTraded} ${DEF.cohortRejected}`}>Cohort</Th>
       <Th def={DEF.count}>n</Th>
@@ -581,7 +581,7 @@ function PerformanceView({ performance, grades }: { performance: SignalDiagnosti
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+                <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-xs">
                   <Th align="left">Instrument</Th>
                   <Th align="left">Grade</Th>
                   <Th align="left">Pool</Th>
@@ -623,7 +623,7 @@ function PerformanceView({ performance, grades }: { performance: SignalDiagnosti
 
 function CostHead({ first }: { first: string }) {
   return (
-    <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+    <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-xs">
       <Th align="left">{first}</Th>
       <Th align="left" def={`${DEF.cohortTraded} ${DEF.cohortRejected}`}>Cohort</Th>
       <Th def={DEF.priced}>Priced (obs/mod)</Th>
@@ -725,7 +725,7 @@ function HealthView({ leakage, census }: { leakage: DiagnosticsLeakageRow[]; cen
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px]">
+                <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-xs">
                   <th className="text-left px-2 py-1.5 font-medium">Instrument</th>
                   <th className="text-left px-2 py-1.5 font-medium">Event</th>
                   <th className="text-right px-2 py-1.5 font-medium">Rejected (graded)</th>
@@ -755,7 +755,7 @@ function HealthView({ leakage, census }: { leakage: DiagnosticsLeakageRow[]; cen
           <div className="overflow-x-auto max-h-96 overflow-y-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-[10px] sticky top-0 bg-gray-900 light:bg-white">
+                <tr className="text-gray-400 light:text-slate-600 uppercase tracking-wider text-xs sticky top-0 bg-gray-900 light:bg-white">
                   <th className="text-left px-2 py-1.5 font-medium">Date</th>
                   <th className="text-left px-2 py-1.5 font-medium">Instrument</th>
                   <th className="text-right px-2 py-1.5 font-medium">Opps</th>
@@ -821,15 +821,15 @@ function FilterBar({
 }) {
   return (
     <div className="flex flex-wrap items-end gap-3">
-      <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wide text-gray-500 light:text-slate-500">
+      <label className="flex flex-col gap-0.5 text-xs uppercase tracking-wide text-gray-500 light:text-slate-500">
         From
         <input id="diag-from" type="date" value={from} onChange={(e) => onChange({ from: e.target.value })} className={inputClass} />
       </label>
-      <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wide text-gray-500 light:text-slate-500">
+      <label className="flex flex-col gap-0.5 text-xs uppercase tracking-wide text-gray-500 light:text-slate-500">
         To
         <input id="diag-to" type="date" value={to} onChange={(e) => onChange({ to: e.target.value })} className={inputClass} />
       </label>
-      <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wide text-gray-500 light:text-slate-500">
+      <label className="flex flex-col gap-0.5 text-xs uppercase tracking-wide text-gray-500 light:text-slate-500">
         Instrument
         <select id="diag-instrument" value={instrument} onChange={(e) => onChange({ instrument: e.target.value })} className={inputClass}>
           <option value="">All, shown separately</option>
@@ -840,7 +840,7 @@ function FilterBar({
           ))}
         </select>
       </label>
-      <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wide text-gray-500 light:text-slate-500">
+      <label className="flex flex-col gap-0.5 text-xs uppercase tracking-wide text-gray-500 light:text-slate-500">
         Strategy version
         <select id="diag-strategy-version" value={strategyVersion} onChange={(e) => onChange({ strategyVersion: e.target.value })} className={inputClass}>
           <option value="">All versions</option>
@@ -851,7 +851,7 @@ function FilterBar({
           ))}
         </select>
       </label>
-      <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wide text-gray-500 light:text-slate-500">
+      <label className="flex flex-col gap-0.5 text-xs uppercase tracking-wide text-gray-500 light:text-slate-500">
         Cost version
         <select id="diag-cost-version" value={costVersion} onChange={(e) => onChange({ costVersion: e.target.value })} className={inputClass}>
           <option value="">All versions</option>

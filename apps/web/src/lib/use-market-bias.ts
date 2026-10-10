@@ -1,26 +1,17 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from './api';
-import type { MarketBias, IntelligenceScore, TradeSetup, TradingMode, StructureBlock, SetupWatchRow } from '@fno/shared';
+import { FRESH_WITHIN_MS } from './freshness';
+import type { BiasSnapshot, MarketBias, IntelligenceScore, TradeSetup, TradingMode, StructureBlock, SetupWatchRow, ReadOnlyMeta } from '@fno/shared';
 
 const POLL_INTERVAL_MS = 60000;
 
-// Retry after a short delay on the first failure — the server-side
-// fallback cache should cover most rate-limit blips, but the network
-// request itself can also fail transiently (timeout, 502 from reverse
-// proxy, etc.). One quick retry handles the common case without adding
-// meaningful latency to the poll cycle.
-const RETRY_DELAY_MS = 5000;
-
-const NO_SETUP: TradeSetup = { available: false, reason: 'Live signal engine unreachable.' };
+const NO_SETUP: TradeSetup = { available: false, reason: 'No assessment has been recorded for this symbol yet.' };
 
 /**
- * What the hook returns before any live read exists for a symbol: a neutral,
- * zero-confidence read with no inputs, carrying the REQUESTED symbol. It used
- * to be the NIFTY sample bias (78% bullish, strong bull trend) — shown under
- * whatever instrument was selected, with nothing on the Dashboard saying so.
- * Consumers should check isLive before presenting direction/regime/score.
+ * What the hook returns before any assessment exists for a symbol: a neutral, zero-confidence read carrying the
+ * REQUESTED symbol. Consumers must check isLive / assessedAt before presenting direction, regime or score.
  */
 export function placeholderBias(symbol: string): MarketBias {
   return {
@@ -31,7 +22,7 @@ export function placeholderBias(symbol: string): MarketBias {
     neutralProbability: 100,
     confidence: 0,
     regime: 'RANGE_BOUND',
-    reasoning: ['Waiting for the live signal engine.'],
+    reasoning: ['No assessment recorded yet.'],
     inputs: {},
     timestamp: 0,
   };
@@ -57,110 +48,99 @@ export function placeholderScore(symbol: string): IntelligenceScore {
   };
 }
 
-// Module-level so a revisited symbol/exchange/mode combination shows its
-// last-known bias instantly on switch instead of either (a) blanking to the
-// generic NIFTY mock, or (b) — the actual prior behavior, since state here
-// simply wasn't reset on prop change — silently showing the PREVIOUS
-// symbol's bias/regime/score mislabeled under the new symbol's header until
-// the first fetch for the new key resolved.
-const biasCache = new Map<string, { bias: MarketBias; score: IntelligenceScore; tradeSetup: TradeSetup; structure?: StructureBlock; setupWatch?: SetupWatchRow[] }>();
-function biasCacheKey(symbol: string, exchange: string, mode: TradingMode): string {
-  return `${exchange}:${symbol}:${mode}`;
+export interface BiasState {
+  bias: MarketBias;
+  score: IntelligenceScore;
+  tradeSetup: TradeSetup;
+  structure: StructureBlock | null;
+  setupWatch: SetupWatchRow[];
+  /** The assessment is recent enough to treat as current (within the engine's re-read window). */
+  isLive: boolean;
+  /** When the assessment was made (epoch ms); null when there is none. */
+  assessedAt: number | null;
+  /** Where it came from: the engine's cached result, the last decision record, or nothing. */
+  origin: 'ENGINE_CACHE' | 'LAST_DECISION_RECORD' | 'NONE';
+  /** The read-only response's own source / age. */
+  meta: ReadOnlyMeta | null;
+  error: string | null;
 }
 
+/** Pure: a read-only snapshot as the state the dashboard cards render. Never invents values the snapshot lacks. */
+export function biasStateFromSnapshot(symbol: string, snap: BiasSnapshot | null, meta: ReadOnlyMeta | null, now: number): BiasState {
+  if (!snap) {
+    return { bias: placeholderBias(symbol), score: placeholderScore(symbol), tradeSetup: NO_SETUP, structure: null, setupWatch: [], isLive: false, assessedAt: null, origin: 'NONE', meta, error: null };
+  }
+  const fresh = snap.assessedAt != null && now - snap.assessedAt <= FRESH_WITHIN_MS.bias;
+  if (snap.origin === 'ENGINE_CACHE' && snap.result) {
+    const r = snap.result as { bias: MarketBias; score: IntelligenceScore; tradeSetup: TradeSetup; structure?: StructureBlock; setupWatch?: SetupWatchRow[] };
+    return { bias: r.bias, score: r.score, tradeSetup: r.tradeSetup, structure: r.structure ?? null, setupWatch: r.setupWatch ?? [], isLive: fresh, assessedAt: snap.assessedAt, origin: 'ENGINE_CACHE', meta, error: null };
+  }
+  // The last decision record carries only direction / confidence / regime: nothing else is invented.
+  const bias: MarketBias = {
+    ...placeholderBias(symbol),
+    direction: snap.direction ?? 'NEUTRAL',
+    confidence: snap.confidence ?? 0,
+    regime: (snap.regime as MarketBias['regime']) ?? 'RANGE_BOUND',
+    reasoning: snap.reason ? [`Last recorded decision: ${snap.reason}`] : ['Last recorded decision.'],
+    timestamp: snap.assessedAt ?? 0,
+  };
+  return {
+    bias,
+    score: placeholderScore(symbol),
+    tradeSetup: { available: false, reason: `Last recorded decision${snap.reason ? `: ${snap.reason}` : ''}. The live trade setup is not part of a decision record.` },
+    structure: null,
+    setupWatch: [],
+    isLive: false,
+    assessedAt: snap.assessedAt,
+    origin: 'LAST_DECISION_RECORD',
+    meta,
+    error: null,
+  };
+}
+
+// Module-level so a revisited symbol shows its last-known assessment instantly on switch.
+const cache = new Map<string, BiasState>();
+const keyOf = (symbol: string, exchange: string, mode: TradingMode) => `${exchange}:${symbol}:${mode}`;
+
 /**
- * Live Market Bias / Regime / Intelligence Score / Trade Setup for a symbol
- * — a neutral zero-confidence placeholder (isLive: false) until the backend
- * returns a real read; never sample data.
+ * The last assessment of a symbol — market bias, regime, intelligence score and trade setup — READ-ONLY.
  *
- * Once live data has been received at least once, subsequent failures
- * preserve the last successful values instead of resetting to mocks —
- * a transient rate-limit blip shouldn't wipe real data the user is
- * actively reading.
+ * It reads GET /api/market/bias-snapshot/:symbol, which returns what the engine already computed. It never runs the
+ * engine: the old GET /api/market/bias/:symbol could mint a paper trade, write decision records and register the
+ * symbol for background warming just because a page was open.
+ *
+ * `isLive` means the assessment is recent enough to treat as current; `assessedAt` and `origin` say exactly what is
+ * on screen. The cards must show "as of <time>" when it is not live.
  */
-export function useMarketBias(
-  symbol: string,
-  exchange: string,
-  mode: TradingMode = 'INTRADAY'
-): { bias: MarketBias; score: IntelligenceScore; tradeSetup: TradeSetup; structure: StructureBlock | null; setupWatch: SetupWatchRow[]; isLive: boolean } {
-  const [bias, setBias] = useState<MarketBias>(() => placeholderBias(symbol));
-  const [score, setScore] = useState<IntelligenceScore>(() => placeholderScore(symbol));
-  const [tradeSetup, setTradeSetup] = useState<TradeSetup>(NO_SETUP);
-  // Structure engine lifecycle for this symbol (absent when the STRUCTURE flag is off).
-  const [structure, setStructure] = useState<StructureBlock | null>(null);
-  // Confirmed setups (every engine) kept alive and re-evaluated, with their option plans.
-  const [setupWatch, setSetupWatch] = useState<SetupWatchRow[]>([]);
-  const [isLive, setIsLive] = useState(false);
-  // Track whether we've ever gotten live data for this symbol — if so,
-  // failures keep the last live snapshot instead of reverting to mocks.
-  const hasReceivedLive = useRef(false);
+export function useMarketBias(symbol: string, exchange: string, mode: TradingMode = 'INTRADAY'): BiasState {
+  const [state, setState] = useState<BiasState>(() => cache.get(keyOf(symbol, exchange, mode)) ?? biasStateFromSnapshot(symbol, null, null, Date.now()));
 
   useEffect(() => {
     let cancelled = false;
-    const key = biasCacheKey(symbol, exchange, mode);
-    const cached = biasCache.get(key);
+    const key = keyOf(symbol, exchange, mode);
+    setState(cache.get(key) ?? biasStateFromSnapshot(symbol, null, null, Date.now()));
 
-    // Sync to this key's cache (or the placeholder, if never fetched) the
-    // moment symbol/exchange/mode changes — without this, whatever was on
-    // screen for the PREVIOUS key stays visible, mislabeled as the new
-    // symbol/mode, until the first fetch below resolves.
-    setBias(cached?.bias ?? placeholderBias(symbol));
-    setScore(cached?.score ?? placeholderScore(symbol));
-    setTradeSetup(cached?.tradeSetup ?? NO_SETUP);
-    setStructure(cached?.structure ?? null);
-    setSetupWatch(cached?.setupWatch ?? []);
-    setIsLive(!!cached);
-    hasReceivedLive.current = !!cached;
-
-    const fetchBias = async () => {
+    const read = async () => {
       try {
-        const data = await api.getMarketBias(symbol, exchange, mode);
+        const { data, meta } = await api.getBiasSnapshot(symbol, exchange, mode);
         if (cancelled) return;
-        biasCache.set(key, data);
-        setBias(data.bias);
-        setScore(data.score);
-        setTradeSetup(data.tradeSetup);
-        setStructure(data.structure ?? null);
-        setSetupWatch(data.setupWatch ?? []);
-        setIsLive(true);
-        hasReceivedLive.current = true;
-      } catch {
+        const next = biasStateFromSnapshot(symbol, data, meta ?? null, Date.now());
+        cache.set(key, next);
+        setState(next);
+      } catch (err) {
         if (cancelled) return;
-        // First failure: retry once after a short delay
-        try {
-          await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
-          if (cancelled) return;
-          const data = await api.getMarketBias(symbol, exchange, mode);
-          if (cancelled) return;
-          biasCache.set(key, data);
-          setBias(data.bias);
-          setScore(data.score);
-          setTradeSetup(data.tradeSetup);
-          setStructure(data.structure ?? null);
-          setSetupWatch(data.setupWatch ?? []);
-          setIsLive(true);
-          hasReceivedLive.current = true;
-        } catch {
-          if (cancelled) return;
-          // If we previously had live data (this poll cycle or an earlier
-          // visit to this same symbol/exchange/mode), keep it rather than
-          // resetting to mocks. Only mark as non-live if we never received
-          // live data for this key at all.
-          if (!hasReceivedLive.current) {
-            setIsLive(false);
-          }
-          // Otherwise: bias/score/tradeSetup stay at their last live values
-        }
+        // Keep the last assessment on screen, marked with the failure — never reset to a made-up value.
+        setState((prev) => ({ ...prev, isLive: false, error: err instanceof Error ? err.message : 'Request failed' }));
       }
     };
 
-    fetchBias();
-    const interval = setInterval(fetchBias, POLL_INTERVAL_MS);
+    read();
+    const interval = setInterval(read, POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
   }, [symbol, exchange, mode]);
 
-  return { bias, score, tradeSetup, structure, setupWatch, isLive };
+  return state;
 }
