@@ -879,11 +879,11 @@ export function SignalDiagnosticsPage() {
   const { loading, error, summary, rejections, census, grades, leakage, performance, opportunity, versions, majorMoves, triggers, triggerStages, displacementRequiredBy, shadow, refresh } = data;
 
   return (
-    <div className="p-4 space-y-4">
-      <div className="flex items-center justify-between gap-3">
+    <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-gray-100 light:text-slate-900">Signal Diagnostics</h2>
-          <p className="text-xs text-gray-500 light:text-slate-500 mt-0.5">
+          <h1 className="text-xl font-semibold tracking-tight text-gray-100 light:text-slate-900">Signal Diagnostics</h1>
+          <p className="text-sm text-gray-400 light:text-slate-600 mt-1">
             Are we missing good trades because of our architecture? Read-only, simulated paper-trade outcomes only. Instruments are shown separately; INDEX and MCX are never pooled.
           </p>
         </div>

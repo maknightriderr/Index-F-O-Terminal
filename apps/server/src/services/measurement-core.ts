@@ -171,6 +171,12 @@ export interface Tally {
   winRateAllTrades: number | null;
   expiredShare: number | null;
   baseline: { grossR: number | null; netR: number | null; nNet: number; grossRSameTradesAsNet: number | null };
+  /**
+   * Baseline net R split by how the trade ended, over the trades that have a recorded cost % (the same population as
+   * baseline.netR, so the three means and the expectancy can be read together). Expired trades are their own line and
+   * `expiredContributionToMeanNetR` is how much of baseline.netR they account for (sum of their net R / nNet).
+   */
+  netByOutcome: { WIN: { n: number; meanNetR: number | null }; LOSS: { n: number; meanNetR: number | null }; EXPIRED: { n: number; meanNetR: number | null }; expiredContributionToMeanNetR: number | null };
   /** MODELLED_SENSITIVITY: a what-if on the paper fills — not execution performance. */
   conservative: { basis: 'MODELLED_SENSITIVITY'; grossR: number | null; netR: number | null; nNet: number; grossRSameTradesAsNet: number | null };
   /** The number of trades behind each metric. Net R covers only trades with a recorded cost %, so compare it only with grossRSameTradesAsNet or between groups with equal nNet. */
@@ -190,6 +196,7 @@ export function tallyOf(trades: readonly MeasuredTrade[]): Tally {
   let expired = 0;
   const bg: number[] = [];
   const bn: number[] = [];
+  const netBy: Record<'WIN' | 'LOSS' | 'EXPIRED', number[]> = { WIN: [], LOSS: [], EXPIRED: [] };
   const bgN: number[] = [];
   const cgN: number[] = [];
   const cg: number[] = [];
@@ -213,6 +220,7 @@ export function tallyOf(trades: readonly MeasuredTrade[]): Tally {
     cg.push(f.conservativeGrossR);
     if (f.baselineNetR != null && f.conservativeNetR != null) {
       bn.push(f.baselineNetR);
+      netBy[t.outcome === 'WIN' ? 'WIN' : t.outcome === 'LOSS' ? 'LOSS' : 'EXPIRED'].push(f.baselineNetR);
       cn.push(f.conservativeNetR);
       bgN.push(f.baselineGrossR);
       cgN.push(f.conservativeGrossR);
@@ -237,6 +245,12 @@ export function tallyOf(trades: readonly MeasuredTrade[]): Tally {
     winRateAllTrades: rate(wins, n),
     expiredShare: rate(expired, n),
     baseline: { grossR: mean(bg), netR: mean(bn), nNet: bn.length, grossRSameTradesAsNet: mean(bgN) },
+    netByOutcome: {
+      WIN: { n: netBy.WIN.length, meanNetR: mean(netBy.WIN) },
+      LOSS: { n: netBy.LOSS.length, meanNetR: mean(netBy.LOSS) },
+      EXPIRED: { n: netBy.EXPIRED.length, meanNetR: mean(netBy.EXPIRED) },
+      expiredContributionToMeanNetR: bn.length ? r4(netBy.EXPIRED.reduce((a, b) => a + b, 0) / bn.length) : null,
+    },
     conservative: { basis: 'MODELLED_SENSITIVITY', grossR: mean(cg), netR: mean(cn), nNet: cn.length, grossRSameTradesAsNet: mean(cgN) },
     denominators: { winRateClosedOnly: wins + losses, winRateAllTrades: n, expiredShare: n, grossR: n, netR: bn.length },
     targetExits: { n: tx, meanHaircut: mean(hair), becomeLosses: becomeLoss, spreadFromQuote: quote, spreadFallback: fallback },

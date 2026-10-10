@@ -477,6 +477,26 @@ describe('eligibility and denominators', () => {
     expect(t.winRateClosedOnly).toBeNull();
     expect(t.baseline.grossR).toBeNull();
   });
+
+  it('splits net R by outcome over the same trades as the expectancy, with expired as its own line', () => {
+    const t = M.tallyOf(mixed);
+    const o = t.netByOutcome;
+    expect(o.WIN.n + o.LOSS.n + o.EXPIRED.n).toBe(t.baseline.nNet);
+    expect(o.WIN.meanNetR!).toBeGreaterThan(0);
+    expect(o.LOSS.meanNetR!).toBeLessThan(0);
+    // the expectancy is the n-weighted mean of the three lines, so the split reconciles with baseline.netR
+    const weighted = (o.WIN.n * o.WIN.meanNetR! + o.LOSS.n * o.LOSS.meanNetR! + o.EXPIRED.n * (o.EXPIRED.meanNetR ?? 0)) / t.baseline.nNet;
+    expect(weighted).toBeCloseTo(t.baseline.netR!, 3);
+    expect((o.EXPIRED.n * (o.EXPIRED.meanNetR ?? 0)) / t.baseline.nNet).toBeCloseTo(o.expiredContributionToMeanNetR!, 3);
+  });
+
+  it('a trade without a recorded cost is not in any net-by-outcome line, and an empty group has no means', () => {
+    const t = M.tallyOf([trade({ id: 'nc', estimatedCostPct: null })]);
+    expect(t.netByOutcome.WIN.n + t.netByOutcome.LOSS.n + t.netByOutcome.EXPIRED.n).toBe(0);
+    expect(t.netByOutcome.WIN.meanNetR).toBeNull();
+    expect(t.netByOutcome.expiredContributionToMeanNetR).toBeNull();
+    expect(M.tallyOf([]).netByOutcome.LOSS.meanNetR).toBeNull();
+  });
 });
 
 describe('summaries of the new records', () => {

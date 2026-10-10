@@ -180,7 +180,8 @@ export function buildPaperTradeView(
 }
 
 /** Pure: the response around a list of views. */
-export function paperTradesResponse(trades: PaperTradeView[]): PaperTradesResponse {
+/** `recorded` is the number of paper trades in the database (null when unknown); the rows given may be only the newest window of them. */
+export function paperTradesResponse(trades: PaperTradeView[], recorded: number | null = null): PaperTradesResponse {
   return {
     trades,
     counts: {
@@ -189,6 +190,8 @@ export function paperTradesResponse(trades: PaperTradeView[]): PaperTradesRespon
       openUntracked: trades.filter((t) => t.status === 'OPEN_UNTRACKED').length,
       closed: trades.filter((t) => t.state !== 'OPEN').length,
       excludedFromPerformance: trades.filter((t) => !t.includedInPerformance && t.state !== 'OPEN').length,
+      recorded,
+      truncated: recorded != null && recorded > trades.length,
     },
     measurementReliableFrom: new Date(MEASUREMENT_RELIABLE_FROM).toISOString(),
     cohortBoundaries: { baselineChangeAt: new Date(BASELINE_CHANGE_AT).toISOString(), trackingFixDeployedAt: new Date(TRACKING_FIX_DEPLOYED_AT).toISOString() },
@@ -235,11 +238,39 @@ async function readCostRecords(ids: readonly string[]): Promise<Map<string, Cost
   return out;
 }
 
-/** The newest `limit` paper trades, joined with their live tracking and cost records. Read-only. */
+/** Pure: the newest window plus every still-open trade from the wider history that the window did not reach. */
+export function withOpenBeyondWindow<T extends { id: string; outcome: unknown }>(window: T[], wider: readonly T[]): T[] {
+  const seen = new Set(window.map((r) => r.id));
+  return window.concat(wider.filter((r) => r.outcome == null && !seen.has(r.id)));
+}
+
+async function countRecorded(): Promise<number | null> {
+  try {
+    const rows = await sql<{ n: string }[]>`SELECT COUNT(*)::text AS n FROM signals WHERE signal_type = 'TRADE_SETUP'`;
+    const n = Number(rows[0]?.n);
+    return Number.isFinite(n) ? n : null;
+  } catch (err: any) {
+    logger.warn({ error: err.message }, 'Paper trades: recorded count failed');
+    return null;
+  }
+}
+
+/**
+ * The newest `limit` paper trades, joined with their live tracking and cost records, plus every OPEN trade older than that
+ * window (an open position must never drop out of view because newer trades pushed it past the limit). Read-only.
+ * `counts.recorded` / `counts.truncated` say how many trades exist, so a window is never presented as the whole history.
+ */
 export async function listPaperTrades(limitRaw?: number, now = Date.now()): Promise<PaperTradesResponse> {
   const limit = Math.min(Math.max(Math.trunc(limitRaw ?? DEFAULT_LIMIT) || DEFAULT_LIMIT, 1), MAX_LIMIT);
-  const records = await getTradeSetupHistory(limit);
+  let records = await getTradeSetupHistory(limit);
+  if (records.length >= limit && limit < MAX_LIMIT) {
+    records = withOpenBeyondWindow(records, await getTradeSetupHistory(MAX_LIMIT));
+  }
+  const recorded = await countRecorded();
   const openIds = records.filter((r) => r.outcome == null).map((r) => r.id);
   const [slots, marks, costs] = await Promise.all([readOpenSlots(), readTradeMarks(openIds), readCostRecords(records.map((r) => r.id))]);
-  return paperTradesResponse(records.map((r) => buildPaperTradeView(r, { now, slot: slots.get(r.id) ?? null, mark: marks.get(r.id) ?? null, cost: costs.get(r.id) ?? null })));
+  return paperTradesResponse(
+    records.map((r) => buildPaperTradeView(r, { now, slot: slots.get(r.id) ?? null, mark: marks.get(r.id) ?? null, cost: costs.get(r.id) ?? null })),
+    recorded
+  );
 }
