@@ -26,6 +26,8 @@ export const MARKET_SCAN_LATEST_KEY = 'market_scan:latest';
 export const MARKET_SCAN_LAST_KEY = 'market_scan:last';
 export const MARKET_SCAN_LAST_TTL_SECONDS = 3 * 24 * 60 * 60;
 export const biasResultKey = (exchange: string, symbol: string, mode: string): string => `bias_result:${exchange}:${symbol}:${mode}`;
+/** The same result, kept 2 days by the engine for display only (the 5-minute cache above expires after the close). */
+export const biasLastKey = (exchange: string, symbol: string, mode: string): string => `bias_last:${exchange}:${symbol}:${mode}`;
 /** The engine's own cache lifetime for a bias result (market-bias.ts BIAS_RESULT_CACHE_TTL_SECONDS). */
 export const BIAS_RESULT_CACHE_TTL_SECONDS = 5 * 60;
 
@@ -113,6 +115,11 @@ export async function readBiasSnapshot(symbol: string, exchange: Exchange, mode:
   if (cached?.bias) {
     const snap = snapshotFromCachedResult(symbol, exchange, mode, cached);
     return { data: snap, meta: readMeta('CACHE', snap.assessedAt, now) };
+  }
+  const last = await getJson<CachedBiasResult>(biasLastKey(exchange, symbol, mode));
+  if (last?.bias) {
+    const snap = snapshotFromCachedResult(symbol, exchange, mode, last);
+    return { data: snap, meta: readMeta('LAST_KNOWN', snap.assessedAt, now) };
   }
   try {
     const rows = await sql<

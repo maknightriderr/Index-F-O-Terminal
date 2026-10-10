@@ -2307,6 +2307,9 @@ async function computeMarketBias(
   // Persist the successful result as a fallback for future failures
   try {
     await redis.set(resultCacheKey, JSON.stringify(result), 'EX', BIAS_RESULT_CACHE_TTL_SECONDS);
+    // Display only (2026-10-10): the same result kept for 2 days under its own key, so the read-only snapshot can still
+    // show the last assessment after the 5-minute cache above has expired. No decision reads this key.
+    await redis.set(resultCacheKey.replace('bias_result:', 'bias_last:'), JSON.stringify(result), 'EX', 2 * 24 * 60 * 60);
   } catch (err: any) {
     logger.warn({ error: err.message, underlying }, 'Failed to cache bias result for fallback');
   }

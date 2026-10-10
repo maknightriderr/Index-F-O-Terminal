@@ -179,6 +179,15 @@ describe('GET /api/market/bias-snapshot/:symbol — read-only', () => {
     noEffects();
   });
 
+  it('serves the 2-day last-known copy when the 5-minute cache has expired', async () => {
+    store.set('bias_last:NSE:NIFTY:INTRADAY', JSON.stringify({ bias: { direction: 'BEARISH', confidence: 70, regime: 'TRENDING_DOWN', timestamp: Date.now() - 3 * 3_600_000 } }));
+    const r = await get('/api/market/bias-snapshot/NIFTY');
+    expect(r.data).toMatchObject({ direction: 'BEARISH', origin: 'ENGINE_CACHE' });
+    expect(r.meta).toMatchObject({ source: 'LAST_KNOWN' });
+    expect(r.meta.ageSeconds).toBeGreaterThan(3 * 3600 - 5);
+    noEffects();
+  });
+
   it('falls back to the last decision record, then to an explicit NONE', async () => {
     dbRows.push({ match: /decision_snapshots/, rows: [{ time: new Date('2026-10-09T10:00:00Z'), regime: 'RANGE_BOUND', bias: 'NEUTRAL', confidence: '55', pcr: '1.0', vix: '14', underlying_price: '22500', reason: 'NEUTRAL_BIAS' }] });
     let r = await get('/api/market/bias-snapshot/NIFTY');
@@ -208,6 +217,8 @@ describe('read-only constants agree with the writers', () => {
     expect(src('market-scanner.ts')).toMatch(/export const SCAN_CACHE_KEY = 'market_scan:latest'/);
     expect(src('market-bias.ts')).toContain('`bias_result:${exchange}:${underlying}:${mode}`');
     expect(V.biasResultKey('NSE', 'NIFTY', 'INTRADAY')).toBe('bias_result:NSE:NIFTY:INTRADAY');
+    expect(V.biasLastKey('NSE', 'NIFTY', 'INTRADAY')).toBe('bias_last:NSE:NIFTY:INTRADAY');
+    expect(src('market-bias.ts')).toContain("resultCacheKey.replace('bias_result:', 'bias_last:')");
     expect(V.BIAS_RESULT_CACHE_TTL_SECONDS).toBe(300);
     expect(src('market-bias.ts')).toMatch(/BIAS_RESULT_CACHE_TTL_SECONDS = 5 \* 60/);
     expect(src('fno-scanner.ts')).toContain('fnoScanLastKey(exchange)');
