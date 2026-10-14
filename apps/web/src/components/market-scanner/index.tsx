@@ -58,7 +58,7 @@ export function MarketScannerPage() {
         <div className="flex flex-wrap items-center gap-2">
           <FreshnessBadge state={freshness.state} detail={freshness.detail} />
           <span className="text-xs text-gray-400 light:text-slate-600">{scannedAt ? `Scan recorded ${formatIstDateTime(scannedAt, now)}${meta?.source === 'LAST_KNOWN' ? ' (last known)' : ''}` : ''}</span>
-          <ActionButton onClick={() => void runScan()} disabled={running} title="Runs the market scan now. It records the same decision rows as the background scan (every 5 minutes while NSE is open), so it only happens when you press this; opening this page never runs a scan.">
+          <ActionButton onClick={() => void runScan()} disabled={running || !isMarketOpen('NSE', now)} title={isMarketOpen('NSE', now) ? 'Runs the market scan now. It records the same decision rows as the background scan (every 5 minutes while NSE is open), so it only happens when you press this; opening this page never runs a scan.' : 'NSE is closed: a scan only runs in session, so there is nothing to run now. The last recorded scan stays on screen.'}>
             {running ? 'Running scan…' : 'Run scan now'}
           </ActionButton>
         </div>

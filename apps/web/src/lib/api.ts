@@ -165,7 +165,7 @@ class ApiClient {
 
   /** An EXPLICIT scan (the "Run scan" button). It records decision rows like the background scan; a page load never calls it. */
   async runMarketScan() {
-    return this.requestEnvelope<MarketScanResult>('/api/market-scanner/refresh', { method: 'POST', body: {} });
+    return this.requestEnvelope<MarketScanResult>('/api/market-scanner/refresh', { method: 'POST', body: {}, headers: { 'X-Explicit-Action': 'run-market-scan' } });
   }
 
   /** Every paper trade (open and closed) with live tracking, estimated costs and an explicit status. Read-only. */

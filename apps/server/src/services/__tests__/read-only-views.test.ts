@@ -25,6 +25,7 @@ const spies = {
   getFnoScan: vi.fn(async () => {
     throw new Error('the F&O scan must not run on a read');
   }),
+  nseOpen: vi.fn(() => true),
   sqlWrites: vi.fn(),
   providerCalls: vi.fn(),
 };
@@ -32,6 +33,7 @@ const spies = {
 const store = new Map<string, string>();
 const dbRows: { match: RegExp; rows: any[] }[] = [];
 
+vi.mock('@fno/shared', async (importOriginal) => ({ ...(await importOriginal<typeof import('@fno/shared')>()), isMarketOpen: (...a: unknown[]) => (a[0] === 'NSE' ? spies.nseOpen() : false) }));
 vi.mock('../../lib/logger.js', () => ({ logger: { info() {}, warn() {}, error() {}, debug() {} } }));
 vi.mock('../../lib/redis.js', () => ({
   redis: {
@@ -122,16 +124,36 @@ describe('GET /api/market-scanner — read-only', () => {
     noEffects();
   });
 
+  const explicit = { 'x-explicit-action': 'run-market-scan' };
+
   it('the explicit scan is a separate POST: it runs once, and is rate-limited', async () => {
-    const first = await fetch(base() + '/api/market-scanner/refresh', { method: 'POST' });
+    const first = await fetch(base() + '/api/market-scanner/refresh', { method: 'POST', headers: explicit });
     expect(first.status).toBe(200);
     expect(spies.refreshMarketScan).toHaveBeenCalledTimes(1);
-    const second = await fetch(base() + '/api/market-scanner/refresh', { method: 'POST' });
+    const second = await fetch(base() + '/api/market-scanner/refresh', { method: 'POST', headers: explicit });
     expect(second.status).toBe(429);
     expect(spies.refreshMarketScan).toHaveBeenCalledTimes(1);
     expect(MANUAL_SCAN_MIN_INTERVAL_MS).toBeGreaterThanOrEqual(60_000);
     // GET on the refresh path does nothing
     expect((await fetch(base() + '/api/market-scanner/refresh')).status).toBe(404);
+  });
+
+  it('a POST without the explicit-action header never starts a scan', async () => {
+    const r = await fetch(base() + '/api/market-scanner/refresh', { method: 'POST' });
+    expect(r.status).toBe(400);
+    expect(((await r.json()) as any).error.code).toBe('EXPLICIT_ACTION_REQUIRED');
+    const wrong = await fetch(base() + '/api/market-scanner/refresh', { method: 'POST', headers: { 'x-explicit-action': 'yes' } });
+    expect(wrong.status).toBe(400);
+    expect(spies.refreshMarketScan).not.toHaveBeenCalled();
+  });
+
+  it('an explicit scan is refused while NSE is closed (found 11 Oct: a closed-market scan wrote 17 MARKET_CLOSED decision rows)', async () => {
+    spies.nseOpen.mockReturnValueOnce(false);
+    const r = await fetch(base() + '/api/market-scanner/refresh', { method: 'POST', headers: explicit });
+    expect(r.status).toBe(409);
+    expect(((await r.json()) as any).error.code).toBe('MARKET_CLOSED');
+    expect(spies.refreshMarketScan).not.toHaveBeenCalled();
+    noEffects();
   });
 });
 

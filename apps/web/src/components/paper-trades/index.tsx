@@ -30,7 +30,7 @@ const EXCLUSION_LABEL: Record<string, string> = {
 };
 
 export function PaperTradesPage() {
-  const { data, loading, error, fetchedAt, reload } = usePaperTrades(1000);
+  const { data, loading, error, fetchedAt, reload } = usePaperTrades(2000);
   const now = useNow(5000);
   const feed = useFeedSummary();
   const [filters, setFilters] = useState<TradeFilters>(DEFAULT_FILTERS);
@@ -52,13 +52,13 @@ export function PaperTradesPage() {
       />
       <SimulatedNotice />
 
-      <DataState loading={loading} error={error} hasData={!!data} isEmpty={!!data && data.trades.length === 0} onRetry={reload} errorTitle="Could not load paper trades" emptyTitle="No paper trades have been recorded yet" emptyHint="They appear here as the engines mint them during a session.">
+      <DataState loading={loading} error={error} hasData={!!data} isEmpty={!!data && data.trades.length === 0} onRetry={reload} errorTitle="Could not load paper trades" emptyTitle="No paper trades have been recorded yet" emptyHint="They appear here as the engines mint them during a session." staleNote={data?.counts.truncated ? `Showing the newest ${all.length} of ${data.counts.recorded} recorded paper trades (every open trade is included). Older closed trades are not on this page.` : undefined}>
         <Section
           title="Summary of the rows below"
           subtitle={`Counts follow the filters. Closed trades are only counted in performance when they are eligible (not voided, lost, off-session or a spread). Data as of ${formatIstDateTime(fetchedAt, now)}.`}
         >
           <MetricGrid min={140}>
-            <MetricTile label="Rows shown" value={counts.shown} sub={`of ${all.length} recorded`} />
+            <MetricTile label="Rows shown" value={counts.shown} sub={`of ${data?.counts.recorded ?? all.length} recorded`} />
             <MetricTile label="Open" value={counts.open} sub={`${counts.openTracked} tracked · ${counts.openUntracked} not tracked`} tone={counts.openUntracked > 0 ? 'warn' : undefined} />
             <MetricTile label="Win" value={counts.win} tone="ok" />
             <MetricTile label="Loss" value={counts.loss} tone="bad" />

@@ -37,8 +37,11 @@ function useTallyColumns(showGroup: boolean): Column<TallyRow>[] {
       { id: 'wrc', header: 'Win rate (closed only)', title: 'wins ÷ (wins + losses); expired excluded', numeric: true, hideBelow: 'md', cell: (r) => displayTally(r.tally).winRateClosed },
       { id: 'wra', header: 'Win rate (all trades)', title: 'wins ÷ (wins + losses + expired)', numeric: true, hideBelow: 'md', cell: (r) => displayTally(r.tally).winRateAll },
       { id: 'g', header: 'Gross R / trade', numeric: true, hideBelow: 'lg', cell: (r) => displayTally(r.tally).grossR },
-      { id: 'n2', header: 'Net R est. / trade', title: 'After the ESTIMATED cost; only trades with a recorded cost %', numeric: true, hideBelow: 'lg', cell: (r) => displayTally(r.tally).netR },
+      { id: 'n2', header: 'Net expectancy R / trade (est.)', title: 'Mean R per eligible trade after the ESTIMATED cost; only trades with a recorded cost %', numeric: true, hideBelow: 'lg', cell: (r) => displayTally(r.tally).netR },
       { id: 'gs', header: 'Gross R, same trades as net', numeric: true, hideBelow: 'lg', cell: (r) => displayTally(r.tally).grossRSameTrades },
+      { id: 'nw', header: 'Avg net win R (est.)', title: 'Mean estimated net R of the winning trades, with their count', numeric: true, hideBelow: '2xl', cell: (r) => displayTally(r.tally).avgNetWin },
+      { id: 'nl', header: 'Avg net loss R (est.)', title: 'Mean estimated net R of the losing trades, with their count', numeric: true, hideBelow: '2xl', cell: (r) => displayTally(r.tally).avgNetLoss },
+      { id: 'ne', header: 'Expired net R (est.)', title: 'Mean estimated net R of expired trades, with their count and how much of the mean they account for. Expired trades are never counted as wins or losses.', numeric: true, hideBelow: '2xl', cell: (r) => displayTally(r.tally).expiredNet },
       { id: 'c', header: 'Conservative-fill net R (modelled)', title: 'A modelled sensitivity test, not execution performance', numeric: true, hideBelow: 'lg', cell: (r) => displayTally(r.tally).conservativeNetR },
       { id: 'x', header: 'Excluded', hideBelow: 'md', cell: (r) => <span className="text-[var(--text-secondary)]">{displayTally(r.tally).excluded}</span> }
     );

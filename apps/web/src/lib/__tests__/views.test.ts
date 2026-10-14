@@ -96,6 +96,17 @@ describe('measurement display', () => {
     expect(none.winRateAll).toBe(MISSING);
     expect(none.netR).toBe(MISSING);
   });
+  it('shows average net win, loss and expired impact with their counts, and an em dash from an older deployment', () => {
+    const d = displayTally(tally({ netByOutcome: { WIN: { n: 4, meanNetR: 0.8 }, LOSS: { n: 3, meanNetR: -1.1 }, EXPIRED: { n: 1, meanNetR: -0.2 }, expiredContributionToMeanNetR: -0.025 } } as never));
+    expect(d.avgNetWin).toBe('+0.80R (n=4)');
+    expect(d.avgNetLoss).toBe('-1.10R (n=3)');
+    expect(d.expiredNet).toContain('(n=1)');
+    expect(d.expiredNet).toContain('-0.03R of the mean');
+    const old = displayTally(tally());
+    expect([old.avgNetWin, old.avgNetLoss, old.expiredNet]).toEqual([MISSING, MISSING, MISSING]);
+    const none = displayTally(tally({ netByOutcome: { WIN: { n: 0, meanNetR: null }, LOSS: { n: 0, meanNetR: null }, EXPIRED: { n: 0, meanNetR: null }, expiredContributionToMeanNetR: null } } as never));
+    expect(none.avgNetWin).toBe(MISSING);
+  });
   it('reads the cutoff from the server, with no hardcoded date, and says when coverage is not measurable', () => {
     expect(reliabilityLines(undefined)).toEqual([]);
     const lines = reliabilityLines({ measurementsReliableFrom: '2026-12-01T00:00:00+05:30', tradesSinceReliable: 0, withCostRecord: 0, costRecordCoveragePct: null });

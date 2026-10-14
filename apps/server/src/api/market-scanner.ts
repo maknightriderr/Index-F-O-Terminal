@@ -6,14 +6,20 @@
 // every finalist, which writes decision records (and can mint paper trades in a
 // live session), so it is only ever started by:
 //   - the background job (every 5 min while NSE is open), or
-//   - POST /refresh, an explicit action a person takes.
+//   - POST /refresh, an explicit action a person takes: it needs the explicit-action header and is refused while NSE is
+//     closed (the background job never scans then either; a closed-market scan only writes MARKET_CLOSED skip rows).
 // ============================================================
 
 import { Router, type Request, type Response } from 'express';
+import { isMarketOpen } from '@fno/shared';
 import { logger } from '../lib/logger.js';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { refreshMarketScan } from '../services/market-scanner.js';
 import { readMarketScan, readMeta } from '../services/read-only-views.js';
+
+/** The header a scan request must carry: the web button sends it, so a stray or prefetched POST cannot start a scan. */
+export const EXPLICIT_SCAN_HEADER = 'x-explicit-action';
+export const EXPLICIT_SCAN_VALUE = 'run-market-scan';
 
 /** One explicit scan at a time, and not more often than this. */
 export const MANUAL_SCAN_MIN_INTERVAL_MS = 60_000;
@@ -43,7 +49,15 @@ export function createMarketScannerRoutes(provider: MarketDataProvider): Router 
    * An explicit "run a scan now". Records the same decision rows the background scan does — it is never called by
    * a page load. Refused while one is running or within MANUAL_SCAN_MIN_INTERVAL_MS of the last.
    */
-  router.post('/refresh', async (_req: Request, res: Response) => {
+  router.post('/refresh', async (req: Request, res: Response) => {
+    if (req.header(EXPLICIT_SCAN_HEADER) !== EXPLICIT_SCAN_VALUE) {
+      res.status(400).json({ success: false, error: { code: 'EXPLICIT_ACTION_REQUIRED', message: `Running a scan needs the ${EXPLICIT_SCAN_HEADER}: ${EXPLICIT_SCAN_VALUE} header.` } });
+      return;
+    }
+    if (!isMarketOpen('NSE')) {
+      res.status(409).json({ success: false, error: { code: 'MARKET_CLOSED', message: 'NSE is closed. A scan only runs in session; the last recorded scan is shown instead.' } });
+      return;
+    }
     const now = Date.now();
     if (manualScanRunning || now - lastManualScanAt < MANUAL_SCAN_MIN_INTERVAL_MS) {
       res.status(429).json({ success: false, error: { code: 'SCAN_RECENTLY_RUN', message: 'A scan is running or ran under a minute ago.' } });

@@ -102,7 +102,18 @@ export interface PaperTradeView {
 
 export interface PaperTradesResponse {
   trades: PaperTradeView[];
-  counts: { total: number; open: number; openUntracked: number; closed: number; excludedFromPerformance: number };
+  counts: {
+    /** Rows in this response. */
+    total: number;
+    open: number;
+    openUntracked: number;
+    closed: number;
+    excludedFromPerformance: number;
+    /** Every paper trade ever recorded (not just the rows returned). Null when it could not be counted. */
+    recorded: number | null;
+    /** True when older closed trades exist that this response does not include (the response is the newest window). */
+    truncated: boolean;
+  };
   measurementReliableFrom: string;
   cohortBoundaries: { baselineChangeAt: string; trackingFixDeployedAt: string };
 }

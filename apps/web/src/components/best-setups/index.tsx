@@ -42,7 +42,7 @@ export function BestSetupsPage() {
         actions={
           <>
             <FreshnessBadge state={freshness.state} detail={freshness.detail} />
-            <ActionButton onClick={() => void s.runScan()} disabled={s.scanRunning} title="Runs the market scan now. It records the same decision rows as the background scan, so it only happens when you press this.">
+            <ActionButton onClick={() => void s.runScan()} disabled={s.scanRunning || !isMarketOpen('NSE', now)} title={isMarketOpen('NSE', now) ? 'Runs the market scan now. It records the same decision rows as the background scan, so it only happens when you press this.' : 'NSE is closed: a scan only runs in session, so there is nothing to run now. The last recorded scan stays on screen.'}>
               {s.scanRunning ? 'Running scan…' : 'Run scan now'}
             </ActionButton>
           </>

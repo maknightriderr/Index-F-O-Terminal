@@ -84,7 +84,7 @@ export function ChartSection({
         <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <span className="font-semibold tabular-nums text-[var(--text-primary)]">{price != null ? formatIndianNumber(price, 2) : MISSING}</span>
           {quote && <span className={quote.change >= 0 ? 'text-[var(--status-ok)]' : 'text-[var(--status-bad)]'}>{formatArrowPercent(quote.changePercent)}</span>}
-          <span>Vol {quote ? formatCompact(quote.volume) : MISSING}</span>
+          <span>Vol {quote && quote.volume > 0 ? formatCompact(quote.volume) : MISSING}</span>
           <span>VWAP {typeof state.bias.inputs.vwap === 'number' ? formatNumber(state.bias.inputs.vwap as number, 0) : MISSING}</span>
         </span>
       }

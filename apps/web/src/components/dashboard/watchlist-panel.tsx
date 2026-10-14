@@ -71,8 +71,8 @@ export function WatchlistPanel({ allIndices, fnoRows }: { allIndices: MarketQuot
                   <div className="text-xs font-bold text-gray-100 light:text-slate-900 truncate">{r.symbol}</div>
                   <div className="text-xs text-gray-400 light:text-slate-600 tabular-nums">
                     {r.exchange}
-                    {r.oi != null ? ` · OI ${formatCompact(r.oi)}` : ''}
-                    {r.volume != null ? ` · Vol ${formatCompact(r.volume)}` : ''}
+                    {r.oi != null && r.oi > 0 ? ` · OI ${formatCompact(r.oi)}` : ''}
+                    {r.volume != null && r.volume > 0 ? ` · Vol ${formatCompact(r.volume)}` : ''}
                   </div>
                 </div>
 
@@ -82,7 +82,6 @@ export function WatchlistPanel({ allIndices, fnoRows }: { allIndices: MarketQuot
                   </div>
                   {r.changePercent != null && (
                     <div className={`text-xs font-semibold tabular-nums ${isPos ? 'text-emerald-400' : 'text-red-400'}`}>
-                      {isPos ? '+' : ''}
                       {formatPercent(r.changePercent)}
                     </div>
                   )}

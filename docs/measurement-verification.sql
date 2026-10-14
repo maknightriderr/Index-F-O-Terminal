@@ -43,8 +43,13 @@ SELECT '2g duplicate post-exit rows (want 0)' k, count(*)::text v FROM (SELECT s
 -- 3. OPTION_PAYOFF_V2 beside, never over, the legacy grades.
 SELECT '3a V2 rows' k, count(*)::text v FROM forward_outcomes WHERE kind='OPTION_PAYOFF_V2';
 SELECT '3b duplicate V2 rows (want 0)' k, count(*)::text v FROM (SELECT subject_id FROM forward_outcomes WHERE kind='OPTION_PAYOFF_V2' GROUP BY 1 HAVING count(*)>1) x;
-SELECT '3c legacy rows graded after V2 began (want 0)' k, count(*)::text v FROM forward_outcomes
- WHERE kind='OPTION_PAYOFF' AND graded_at >= (SELECT min(graded_at) FROM forward_outcomes WHERE kind='OPTION_PAYOFF_V2');
+-- 3c (corrected 2026-10-11): V2 must not alter or duplicate the first grader's rows. The legacy grader is a separate job that keeps grading
+-- newly closed trades after V2 started, so "legacy rows graded after V2 began" is NOT a failure (the old check flagged 61 normal rows).
+-- A legacy grade is wrong only if it is duplicated for a trade, or was recorded before the trade it grades had closed.
+SELECT '3c legacy rows duplicated per trade or graded before the trade closed (want 0)' k,
+ ((SELECT count(*) FROM (SELECT subject_id FROM forward_outcomes WHERE kind='OPTION_PAYOFF' GROUP BY 1 HAVING count(*)>1) a)
+ + (SELECT count(*) FROM forward_outcomes f JOIN signals s ON s.id::text = f.subject_id
+     WHERE f.kind='OPTION_PAYOFF' AND f.graded_at < to_timestamp((s.inputs->>'exitTime')::bigint/1000.0)))::text v;
 SELECT '3d V2 rows with no matching trade (want 0)' k, count(*)::text v FROM forward_outcomes f WHERE kind='OPTION_PAYOFF_V2' AND NOT EXISTS (SELECT 1 FROM signals s WHERE s.id::text = f.subject_id);
 SELECT '3e V2 verdicts' k, string_agg(coalesce(vd,'null')||'='||n, ', ') v FROM (SELECT actual->>'verdict' AS vd, count(*) n FROM forward_outcomes WHERE kind='OPTION_PAYOFF_V2' GROUP BY 1) x;
 SELECT '3f closed trades in the last 10 days still ungraded by V2 (the job grades 40 per run)' k, count(*)::text v FROM signals s

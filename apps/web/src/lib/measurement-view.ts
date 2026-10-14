@@ -31,11 +31,17 @@ export interface TallyDisplay {
   netR: string;
   netRN: number;
   grossRSameTrades: string;
+  /** Mean net R of the winning / losing / expired trades that have a recorded cost, each with its own count; an em dash when the server did not send it. */
+  avgNetWin: string;
+  avgNetLoss: string;
+  expiredNet: string;
   conservativeNetR: string;
   excluded: string;
   smallSample: boolean;
   netPopulationDiffers: boolean;
 }
+
+const byOutcome = (x: { n: number; meanNetR: number | null } | undefined) => (x && x.n > 0 && x.meanNetR != null ? `${formatR(x.meanNetR)} (n=${x.n})` : MISSING);
 
 /** Pure: one tally as display strings, each rate with its denominator. */
 export function displayTally(t: Tally): TallyDisplay {
@@ -62,6 +68,11 @@ export function displayTally(t: Tally): TallyDisplay {
     netR: t.baseline.netR != null ? `${formatR(t.baseline.netR)} (n=${netN})` : MISSING,
     netRN: netN,
     grossRSameTrades: t.baseline.grossRSameTradesAsNet != null ? `${formatR(t.baseline.grossRSameTradesAsNet)} (n=${netN})` : MISSING,
+    avgNetWin: byOutcome(t.netByOutcome?.WIN),
+    avgNetLoss: byOutcome(t.netByOutcome?.LOSS),
+    expiredNet: t.netByOutcome?.EXPIRED && t.netByOutcome.EXPIRED.n > 0 && t.netByOutcome.EXPIRED.meanNetR != null
+      ? `${formatR(t.netByOutcome.EXPIRED.meanNetR)} (n=${t.netByOutcome.EXPIRED.n})${t.netByOutcome.expiredContributionToMeanNetR != null ? ` · ${formatR(t.netByOutcome.expiredContributionToMeanNetR)} of the mean` : ''}`
+      : MISSING,
     conservativeNetR: t.conservative.netR != null ? `${formatR(t.conservative.netR)} (n=${t.conservative.nNet})` : MISSING,
     excluded: excluded || 'none',
     smallSample: t.n < SMALL_SAMPLE_BELOW,
