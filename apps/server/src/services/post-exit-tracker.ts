@@ -31,6 +31,7 @@ import { sql } from '../lib/db.js';
 import { insertOnce } from '../lib/insert-once.js';
 import { logger } from '../lib/logger.js';
 import { schemaFileReady } from './ensure-capture-schema.js';
+import { returnedToEntryOf } from './measurement-core.js';
 import { TRADE_MEASUREMENT_MIGRATION } from './trade-costs.js';
 import { minutesToSessionClose } from './validation-gates.js';
 import { buildOptionChain } from './option-chain.js';
@@ -299,7 +300,7 @@ export function finalizePostExit(w: PostExitWatch, skip?: { status: 'NOT_WATCHED
       minVsExit: r4(minVs),
       minVsExitPct: minVs != null && exit != null && exit > 0 ? r4((minVs / exit) * 100) : null,
       peakThroughTargetR: w.option.max != null && w.target != null && risk != null ? r4((w.option.max - w.target) / risk) : null,
-      returnedToEntry: w.option.min == null ? null : w.option.min <= w.entry,
+      returnedToEntry: returnedToEntryOf(w.entry, exit, w.option.min, w.option.max),
       minutesToPeak: w.option.maxAt != null ? Math.round((w.option.maxAt - w.exitAt) / 60_000) : null,
     },
     underlying: {

@@ -251,7 +251,7 @@ export async function diagnosticsPerformance(q: DiagnosticsQuery) {
   const segments = new Map<string, { segment: Segment; cohort: Cohort; rows: GradedEventRow[] }>();
   for (const r of rows) {
     const cohort: Cohort = r.decision === 'TRADED' ? 'TRADED' : 'REJECTED';
-    const segment = segmentOf(r.exchange);
+    const segment = segmentOf(r.exchange, r.instrument);
     const row: GradedEventRow = {
       time: new Date(r.time).getTime(),
       resultR: numOrNull(r.result_r),
@@ -306,11 +306,11 @@ export async function diagnosticsOpportunity(q: DiagnosticsQuery) {
   const segCounts = new Map<Segment, Record<string, number>>();
   for (const d of days) {
     const key = `${d.instrument}:${d.exchange}`;
-    if (!counts.has(key)) counts.set(key, { instrument: d.instrument, exchange: d.exchange, segment: segmentOf(d.exchange), c: {} });
+    if (!counts.has(key)) counts.set(key, { instrument: d.instrument, exchange: d.exchange, segment: segmentOf(d.exchange, d.instrument), c: {} });
   }
   for (const w of windows) {
     const key = `${w.instrument}:${w.exchange}`;
-    const e = counts.get(key) ?? { instrument: w.instrument, exchange: w.exchange, segment: segmentOf(w.exchange), c: {} };
+    const e = counts.get(key) ?? { instrument: w.instrument, exchange: w.exchange, segment: segmentOf(w.exchange, w.instrument), c: {} };
     e.c[w.classification] = (e.c[w.classification] ?? 0) + Number(w.n);
     counts.set(key, e);
     const s = segCounts.get(e.segment) ?? {};
@@ -383,7 +383,7 @@ export async function diagnosticsMajorMoves(q: DiagnosticsQuery) {
     sessionDate: r.session_date,
     instrument: r.instrument,
     exchange: r.exchange,
-    segment: segmentOf(r.exchange),
+    segment: segmentOf(r.exchange, r.instrument),
     direction: r.direction,
     startTime: r.start_time ? new Date(r.start_time).getTime() : null,
     endTime: r.end_time ? new Date(r.end_time).getTime() : null,
@@ -434,6 +434,8 @@ export async function diagnosticsShadow(q: DiagnosticsQuery) {
     groups.set(key, g);
   };
   for (const r of rows) {
+    // Exchange-only on purpose: the 30-trade promotion counter has always been per INDEX / MCX, and splitting NSE
+    // into INDEX and STOCK here would change how a promotion is counted (2026-10-15).
     const segment = segmentOf(r.exchange);
     add(r.trigger_type ?? '—', segment, r, true);
     // The arbitrated book: only each parent move's selected setup — what trading one per parent would have done.

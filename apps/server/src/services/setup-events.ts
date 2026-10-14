@@ -31,7 +31,7 @@
 import { gradeFromScore } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
-import { measureStopDistance, type SetupCostMeasurement } from './setup-cost.js';
+import { costForDiagnostics, measureStopDistance, type SetupCostMeasurement } from './setup-cost.js';
 import { currentSnapshotId } from './snapshot-context.js';
 
 export { gradeFromScore };
@@ -220,7 +220,8 @@ async function insertSetupEvent(input: SetupEventInput, snapshotId: string | nul
   const scoreRr = grossRr;
 
   // Cost and stop distance (migration 032). Without a priced leg, stop distance still lands.
-  const cost = input.cost ?? null;
+  // A quote that is not a market is stored without cost in R (setup-cost.ts, 2026-10-15).
+  const cost = costForDiagnostics(input.cost ?? null);
   const stopDist = cost?.stop ?? measureStopDistance({ entry: input.entry, stop: input.stop, atr: input.atr ?? null });
   const opt = cost?.option ?? null;
   const optionCandidate = opt ? { ...(input.optionCandidate ?? {}), ...opt } : input.optionCandidate ?? null;

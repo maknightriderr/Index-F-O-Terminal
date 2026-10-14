@@ -51,6 +51,15 @@ export async function orderFlowReport(q: DiagnosticsQuery) {
     WHERE (${since}::timestamptz IS NULL OR block_time >= ${since}) AND (${until}::timestamptz IS NULL OR block_time < ${until}) AND (${inst}::text IS NULL OR symbol = ${inst})
     GROUP BY 1 ORDER BY 1
   `;
+  // Every block that was ever touched, judged at its first touch (2026-10-15). The per-state rows above are conditioned
+  // on what happened LATER: a block still in FIRST_TOUCH is one that has not failed yet, so its reaction looks better
+  // than a touched block's really is (survivorship). This row is the unconditioned read.
+  const touched = await sql<{ n: string; held: string; failed: string; avg_mfe: string | null; avg_mae: string | null }[]>`
+    SELECT COUNT(*)::text AS n, COUNT(*) FILTER (WHERE held)::text AS held, COUNT(*) FILTER (WHERE held = false)::text AS failed, AVG(mfe_atr) AS avg_mfe, AVG(mae_atr) AS avg_mae
+    FROM order_blocks
+    WHERE state IN ('FIRST_TOUCH', 'MITIGATED')
+      AND (${since}::timestamptz IS NULL OR block_time >= ${since}) AND (${until}::timestamptz IS NULL OR block_time < ${until}) AND (${inst}::text IS NULL OR symbol = ${inst})
+  `;
   const shadow = await sql<{ decisions: string; legacy_signals: string; v2_signals: string; changed: string }[]>`
     SELECT COUNT(*)::text AS decisions, COUNT(*) FILTER (WHERE legacy_vote <> 0)::text AS legacy_signals, COUNT(*) FILTER (WHERE v2_vote <> 0)::text AS v2_signals,
       COUNT(*) FILTER (WHERE changed_direction)::text AS changed
@@ -72,6 +81,10 @@ export async function orderFlowReport(q: DiagnosticsQuery) {
     },
     orderBlocks: {
       byState: blocks.map((r) => ({ state: r.state, n: n(r.n), held: n(r.held), failed: n(r.failed), avgMfeAtr: avg(r.avg_mfe), avgMaeAtr: avg(r.avg_mae) })),
+      allTouched: touched[0]
+        ? { n: n(touched[0].n), held: n(touched[0].held), failed: n(touched[0].failed), avgMfeAtr: avg(touched[0].avg_mfe), avgMaeAtr: avg(touched[0].avg_mae) }
+        : null,
+      allTouchedNote: 'Every block ever touched, at its first touch. Read this, not the FIRST_TOUCH row alone: a block still in FIRST_TOUCH is one that has not failed yet.',
       decisions: n(sh.decisions), legacySignals: n(sh.legacy_signals), v2Signals: n(sh.v2_signals), wouldChangeIndicatorDirection: n(sh.changed),
     },
   };

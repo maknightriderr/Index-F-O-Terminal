@@ -44,6 +44,23 @@ export function minutesToSessionClose(exchange: Exchange, at: number): number | 
 }
 
 /**
+ * When an INTRADAY trade that ran out of session really ended (measurement only, 2026-10-15).
+ *
+ * A session-end close is recorded by the first poll or monitor sweep AFTER the session — often the day rollover at
+ * 00:00 IST — so stamping it with the wall clock made every such trade's exit time and hold read as midnight
+ * (NSE trades "held" 10-13 hours). The exit price is the session's last mark either way; this only returns the
+ * instant that price belongs to: the close of the session on the trade's own IST date, or `now` when that close
+ * is not yet past (or the date has no session, e.g. a holiday record).
+ */
+export function sessionEndExitTime(exchange: Exchange, generatedAt: number | null | undefined, now: number): number {
+  if (generatedAt == null || !Number.isFinite(generatedAt)) return now;
+  const date = new Date(generatedAt).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const window = getSessionWindow(exchange, date);
+  if (!window || window.close > now || window.close < generatedAt) return now;
+  return window.close;
+}
+
+/**
  * Fix 5. New INTRADAY setups are refused once fewer than `guardMinutes` remain.
  * Existing setups are untouched (this is only consulted when minting), and so
  * is CLOSING_WINDOW_MINUTES' volume rule. Evidence is thin — NSE entries with

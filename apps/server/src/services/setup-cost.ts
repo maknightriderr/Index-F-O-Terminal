@@ -32,6 +32,15 @@ import { TRADING_COST_MODEL, type CostDataQuality } from '@fno/shared';
 
 export type ValueSource = 'OBSERVED' | 'MODELLED';
 
+/**
+ * A two-sided quote whose spread is wider than this share of its own mid is not a market (2026-10-15). MCX GOLD legs
+ * arrived quoted 230.5 / 26,797: the "premium" was the mid of that quote and the spread alone turned into 50-216R of
+ * cost, dragging every MCX net figure in the diagnostics. measureSetupCost still returns its numbers unchanged (the
+ * family router's cost ceiling and the arbitration read them, and this fix must not move a decision); it flags the
+ * quote, and the copy stored for the diagnostics (costForDiagnostics) carries no cost in R for it, never a guessed one.
+ */
+export const MAX_USABLE_SPREAD_SHARE_OF_MID = 0.5;
+
 /** The option leg a setup was (or would have been) priced on. */
 export interface OptionQuoteInput {
   side: 'CE' | 'PE';
@@ -78,6 +87,8 @@ export interface SetupCostMeasurement {
   netR: number | null;
   stop: StopDistance;
   costVersion: string;
+  /** False when the two-sided quote's spread exceeds MAX_USABLE_SPREAD_SHARE_OF_MID of its mid (2026-10-15). Read by costForDiagnostics only. */
+  quoteUsableForR?: boolean;
 }
 
 const round4 = (n: number) => Math.round(n * 10000) / 10000;
@@ -130,6 +141,8 @@ export function measureSetupCost(args: {
 
   // The same arithmetic as estimateRoundTripCost (@fno/analytics), kept in parts.
   const twoSided = finite(option.bid) && finite(option.ask) && option.bid > 0 && option.ask > option.bid;
+  // Flagged only: every number below is computed as before, so no decision that reads them can move.
+  const quoteUsableForR = !(twoSided && option.ask! - option.bid! > MAX_USABLE_SPREAD_SHARE_OF_MID * ((option.ask! + option.bid!) / 2));
   const spread = twoSided ? option.ask! - option.bid! : premium * (TRADING_COST_MODEL.fallbackSpreadPct / 100);
   const slippage = premium * (TRADING_COST_MODEL.slippagePct / 100);
   const brokerage = 2 * TRADING_COST_MODEL.brokeragePerOrder * (1 + TRADING_COST_MODEL.gstPct / 100);
@@ -156,5 +169,15 @@ export function measureSetupCost(args: {
     netR: grossR != null && costR != null ? round4(grossR - costR) : null,
     stop: stopDistance,
     costVersion,
+    quoteUsableForR,
   };
+}
+
+/**
+ * The copy of a cost measurement stored in setup_events for the diagnostics: a quote that is not a market
+ * (quoteUsableForR false) keeps its parts and % of premium but gives no cost or net in R. Measurement only.
+ */
+export function costForDiagnostics(cost: SetupCostMeasurement | null): SetupCostMeasurement | null {
+  if (!cost || cost.quoteUsableForR !== false) return cost;
+  return { ...cost, costR: null, spreadR: null, slippageR: null, chargesR: null, netR: null };
 }

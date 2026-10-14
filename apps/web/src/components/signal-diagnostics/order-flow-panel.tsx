@@ -33,6 +33,9 @@ export interface OrderFlowReport {
   };
   orderBlocks: {
     byState: Array<{ state: string; n: number; held: number; failed: number; avgMfeAtr: number | null; avgMaeAtr: number | null }>;
+    /** Every touched block at its first touch (absent on older deployments). */
+    allTouched?: { n: number; held: number; failed: number; avgMfeAtr: number | null; avgMaeAtr: number | null } | null;
+    allTouchedNote?: string;
     decisions: number; legacySignals: number; v2Signals: number; wouldChangeIndicatorDirection: number;
   };
 }
@@ -50,6 +53,7 @@ const FEED_TEXT: Record<string, string> = {
 /** The lifecycle order of an order block, so the table reads left to right in time. */
 const STATE_ORDER = ['FRESH', 'FIRST_TOUCH', 'MITIGATED', 'FAILED', 'EXPIRED'];
 const STATE_NOTE: Record<string, string> = {
+  ALL_TOUCHED: 'every block price ever returned to, judged at that first touch (read this row)',
   FRESH: 'created, price has not returned to it',
   FIRST_TOUCH: 'price has returned to it once',
   MITIGATED: 'price has traded through it',
@@ -71,7 +75,13 @@ export function OrderFlowPanel({ filter }: { filter: DiagnosticsFilter }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
-  const blockRows = useMemo(() => (data ? [...data.orderBlocks.byState].sort((a, b) => STATE_ORDER.indexOf(a.state) - STATE_ORDER.indexOf(b.state)) : []), [data]);
+  // The unconditioned row first: a block still in FIRST_TOUCH is one that has not failed yet, so that row alone flatters the detector.
+  const blockRows = useMemo(() => {
+    if (!data) return [];
+    const byState = [...data.orderBlocks.byState].sort((a, b) => STATE_ORDER.indexOf(a.state) - STATE_ORDER.indexOf(b.state));
+    const all = data.orderBlocks.allTouched;
+    return all && all.n > 0 ? [{ state: 'ALL_TOUCHED', ...all }, ...byState] : byState;
+  }, [data]);
   const blockCols = useMemo<Column<OrderFlowReport['orderBlocks']['byState'][number]>[]>(
     () => [
       { id: 'state', header: 'Lifecycle state', cell: (r) => <span><span className="font-medium">{r.state.replace(/_/g, ' ').toLowerCase()}</span>{STATE_NOTE[r.state] && <span className="block text-xs text-[var(--text-secondary)]">{STATE_NOTE[r.state]}</span>}</span> },
@@ -112,6 +122,7 @@ export function OrderFlowPanel({ filter }: { filter: DiagnosticsFilter }) {
         </MetricGrid>
         <div className="mt-4">
           <DataTable columns={blockCols} rows={blockRows} rowKey={(r) => r.state} ariaLabel="Order blocks by lifecycle state" pageSize={10} emptyTitle="No order blocks recorded yet" />
+          {ob.allTouchedNote && <p className="mt-2 text-xs text-[var(--text-secondary)]">All touched: {ob.allTouchedNote}</p>}
           <p className="mt-2 text-xs text-[var(--text-secondary)]">This report aggregates blocks by lifecycle state. Each block&apos;s direction, high/low zone, creation time and version are recorded with it but are not exposed per block here.</p>
         </div>
       </Section>

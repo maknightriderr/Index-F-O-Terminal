@@ -3,12 +3,22 @@
 // ============================================================
 // The definitions the dashboard's tooltips quote. Every figure is a
 // SIMULATED paper-trade outcome in R of the underlying stop, never account
-// P&L. Callers group by instrument (and label INDEX / MCX); nothing here
+// P&L. Callers group by instrument (and label INDEX / STOCK / MCX); nothing here
 // pools across groups.
 // ============================================================
 
-export type Segment = 'INDEX' | 'MCX';
-export const segmentOf = (exchange: string): Segment => (exchange === 'MCX' ? 'MCX' : 'INDEX');
+export type Segment = 'INDEX' | 'STOCK' | 'MCX';
+
+/** Index underlyings that carry F&O; everything else on NSE / BSE is a single stock. */
+const INDEX_UNDERLYINGS = new Set(['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTYNXT50', 'SENSEX', 'BANKEX', 'SENSEX50']);
+
+/**
+ * MCX by exchange; on NSE / BSE an index underlying is INDEX and anything else a STOCK. Before 2026-10-15 every
+ * NSE / BSE row was labelled INDEX, so single stocks were pooled with the indices in every "by segment" total.
+ * Called without an instrument (older callers) it keeps the old exchange-only answer.
+ */
+export const segmentOf = (exchange: string, instrument?: string | null): Segment =>
+  exchange === 'MCX' ? 'MCX' : instrument != null && !INDEX_UNDERLYINGS.has(instrument.toUpperCase()) ? 'STOCK' : 'INDEX';
 
 export interface GradedEventRow {
   time: number;
