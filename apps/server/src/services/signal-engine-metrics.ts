@@ -17,7 +17,22 @@ import { sql } from '../lib/db.js';
 import type { DiagnosticsQuery } from './signal-diagnostics.js';
 import { ESTIMATED_ROUND_TRIP_COST_PCT, type TradeSetupRecord } from '@fno/shared';
 import { getTradeSetupHistory } from './backtesting.js';
-import { SHADOW_PARAMS, SHADOW_RULES_REGISTERED_AT, SHADOW_RULES_VERSION, aggregateEntryRules, aggregateExitRules, entryFlags, type EntryRuleTrade } from './shadow-rules.js';
+import {
+  ENTRY_RULES_V11,
+  SHADOW_PARAMS,
+  SHADOW_PARAMS_V11,
+  SHADOW_RULES_REGISTERED_AT,
+  SHADOW_RULES_V11_REGISTERED_AT,
+  SHADOW_RULES_V11_VERSION,
+  SHADOW_RULES_VERSION,
+  aggregateEntryRules,
+  aggregateExitRules,
+  entryFlags,
+  entryFlagsV11,
+  type EntryRuleTrade,
+  type EntryRuleV11,
+} from './shadow-rules.js';
+import { netRiskReward } from './validation-gates.js';
 
 /** Option-plan stages that are time decay / cost, and that are liquidity (OptionCandidate.rejectedAt). */
 export const STRIKE_THETA_COST_STAGES: ReadonlySet<string> = new Set(['TARGET_POTENTIAL', 'PREMIUM_RISK', 'NET_RR']);
@@ -253,6 +268,24 @@ export function entryRuleTrades(records: readonly TradeSetupRecord[]): EntryRule
     }));
 }
 
+/** Pure: the SHADOW-1.1 entry facts of each closed trade (same population and net % as entryRuleTrades). */
+export function entryRuleTradesV11(records: readonly TradeSetupRecord[]): EntryRuleTrade<EntryRuleV11>[] {
+  return records
+    .filter((r) => !r.voided && !r.generatedOffSession && r.structureType !== 'SPREAD')
+    .filter((r) => (r.outcome === 'WIN' || r.outcome === 'LOSS' || r.outcome === 'EXPIRED') && r.returnPercent != null)
+    .map((r) => {
+      const pn = (r.votes as { positioningNet?: unknown } | null)?.positioningNet;
+      return {
+        netPct: r.returnPercent! - (r.estimatedCostPct ?? ESTIMATED_ROUND_TRIP_COST_PCT),
+        flags: entryFlagsV11({
+          direction: r.direction ?? null,
+          netRiskReward: netRiskReward({ structureType: r.structureType, entry: r.entry, stopLoss: r.stopLoss, target: r.target, estimatedCostPct: r.estimatedCostPct }),
+          positioningNet: typeof pn === 'number' && Number.isFinite(pn) ? pn : null,
+        }),
+      };
+    });
+}
+
 /** The Signal Diagnostics "Shadow experiments" block. */
 export async function shadowRulesReport(q: DiagnosticsQuery) {
   const history = (await getTradeSetupHistory()).filter(
@@ -297,6 +330,15 @@ export async function shadowRulesReport(q: DiagnosticsQuery) {
       sinceArchitectureChange: aggregateEntryRules(entryRuleTrades(history.filter((r) => r.generatedAt >= ARCHITECTURE_CHANGE_AT))),
     },
     exit: aggregateExitRules(exits.map((e) => ({ actualNetPct: Number(e.actual.actualNetPct), exits: e.actual.exits }))),
+    // SHADOW-1.1 (registered 2026-10-15; out-of-sample from 16 Oct). Measurement only, never a skip.
+    entryV11: {
+      version: SHADOW_RULES_V11_VERSION,
+      params: SHADOW_PARAMS_V11,
+      registeredAt: SHADOW_RULES_V11_REGISTERED_AT,
+      sinceRegistered: aggregateEntryRules(entryRuleTradesV11(history.filter((r) => r.generatedAt >= SHADOW_RULES_V11_REGISTERED_AT)), ENTRY_RULES_V11),
+      // In sample: the audit that proposed these rules read these trades.
+      sinceArchitectureChange: aggregateEntryRules(entryRuleTradesV11(history.filter((r) => r.generatedAt >= ARCHITECTURE_CHANGE_AT)), ENTRY_RULES_V11),
+    },
   };
 }
 

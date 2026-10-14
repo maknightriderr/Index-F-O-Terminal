@@ -58,6 +58,8 @@ export interface ShadowRulesReport {
   registeredAt?: number;
   squareOff?: { trades: number; sessionEnded: number; actualNetPerTrade: number | null; squareOffNetPerTrade: number | null };
   entry: { sinceRegistered?: EntryBlock; all: EntryBlock; sinceArchitectureChange: EntryBlock };
+  /** SHADOW-1.1 (registered 2026-10-15; absent on older deployments). */
+  entryV11?: { version: string; params: Record<string, number>; registeredAt: number; sinceRegistered: EntryBlock; sinceArchitectureChange: EntryBlock };
   exit: {
     trades: number;
     baselineNetPerTrade: number | null;
@@ -69,6 +71,8 @@ const ENTRY_RULE_TEXT: Record<string, string> = {
   COST_EDGE_2X: 'Skip when the target gain is under 2× the round-trip cost',
   MCX_EVENING: 'Skip MCX entries from 18:00 IST',
   RICH_IV: 'Skip entries with rich implied volatility',
+  NET_RR_FLOOR_1: 'Skip when net reward after cost is under 1× the risk',
+  POSITIONING_OPPOSED: 'Skip when futures OI, PCR and option OI net against the trade',
 };
 const EXIT_RULE_TEXT: Record<string, string> = {
   TIME_STOP_60: 'Exit at 60 min if the premium is below entry',
@@ -115,6 +119,18 @@ export function ShadowRulesPanel({ filter }: { filter: DiagnosticsFilter }) {
             Entry filters — fair test: trades after the rules were registered ({data.entry.sinceRegistered.trades} closed trades, baseline {signedPct(data.entry.sinceRegistered.baselineNetPerTrade)} / trade)
           </h4>
           <Rows head={head} rows={entryRows(data.entry.sinceRegistered)} />
+        </div>
+      )}
+      {data.entryV11 && (
+        <div className="space-y-1">
+          <h4 className={`text-xs uppercase tracking-wide ${muted}`}>
+            {data.entryV11.version} entry filters, registered {new Date(data.entryV11.registeredAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', timeZone: 'Asia/Kolkata' })} — fair test ({data.entryV11.sinceRegistered.trades} closed trades since registration)
+          </h4>
+          <Rows head={head} rows={entryRows(data.entryV11.sinceRegistered)} />
+          <p className={`text-xs ${muted}`}>
+            In sample, since the 5 Oct change ({data.entryV11.sinceArchitectureChange.trades} trades; the audit that proposed these rules read them):
+          </p>
+          <Rows head={head} rows={entryRows(data.entryV11.sinceArchitectureChange)} />
         </div>
       )}
       <p className={`text-xs ${muted}`}>
