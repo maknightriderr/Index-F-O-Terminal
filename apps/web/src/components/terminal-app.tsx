@@ -10,6 +10,7 @@ import { FnoExplorerPage } from '@/components/fno-explorer';
 import { PaperTradesPage } from '@/components/paper-trades';
 import { BestSetupsPage } from '@/components/best-setups';
 import { MeasurementPage } from '@/components/measurement';
+import { EvidencePage } from '@/components/evidence';
 import { SystemHealthPage } from '@/components/system-health';
 import { PerformanceNav } from '@/components/performance/performance-nav';
 import { UnbuiltPage } from '@/components/common/unbuilt-page';
@@ -80,6 +81,8 @@ export function TerminalApp() {
         );
       case 'measurement':
         return <MeasurementPage />;
+      case 'evidence':
+        return <EvidencePage />;
       case 'institutional-flow':
         return <InstitutionalFlowPage />;
       case 'alerts':

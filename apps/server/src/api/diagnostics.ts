@@ -54,6 +54,7 @@ import { shadowRulesReport, signalEngineMetrics } from '../services/signal-engin
 import { orderFlowReport } from '../services/order-flow-metrics.js';
 import { replayFull } from '../services/full-replay.js';
 import { measurementReport } from '../services/measurement-report.js';
+import { gateValidationReport, logEvaluationFailure, portfolioRiskReport, scorecardReport, signalQualityReport } from '../services/evaluation-reports.js';
 
 /** One full replay at a time: it re-runs the whole decision path in this process. */
 let fullReplayRunning = false;
@@ -294,6 +295,22 @@ export function createDiagnosticsRoutes(): Router {
       res.status(500).json({ success: false, error: err.message });
     }
   });
+
+  // Evidence reports (2026-10-15 audit): strategy scorecard, direction-call quality, gate validation and the
+  // portfolio-limits replay. Read-only SELECTs over existing records; cached a few minutes; never read by a decision.
+  const evidenceRoute = (path: string, report: string, build: () => Promise<unknown>) =>
+    router.get(path, async (_req: Request, res: Response) => {
+      try {
+        res.json({ success: true, data: { note: SIMULATION_NOTE, ...((await build()) as object) } });
+      } catch (err: any) {
+        logEvaluationFailure(report, err);
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+  evidenceRoute('/scorecard', 'scorecard', scorecardReport);
+  evidenceRoute('/signal-quality', 'signal-quality', signalQualityReport);
+  evidenceRoute('/gate-validation', 'gate-validation', gateValidationReport);
+  evidenceRoute('/portfolio-risk', 'portfolio-risk', portfolioRiskReport);
 
   // Phase 5: feed-gap checks of open paper trades (last 3 days) — FILL_UNCERTAIN /
   // MISSED_TOUCH_POSSIBLE are surfaced here; nothing was assumed for them.
