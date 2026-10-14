@@ -28,7 +28,7 @@ export function TopBar() {
   const clock = new Date(feed.now).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
   return (
-    <header className="relative z-10 flex h-12 shrink-0 items-center gap-2 overflow-hidden border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 md:gap-4 md:px-4">
+    <header className="relative z-10 flex h-12 shrink-0 items-center gap-2 border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 md:gap-4 md:px-4">
       <div className="flex min-w-0 items-center gap-3">
         <IndexChip symbol="NIFTY" quote={nifty} />
         <div className="hidden md:block">

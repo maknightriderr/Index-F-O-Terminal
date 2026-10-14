@@ -62,6 +62,9 @@ export function AlertBell() {
         }
         className="relative w-7 h-7 flex items-center justify-center rounded-lg text-gray-400 light:text-slate-600 hover:text-gray-200 light:hover:text-slate-800 hover:bg-gray-800/60 light:hover:bg-slate-100 transition-colors"
         title="Alerts"
+        aria-label={unreadCount > 0 ? `Alerts, ${unreadCount} new` : 'Alerts'}
+        aria-haspopup="true"
+        aria-expanded={open}
       >
         🔔
         {unreadCount > 0 && (
@@ -72,7 +75,7 @@ export function AlertBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-9 w-80 max-h-96 overflow-y-auto bg-[#12121a] light:bg-white border border-gray-800/60 light:border-slate-200 rounded-xl shadow-[0_16px_40px_-12px_rgba(0,0,0,0.7)] light:shadow-[0_8px_24px_-8px_rgba(0,0,0,0.2)] z-50">
+        <div className="fixed left-16 right-2 top-14 max-h-[70dvh] sm:absolute sm:left-auto sm:right-0 sm:top-9 sm:w-80 sm:max-h-96 overflow-y-auto bg-[#12121a] light:bg-white border border-gray-800/60 light:border-slate-200 rounded-xl shadow-[0_16px_40px_-12px_rgba(0,0,0,0.7)] light:shadow-[0_8px_24px_-8px_rgba(0,0,0,0.2)] z-50">
           <div className="px-3.5 py-2.5 border-b border-gray-800/60 light:border-slate-200 flex items-center justify-between">
             <span className="text-xs font-bold text-gray-200 light:text-slate-800">Alerts</span>
             <button
