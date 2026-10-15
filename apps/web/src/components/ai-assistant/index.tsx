@@ -7,6 +7,8 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   error?: boolean;
+  /** Which AI provider answered (Gemini, Groq or Claude). */
+  via?: string;
 }
 
 const STARTER_PROMPTS = [
@@ -40,8 +42,8 @@ export function AiAssistantPage() {
       const history = nextMessages
         .filter((m) => !m.error)
         .map((m) => ({ role: m.role, content: m.content }));
-      const { reply } = await api.chatWithAssistant(trimmed, history.slice(0, -1));
-      setMessages((prev) => [...prev, { role: 'assistant', content: reply }]);
+      const { reply, via } = await api.chatWithAssistant(trimmed, history.slice(0, -1));
+      setMessages((prev) => [...prev, { role: 'assistant', content: reply, via }]);
     } catch (err) {
       if (err instanceof ApiError && err.code === 'AI_NOT_CONFIGURED') {
         setNotConfigured(true);
@@ -66,7 +68,7 @@ export function AiAssistantPage() {
 
       {notConfigured && (
         <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3 text-amber-400 light:text-amber-700 text-xs font-medium mb-3">
-          ⚠️ AI Assistant isn't configured yet — the backend needs an <code className="font-mono">ANTHROPIC_API_KEY</code> set.
+          ⚠️ AI Assistant isn&apos;t configured yet. Set <code className="font-mono">GEMINI_API_KEY</code> (free) or <code className="font-mono">GROQ_API_KEY</code> (free) on the backend in Railway.
         </div>
       )}
 
@@ -106,6 +108,7 @@ export function AiAssistantPage() {
               }`}
             >
               {m.content}
+              {m.via && <div className="mt-1.5 text-[11px] text-gray-500 light:text-slate-500">via {m.via}</div>}
             </div>
           </div>
         ))}
