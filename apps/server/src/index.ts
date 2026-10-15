@@ -9,6 +9,7 @@ import compression from 'compression';
 import rateLimit from 'express-rate-limit';
 import { config } from './lib/config.js';
 import { logger } from './lib/logger.js';
+import { memoryStatus, startMemoryTelemetry, stopMemoryTelemetry } from './lib/memory-telemetry.js';
 import { redis, pingRedis } from './lib/redis.js';
 import { sql, pingDb } from './lib/db.js';
 import { SubscriptionManager } from './lib/subscription-manager.js';
@@ -203,9 +204,15 @@ app.get('/api/health', async (_req, res) => {
       supervisor,
       sessions,
       orderFlow: orderFlowFeedStatus(),
+      memory: memoryStatus(),
       version: '0.1.0',
     },
   });
+});
+
+// Memory telemetry (2026-10-15, measurement only): the last 24 hours of 15-minute samples.
+app.get('/api/health/memory', (_req, res) => {
+  res.json({ success: true, data: memoryStatus(true) });
 });
 
 // --- 404 Handler ---
@@ -349,6 +356,8 @@ for (const spec of [
 ] satisfies ServiceSpec[]) serviceSupervisor.register(spec);
 void serviceSupervisor.startAll();
 
+startMemoryTelemetry();
+
 const authRefreshTimer = setInterval(() => {
   const { apiKey, clientId, password, totpSecret } = config.angelOne;
   if (!apiKey || !clientId || !password) return;
@@ -378,6 +387,7 @@ const shutdown = async (signal: string) => {
   // HTTP server, the upstream WS, the broker session, Postgres, Redis.
   serviceSupervisor.stopAll();
   clearInterval(authRefreshTimer);
+  stopMemoryTelemetry();
 
   server.close(() => {
     logger.info('HTTP server closed');
