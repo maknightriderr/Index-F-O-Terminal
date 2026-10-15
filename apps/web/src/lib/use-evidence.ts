@@ -71,7 +71,7 @@ export interface SignalQualityReport {
 export interface GateValidationReport {
   note: string;
   taken: ClusterStat;
-  gates: Array<{ code: string; refused: ClusterStat; diffVsTaken: { diff: number | null; lo: number | null; hi: number | null; days: number }; verdict: 'FILTERS_WORSE' | 'REFUSES_NO_WORSE' | 'INCONCLUSIVE' }>;
+  gates: Array<{ code: string; refused: ClusterStat; diffVsTaken: { diff: number | null; lo: number | null; hi: number | null; days: number }; verdict: 'FILTERS_WORSE' | 'REFUSES_NO_WORSE' | 'INCONCLUSIVE'; tooFewDays?: boolean }>;
 }
 
 export interface BookStats {

@@ -58,10 +58,11 @@ demotion, whatever its numbers.
 
 New, read-only, never imported by the decision path:
 
-- **`evaluation-core.ts`** (pure). Day-clustered bootstrap intervals (seeded, reproducible), Spearman rank correlation by day, Bonferroni correction. It also holds the written rule `EVIDENCE-1.0`:
+- **`evaluation-core.ts`** (pure). Day-clustered bootstrap intervals (seeded, reproducible), Spearman rank correlation by day, Bonferroni correction. It also holds the written rule `EVIDENCE-1.1` (1.0 plus the gate condition below):
   - **Demotion candidate:** at least 30 trades with the upper 95% bound below 0.
   - **Edge shown:** at least 100 trades over at least 20 trading days, with the corrected lower bound above 0 and both halves positive.
   - **Protected:** `INDICATOR`.
+  - **Gate verdict** (1.1): a gate is read as FILTERS_WORSE or REFUSES_NO_WORSE only when its refusals fall on at least 5 trading days. Otherwise it is INCONCLUSIVE. After the first deploy, RISK_OFF (61 refusals, all on one day) and WIDE_SPREAD (74 on two days) read FILTERS_WORSE. With the refused side on one or two days, resampling days cannot vary its mean, so those intervals were far too narrow.
 - **`evaluation-reports.ts`**. Four reports, each cached for 10 minutes:
 
   | Endpoint | Answers |
@@ -105,7 +106,7 @@ Each was tested in-sample and then out-of-sample, with intervals that resample w
 | **Flip the direction when futures and options OI both oppose it** (from F1: OI is the only dimension with a positive rank correlation) | Signed 60-minute move +0.189 ATR better [+0.042, +0.328], 21 Sep–1 Oct, 7,513 decisions | +0.019 [−0.066, +0.098], 2–14 Oct, 1,269 decisions | **Rejected.** The effect did not hold. Kept as the SHADOW-1.1 measurement `POSITIONING_OPPOSED`. |
 | **Refuse trades with net R:R below 1** (from F2) | Would skip 99% of indicator trades (228 of 231); skipped −0.042R, kept n = 3 | Skipped −0.006R (n = 134); kept −0.165R (n = 6). All trades: skipped −0.002, kept −0.074 | **Rejected.** It would remove almost every Old Indicator trade, and the few kept did no better. Kept as the SHADOW-1.1 measurement `NET_RR_FLOOR_1`. |
 | **Portfolio caps** (F4; table below) | See §4 | See §4 | **Not enabled.** No cap improved net R per trade. They cut 63–94% of Old Indicator trades. |
-| **Remove or retune any gate** (F5) | All 8 gates INCONCLUSIVE on 15,353 decisions (23 days) | n/a | **Unchanged.** No gate is shown to filter worse decisions, and none is shown to refuse equally good ones. Removing one would be the same mistake as fitting it. |
+| **Remove or retune any gate** (F5) | All 13 gates with 40+ graded refusals are INCONCLUSIVE on 15,595 decisions (24 days; production report after deploy, rule 1.1) | n/a | **Unchanged.** No gate is shown to filter worse decisions, and none is shown to refuse equally good ones. Removing one would be the same mistake as fitting it. |
 
 **Signal quality, for the record (F1).** Over 15,353 intraday decisions (23 days), the direction call's hit rate is:
 

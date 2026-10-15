@@ -171,10 +171,19 @@ function GateValidation() {
   const cols = useMemo<Column<GateValidationReport['gates'][number]>[]>(
     () => [
       { id: 'c', header: 'Refusal', cell: (r) => r.code.replace(/_/g, ' ').toLowerCase() },
-      { id: 'n', header: 'Refused', numeric: true, sortValue: (r) => r.refused.n, cell: (r) => r.refused.n },
+      { id: 'n', header: 'Refused', numeric: true, sortValue: (r) => r.refused.n, cell: (r) => `${r.refused.n} · ${r.refused.clusters}d` },
       { id: 'r', header: 'Refused graded R (95%)', numeric: true, cell: (r) => withInterval(r.refused) },
       { id: 'd', header: 'Minus taken (95%)', numeric: true, cell: (r) => withInterval({ mean: r.diffVsTaken.diff, lo: r.diffVsTaken.lo, hi: r.diffVsTaken.hi }) },
-      { id: 'v', header: 'Reading', cell: (r) => <StatusBadge tone={VERDICT[r.verdict].tone} label={VERDICT[r.verdict].label} /> },
+      {
+        id: 'v',
+        header: 'Reading',
+        cell: (r) => (
+          <span className="inline-flex flex-wrap items-center gap-1.5">
+            <StatusBadge tone={VERDICT[r.verdict].tone} label={VERDICT[r.verdict].label} />
+            {r.tooFewDays && <span className="text-xs text-[var(--text-secondary)]">refused on {r.refused.clusters} day{r.refused.clusters === 1 ? '' : 's'} only</span>}
+          </span>
+        ),
+      },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []

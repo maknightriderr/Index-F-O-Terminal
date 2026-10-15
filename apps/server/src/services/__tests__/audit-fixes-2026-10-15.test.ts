@@ -263,6 +263,21 @@ describe('evaluation core: signal quality and gates', () => {
     expect(bad.verdict).toBe('FILTERS_WORSE');
     const noise = g.gates.find((x) => x.code === 'NOISE_GATE')!;
     expect(noise.verdict).toBe('REFUSES_NO_WORSE');
+    expect(bad.tooFewDays).toBe(false);
+  });
+  it('never judges a gate whose refusals fall on fewer than MIN_DAYS_GATE days (RISK_OFF: 61 refusals, one day)', () => {
+    const pts: DecisionPoint[] = [];
+    const days = ['2026-10-01', '2026-10-02', '2026-10-03', '2026-10-06', '2026-10-07', '2026-10-08'];
+    days.forEach((d, k) => {
+      for (let i = 0; i < 10; i++) pts.push({ ...base(i), day: d, decision: 'TAKE', outcomeR: 0.1 + (k % 3) * 0.1 });
+    });
+    for (let i = 0; i < 61; i++) pts.push({ ...base(i), day: '2026-10-07', decision: 'ONE_DAY_GATE', outcomeR: -0.9 });
+    const g = gateValidation(pts);
+    const one = g.gates.find((x) => x.code === 'ONE_DAY_GATE')!;
+    expect(one.refused.clusters).toBe(1);
+    expect(one.tooFewDays).toBe(true);
+    expect(one.verdict).toBe('INCONCLUSIVE');
+    expect(EVIDENCE_RULES.MIN_DAYS_GATE).toBe(5);
   });
 });
 

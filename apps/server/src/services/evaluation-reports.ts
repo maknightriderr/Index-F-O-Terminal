@@ -152,7 +152,8 @@ export function gateValidationReport() {
     note:
       'For each refusal code, the decisions it refused against the decisions taken, graded by the missed-winner audit on its default ATR stop and target ' +
       '(the underlying, before option costs). FILTERS_WORSE: the refused decisions did worse with 95% confidence, the gate earns its keep. ' +
-      'REFUSES_NO_WORSE: they did at least as well, the gate removes trades without removing losses. INCONCLUSIVE: not enough evidence either way.',
+      'REFUSES_NO_WORSE: they did at least as well, the gate removes trades without removing losses. INCONCLUSIVE: not enough evidence either way, ' +
+      `including every gate whose refusals fall on fewer than ${EVIDENCE_RULES.MIN_DAYS_GATE} trading days (one day's market cannot judge a gate).`,
     ...gateValidation(await decisionPoints()),
   }));
 }
