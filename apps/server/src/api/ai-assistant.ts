@@ -6,8 +6,7 @@ import { Router, type Request, type Response } from 'express';
 import { logger } from '../lib/logger.js';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { chat } from '../services/ai-assistant.js';
-import { isAnthropicConfigured } from '../lib/anthropic.js';
-import type { ChatTurn } from '../lib/anthropic.js';
+import { AI_KEY_NAMES, isAiConfigured, type ChatTurn } from '../lib/llm.js';
 
 const MAX_HISTORY_TURNS = 20;
 
@@ -19,10 +18,10 @@ export function createAiAssistantRoutes(provider: MarketDataProvider): Router {
    * Body: { message: string, history?: Array<{ role: 'user'|'assistant', content: string }> }
    */
   router.post('/chat', async (req: Request, res: Response) => {
-    if (!isAnthropicConfigured()) {
+    if (!isAiConfigured()) {
       res.status(503).json({
         success: false,
-        error: { code: 'AI_NOT_CONFIGURED', message: 'ANTHROPIC_API_KEY is not set on the backend.' },
+        error: { code: 'AI_NOT_CONFIGURED', message: `No AI key is set on the backend: set ${AI_KEY_NAMES}.` },
       });
       return;
     }
@@ -39,9 +38,9 @@ export function createAiAssistantRoutes(provider: MarketDataProvider): Router {
         .filter((h: any) => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string')
         .slice(-MAX_HISTORY_TURNS);
 
-      const reply = await chat(provider, message, history);
+      const answer = await chat(provider, message, history);
 
-      res.json({ success: true, data: { reply }, meta: { timestamp: Date.now() } });
+      res.json({ success: true, data: { reply: answer.text, via: answer.label }, meta: { timestamp: Date.now(), model: answer.model } });
     } catch (error: any) {
       logger.error({ error: error.message }, 'AI assistant chat failed');
       res.status(502).json({

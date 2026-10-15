@@ -1,7 +1,7 @@
 // ============================================================
 // AI ASSISTANT
 // ============================================================
-// Grounds Claude in a compact live-data snapshot (indices, F&O
+// Grounds the model (llm.ts: Gemini, Groq or Claude) in a compact live-data snapshot (indices, F&O
 // universe aggregates, recent alerts) rather than letting it answer
 // from training data alone — the snapshot reuses the SAME cached
 // scan/quote calls the rest of the app already makes, so a chat
@@ -17,7 +17,7 @@ import { getLiveIndexQuotes } from './indices.js';
 import { getFnoScan } from './fno-scanner.js';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
-import { askClaude, type ChatTurn } from '../lib/anthropic.js';
+import { askAi, type AiReply, type ChatTurn } from '../lib/llm.js';
 import type { MarketDataProvider } from '../providers/interface.js';
 
 const INDEX_CONTEXT_CACHE_TTL_SECONDS = 60;
@@ -121,9 +121,9 @@ async function buildMarketContext(provider: MarketDataProvider): Promise<string>
   return lines.join('\n');
 }
 
-export async function chat(provider: MarketDataProvider, message: string, history: ChatTurn[]): Promise<string> {
+export async function chat(provider: MarketDataProvider, message: string, history: ChatTurn[]): Promise<AiReply> {
   const context = await buildMarketContext(provider);
   const system = buildSystemPrompt(context);
   const messages: ChatTurn[] = [...history, { role: 'user', content: message }];
-  return askClaude(system, messages);
+  return askAi(system, messages);
 }

@@ -1621,6 +1621,8 @@ export interface InstitutionalCommentary {
   bearCase: string;
   riskFactors: string[];
   generatedAt: number;
+  /** Which AI provider wrote it (Gemini, Groq or Claude). Absent when no AI answered. */
+  generatedBy?: string;
 }
 
 export interface InstitutionalFlowPrediction {

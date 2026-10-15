@@ -46,7 +46,7 @@ import { buildMarketBias } from './market-bias.js';
 import { getFiiDiiActivity } from './fii-dii.js';
 import { cached } from '../lib/cache.js';
 import { logger } from '../lib/logger.js';
-import { askClaude, isAnthropicConfigured } from '../lib/anthropic.js';
+import { AI_KEY_NAMES, askAi, isAiConfigured } from '../lib/llm.js';
 
 export const INSTITUTIONAL_SYMBOLS: Array<{ symbol: string; exchange: Exchange }> = [
   { symbol: 'NIFTY', exchange: 'NSE' },
@@ -386,9 +386,9 @@ bearCase: 1-2 sentences on what would validate a bearish read.
 riskFactors: 2-4 short bullet-style strings on what could invalidate this read.`;
 
 export async function generateCommentary(snapshot: InstitutionalFlowSnapshot, biases: NextDayBias[]): Promise<InstitutionalCommentary> {
-  if (!isAnthropicConfigured()) {
+  if (!isAiConfigured()) {
     return {
-      oneLineSummary: 'AI commentary unavailable — ANTHROPIC_API_KEY not configured on the backend.',
+      oneLineSummary: `AI commentary unavailable: set ${AI_KEY_NAMES} on the backend.`,
       detailedAnalysis: '',
       bullCase: '',
       bearCase: '',
@@ -416,7 +416,8 @@ export async function generateCommentary(snapshot: InstitutionalFlowSnapshot, bi
   lines.push(`NOT connected (never reference): ${snapshot.unavailableInputs.join(', ')}.`);
 
   try {
-    const raw = await askClaude(COMMENTARY_SYSTEM_PROMPT, [{ role: 'user', content: lines.join('\n') }]);
+    const answer = await askAi(COMMENTARY_SYSTEM_PROMPT, [{ role: 'user', content: lines.join('\n') }]);
+    const raw = answer.text;
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : raw);
     return {
@@ -426,6 +427,7 @@ export async function generateCommentary(snapshot: InstitutionalFlowSnapshot, bi
       bearCase: String(parsed.bearCase ?? ''),
       riskFactors: Array.isArray(parsed.riskFactors) ? parsed.riskFactors.map(String) : [],
       generatedAt: Date.now(),
+      generatedBy: answer.label,
     };
   } catch (err: any) {
     logger.warn({ error: err.message }, 'Institutional flow: AI commentary generation failed');

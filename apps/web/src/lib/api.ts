@@ -315,7 +315,7 @@ class ApiClient {
   }
 
   async chatWithAssistant(message: string, history: Array<{ role: 'user' | 'assistant'; content: string }>) {
-    return this.post<{ reply: string }>('/api/ai-assistant/chat', { message, history });
+    return this.post<{ reply: string; via?: string }>('/api/ai-assistant/chat', { message, history });
   }
 
   // --- System learning / self-audit ---
