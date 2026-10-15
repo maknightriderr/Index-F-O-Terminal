@@ -109,25 +109,60 @@ export function simulateExits(x: ExitSimInput): Record<ExitRule, ExitSimResult> 
   return { TIME_STOP_60: timeStop, BREAKEVEN_AT_HALF: breakeven };
 }
 
+// ---------------- SHADOW-1.1 entry rules (registered 2026-10-15, measurement only) ----------------
+//
+// Suggested by the 2026-10-15 audit, fixed here before any forward result exists. Like SHADOW-1.0 they never skip a
+// trade; they only say which trades they WOULD have skipped, so the record can show whether that set does worse.
+//   NET_RR_FLOOR_1      net reward after the trade's own cost is under 1x the risk (validation-gates netRiskReward).
+//                       Before 5 Oct a 1.5R gate existed; decisions it refused later graded -0.19R on the underlying,
+//                       the only refusal group that did worse than the trades taken.
+//   POSITIONING_OPPOSED the indicator's positioning cluster (futures OI, PCR, option OI flow) nets AGAINST the trade's
+//                       direction. Futures OI and option OI are the only vote dimensions whose rank correlation with
+//                       the next hour's move was above zero across 23 days of decisions.
+// Only trades minted from SHADOW_RULES_V11_REGISTERED_AT are a fair test.
+
+export const SHADOW_RULES_V11_VERSION = 'SHADOW-1.1';
+export const SHADOW_RULES_V11_REGISTERED_AT = Date.parse('2026-10-16T00:00:00+05:30');
+export const ENTRY_RULES_V11 = ['NET_RR_FLOOR_1', 'POSITIONING_OPPOSED'] as const;
+export type EntryRuleV11 = (typeof ENTRY_RULES_V11)[number];
+export const SHADOW_PARAMS_V11 = Object.freeze({ NET_RR_FLOOR: 1 });
+
+export interface EntryFactsV11 {
+  direction: string | null;
+  /** (reward − cost) ÷ (risk + cost) at the mint, from validation-gates netRiskReward; null when a price is missing. */
+  netRiskReward: number | null;
+  /** The indicator's positioning cluster net at the mint (votes.positioningNet); null when not recorded. */
+  positioningNet: number | null;
+}
+
+/** Pure: which SHADOW-1.1 rules would have skipped this trade. Null = not evaluable (a missing field). */
+export function entryFlagsV11(f: EntryFactsV11): Record<EntryRuleV11, boolean | null> {
+  const sign = f.direction === 'BULLISH' ? 1 : f.direction === 'BEARISH' ? -1 : 0;
+  return {
+    NET_RR_FLOOR_1: f.netRiskReward == null ? null : f.netRiskReward < SHADOW_PARAMS_V11.NET_RR_FLOOR,
+    POSITIONING_OPPOSED: f.positioningNet == null || sign === 0 ? null : f.positioningNet * sign < 0,
+  };
+}
+
 // ---------------- aggregation ----------------
 
-export interface EntryRuleTrade {
+export interface EntryRuleTrade<R extends string = EntryRule> {
   netPct: number;
-  flags: Record<EntryRule, boolean | null>;
+  flags: Record<R, boolean | null>;
 }
 
 const mean = (xs: readonly number[]) => (xs.length ? round2(xs.reduce((a, b) => a + b, 0) / xs.length) : null);
 const sum = (xs: readonly number[]) => round2(xs.reduce((a, b) => a + b, 0));
 
 /** Pure: per entry rule — the trades it would have skipped vs kept, and the total with and without it. */
-export function aggregateEntryRules(trades: readonly EntryRuleTrade[]) {
+export function aggregateEntryRules<R extends string = EntryRule>(trades: readonly EntryRuleTrade<R>[], rulesList: readonly R[] = ENTRY_RULES as unknown as readonly R[]) {
   const baseline = trades.map((t) => t.netPct);
   return {
     trades: trades.length,
     baselineNetPerTrade: mean(baseline),
     baselineTotalNet: sum(baseline),
     rules: Object.fromEntries(
-      ENTRY_RULES.map((rule) => {
+      rulesList.map((rule) => {
         const measured = trades.filter((t) => t.flags[rule] != null);
         const skipped = measured.filter((t) => t.flags[rule]).map((t) => t.netPct);
         const kept = measured.filter((t) => !t.flags[rule]).map((t) => t.netPct);
@@ -145,7 +180,7 @@ export function aggregateEntryRules(trades: readonly EntryRuleTrade[]) {
           },
         ];
       })
-    ) as Record<EntryRule, { measured: number; skipped: number; skippedNetPerTrade: number | null; keptNetPerTrade: number | null; totalNetWithRule: number; improvementTotalNet: number }>,
+    ) as Record<R, { measured: number; skipped: number; skippedNetPerTrade: number | null; keptNetPerTrade: number | null; totalNetWithRule: number; improvementTotalNet: number }>,
   };
 }
 

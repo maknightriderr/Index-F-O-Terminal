@@ -58,6 +58,7 @@ import { startMarketStateCapture } from './services/market-state-capture.js';
 import { startMissedWinnerAudit } from './services/missed-winner-audit.js';
 import { startSetupEventsGrading } from './services/setup-events-grading.js';
 import { startOpportunityCensus } from './services/opportunity-census-job.js';
+import { startBarArchive } from './services/bar-archive.js';
 import { orderFlowFeedActive, startOrderFlowFeed } from './services/dhan-feed.js';
 import { createDiagnosticsRoutes } from './api/diagnostics.js';
 import { ensureCaptureSchema } from './services/ensure-capture-schema.js';
@@ -328,6 +329,8 @@ for (const spec of [
   timerService('missedWinnerAudit', () => startMissedWinnerAudit(provider), { ready: () => schemaReady }),
   timerService('setupEventsGrading', () => startSetupEventsGrading(provider), { ready: () => schemaReady }),
   timerService('opportunityCensus', () => startOpportunityCensus(provider), { ready: () => schemaReady }),
+  // Research only (2026-10-15): stores closed 15m / daily bars while no exchange trades. Never read by a decision.
+  timerService('barArchive', () => startBarArchive(provider), { ready: () => schemaReady }),
   timerService('holidayCalendarCheck', () => startHolidayCalendarCheck()),
   // The self-audit: it can change what the system NOTICES, never what it DOES.
   timerService('systemLearningAudit', () => startSystemLearningAudit(provider)),

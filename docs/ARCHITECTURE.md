@@ -288,7 +288,16 @@ Runs on the opportunity census's post-session tick (no new service); grades only
 - **Square-off shadow:** the price monitor records the option mid in each intraday trade's last 10 session minutes (`squareOffShadow`); the shadow-rules report compares it with the actual exit. No exit changed.
 - **OF1 on MCX:** the Dhan feed also subscribes MCX_COMM nearest futures (CRUDEOIL, GOLD, SILVER, NATURALGAS by default), connects during NSE or MCX hours, and closes each symbol's flow bars on its own exchange session. OB1 already ran on MCX (it runs wherever the trigger families run).
 
-## 8. Background services (18) — supervised (Phase 6)
+### 6g. Evidence reports and bar archive (audit fixes, 2026-10-15) — measurement only
+
+- **evaluation-core.ts** (pure): day-clustered bootstrap, Spearman by day, Bonferroni, the written strategy rule `EVIDENCE-1.0` (demotion candidate: ≥ 30 trades, upper 95% bound < 0; edge shown: ≥ 100 trades over ≥ 20 days, corrected lower bound > 0, both halves positive; `INDICATOR` protected), forward moves of every decision, gate validation, portfolio-limit replay.
+- **evaluation-reports.ts**: `/api/diagnostics/scorecard`, `/signal-quality`, `/gate-validation`, `/portfolio-risk` (read-only SELECTs, 10-min cache). Web: Performance → Evidence.
+- **bar-archive.ts** + migration `041_bar_archive.sql`: the closed 15m and daily bars of every evaluated symbol, written only while no exchange trades. Nothing in the decision path reads it (guarded by a test).
+- **SHADOW-1.1** (shadow-rules.ts): `NET_RR_FLOOR_1`, `POSITIONING_OPPOSED`, registered for trades from 2026-10-16 IST; flags only.
+- **Measurement fixes**: `returnedToEntryOf` (post-exit), `sessionEndExitTime` (session-end exits stamped at the close), `segmentOf` INDEX / STOCK / MCX, order-flow ALL_TOUCHED row, `costForDiagnostics` (no cost in R stored for a quote whose spread exceeds 50% of mid; `measureSetupCost` itself unchanged).
+- Write-up with every test and comparison: `docs/AUDIT-FIXES-2026-10-15.md`.
+
+## 8. Background services (19) — supervised (Phase 6)
 
 `ServiceSupervisor` (lib/service-supervisor.ts) starts, watches and stops every service. Each registers
 {name, critical, startupTimeoutMs, heartbeatIntervalMs}. States STARTING → RUNNING ⇄ DEGRADED → FAILED →
@@ -302,9 +311,9 @@ Critical: tradeSetupPriceMonitor, signalEngine, setupLifecycle — any not RUNNI
 | Registration | Critical | Kind | Notes |
 |---|---|---|---|
 | alertScanner, patternScanner, institutionalFlowScanner, marketScanner, fiiDiiTracker, abandonedSetupSweep, oiCloseSnapshot, cacheWarmer, strategyTracker, positionalStockScan, backgroundBiasEvaluator, holidayCalendarCheck, systemLearningAudit | no | TIMER | heartbeat = own interval |
-| marketStateCapture, missedWinnerAudit, setupEventsGrading, opportunityCensus | no | TIMER | start after the capture schema check |
+| marketStateCapture, missedWinnerAudit, setupEventsGrading, opportunityCensus, barArchive | no | TIMER | start after the capture schema check |
 | tradeSetupPriceMonitor | **yes** | TIMER | starts after Redis is rebuilt from PostgreSQL; its sweep reports its own outcome |
-| signalEngine (extra) | **yes** | COMPONENT | the bias / signal computation has no single service among the 18 (browser polls, marketScanner, backgroundBiasEvaluator all run it); heartbeat = a completed computation, expected only in session (10 min) |
+| signalEngine (extra) | **yes** | COMPONENT | the bias / signal computation has no single service among the 19 (browser polls, marketScanner, backgroundBiasEvaluator all run it); heartbeat = a completed computation, expected only in session (10 min) |
 | setupLifecycle (extra) | **yes** | COMPONENT | the structure lifecycle advance runs inside the signal computation; heartbeat = a completed advance (20 min, in session) |
 
 Recovery (services/state-recovery.ts): PostgreSQL is the source of truth; on boot Redis is rebuilt from it
@@ -316,7 +325,7 @@ recorded one; a cached trade with no PG row yet is kept for the existing backfil
 
 Shutdown: supervisor + every service timer → server.close → WS disconnect → logout → sql.end → redis.disconnect.
 
-The 18 services:
+The 19 services:
 
 | Service | Frequency | Role |
 |---|---|---|
@@ -336,12 +345,13 @@ The 18 services:
 | missedWinnerAudit | periodic | refusals graded against the price path |
 | setupEventsGrading | periodic | setup_events grading |
 | opportunityCensus | post-session | opportunities vs setups |
+| barArchive | 30 min, only while NSE, BSE and MCX are all closed | closed 15m + daily bars into `bar_archive` (research only) |
 | holidayCalendarCheck | daily | holiday calendar populated |
 | systemLearningAudit | daily (EOD) | learning detectors (observation only) |
 
 ## 9. REST API
 
-`POST /api/auth/login|logout`, `GET /api/auth/status`, `GET /api/instruments/search|:token`, `GET /api/market/bias/:symbol` (full MarketBias incl. `setupWatch`), `GET /api/market/history|quote`, `GET /api/option-chain/:symbol`, `GET /api/futures/:symbol`, `POST/GET/DELETE /api/alerts`, `POST /api/ai-assistant/ask`, `GET /api/institutional-flow`, `POST/GET /api/backtesting/*`, `GET /api/learning/*`, `GET /api/loss-attribution`, `GET /api/structure/:symbol`, `GET /api/market-scanner/scan`, `GET /api/strategy-scanner/scan`, `GET /api/fii-dii`, `GET /api/news/:symbol`, `GET /api/corporate-actions`, `GET /api/diagnostics/*` (summary, rejections, census, grades, leakage, performance, opportunity, major-moves, triggers, shadow, versions, setup-outcomes), `GET /api/health`.
+`POST /api/auth/login|logout`, `GET /api/auth/status`, `GET /api/instruments/search|:token`, `GET /api/market/bias/:symbol` (full MarketBias incl. `setupWatch`), `GET /api/market/history|quote`, `GET /api/option-chain/:symbol`, `GET /api/futures/:symbol`, `POST/GET/DELETE /api/alerts`, `POST /api/ai-assistant/ask`, `GET /api/institutional-flow`, `POST/GET /api/backtesting/*`, `GET /api/learning/*`, `GET /api/loss-attribution`, `GET /api/structure/:symbol`, `GET /api/market-scanner/scan`, `GET /api/strategy-scanner/scan`, `GET /api/fii-dii`, `GET /api/news/:symbol`, `GET /api/corporate-actions`, `GET /api/diagnostics/*` (summary, rejections, census, grades, leakage, performance, opportunity, major-moves, triggers, shadow, versions, setup-outcomes, scorecard, signal-quality, gate-validation, portfolio-risk), `GET /api/health`.
 
 Decision research view (Phase 8): `GET /api/diagnostics/decisions?symbol=&limit=` (recent snapshotted decisions) and `GET /api/diagnostics/decision/:snapshotId[?replay=1]` — input snapshot summary, per-input dataQuality (asOf, decisionBarTime, ageMs, source, status), market state, events, trigger candidates + parentId, common metrics, option candidates (+ every strike of each persisted plan, rejected ones with stage and reason), arbitration (pre-build ranking + the live slot rows with role, rank, slot decision and the criterion each loser lost on), final status, outcome (setup_events grading of the rows the decision produced), every version field; replay re-derives offline and compares. Shown in Signal Diagnostics → "Decision Record". Also `GET /api/diagnostics/feed-gaps` (Phase 5).
 
@@ -432,3 +442,4 @@ Observation only: `startSystemLearningAudit` → `learningDetectors.ts` → `lea
 - **2026-10-08 — Profitability review.** A4 demoted to SHADOW (`TRIGGER_DEMOTIONS`, `+demote-a4.1`); trade source recorded on signals and slot decisions linked to their snapshot; net expectancy (EXPIRED included, after cost), wins below cost and a by-source split in the win-rate report; pre-registered shadow experiments (`SHADOW-1.0`: three entry filters, two exit rules) measured, never traded.
 - **2026-10-09 — Order Block repair (OB-2.0, shadow) + Dhan Order Flow + OF1 (shadow).** Migration `038_order_blocks_order_flow_of1.sql`. The live vote keeps the frozen legacy detector; no strategy, gate, arbitration or option logic changed (fingerprint-tested).
 - **2026-10-09 — Diagnostic fixes.** Slot compare-and-set; idempotent closes with a retry queue; recovery no longer revives superseded / lost trades; session-close bar anomaly recorded and excluded from grading (migration 039); square-off shadow; OF1 order flow on MCX.
+- **2026-10-15 — Audit fixes, phase 1 (measurement and evidence only).** No trading logic changed (fingerprint, 316 golden snapshots and full replay unchanged). Measurement fixes (post-exit return to entry, session-end exit time, INDEX / STOCK / MCX split, order-flow survivorship row, non-market quotes stored without cost in R); evidence reports + Evidence page with the written rule `EVIDENCE-1.0` (Old Indicator protected); SHADOW-1.1 entry measurements; migration `041_bar_archive.sql` + `barArchive` service (19 services). Tested and rejected out of sample: OI-opposed direction flip, net R:R ≥ 1 floor, portfolio caps. Details: `docs/AUDIT-FIXES-2026-10-15.md`.

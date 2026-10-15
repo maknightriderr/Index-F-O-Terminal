@@ -333,6 +333,19 @@ export function summariseCostRecords(records: ReadonlyArray<any>) {
   };
 }
 
+/**
+ * Pure: did the option's price come back to the entry premium after the exit?
+ * An exit at or above entry (a win, or a flat close) "returns" when a later low reaches entry — the gain was given back.
+ * An exit below entry (a loss, or an expiry in the red) "returns" when a later HIGH reaches entry — the trade would
+ * have recovered. Before 2026-10-15 every exit was tested with `min <= entry`, which is trivially true for an exit below
+ * entry (its own exit price is already below), so losing exits all read 100% "returned".
+ */
+export function returnedToEntryOf(entry: number | null | undefined, exit: number | null | undefined, minAfter: number | null | undefined, maxAfter: number | null | undefined): boolean | null {
+  if (entry == null || !(entry > 0)) return null;
+  if (exit != null && exit < entry) return maxAfter == null ? null : maxAfter >= entry;
+  return minAfter == null ? null : minAfter <= entry;
+}
+
 /** Pure: the post-exit rows (status, outcome, record JSON). Target exits are reported apart from every other close. */
 export function summarisePostExit(rows: ReadonlyArray<{ status: string; outcome: string; record: any }>) {
   const byStatus: Record<string, number> = {};
@@ -342,7 +355,15 @@ export function summarisePostExit(rows: ReadonlyArray<{ status: string; outcome:
   const block = (rs: typeof observed) => {
     const beyondR = nums(rs.map((r) => r.record?.option?.maxBeyondExitR));
     const atLeast = (x: number) => (beyondR.length ? Math.round((beyondR.filter((v) => v >= x).length / beyondR.length) * 1000) / 10 : null);
-    const back = rs.map((r) => r.record?.option?.returnedToEntry).filter((v): v is boolean => typeof v === 'boolean');
+    // Re-derived from the stored prices so rows written before the 2026-10-15 fix (which marked every losing exit as
+    // "returned") read correctly; the stored flag is used only when a price is missing.
+    const back = rs
+      .map((r) => {
+        const o = r.record?.option;
+        const derived = returnedToEntryOf(r.record?.entry, r.record?.exitPrice, o?.minAfter, o?.maxAfter);
+        return derived ?? o?.returnedToEntry;
+      })
+      .filter((v): v is boolean => typeof v === 'boolean');
     return {
       n: rs.length,
       medianMaxBeyondExitR: median(beyondR),

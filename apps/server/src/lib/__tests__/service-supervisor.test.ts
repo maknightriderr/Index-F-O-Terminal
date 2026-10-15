@@ -160,12 +160,15 @@ describe('boot registrations and shutdown order (index.ts)', () => {
   const src = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../index.ts'), 'utf8');
   const EXISTING = [
     'alertScanner', 'patternScanner', 'institutionalFlowScanner', 'tradeSetupPriceMonitor', 'marketScanner', 'fiiDiiTracker', 'abandonedSetupSweep', 'oiCloseSnapshot', 'cacheWarmer',
-    'strategyTracker', 'positionalStockScan', 'backgroundBiasEvaluator', 'marketStateCapture', 'missedWinnerAudit', 'setupEventsGrading', 'opportunityCensus', 'holidayCalendarCheck', 'systemLearningAudit',
+    'strategyTracker', 'positionalStockScan', 'backgroundBiasEvaluator', 'marketStateCapture', 'missedWinnerAudit', 'setupEventsGrading', 'opportunityCensus',
+    // 2026-10-15: the bar archive (research only; writes bar_archive while no exchange trades, never read by a decision).
+    'barArchive',
+    'holidayCalendarCheck', 'systemLearningAudit',
   ];
-  it('registers exactly the 18 existing services, plus three justified COMPONENT extras', () => {
+  it('registers exactly the 18 original services plus the bar archive, and three justified COMPONENT extras', () => {
     const timer = [...src.matchAll(/timerService\('(\w+)'/g)].map((m) => m[1]);
     expect(timer).toEqual(EXISTING);
-    expect(new Set(timer).size).toBe(18);
+    expect(new Set(timer).size).toBe(19);
     const components = [...src.matchAll(/name: '(\w+)', critical: (true|false)[^\n]*kind: 'COMPONENT'/g)].map((m) => m[1]);
     expect(components).toEqual(['signalEngine', 'setupLifecycle', 'orderFlowFeed']);
     expect((src.match(/note: 'Extra:/g) ?? []).length).toBe(3);

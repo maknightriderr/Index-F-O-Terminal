@@ -142,6 +142,7 @@ import {
   roomV2,
   setupConfidenceRefusal,
   netRiskReward,
+  sessionEndExitTime,
 } from './validation-gates.js';
 import { INDICATOR_CONFIDENCE_MODE, locationGateEnforced } from '../config/trading-flags.js';
 import type { ExposureSnapshot } from './exposure-tracker.js';
@@ -6035,12 +6036,15 @@ async function recordTradeSetupOutcome(
 
   let status: 'RECORDED' | 'DUPLICATE' | 'QUEUED' | 'NO_ROW' = 'NO_ROW';
   if (stored.signalId) {
+    // A session-end close is written by the first poll / sweep after the session (often the 00:00 IST rollover);
+    // its exit belongs to the session close, not to that later wall-clock instant (2026-10-15, measurement only).
+    const exitAt = close.reason === 'SESSION_ENDED' && close.mode === 'INTRADAY' ? sessionEndExitTime(close.exchange, stored.generatedAt, decisionNow()) : decisionNow();
     const patch = {
       outcome,
       exitPrice: exitValue,
-      exitTime: decisionNow(),
+      exitTime: exitAt,
       closeReason: close.reason,
-      holdMinutes: stored.generatedAt ? Math.round((decisionNow() - stored.generatedAt) / 60000) : null,
+      holdMinutes: stored.generatedAt ? Math.round((exitAt - stored.generatedAt) / 60000) : null,
       excursion: stored.excursion ? { ...stored.excursion } : null,
       healthAtExit: stored.health ? { ...stored.health } : null,
       ...(outcome === 'LOSS' ? { stopOvershootPct: stopOvershootPct(stored, exitValue) } : {}),

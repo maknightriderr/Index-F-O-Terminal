@@ -23,6 +23,7 @@ export type PageId =
   | 'loss-attribution'
   | 'signal-diagnostics'
   | 'measurement'
+  | 'evidence'
   | 'institutional-flow'
   | 'system-health'
   | 'alerts'
@@ -74,6 +75,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: 'loss-attribution', label: 'Loss Attribution', description: 'Why trades lose: twelve questions answered from the recorded trades.', icon: 'loss-attribution' },
       { id: 'signal-diagnostics', label: 'Signal Diagnostics', description: 'Why candidates were accepted or rejected, shadow experiments, order blocks and order flow.', icon: 'signal-diagnostics' },
       { id: 'measurement', label: 'Measurement', description: 'Sample reliability: cohorts, denominators, estimated costs and payoff grading.', icon: 'measurement' },
+      { id: 'evidence', label: 'Evidence', description: 'Which strategies, signals, gates and limits have shown an edge, with intervals.', icon: 'evidence' },
     ],
   },
   {
@@ -94,7 +96,7 @@ export const NAV_GROUPS: NavGroup[] = [
 ];
 
 /** Sub-pages of the Performance area (rendered as a tab strip at the top of each). */
-export const PERFORMANCE_PAGES: PageId[] = ['backtesting', 'loss-attribution', 'signal-diagnostics', 'measurement'];
+export const PERFORMANCE_PAGES: PageId[] = ['backtesting', 'loss-attribution', 'signal-diagnostics', 'measurement', 'evidence'];
 
 /** Pages that are reachable but are not built; they are not in the sidebar. */
 export const UNBUILT_PAGES: PageId[] = ['positions', 'settings'];

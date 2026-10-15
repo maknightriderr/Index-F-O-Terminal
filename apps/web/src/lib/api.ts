@@ -178,6 +178,11 @@ class ApiClient {
     return this.get<MeasurementReport>('/api/diagnostics/measurement');
   }
 
+  /** The evidence reports (2026-10-15): scorecard, signal-quality, gate-validation, portfolio-risk. Read-only. */
+  async getEvidence<T>(report: 'scorecard' | 'signal-quality' | 'gate-validation' | 'portfolio-risk') {
+    return this.get<T>(`/api/diagnostics/${report}`);
+  }
+
   /** Structure engine: every symbol's running lifecycle (WATCH → DEVELOPING → CONFIRMED → ENTRY/ACTIVE). Read-only. */
   async getStructureWatchlist() {
     return this.get<{ enabled: boolean; day: string; rows: StructureLifecycleView[] }>('/api/structure/watchlist');

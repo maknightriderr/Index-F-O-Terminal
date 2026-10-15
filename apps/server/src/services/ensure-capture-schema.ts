@@ -123,6 +123,8 @@ export const FILES = [
   '039_bar_anomalies.sql',
   // Measurement only: estimated cost components per trade, post-exit excursion (2026-10-09).
   '040_trade_measurement.sql',
+  // Research only: persisted 15-minute and daily bars written after the sessions close (2026-10-15).
+  '041_bar_archive.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */
