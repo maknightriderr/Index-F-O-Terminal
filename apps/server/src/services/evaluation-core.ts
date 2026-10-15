@@ -28,7 +28,10 @@
 // ============================================================
 
 export const EVIDENCE_RULES = Object.freeze({
-  VERSION: 'EVIDENCE-1.0',
+  // 1.1 (2026-10-15, same day): a gate verdict needs refusals on MIN_DAYS_GATE trading days. In production RISK_OFF's
+  // 61 refusals fell on one day and WIDE_SPREAD's 74 on two; resampling days then cannot vary the refused mean, so the
+  // interval was far too narrow and both read FILTERS_WORSE. The strategy rules are unchanged.
+  VERSION: 'EVIDENCE-1.1',
   REGISTERED_AT: '2026-10-15',
   /** Two-sided 95% intervals. */
   ALPHA: 0.05,
@@ -42,6 +45,8 @@ export const EVIDENCE_RULES = Object.freeze({
    *  correction for every strategy that reached the size bar, and both halves of its own record positive. */
   MIN_N_PROMOTE: 100,
   MIN_DAYS_PROMOTE: 20,
+  /** A gate is judged (FILTERS_WORSE / REFUSES_NO_WORSE) only when its refusals fall on at least this many trading days. */
+  MIN_DAYS_GATE: 5,
   /** Strategy keys the scorecard never proposes to demote (user decision 2026-10-15: the Old Indicator stays). */
   PROTECTED: ['INDICATOR'] as readonly string[],
   /** Forward horizons for the direction test (minutes); a later observation within this tolerance counts. */
@@ -484,8 +489,9 @@ export function gateValidation(points: readonly DecisionPoint[], opts: { seed?: 
       const refused = graded.filter((p) => p.decision === code).map((p) => ({ v: p.outcomeR!, c: p.day }));
       const s = clusterBootstrapMean(refused.map((r) => r.v), refused.map((r) => r.c), opts);
       const d = clusterBootstrapDiff(refused, taken, opts);
-      const verdict: GateVerdict = d.hi != null && d.hi < 0 ? 'FILTERS_WORSE' : d.lo != null && d.lo >= 0 ? 'REFUSES_NO_WORSE' : 'INCONCLUSIVE';
-      return { code, refused: s, diffVsTaken: d, verdict };
+      const tooFewDays = s.clusters < EVIDENCE_RULES.MIN_DAYS_GATE;
+      const verdict: GateVerdict = tooFewDays ? 'INCONCLUSIVE' : d.hi != null && d.hi < 0 ? 'FILTERS_WORSE' : d.lo != null && d.lo >= 0 ? 'REFUSES_NO_WORSE' : 'INCONCLUSIVE';
+      return { code, refused: s, diffVsTaken: d, verdict, tooFewDays };
     })
     .filter((r) => r.refused.n >= (opts.minRows ?? 40))
     .sort((a, b) => b.refused.n - a.refused.n);
