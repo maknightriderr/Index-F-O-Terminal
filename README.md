@@ -156,6 +156,7 @@ this repo is set up for Railway, but Render/Fly.io work the same way.
 | `DATABASE_URL`, `REDIS_URL` | Railway (backend service) only | Yes | Reference the Postgres/Redis plugins' own variables — don't hand-type connection strings. |
 | `CORS_ORIGINS` | Railway (backend service) only | No | Your Vercel URL. Not secret, but must be correct or the frontend gets CORS errors. |
 | `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_WS_URL` | Vercel (frontend project) only | No | `NEXT_PUBLIC_*` vars are bundled into the browser JS — never put a secret behind this prefix, anywhere. |
+| `MALLOC_ARENA_MAX` | Railway (backend service) only | No | Set to `2`. The container reports 48 CPUs, so the C allocator can keep many per-thread memory arenas that never shrink, and Railway bills that memory. Check the effect at `GET /api/health/memory`. |
 
 ## Security
 
