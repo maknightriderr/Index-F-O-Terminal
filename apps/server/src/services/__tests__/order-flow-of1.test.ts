@@ -217,6 +217,13 @@ describe('Dhan feed: never hammer Dhan; no connection without the Data API plan 
     expect(d).toBe(F.RECONNECT_MAX_MS);
     expect(F.nextReconnectDelay(d, 'RATE_LIMITED')).toBe(F.RATE_LIMIT_BACKOFF_MS);
     expect(F.nextReconnectDelay(d, 'GOT_DATA')).toBe(F.RECONNECT_MIN_MS);
+    // A failed profile check waits instead of retrying on the next 10-second tick (an expired token drew a 401 every 10 s).
+    expect(F.profileRetryDelay(401)).toBe(F.PROFILE_AUTH_BACKOFF_MS);
+    expect(F.profileRetryDelay(403)).toBe(F.PROFILE_AUTH_BACKOFF_MS);
+    expect(F.profileRetryDelay(429)).toBe(F.RATE_LIMIT_BACKOFF_MS);
+    expect(F.profileRetryDelay(503)).toBe(F.PROFILE_RETRY_MS);
+    expect(F.profileRetryDelay(null)).toBe(F.PROFILE_RETRY_MS);
+    expect(F.PROFILE_RETRY_MS).toBeGreaterThanOrEqual(60_000);
     expect(F.RECONNECT_MIN_MS).toBeGreaterThanOrEqual(30_000);
   });
   it('reads the Data API plan from the Dhan profile (the 9 Oct account: Deactive)', () => {

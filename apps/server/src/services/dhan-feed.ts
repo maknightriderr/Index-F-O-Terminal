@@ -43,6 +43,21 @@ export const DHAN_PROFILE_URL = 'https://api.dhan.co/v2/profile';
 export const RECONNECT_MIN_MS = 30_000;
 export const RECONNECT_MAX_MS = 15 * 60_000;
 export const RATE_LIMIT_BACKOFF_MS = 30 * 60_000;
+/** After Dhan rejects the token (401/403): it will not start working by itself, so ask again only every 30 minutes. */
+export const PROFILE_AUTH_BACKOFF_MS = 30 * 60_000;
+/** After any other failed profile check (network, 5xx). */
+export const PROFILE_RETRY_MS = 5 * 60_000;
+
+/**
+ * Pure: how long to wait before the next profile check after one failed (2026-10-16). It used to be retried on the
+ * very next 10-second tick: an expired token drew a 401 every 10 s (38 in 16 minutes), the repeated-request pattern
+ * Dhan warns can block the account.
+ */
+export function profileRetryDelay(status: number | null | undefined): number {
+  if (status === 401 || status === 403) return PROFILE_AUTH_BACKOFF_MS;
+  if (status === 429) return RATE_LIMIT_BACKOFF_MS;
+  return PROFILE_RETRY_MS;
+}
 
 /** Pure: the next reconnect delay — doubles after a failed connection (no data), resets after real data; a 429 waits RATE_LIMIT_BACKOFF_MS. */
 export function nextReconnectDelay(prevMs: number, outcome: 'GOT_DATA' | 'NO_DATA' | 'RATE_LIMITED'): number {
@@ -86,6 +101,10 @@ const state = {
   dataPlan: 'UNKNOWN' as 'ACTIVE' | 'INACTIVE' | 'UNKNOWN',
   dataPlanCheckedOn: null as string | null,
   dataPlanCheckedAt: 0,
+  /** No profile check before this instant (set after a failed one). */
+  profileRetryAt: 0,
+  /** Dhan answered 401/403 to the last profile check: no connection is attempted until a check succeeds. */
+  tokenRejected: false,
 };
 
 /**
@@ -200,25 +219,34 @@ async function tick(): Promise<void> {
   }
   // Data API plan: checked once a day (and after a failed connection). No connection while inactive.
   // Re-checked every 30 minutes while inactive, so activating the plan takes effect the same day.
-  if (state.dataPlanCheckedOn !== istDate(now) || (state.dataPlan === 'INACTIVE' && now - state.dataPlanCheckedAt >= 30 * 60_000)) {
+  const due = state.dataPlanCheckedOn !== istDate(now) || (state.dataPlan === 'INACTIVE' && now - state.dataPlanCheckedAt >= 30 * 60_000);
+  if (due && now >= state.profileRetryAt) {
     try {
       const res = await axios.get(DHAN_PROFILE_URL, { headers: { 'access-token': creds.accessToken, Accept: 'application/json' }, timeout: 15_000 });
       const active = dataPlanActive(res.data);
       state.dataPlan = active === true ? 'ACTIVE' : active === false ? 'INACTIVE' : 'UNKNOWN';
       state.dataPlanCheckedOn = istDate(now);
       state.dataPlanCheckedAt = now;
+      state.tokenRejected = false;
+      state.profileRetryAt = 0;
       if (state.dataPlan === 'INACTIVE') {
         state.lastError = 'Dhan Data API plan is not active (profile dataPlan: Deactive) — the market feed needs the Data API subscription in Dhan';
         logger.warn('Dhan feed: Data API plan not active — no connection attempted today (order flow stays UNAVAILABLE)');
       }
     } catch (err: any) {
-      state.lastError = `Dhan profile check failed: ${err.message}`;
-      logger.warn({ error: err.message }, 'Dhan feed: profile check failed — will retry');
-      if (/\b429\b/.test(err.message)) state.reconnectAt = now + RATE_LIMIT_BACKOFF_MS;
+      const status: number | null = typeof err?.response?.status === 'number' ? err.response.status : null;
+      const waitMs = profileRetryDelay(status);
+      state.profileRetryAt = now + waitMs;
+      state.tokenRejected = status === 401 || status === 403;
+      state.lastError = state.tokenRejected
+        ? `Dhan rejected the access token (HTTP ${status}): refresh DHAN_ACCESS_TOKEN. Next check in ${Math.round(waitMs / 60_000)} minutes.`
+        : `Dhan profile check failed: ${err.message}. Next check in ${Math.round(waitMs / 60_000)} minutes.`;
+      logger.warn({ error: err.message, status, retryInMinutes: Math.round(waitMs / 60_000) }, 'Dhan feed: profile check failed');
+      if (status === 429) state.reconnectAt = now + RATE_LIMIT_BACKOFF_MS;
     }
   }
-  if (state.dataPlan === 'INACTIVE') {
-    await closeFlowBars(now, false, 'DATA_PLAN_INACTIVE').catch((err: any) => logger.warn({ error: err.message }, 'Order flow: bar close failed'));
+  if (state.dataPlan === 'INACTIVE' || state.tokenRejected) {
+    await closeFlowBars(now, false, state.tokenRejected ? 'TOKEN_REJECTED' : 'DATA_PLAN_INACTIVE').catch((err: any) => logger.warn({ error: err.message }, 'Order flow: bar close failed'));
     return;
   }
   if (!state.ws && now >= state.reconnectAt && Object.keys(state.resolved).length) connect(creds);
@@ -243,7 +271,7 @@ export function startOrderFlowFeed(): void {
 
 export function orderFlowFeedStatus() {
   return {
-    status: !state.configured ? 'NOT_CONFIGURED' : state.dataPlan === 'INACTIVE' ? 'DATA_PLAN_INACTIVE' : state.connected ? 'CONNECTED' : 'DISCONNECTED',
+    status: !state.configured ? 'NOT_CONFIGURED' : state.tokenRejected ? 'TOKEN_REJECTED' : state.dataPlan === 'INACTIVE' ? 'DATA_PLAN_INACTIVE' : state.connected ? 'CONNECTED' : 'DISCONNECTED',
     dataPlan: state.dataPlan,
     failedConnections: state.failedConnections,
     nextAttemptAt: state.ws ? null : state.reconnectAt || null,
