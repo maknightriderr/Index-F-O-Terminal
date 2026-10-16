@@ -163,12 +163,14 @@ describe('boot registrations and shutdown order (index.ts)', () => {
     'strategyTracker', 'positionalStockScan', 'backgroundBiasEvaluator', 'marketStateCapture', 'missedWinnerAudit', 'setupEventsGrading', 'opportunityCensus',
     // 2026-10-15: the bar archive (research only; writes bar_archive while no exchange trades, never read by a decision).
     'barArchive',
+    // 2026-10-16: the end-of-session review (measurement only; reads paper trades, sends one Telegram note per session).
+    'dailyReview',
     'holidayCalendarCheck', 'systemLearningAudit',
   ];
-  it('registers exactly the 18 original services plus the bar archive, and three justified COMPONENT extras', () => {
+  it('registers exactly the 18 original services plus the bar archive and daily review, and three justified COMPONENT extras', () => {
     const timer = [...src.matchAll(/timerService\('(\w+)'/g)].map((m) => m[1]);
     expect(timer).toEqual(EXISTING);
-    expect(new Set(timer).size).toBe(19);
+    expect(new Set(timer).size).toBe(20);
     const components = [...src.matchAll(/name: '(\w+)', critical: (true|false)[^\n]*kind: 'COMPONENT'/g)].map((m) => m[1]);
     expect(components).toEqual(['signalEngine', 'setupLifecycle', 'orderFlowFeed']);
     expect((src.match(/note: 'Extra:/g) ?? []).length).toBe(3);

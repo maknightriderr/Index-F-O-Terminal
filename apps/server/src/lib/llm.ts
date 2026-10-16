@@ -73,14 +73,25 @@ const CATALOG: Record<AiProviderId, (env: Env) => Omit<AiProviderSpec, 'id'>> = 
   }),
 };
 
-/** Pure: the providers to try, in order — AI_PROVIDERS (unknown names ignored) or the default, keeping only those with a key. */
+/**
+ * Pure: the providers to try, in order — AI_PROVIDERS (unknown names ignored) or the default, keeping only those with
+ * a key. A model setting may list several models, comma-separated (GEMINI_MODEL=gemini-flash-latest,gemini-2.5-flash):
+ * each is tried in turn before the next provider. On 16 Oct the newest Flash models answered 503 "high demand" on
+ * the free tier while gemini-2.5-flash answered.
+ */
 export function configuredAiProviders(env: Env = process.env): AiProviderSpec[] {
   const asked = (env.AI_PROVIDERS ?? '')
     .split(',')
     .map((s) => s.trim().toLowerCase())
     .filter((s): s is AiProviderId => s in CATALOG);
   const order = asked.length > 0 ? [...new Set(asked)] : AI_DEFAULT_ORDER;
-  return order.map((id) => ({ id, ...CATALOG[id](env) })).filter((p) => p.apiKey !== '');
+  return order
+    .map((id) => ({ id, ...CATALOG[id](env) }))
+    .filter((p) => p.apiKey !== '')
+    .flatMap((p) => {
+      const models = [...new Set(p.model.split(',').map((m) => m.trim()).filter(Boolean))];
+      return (models.length > 0 ? models : [p.model]).map((model) => ({ ...p, model }));
+    });
 }
 
 export function isAiConfigured(env: Env = process.env): boolean {

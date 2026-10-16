@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  allocatorOf,
   MEMORY_SAMPLES_KEPT,
   memorySample,
   memoryStatus,
@@ -35,6 +36,12 @@ describe('memory telemetry (measurement only)', () => {
     expect(st.samples![0].at).toBe(10);
     expect(st.peakSinceBoot!.at).toBe(5); // the peak survives after its sample has rolled out
     expect(st.peakSinceBoot!.rssMb).toBe(4600);
+  });
+
+  it('reads the active allocator from the process map', () => {
+    expect(allocatorOf('7f01-7f02 r-xp 00000000 08:01 123 /usr/lib/x86_64-linux-gnu/libjemalloc.so.2\n7f03 /usr/lib/x86_64-linux-gnu/libc.so.6')).toBe('jemalloc');
+    expect(allocatorOf('7f03-7f04 r-xp 00000000 08:01 456 /usr/lib/x86_64-linux-gnu/libc.so.6')).toBe('glibc');
+    expect(allocatorOf(null)).toBe('unknown');
   });
 
   it('keeps /api/health light: the full series only when asked', () => {

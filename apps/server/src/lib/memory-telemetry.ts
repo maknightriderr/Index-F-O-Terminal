@@ -16,8 +16,28 @@
 // sample. Served at GET /api/health/memory; /api/health carries the latest.
 // ============================================================
 
+import { readFileSync } from 'node:fs';
 import v8 from 'node:v8';
 import { logger } from './logger.js';
+
+/** Pure: the memory allocator a process map shows (jemalloc when preloaded, else the system's glibc malloc). */
+export function allocatorOf(maps: string | null): 'jemalloc' | 'glibc' | 'unknown' {
+  if (maps == null) return 'unknown';
+  return /libjemalloc/.test(maps) ? 'jemalloc' : 'glibc';
+}
+
+let allocatorCache: ReturnType<typeof allocatorOf> | null = null;
+function activeAllocator(): ReturnType<typeof allocatorOf> {
+  if (allocatorCache) return allocatorCache;
+  let maps: string | null = null;
+  try {
+    maps = readFileSync('/proc/self/maps', 'utf8');
+  } catch {
+    maps = null; // not Linux (local development)
+  }
+  allocatorCache = allocatorOf(maps);
+  return allocatorCache;
+}
 
 export const MEMORY_SAMPLE_MS = 15 * 60_000;
 /** 24 hours of 15-minute samples. */
@@ -77,6 +97,7 @@ export function memoryStatus(full = false) {
   return {
     now: memorySample(),
     peakSinceBoot: peak,
+    allocator: activeAllocator(),
     mallocArenaMax: process.env.MALLOC_ARENA_MAX ?? null,
     nodeOptions: process.env.NODE_OPTIONS ?? null,
     ...(full ? { sampleEveryMinutes: MEMORY_SAMPLE_MS / 60_000, samples: [...samples] } : {}),

@@ -27,7 +27,6 @@ export type PageId =
   | 'institutional-flow'
   | 'system-health'
   | 'alerts'
-  | 'ai-assistant'
   | 'system-learning'
   | 'positions'
   | 'settings';
@@ -89,7 +88,6 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'system-health', label: 'System Health', description: 'Service and data-feed status, from observed evidence.', icon: 'system-health' },
       { id: 'alerts', label: 'Alerts', description: 'Open-interest, volatility and trade alerts.', icon: 'alerts' },
-      { id: 'ai-assistant', label: 'AI Assistant', description: 'Ask questions about the current market data.', icon: 'ai-assistant' },
       { id: 'system-learning', label: 'System Learning', description: 'Self-audit of failures and protections.', icon: 'system-learning' },
     ],
   },

@@ -13,6 +13,7 @@ import { Section } from '@/components/ui/card';
 import { ActionButton } from '@/components/ui/controls';
 import { DataState } from '@/components/ui/data-state';
 import { FreshnessBadge, TradeStateBadge } from '@/components/ui/status-badge';
+import { ExplainButton } from '@/components/assistant/assistant-launcher';
 
 // ============================================================
 // SECTION C — MY PAPER TRADES (compact)
@@ -40,6 +41,7 @@ function TradeRow({ t, now, apiReachable }: { t: PaperTradeView; now: number; ap
               {contractLabel(t)}
             </button>
             <TradeStateBadge state={t.state} status={t.status} />
+            <ExplainButton target={{ kind: 'trade', id: t.id }} question={`Why this trade? ${contractLabel(t)}`} />
           </div>
           <div className="text-xs text-[var(--text-secondary)]">
             {t.strategyLabel}

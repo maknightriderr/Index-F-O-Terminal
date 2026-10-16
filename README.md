@@ -156,7 +156,8 @@ this repo is set up for Railway, but Render/Fly.io work the same way.
 | `DATABASE_URL`, `REDIS_URL` | Railway (backend service) only | Yes | Reference the Postgres/Redis plugins' own variables — don't hand-type connection strings. |
 | `CORS_ORIGINS` | Railway (backend service) only | No | Your Vercel URL. Not secret, but must be correct or the frontend gets CORS errors. |
 | `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_WS_URL` | Vercel (frontend project) only | No | `NEXT_PUBLIC_*` vars are bundled into the browser JS — never put a secret behind this prefix, anywhere. |
-| `GEMINI_API_KEY`, `GROQ_API_KEY` | Railway (backend service) only | Yes | Free-tier keys for the AI assistant and commentary (Google AI Studio, console.groq.com). Gemini is tried first, Groq second. `ANTHROPIC_API_KEY` (paid) is a third, optional fallback. Optional: `AI_PROVIDERS` (order), `GEMINI_MODEL`, `GROQ_MODEL`. |
+| `GEMINI_API_KEY`, `GROQ_API_KEY` | Railway (backend service) only | Yes | Free-tier keys for the AI assistant and commentary (Google AI Studio, console.groq.com). Gemini is tried first, Groq second. `ANTHROPIC_API_KEY` (paid) is a third, optional fallback. Optional: `AI_PROVIDERS` (order), `GEMINI_MODEL`, `GROQ_MODEL` (each may list several models, comma-separated, tried in turn). |
+| `LD_PRELOAD` | Railway (backend service) only | No | `/usr/lib/x86_64-linux-gnu/libjemalloc.so.2`: runs the backend on jemalloc (installed by `nixpacks.toml`), which returns freed memory; glibc kept ~2 GB per market session. `GET /api/health/memory` shows `\"allocator\"`. |
 | `MALLOC_ARENA_MAX` | Railway (backend service) only | No | Set to `2`. The container reports 48 CPUs, so the C allocator can keep many per-thread memory arenas that never shrink, and Railway bills that memory. Check the effect at `GET /api/health/memory`. |
 
 ## Security

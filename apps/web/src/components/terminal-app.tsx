@@ -17,7 +17,6 @@ import { UnbuiltPage } from '@/components/common/unbuilt-page';
 import { AlertsPage } from '@/components/alerts';
 import { StrategyScannerPage } from '@/components/strategy-scanner';
 import { MarketScannerPage } from '@/components/market-scanner';
-import { AiAssistantPage } from '@/components/ai-assistant';
 import { InstitutionalFlowPage } from '@/components/institutional-flow';
 import { BacktestingPage } from '@/components/backtesting';
 import { SystemLearningPage } from '@/components/system-learning';
@@ -87,8 +86,6 @@ export function TerminalApp() {
         return <InstitutionalFlowPage />;
       case 'alerts':
         return <AlertsPage />;
-      case 'ai-assistant':
-        return <AiAssistantPage />;
       case 'system-learning':
         return <SystemLearningPage />;
       case 'system-health':

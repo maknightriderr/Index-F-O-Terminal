@@ -6,6 +6,19 @@
 // ============================================================
 
 import type { MeasurementReport } from './use-measurement';
+
+/** What "Why this trade?" / "Why no trade?" explains: a paper trade by id, or a symbol's latest decision. */
+export type ExplainTarget = { kind: 'trade'; id: string } | { kind: 'decision'; symbol: string; exchange: 'NSE' | 'BSE' | 'MCX'; mode: 'INTRADAY' | 'POSITIONAL' };
+
+/** One end-of-session review (server: services/ai-daily-review.ts). */
+export interface DailyReviewView {
+  group: 'NSE_BSE' | 'MCX';
+  date: string;
+  createdAt: number;
+  lines: string[];
+  summary: string | null;
+  via: string | null;
+}
 import type {
   OptionChain,
   FuturesChainResponse,
@@ -316,6 +329,16 @@ class ApiClient {
 
   async chatWithAssistant(message: string, history: Array<{ role: 'user' | 'assistant'; content: string }>) {
     return this.post<{ reply: string; via?: string }>('/api/ai-assistant/chat', { message, history });
+  }
+
+  /** "Why this trade?" / "Why no trade?": a plain-English reading of one stored decision (cached on the server). */
+  async explainDecision(target: ExplainTarget) {
+    return this.post<{ subject: string; text: string; via: string; model: string }>('/api/ai-assistant/explain', target);
+  }
+
+  /** The latest end-of-session reviews (also sent to Telegram), newest first. */
+  async getDailyReviews() {
+    return this.get<{ reviews: DailyReviewView[] }>('/api/ai-assistant/daily-review');
   }
 
   // --- System learning / self-audit ---

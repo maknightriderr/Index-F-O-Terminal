@@ -27,6 +27,18 @@ describe('AI provider chain (read-only features only)', () => {
     expect(groq.model).toBe('qwen/qwen3-32b');
   });
 
+  it('tries each listed model of a provider before the next provider', async () => {
+    const env = { GEMINI_API_KEY: 'm', GROQ_API_KEY: 'g', GEMINI_MODEL: 'gemini-flash-latest, gemini-2.5-flash,gemini-flash-latest' };
+    expect(configuredAiProviders(env).map((p) => `${p.id}:${p.model}`)).toEqual(['gemini:gemini-flash-latest', 'gemini:gemini-2.5-flash', 'groq:openai/gpt-oss-120b']);
+    const post = vi
+      .fn()
+      .mockRejectedValueOnce(httpError(503, 'This model is currently experiencing high demand.'))
+      .mockResolvedValueOnce(ok('From the older Flash.'));
+    const r = await askAi('S', [{ role: 'user', content: 'q' }], { env, post });
+    expect(r).toMatchObject({ provider: 'gemini', model: 'gemini-2.5-flash', text: 'From the older Flash.' });
+    expect(post.mock.calls.map((c) => c[1].model)).toEqual(['gemini-flash-latest', 'gemini-2.5-flash']);
+  });
+
   it('sends an OpenAI-style request to Gemini with the system prompt first and a bearer key', async () => {
     const post = vi.fn().mockResolvedValue(ok('NIFTY is flat.'));
     const r = await askAi('SYSTEM', [{ role: 'user', content: 'How is NIFTY?' }], { env: { GEMINI_API_KEY: 'key-1' }, post });

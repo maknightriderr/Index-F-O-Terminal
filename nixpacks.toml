@@ -1,0 +1,12 @@
+# Railway build (Nixpacks). The build and start commands stay in railway.json.
+#
+# jemalloc (2026-10-16): the backend's JavaScript heap stays near 100 MB, yet the
+# process held ~2 GB from each market session until the next redeploy. That memory
+# was native and retained by glibc malloc after the session's bursts (every API
+# response is gzip-compressed through zlib, a known source of this). MALLOC_ARENA_MAX=2
+# did not change it. jemalloc returns freed memory to the system. It is loaded with
+# the Railway variable LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2; if the
+# library were missing the loader prints a warning and the process runs on glibc.
+# Check which allocator is active at GET /api/health/memory ("allocator").
+[phases.setup]
+aptPkgs = ["...", "libjemalloc2"]
