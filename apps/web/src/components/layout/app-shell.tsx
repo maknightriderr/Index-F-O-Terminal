@@ -5,6 +5,7 @@ import { Sidebar } from './sidebar';
 import { TopBar } from './topbar';
 import { AssetTabBar } from './asset-tab-bar';
 import { ThemeEffect } from '@/components/theme-effect';
+import { AssistantLauncher } from '@/components/assistant/assistant-launcher';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -60,11 +61,13 @@ export function AppShell({ children }: AppShellProps) {
         <TopBar />
         <AssetTabBar />
         <div className="flex min-h-0 flex-1">
-          <main id="main-content" tabIndex={-1} className="min-w-0 flex-1 overflow-auto">
+          {/* pb-20: the last row of every page scrolls clear of the floating assistant button. */}
+          <main id="main-content" tabIndex={-1} className="min-w-0 flex-1 overflow-auto pb-20">
             {children}
           </main>
         </div>
       </div>
+      <AssistantLauncher />
     </div>
   );
 }

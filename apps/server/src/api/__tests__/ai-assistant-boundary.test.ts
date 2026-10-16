@@ -17,7 +17,7 @@ const { sanitizeUntrusted, delimitUntrusted, buildSystemPrompt } = await import(
 const { authorizeWsUpgrade, admitSubscriptions, validTargets, parseMaxSubscriptions } = await import('../../ws/ws-guard.js');
 
 const SERVER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-const FILES = ['src/api/ai-assistant.ts', 'src/services/ai-assistant.ts'];
+const FILES = ['src/api/ai-assistant.ts', 'src/services/ai-assistant.ts', 'src/services/ai-explain.ts', 'src/services/ai-daily-review.ts'];
 
 describe('AI assistant import boundary (eslint no-restricted-imports)', () => {
   const eslint = new ESLint({ cwd: SERVER });

@@ -297,7 +297,7 @@ Runs on the opportunity census's post-session tick (no new service); grades only
 - **Measurement fixes**: `returnedToEntryOf` (post-exit), `sessionEndExitTime` (session-end exits stamped at the close), `segmentOf` INDEX / STOCK / MCX, order-flow ALL_TOUCHED row, `costForDiagnostics` (no cost in R stored for a quote whose spread exceeds 50% of mid; `measureSetupCost` itself unchanged).
 - Write-up with every test and comparison: `docs/AUDIT-FIXES-2026-10-15.md`.
 
-## 8. Background services (19) — supervised (Phase 6)
+## 8. Background services (20) — supervised (Phase 6)
 
 `ServiceSupervisor` (lib/service-supervisor.ts) starts, watches and stops every service. Each registers
 {name, critical, startupTimeoutMs, heartbeatIntervalMs}. States STARTING → RUNNING ⇄ DEGRADED → FAILED →
@@ -311,9 +311,9 @@ Critical: tradeSetupPriceMonitor, signalEngine, setupLifecycle — any not RUNNI
 | Registration | Critical | Kind | Notes |
 |---|---|---|---|
 | alertScanner, patternScanner, institutionalFlowScanner, marketScanner, fiiDiiTracker, abandonedSetupSweep, oiCloseSnapshot, cacheWarmer, strategyTracker, positionalStockScan, backgroundBiasEvaluator, holidayCalendarCheck, systemLearningAudit | no | TIMER | heartbeat = own interval |
-| marketStateCapture, missedWinnerAudit, setupEventsGrading, opportunityCensus, barArchive | no | TIMER | start after the capture schema check |
+| marketStateCapture, missedWinnerAudit, setupEventsGrading, opportunityCensus, barArchive, dailyReview | no | TIMER | start after the capture schema check |
 | tradeSetupPriceMonitor | **yes** | TIMER | starts after Redis is rebuilt from PostgreSQL; its sweep reports its own outcome |
-| signalEngine (extra) | **yes** | COMPONENT | the bias / signal computation has no single service among the 19 (browser polls, marketScanner, backgroundBiasEvaluator all run it); heartbeat = a completed computation, expected only in session (10 min) |
+| signalEngine (extra) | **yes** | COMPONENT | the bias / signal computation has no single service among the 20 (browser polls, marketScanner, backgroundBiasEvaluator all run it); heartbeat = a completed computation, expected only in session (10 min) |
 | setupLifecycle (extra) | **yes** | COMPONENT | the structure lifecycle advance runs inside the signal computation; heartbeat = a completed advance (20 min, in session) |
 
 Recovery (services/state-recovery.ts): PostgreSQL is the source of truth; on boot Redis is rebuilt from it
@@ -325,7 +325,7 @@ recorded one; a cached trade with no PG row yet is kept for the existing backfil
 
 Shutdown: supervisor + every service timer → server.close → WS disconnect → logout → sql.end → redis.disconnect.
 
-The 19 services:
+The 20 services:
 
 | Service | Frequency | Role |
 |---|---|---|
@@ -346,12 +346,13 @@ The 19 services:
 | setupEventsGrading | periodic | setup_events grading |
 | opportunityCensus | post-session | opportunities vs setups |
 | barArchive | 30 min, only while NSE, BSE and MCX are all closed | closed 15m + daily bars into `bar_archive` (research only) |
+| dailyReview | 5 min; acts 20 min to 4 h after the NSE and MCX closes | one end-of-session paper-trade review per session to Telegram + `daily-review:history` (measurement only) |
 | holidayCalendarCheck | daily | holiday calendar populated |
 | systemLearningAudit | daily (EOD) | learning detectors (observation only) |
 
 ## 9. REST API
 
-`POST /api/auth/login|logout`, `GET /api/auth/status`, `GET /api/instruments/search|:token`, `GET /api/market/bias/:symbol` (full MarketBias incl. `setupWatch`), `GET /api/market/history|quote`, `GET /api/option-chain/:symbol`, `GET /api/futures/:symbol`, `POST/GET/DELETE /api/alerts`, `POST /api/ai-assistant/ask`, `GET /api/institutional-flow`, `POST/GET /api/backtesting/*`, `GET /api/learning/*`, `GET /api/loss-attribution`, `GET /api/structure/:symbol`, `GET /api/market-scanner/scan`, `GET /api/strategy-scanner/scan`, `GET /api/fii-dii`, `GET /api/news/:symbol`, `GET /api/corporate-actions`, `GET /api/diagnostics/*` (summary, rejections, census, grades, leakage, performance, opportunity, major-moves, triggers, shadow, versions, setup-outcomes, scorecard, signal-quality, gate-validation, portfolio-risk), `GET /api/health`, `GET /api/health/memory` (24 h of 15-minute process memory samples).
+`POST /api/auth/login|logout`, `GET /api/auth/status`, `GET /api/instruments/search|:token`, `GET /api/market/bias/:symbol` (full MarketBias incl. `setupWatch`), `GET /api/market/history|quote`, `GET /api/option-chain/:symbol`, `GET /api/futures/:symbol`, `POST/GET/DELETE /api/alerts`, `POST /api/ai-assistant/chat|explain`, `GET /api/ai-assistant/daily-review`, `GET /api/institutional-flow`, `POST/GET /api/backtesting/*`, `GET /api/learning/*`, `GET /api/loss-attribution`, `GET /api/structure/:symbol`, `GET /api/market-scanner/scan`, `GET /api/strategy-scanner/scan`, `GET /api/fii-dii`, `GET /api/news/:symbol`, `GET /api/corporate-actions`, `GET /api/diagnostics/*` (summary, rejections, census, grades, leakage, performance, opportunity, major-moves, triggers, shadow, versions, setup-outcomes, scorecard, signal-quality, gate-validation, portfolio-risk), `GET /api/health`, `GET /api/health/memory` (24 h of 15-minute process memory samples).
 
 Decision research view (Phase 8): `GET /api/diagnostics/decisions?symbol=&limit=` (recent snapshotted decisions) and `GET /api/diagnostics/decision/:snapshotId[?replay=1]` — input snapshot summary, per-input dataQuality (asOf, decisionBarTime, ageMs, source, status), market state, events, trigger candidates + parentId, common metrics, option candidates (+ every strike of each persisted plan, rejected ones with stage and reason), arbitration (pre-build ranking + the live slot rows with role, rank, slot decision and the criterion each loser lost on), final status, outcome (setup_events grading of the rows the decision produced), every version field; replay re-derives offline and compares. Shown in Signal Diagnostics → "Decision Record". Also `GET /api/diagnostics/feed-gaps` (Phase 5).
 
@@ -401,6 +402,12 @@ Redis
 
 `POST /api/ai-assistant/chat` → `ai-assistant.ts` builds market context (indices, the F&O scanner aggregates, recent alerts) → `askAi()` (`lib/llm.ts`) → response with the provider that answered. The institutional-flow commentary uses the same client (cached 5 min). Providers are tried in order (`AI_PROVIDERS`, default gemini → groq → anthropic), skipping any without a key; a rate limit, outage, retired model or empty answer moves to the next. Gemini and Groq go through their OpenAI-compatible endpoints; models via `GEMINI_MODEL` (default `gemini-flash-latest`; a comma-separated list is tried in turn, e.g. `gemini-flash-latest,gemini-2.5-flash`), `GROQ_MODEL` (`openai/gpt-oss-120b`), `ANTHROPIC_MODEL` (`claude-sonnet-5`).
 
+Web: the assistant is a floating panel on every page (`components/assistant/`: bottom-right button; side panel on wide screens, full-screen sheet on phones; Escape closes; an old `?page=ai-assistant` link opens it). It is no longer a sidebar page.
+
+- **"Why this trade?" / "Why no trade?"** (`POST /api/ai-assistant/explain`, `services/ai-explain.ts`): a paper trade's `signals` row plus the decision snapshot that minted it, or a symbol's latest decision snapshot, read with SQL. The fact sheet is computed in code (vote stances from `vote_contributions`: ≥ 70 agrees, ≤ 30 against; the refusal rule; option and estimated cost; outcome and R before costs); the model only words it, told to invent nothing. Cached: a closed trade 7 days, an open one 10 min, a decision 1 day. Buttons: the paper-trades row detail, the dashboard trade list, the symbol workspace's trade card. They open the assistant panel with the answer.
+- **End-of-session review** (`services/daily-review-job.ts` → `services/ai-daily-review.ts`): the job reads the paper trades and passes them as data; the numbers (minted, closed W/L/E, net R after estimated costs, best / worst, Old Indicator vs others, still open) are computed in code and sent even when no model answers; the model adds 2–4 sentences. Telegram (HTML, escaped) once per session (Redis claim `daily-review:sent:{date}:{group}`), the last 30 kept in `daily-review:history` and shown by the panel's "Latest session review".
+- `ai-explain.ts` and `ai-daily-review.ts` sit inside the Phase 7 import boundary (eslint + the graph test); the job that reads paper trades is outside it and only hands data in.
+
 Read-only (Phase 7): the routes and service may not import trade, strategy, risk, strike, flag or learning modules — enforced by `eslint no-restricted-imports` (`apps/server/eslint.config.mjs`, `npm run lint -w apps/server`) and by a test that lints the files and walks their import graph. Untrusted text (alert messages, any news / third-party text) is wrapped in `<untrusted_data>…</untrusted_data>`, sanitised so it cannot close or open a delimiter, capped at 500 characters per entry, and the system prompt tells the model to treat it as data and ignore any instructions inside it.
 
 ## 15. Angel One authentication
@@ -447,3 +454,4 @@ Observation only: `startSystemLearningAudit` → `learningDetectors.ts` → `lea
 - **2026-10-15 — Memory telemetry (measurement only).** `lib/memory-telemetry.ts`: process memory (resident, heap used / reserved / limit, buffers, outside-heap) every 15 min, 24 h kept, peak since boot; one log line per sample; latest in `/api/health`, series at `/api/health/memory`. Railway variable `MALLOC_ARENA_MAX=2` set on the backend the same day: the process grew from ~0.6 GB after a restart to 2–4 GB per market day, above its 2.24 GB heap limit, so part of it lives outside the JavaScript heap (allocator arenas suspected; the samples will show).
 - **2026-10-16 — Free AI providers.** `lib/llm.ts` replaces `lib/anthropic.ts`: the AI assistant and institutional-flow commentary try Gemini (free tier), then Groq (free tier), then Claude, each only when its key is set (`GEMINI_API_KEY`, `GROQ_API_KEY`, `ANTHROPIC_API_KEY`; order via `AI_PROVIDERS`). Replies name the provider. Still read-only and outside the decision path (Phase 7 boundary test unchanged).
 - **2026-10-16 — jemalloc for the backend.** A day of memory samples (15 Oct, `MALLOC_ARENA_MAX=2` active): JavaScript heap ~100 MB used / ~110 MB reserved, buffers ~5 MB, yet resident memory rose from 128 MB at boot to ~2.0 GB by the NSE close and held flat overnight. The memory was native and retained by glibc malloc after the session's bursts (every response is gzip-compressed through zlib); the arena cap did not change it. `nixpacks.toml` installs `libjemalloc2`; the Railway variable `LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2` loads it (a missing library only warns). `/api/health/memory` reports the active `allocator`.
+- **2026-10-16 — AI explanations, end-of-session review, floating assistant.** `POST /api/ai-assistant/explain` and the "Why this trade?" / "Why no trade?" buttons; the `dailyReview` service (20 services) with one Telegram note per session; the assistant moved from a sidebar page to a floating panel on every page. All read-only: the two AI modules are inside the Phase 7 boundary, and no trading code changed.

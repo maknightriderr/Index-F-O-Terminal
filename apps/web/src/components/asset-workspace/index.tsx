@@ -42,6 +42,8 @@ import {
 } from '@/components/common/structure-stage';
 import { useSetupOutcomes, type SetupOutcome } from '@/lib/use-setup-outcomes';
 import { formatSignedPercent } from '@/lib/format';
+import { ExplainButton } from '@/components/assistant/assistant-launcher';
+import type { ExplainTarget } from '@/lib/api';
 
 const STRIKE_RANGE_OPTIONS = [5, 10, 15, 20];
 const REFRESH_INTERVAL_MS = 15000;
@@ -317,7 +319,11 @@ export function AssetWorkspace() {
                 <OiTrapCard trap={chain.oiTrap} />
                 <PositionMomentumCard momentum={chain.positionMomentum} />
                 <DecayCard decay={chain.decay} />
-                <TradeSetupCard setup={tradeSetup} structure={structure} />
+                <TradeSetupCard
+                  setup={tradeSetup}
+                  structure={structure}
+                  explainTarget={{ kind: 'decision', symbol: selectedSymbol || 'NIFTY', exchange: (selectedExchange || 'NSE') as 'NSE' | 'BSE' | 'MCX', mode: biasMode }}
+                />
                 {setupWatch.length > 0 && <SetupWatchList rows={setupWatch} />}
               </div>
               <OiShiftCard strikes={chain.strikes} />
@@ -918,7 +924,7 @@ function NoTradePanel({ d }: { d: NoTradeDiagnostics }) {
   );
 }
 
-function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: StructureBlock | null }) {
+function TradeSetupCard({ setup, structure, explainTarget }: { setup: TradeSetup; structure: StructureBlock | null; explainTarget: Extract<ExplainTarget, { kind: 'decision' }> }) {
   // Structure lifecycles, computed up front so the measurement lookup below runs on every render.
   const running = structure?.enabled
     ? (['BEARISH', 'BULLISH'] as const)
@@ -979,7 +985,10 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
         <RejectedToday rows={rejectedToday} outcomes={outcomes} />
         {setup.noTradeDiagnostics && <NoTradePanel d={setup.noTradeDiagnostics} />}
         <div>
-          <div className="text-xs font-bold uppercase tracking-wide text-gray-400 light:text-slate-600 mb-1">Indicator engine · OLD</div>
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <div className="text-xs font-bold uppercase tracking-wide text-gray-400 light:text-slate-600">Indicator engine · OLD</div>
+            <ExplainButton target={explainTarget} question={`Why no trade on ${explainTarget.symbol} (${explainTarget.mode.toLowerCase()})?`} label="Why no trade?" />
+          </div>
           <p className="text-xs text-gray-400 light:text-slate-600 leading-snug">{setup.reason}</p>
           {structure?.enabled && <p className="text-xs text-gray-500 light:text-slate-500 mt-0.5 italic">Doesn't block structure setups.</p>}
         </div>
@@ -1045,7 +1054,10 @@ function TradeSetupCard({ setup, structure }: { setup: TradeSetup; structure: St
   return (
     <IntelCard title="Trade Setup" accent="emerald">
       <div className="flex items-center justify-between mb-1">
-        <span className="text-xs font-bold uppercase tracking-wide text-emerald-400 light:text-emerald-700">Active paper trade</span>
+        <span className="flex items-center gap-2">
+          <span className="text-xs font-bold uppercase tracking-wide text-emerald-400 light:text-emerald-700">Active paper trade</span>
+          <ExplainButton target={explainTarget} question={`Why this trade on ${explainTarget.symbol} (${explainTarget.mode.toLowerCase()})?`} />
+        </span>
         <span
           className={`text-xs font-semibold px-1.5 py-0.5 rounded ${
             badge.key === 'PAPER_RESEARCH'

@@ -16,6 +16,7 @@ import { FreshnessBadge, StatusBadge, TradeStateBadge } from '@/components/ui/st
 import { classifyFreshness, FRESH_WITHIN_MS } from '@/lib/freshness';
 import { formatAge, formatHold, formatIstDateTime, formatNumber, formatR, formatRupees, formatSignedPercent, MISSING } from '@/lib/format';
 import { contractLabel } from '@/lib/paper-trade-view';
+import { ExplainButton } from '@/components/assistant/assistant-launcher';
 
 const rColor = (v: number | null) => (v == null ? '' : v > 0 ? 'text-[var(--status-ok)]' : v < 0 ? 'text-[var(--status-bad)]' : '');
 
@@ -90,7 +91,10 @@ export function TradeDetail({ t, now }: { t: PaperTradeView; now: number }) {
           </div>
         ))}
       </dl>
-      <p className="text-xs text-[var(--text-secondary)]">{t.disclosure}</p>
+      <div className="flex flex-wrap items-center gap-3">
+        <ExplainButton target={{ kind: 'trade', id: t.id }} question={`Why this trade? ${contractLabel(t)}`} label="Why this trade?" />
+        <p className="text-xs text-[var(--text-secondary)]">{t.disclosure}</p>
+      </div>
     </div>
   );
 }
