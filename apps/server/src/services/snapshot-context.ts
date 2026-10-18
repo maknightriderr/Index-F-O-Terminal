@@ -17,6 +17,8 @@ import { schemaFileReady } from './ensure-capture-schema.js';
 
 interface SnapshotScope {
   snapshotId: string | null;
+  /** A paper trade was minted in this poll (audit 2026-10-18, REPL-1: its I/O tape is kept). */
+  took?: boolean;
 }
 
 const storage = new AsyncLocalStorage<SnapshotScope>();
@@ -32,6 +34,17 @@ export function runInSnapshotScope<T>(fn: () => Promise<T>): Promise<T> {
 export function setScopeSnapshotId(snapshotId: string | null): void {
   const scope = storage.getStore();
   if (scope) scope.snapshotId = snapshotId;
+}
+
+/** Marks the current poll as one that minted a paper trade. No-op outside a scope. */
+export function noteScopeTake(): void {
+  const scope = storage.getStore();
+  if (scope) scope.took = true;
+}
+
+/** Did the current poll mint a paper trade? */
+export function scopeTook(): boolean {
+  return storage.getStore()?.took === true;
 }
 
 /** The persisted snapshot the current write belongs to, or null (none, outside a poll, or the column not ready). */

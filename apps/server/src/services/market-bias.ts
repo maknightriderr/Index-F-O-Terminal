@@ -240,13 +240,13 @@ import {
   type SlotEntry,
 } from './slot-arbitration.js';
 import { recordSetupEvent } from './setup-events.js';
-import { currentSnapshotId, runInSnapshotScope, setScopeSnapshotId } from './snapshot-context.js';
+import { currentSnapshotId, noteScopeTake, runInSnapshotScope, scopeTook, setScopeSnapshotId } from './snapshot-context.js';
 import { serviceFailure, serviceHeartbeat } from '../lib/service-supervisor.js';
 import { buildNoTradeDiagnostics } from './no-trade-diagnostics.js';
 import { recordSlotDecision, slotDecisionRow } from './slot-decisions.js';
 import { ARBITRATION_VERSION, OPTION_SELECTION_VERSION, OPTION_VERSION } from '../config/trading-flags.js';
 import { isReplaying, runRecording, tapedInput, tapedProvider, tapedValue, tapeMode } from '../lib/io-tape.js';
-import { persistTape, DECISION_TAPE_ENABLED } from './decision-record-store.js';
+import { persistTape, DECISION_TAPE_ENABLED, DECISION_TAPE_MODE, shouldStoreTape } from './decision-record-store.js';
 import { buildSignalDecisionSnapshot, currentVersions, decisionConfig, deriveDecisionRecord } from './decision-record.js';
 import { persistDecisionRecord, persistSnapshot } from './decision-record-store.js';
 import { buildOptionPlanRow, optionLevelsOf, persistOptionPlan, planIdFor, recordOptionPlanEvent, type UnderlyingPlan } from './option-plans.js';
@@ -406,13 +406,14 @@ async function pollWithTape(provider: MarketDataProvider, underlying: string, ex
     const run = () =>
       runInSnapshotScope(async () => {
         const r = await computeMarketBias(p, underlying, exchange, cacheKey, mode);
-        return { r, snapshotId: currentSnapshotId() };
+        return { r, snapshotId: currentSnapshotId(), minted: scopeTook() };
       });
     return hasDecisionTime() ? run() : withDecisionTime(Date.now(), run);
   };
   if (tapeMode() != null || !DECISION_TAPE_ENABLED) return (await compute(provider)).r;
   const { result, tape } = await runRecording(() => compute(tapedProvider(provider)));
-  if (result.snapshotId) void persistTape(result.snapshotId, tape, result.r);
+  // Audit 2026-10-18 (REPL-1): every poll that minted a paper trade keeps its tape, plus a sample of the rest.
+  if (result.snapshotId && shouldStoreTape(DECISION_TAPE_MODE, result.minted, result.snapshotId)) void persistTape(result.snapshotId, tape, result.r);
   return result.r;
 }
 
@@ -5989,6 +5990,8 @@ async function recordTradeSetupGenerated(
       )
       RETURNING id
     `;
+    // A trade minted in this poll (not a late-written row of an earlier mint): the poll keeps its tape (REPL-1).
+    if (rows[0]?.id && at == null) noteScopeTake();
     return rows[0]?.id;
   } catch (err: any) {
     logger.warn({ error: err.message, underlying }, 'Backtesting: failed to record generated trade setup');

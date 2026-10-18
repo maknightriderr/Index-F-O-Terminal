@@ -80,6 +80,8 @@ vi.mock('../decision-record-store.js', async () => {
   const { encode, decode } = await import('../../lib/io-tape.js');
   return {
     DECISION_TAPE_ENABLED: true,
+    DECISION_TAPE_MODE: 'ALL',
+    shouldStoreTape: () => true,
     persistSnapshot: async (s: any) => ((stored.snap = s), true),
     persistDecisionRecord: async () => true,
     persistTape: async (_id: string, tape: any, live: any) => {
