@@ -225,13 +225,15 @@ export function estimateRoundTripCost(
   entry: number,
   bid: number,
   ask: number,
-  lotSize: number
+  lotSize: number,
+  /** COST-3.0: the exchange's dated statutory + exchange charges (% of entry; optionStatutoryPct). Default = COST-2.0's flat 0.2%. */
+  statutoryPct: number = TRADING_COST_MODEL.statutoryPct
 ): { perUnit: number; pct: number } {
   if (!(entry > 0)) return { perUnit: 0, pct: 0 };
   const spread = bid > 0 && ask > bid ? ask - bid : entry * (TRADING_COST_MODEL.fallbackSpreadPct / 100);
   const brokerage = 2 * TRADING_COST_MODEL.brokeragePerOrder * (1 + TRADING_COST_MODEL.gstPct / 100);
   const brokeragePerUnit = lotSize > 0 ? brokerage / lotSize : 0;
-  const percentageCharges = entry * ((TRADING_COST_MODEL.statutoryPct + TRADING_COST_MODEL.slippagePct) / 100);
+  const percentageCharges = entry * ((statutoryPct + TRADING_COST_MODEL.slippagePct) / 100);
   const perUnit = spread + percentageCharges + brokeragePerUnit;
   return { perUnit, pct: (perUnit / entry) * 100 };
 }
@@ -497,7 +499,7 @@ function buildNakedLong(
   // it on top of the stop. Deliberately used for the GATE only, never
   // written into the displayed `riskReward` — the displayed prices stay
   // pre-cost (same reasoning as the note in `reason` below).
-  const cost = estimateRoundTripCost(entry, leg.bid, leg.ask, lotSize);
+  const cost = estimateRoundTripCost(entry, leg.bid, leg.ask, lotSize, instrument.statutoryPct);
   const roundTripCost = cost.perUnit;
   const costPct = round2(cost.pct);
 
@@ -857,6 +859,13 @@ export interface SetupInstrumentContext {
    * (golden snapshots, research and backtests).
    */
   rrGate?: boolean;
+
+  /**
+   * Every live caller (COST-3.0, audit 2026-10-18): the exchange's dated statutory and exchange charges, % of the
+   * entry premium (optionStatutoryPct in @fno/shared). Absent = COST-2.0's flat TRADING_COST_MODEL.statutoryPct
+   * (golden snapshots, research, backtests).
+   */
+  statutoryPct?: number;
 
   /**
    * Every live caller (OPTION-2.0): the target premium is the realistic payoff

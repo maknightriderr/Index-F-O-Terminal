@@ -67,6 +67,7 @@ import {
   getSessionCloseTime,
   minutesSinceSessionOpen,
   getSessionWindow,
+  optionStatutoryPct,
 } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveSpotToken, resolveNearestFuturesContract, buildOptionChain } from './option-chain.js';
@@ -4107,6 +4108,8 @@ async function resolveStickyTradeSetup(
             rrGate: false,
             // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
             realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
+            // COST-3.0 (audit 2026-10-18): this exchange's dated statutory + exchange charges, not the flat 0.2%.
+            statutoryPct: optionStatutoryPct(exchange, decisionNow()),
             // EVIDENCE: the builder's own confidence floor is off too — confidence ranks, it does not refuse.
             ...(INDICATOR_CONFIDENCE_MODE === 'EVIDENCE' ? { confidenceGate: false } : {}),
           // An R:R refusal still carries its option levels (shown for a confirmed setup; never traded).
@@ -4573,6 +4576,8 @@ async function resolveMomentumBreakSetup(ctx: {
           rrGate: false,
           // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
           realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
+          // COST-3.0 (audit 2026-10-18): this exchange's dated statutory + exchange charges, not the flat 0.2%.
+          statutoryPct: optionStatutoryPct(exchange, decisionNow()),
           ...(FNO_VALIDATION
             ? { fnoValidation: { enabled: true, maxCostPctOfPremium: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM, minOptionStopAtr: FNO_VALIDATION_PARAMS.MIN_OPTION_STOP_ATR } }
             : {}),
@@ -5224,6 +5229,8 @@ async function resolveStructureSetup(ctx: {
           rrGate: false,
           // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
           realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
+          // COST-3.0 (audit 2026-10-18): this exchange's dated statutory + exchange charges, not the flat 0.2%.
+          statutoryPct: optionStatutoryPct(exchange, decisionNow()),
           ...(FNO_VALIDATION
             ? {
                 fnoValidation: {
@@ -5353,6 +5360,8 @@ async function planForLifecycle(
       rrGate: false,
       // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
       realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
+      // COST-3.0 (audit 2026-10-18): this exchange's dated statutory + exchange charges, not the flat 0.2%.
+      statutoryPct: optionStatutoryPct(exchange, decisionNow()),
       plan: true,
       ...(FNO_VALIDATION
         ? { fnoValidation: { enabled: true, maxCostPctOfPremium: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM, minOptionStopAtr: FNO_VALIDATION_PARAMS.MIN_OPTION_STOP_ATR, ...(fiveMinute ? { noiseAtrPoints: lc.atr } : {}) } }
@@ -5643,6 +5652,8 @@ async function buildStructurePreview(
           rrGate: false,
           // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
           realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
+          // COST-3.0 (audit 2026-10-18): this exchange's dated statutory + exchange charges, not the flat 0.2%.
+          statutoryPct: optionStatutoryPct(exchange, decisionNow()),
           ...(FNO_VALIDATION
             ? {
                 fnoValidation: {
@@ -6628,6 +6639,8 @@ function computeShadowModels(
   if (setup.strike == null || !setup.side || setup.entry == null || setup.stopLoss == null || setup.target == null) return null;
   try {
     const leg = findLeg(chain, setup.strike, setup.side);
+    // The live builder's own cost basis (COST-3.0), so the shadow's "live net R" is the live one.
+    const statutoryPct = optionStatutoryPct(chain.exchange, decisionNow());
     const strikeSelection = scoreStrikeCandidates({
       strikes: chain.strikes,
       // The strike actually traded: chain.atmStrike with FNO_VALIDATION off, the delta-band strike with it on.
@@ -6649,6 +6662,7 @@ function computeShadowModels(
       stopLoss: setup.stopLoss,
       target: setup.target,
       lotSize: chain.lotSize,
+      statutoryPct,
     });
     const targetV2 = leg
       ? estimateTargetV2({
@@ -6663,6 +6677,7 @@ function computeShadowModels(
           bid: leg.bid,
           ask: leg.ask,
           lotSize: chain.lotSize,
+          statutoryPct,
         })
       : null;
     return { strikeSelection, execution, targetV2 };
@@ -6704,7 +6719,7 @@ function measureStructureFillCost(chain: OptionChain, lc: LiveLifecycle, side: '
     const strike = traded ?? selected ?? chain.atmStrike;
     const strikeBasis = traded != null ? 'TRADED' : selected != null ? 'SELECTED' : 'ATM_PROXY';
     const leg = findLeg(chain, strike, side);
-    const base = { entry: lc.entry, stop: lc.stop, t1: lc.t1?.price ?? null, atr: lc.atr, costVersion: COST_VERSION };
+    const base = { entry: lc.entry, stop: lc.stop, t1: lc.t1?.price ?? null, atr: lc.atr, costVersion: COST_VERSION, statutoryPct: optionStatutoryPct(chain.exchange, decisionNow()) };
     if (!leg) return measureSetupCost({ ...base, option: null });
     const twoSided = leg.bid > 0 && leg.ask > leg.bid;
     const quotePremium = twoSided ? (leg.bid + leg.ask) / 2 : leg.ltp > 0 ? leg.ltp : null;

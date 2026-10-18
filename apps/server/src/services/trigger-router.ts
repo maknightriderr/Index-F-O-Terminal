@@ -67,7 +67,7 @@ import {
   parentIdFor,
   levelKeyOf,
 } from '@fno/analytics';
-import { getSessionWindow, type Exchange, type OptionChain, type TradingMode } from '@fno/shared';
+import { getSessionWindow, optionStatutoryPct, type Exchange, type OptionChain, type TradingMode } from '@fno/shared';
 import { redis } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
 import {
@@ -393,7 +393,7 @@ export function costOnChain(c: TriggerCandidate, chain: OptionChain | null): Set
   if (!chain) return null;
   const side = c.direction === 'BULLISH' ? 'CE' : 'PE';
   const leg = legFor(chain, side);
-  const base = { entry: c.entry, stop: c.stop, t1: c.t1?.price ?? null, atr: c.atr, costVersion: COST_VERSION };
+  const base = { entry: c.entry, stop: c.stop, t1: c.t1?.price ?? null, atr: c.atr, costVersion: COST_VERSION, statutoryPct: optionStatutoryPct(chain.exchange, chain.timestamp) };
   if (!leg) return measureSetupCost({ ...base, option: null });
   const twoSided = leg.bid > 0 && leg.ask > leg.bid;
   return measureSetupCost({

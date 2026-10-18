@@ -47,6 +47,8 @@ export interface TargetEstimateInput {
   bid: number;
   ask: number;
   lotSize: number;
+  /** COST-3.0 statutory % (the live builder's); absent = COST-2.0's flat 0.2%. */
+  statutoryPct?: number;
 }
 
 export interface TargetEstimateResult {
@@ -87,7 +89,7 @@ export function estimateTargetV2(input: TargetEstimateInput): TargetEstimateResu
 
   const shadowTargetV2 = round2(input.entry + deltaMove + gammaTerm - thetaDecay);
 
-  const cost = estimateRoundTripCost(input.entry, input.bid, input.ask, input.lotSize).perUnit;
+  const cost = estimateRoundTripCost(input.entry, input.bid, input.ask, input.lotSize, input.statutoryPct).perUnit;
   const denom = input.entry - input.stopLoss + cost;
   const shadowExpectedNetRV2 = denom > 0 ? round2((shadowTargetV2 - input.entry - cost) / denom) : null;
 

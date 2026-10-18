@@ -445,7 +445,11 @@ export const OPTION_VERSION = 'OPTION-2.0';
 // COST-2.0: setup_events carry a per-setup cost measured at the fill from the
 // leg's live quote (setup-cost.ts; spread observed, slippage/charges modelled
 // from TRADING_COST_MODEL). COST-1.0 rows carry no cost at all.
-export const COST_VERSION = 'COST-2.0';
+// COST-3.0 (audit 2026-10-18, COST-1): the statutory part is the exchange's dated
+// charges (STT/CTT, exchange transaction, SEBI, stamp, GST on fees —
+// OPTION_CHARGES in @fno/shared) in the builder, the setup_events measurement and
+// the per-trade cost record, instead of one flat 0.2% for every exchange.
+export const COST_VERSION = 'COST-3.0';
 /**
  * The multi-path event engine and trigger registry (@fno/analytics
  * event-engine), RESEARCH only: stamped on major_move_diagnostics rows. Not

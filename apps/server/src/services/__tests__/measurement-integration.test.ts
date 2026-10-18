@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { PGlite } from '@electric-sql/pglite';
 import { uuid_ossp } from '@electric-sql/pglite/contrib/uuid_ossp';
 import { buildTradeSetup } from '@fno/analytics';
+import { optionStatutoryPct } from '@fno/shared';
 import { GOLDEN_CASES } from './trade-setup-fixtures.js';
 
 // ---- a postgres.js-shaped tagged template over PGlite ------------------------------------
@@ -167,7 +168,10 @@ describe('migration 040', () => {
 describe('cost record at the mint', () => {
   it('is written once, labelled a model, reconciled with the setup, and leaves the setup untouched', async () => {
     const a = GOLDEN_CASES['p2 BULL move=100 vix=null dte=3']();
-    const setup = buildTradeSetup(...a);
+    // Built as the live path builds it (COST-3.0): NSE's dated charges at the mint, which the record reconciles with.
+    const args = [...a] as unknown as Parameters<typeof buildTradeSetup>;
+    args[10] = { ...((args[10] as object | undefined) ?? {}), statutoryPct: optionStatutoryPct('NSE', T_MINT) };
+    const setup = buildTradeSetup(...args);
     const frozen = JSON.stringify(setup);
     const id = await insertTrade();
     C.recordTradeCosts({ signalId: id, symbol: 'NIFTY', exchange: 'NSE', mode: 'INTRADAY', source: 'INDICATOR', mintedAt: T_MINT, setup, chain: { strikes: a[0] as any[], lotSize: 75 } });

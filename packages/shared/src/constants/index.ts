@@ -69,6 +69,79 @@ export const TRADING_COST_MODEL = {
   fallbackSpreadPct: 2,
 } as const;
 
+// --- COST-3.0: dated statutory and exchange charges per exchange (audit 2026-10-18, COST-1) ---
+// COST-2.0 charged one flat 0.2% "statutory" allowance on every exchange. The real charges differ by exchange and
+// changed on 1 Apr 2026 (Finance Act 2026: STT on an option sale 0.10% -> 0.15% of premium). Each rate below is % of
+// the premium turnover of the leg it applies to. Checked 2026-10-18 against:
+//   STT (NSE/BSE options, seller, on premium): NSE STT table, nseindia.com/static/products-services/
+//     equity-derivatives-securities-transaction-tax: 0.10% to 31 Mar 2026, 0.15% from 1 Apr 2026.
+//   CTT (MCX commodity options, seller, on premium): 0.05% (unchanged by Budget 2026).
+//   Exchange transaction charges (both legs, on premium; revised 1 Oct 2024 under SEBI's "true to label" circular):
+//     NSE 0.03503% + IPFT 0.0005% = 0.03553%, BSE 0.0325%, MCX 0.0418% (zerodha.com/charges, 2026-10-18).
+//   SEBI turnover fee: Rs 10 / crore = 0.0001% (both legs). Stamp duty: 0.003% of the BUY premium.
+//   GST: 18% on brokerage + exchange transaction charges + SEBI fee.
+// Not modelled: STT/CTT on exercise (a paper trade is always closed before expiry settles), clearing charges.
+
+export type ChargeExchange = 'NSE' | 'BSE' | 'MCX';
+
+export interface OptionChargeSchedule {
+  /** IST date (YYYY-MM-DD) from which these rates apply. */
+  effectiveFrom: string;
+  /** STT (equity) / CTT (commodity) on the SELL premium. */
+  sellTaxPct: number;
+  /** Exchange transaction charges, each leg. */
+  exchangeTxnPct: number;
+  /** SEBI turnover fee, each leg. */
+  sebiPct: number;
+  /** Stamp duty on the BUY premium. */
+  stampBuyPct: number;
+  /** GST on brokerage + exchange charges + SEBI fee. */
+  gstPct: number;
+}
+
+export const OPTION_CHARGES: Readonly<Record<ChargeExchange, readonly OptionChargeSchedule[]>> = {
+  NSE: [
+    { effectiveFrom: '2024-10-01', sellTaxPct: 0.1, exchangeTxnPct: 0.03553, sebiPct: 0.0001, stampBuyPct: 0.003, gstPct: 18 },
+    { effectiveFrom: '2026-04-01', sellTaxPct: 0.15, exchangeTxnPct: 0.03553, sebiPct: 0.0001, stampBuyPct: 0.003, gstPct: 18 },
+  ],
+  BSE: [
+    { effectiveFrom: '2024-10-01', sellTaxPct: 0.1, exchangeTxnPct: 0.0325, sebiPct: 0.0001, stampBuyPct: 0.003, gstPct: 18 },
+    { effectiveFrom: '2026-04-01', sellTaxPct: 0.15, exchangeTxnPct: 0.0325, sebiPct: 0.0001, stampBuyPct: 0.003, gstPct: 18 },
+  ],
+  MCX: [{ effectiveFrom: '2024-10-01', sellTaxPct: 0.05, exchangeTxnPct: 0.0418, sebiPct: 0.0001, stampBuyPct: 0.003, gstPct: 18 }],
+};
+
+/** The schedule in force on the IST date of `at` (the earliest one before the table starts). Null for an unknown exchange. */
+export function optionChargesFor(exchange: string, at: number): OptionChargeSchedule | null {
+  const table = OPTION_CHARGES[exchange as ChargeExchange];
+  if (!table) return null;
+  const day = new Date(at).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  let hit = table[0];
+  for (const s of table) if (s.effectiveFrom <= day) hit = s;
+  return hit;
+}
+
+/**
+ * A long option's round-trip statutory and exchange charges, in their parts, as % of the ENTRY premium. The exit is
+ * taken at the entry premium (the target or stop is not known when the cost is estimated), so the sell-side tax and
+ * the second leg's fees are charged on the same turnover. GST here is on the exchange and SEBI fees; the GST on
+ * brokerage stays with the brokerage.
+ */
+export function optionStatutoryParts(exchange: string, at: number): { sellTax: number; exchangeTxn: number; sebi: number; stamp: number; gstOnFees: number; total: number } | null {
+  const c = optionChargesFor(exchange, at);
+  if (!c) return null;
+  const exchangeTxn = 2 * c.exchangeTxnPct;
+  const sebi = 2 * c.sebiPct;
+  const gstOnFees = (exchangeTxn + sebi) * (c.gstPct / 100);
+  const total = c.sellTaxPct + exchangeTxn + sebi + c.stampBuyPct + gstOnFees;
+  return { sellTax: c.sellTaxPct, exchangeTxn, sebi, stamp: c.stampBuyPct, gstOnFees, total };
+}
+
+/** The statutory % a live decision charges (COST-3.0); TRADING_COST_MODEL.statutoryPct (COST-2.0) for an unknown exchange. */
+export function optionStatutoryPct(exchange: string, at: number): number {
+  return optionStatutoryParts(exchange, at)?.total ?? TRADING_COST_MODEL.statutoryPct;
+}
+
 /**
  * When trade-selection logic last changed materially (confidence per
  * source, hold bands, index futures volume, previous-close OI, IV pressure
