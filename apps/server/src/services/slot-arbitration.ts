@@ -253,8 +253,28 @@ export function compareSlotCandidates(a: SlotCandidate, b: SlotCandidate, used: 
 
 /** The pool's order (best first), the criteria used / skipped, and what each other candidate lost to the winner on. */
 export function rankSlotCandidates(cands: readonly SlotCandidate[]): { winner: number; order: number[]; used: string[]; skipped: string[]; lostOn: Map<number, string> } {
-  const { used, skipped } = sharedCriteria(cands);
-  const order = cands.map((_, i) => i).sort((x, y) => compareSlotCandidates(cands[x], cands[y], used).cmp);
+  // Audit 2026-10-18 (ARB-1): one candidate without a measured net R:R after costs made the whole pool skip that
+  // criterion, so an unpriced setup could win on entry quality against priced rivals. In a mixed pool the priced
+  // candidates now rank first, compared on net R:R among themselves; an unpriced one can win only when no candidate
+  // was priced. (Not seen in production since 5 Oct — every slot pool had net R:R for all — so no recorded choice changes.)
+  const priced = cands.map((_, i) => i).filter((i) => cands[i].netRR !== NOT_MEASURED && Number.isFinite(cands[i].netRR as number));
+  if (priced.length > 0 && priced.length < cands.length) {
+    const pricedSet = new Set(priced);
+    const unpriced = cands.map((_, i) => i).filter((i) => !pricedSet.has(i));
+    const first = rankWithin(cands, priced);
+    const rest = rankWithin(cands, unpriced);
+    const order = [...first.order, ...rest.order];
+    const winner = order[0];
+    const lostOn = new Map(first.lostOn);
+    for (const i of rest.order) lostOn.set(i, 'net R:R after costs (not measured; a priced candidate ranks first)');
+    return { winner, order, used: first.used, skipped: first.skipped, lostOn };
+  }
+  return rankWithin(cands, cands.map((_, i) => i));
+}
+
+function rankWithin(cands: readonly SlotCandidate[], idx: readonly number[]): { winner: number; order: number[]; used: string[]; skipped: string[]; lostOn: Map<number, string> } {
+  const { used, skipped } = sharedCriteria(idx.map((i) => cands[i]));
+  const order = [...idx].sort((x, y) => compareSlotCandidates(cands[x], cands[y], used).cmp);
   const winner = order[0];
   const lostOn = new Map<number, string>();
   for (const i of order.slice(1)) lostOn.set(i, compareSlotCandidates(cands[winner], cands[i], used).criterion);

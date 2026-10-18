@@ -15,7 +15,8 @@
 // Ranking among eligible candidates on the same bar, first difference wins:
 //   1. entry timing   OPTIMAL > EARLY > ACCEPTABLE > LATE > CHASING
 //   2. move potential HIGH > NORMAL > LOW, then more remaining session range
-//   3. net-R geometry higher (R to T1 net of cost when measured, else gross)
+//   3. net-R geometry a measured cost first, then higher R to T1 net of cost;
+//                     gross R only between two unpriced candidates (ARB-1)
 //   4. evidence       more supporting events in the rule's sequence
 //   5. tie-breaker    earliest decision bar, then trigger id (alphabetical)
 // Ineligible candidates (invalid stop, no target, low R:R, outside the
@@ -67,7 +68,11 @@ export function compareCandidates(a: TriggerCandidate, b: TriggerCandidate, ia: 
     [(TIMING_RANK[a.timing.class] ?? 9) - (TIMING_RANK[b.timing.class] ?? 9), 'entry timing'],
     [(POTENTIAL_RANK[a.movePotential.class] ?? 9) - (POTENTIAL_RANK[b.movePotential.class] ?? 9), 'move potential'],
     [(b.movePotential.remainingMovePct ?? -1) - (a.movePotential.remainingMovePct ?? -1), 'remaining move'],
-    [(ib.netR ?? b.rToT1 ?? -Infinity) - (ia.netR ?? a.rToT1 ?? -Infinity), 'net-R geometry'],
+    // Audit 2026-10-18 (ARB-1): a candidate whose cost was measured ranks before one whose was not, then the higher
+    // net R. An unpriced candidate is never compared on its GROSS R to T1 with a priced rival's net R (a number that
+    // ignores its cost against one already charged it); two unpriced candidates still compare gross with gross.
+    [(ia.netR == null ? 1 : 0) - (ib.netR == null ? 1 : 0), 'net-R geometry'],
+    [ia.netR != null && ib.netR != null ? ib.netR - ia.netR : (b.rToT1 ?? -Infinity) - (a.rToT1 ?? -Infinity), 'net-R geometry'],
     [b.eventIds.length - a.eventIds.length, 'evidence'],
     [a.decisionIndex - b.decisionIndex, 'earlier entry'],
     [a.triggerId.localeCompare(b.triggerId), 'trigger id tie-break'],
