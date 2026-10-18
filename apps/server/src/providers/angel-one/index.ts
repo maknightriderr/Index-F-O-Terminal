@@ -24,6 +24,7 @@ import type {
 } from '@fno/shared';
 import { isExpiryActive } from '@fno/shared';
 import { exchangeTimesOf } from './exchange-time.js';
+import { unitsPerLot } from './lot-size.js';
 
 // Angel One can reject the current access token (HTTP 200, status:false,
 // message like "Invalid Token") well before its own 24h expiry — a
@@ -415,6 +416,10 @@ export class AngelOneProvider implements MarketDataProvider {
 
         this.instrumentCache = rawInstruments.map(raw => this.mapInstrument(raw));
         this.instrumentCacheTime = Date.now();
+        // Audit 2026-10-18 (COST-1): a derivative with no lot size falls back to 1 (a conservative cost, nonsense
+        // rupee figures). None did on 18 Oct; say so if Angel One ever ships one.
+        const missingLot = rawInstruments.filter((r) => this.isDerivativeType(this.resolveInstrumentType(r.instrumenttype, r.exch_seg?.toLowerCase() || '')) && unitsPerLot('', null, parseInt(r.lotsize)).source === 'MISSING');
+        if (missingLot.length > 0) logger.warn({ count: missingLot.length, sample: missingLot.slice(0, 5).map((r) => r.symbol) }, 'Scrip master: derivatives without a lot size — treated as 1');
 
         return this.instrumentCache;
       } catch (error: any) {
@@ -775,7 +780,8 @@ export class AngelOneProvider implements MarketDataProvider {
       strike: raw.strike && parseFloat(raw.strike) > 0 ? parseFloat(raw.strike) / 100 : undefined,
       optionType: this.resolveOptionType(raw.symbol, raw.instrumenttype),
       expiry: raw.expiry ? this.parseExpiry(raw.expiry) : undefined,
-      lotSize: parseInt(raw.lotsize) || 1,
+      // The P&L multiplier of one lot, not Angel One's quantity unit (MCX GOLD 1 -> 100, GOLDM 100 -> 10; lot-size.ts).
+      lotSize: unitsPerLot(exchange, raw.name, parseInt(raw.lotsize)).lotSize,
       tickSize: parseFloat(raw.tick_size) || 0.05,
       isFnO: segment === 'FO',
     };
