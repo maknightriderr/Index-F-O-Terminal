@@ -94,7 +94,10 @@ export type GateName =
   // family, after the family's own gates; not part of LIVE_CHAIN_GATES.
   | 'FNO_VALIDATION'
   // Structure engine only (structure-live.ts): the sweep -> displacement -> fill sequence.
-  | 'STRUCTURE_SEQUENCE';
+  | 'STRUCTURE_SEQUENCE'
+  // Not part of any live chain (audit 2026-10-18, DATA-1): the exchange age of the option quote a TAKE used,
+  // against the pre-registered 120 s limit. Measured only — see signal-freshness.ts.
+  | 'STALE_QUOTE';
 
 /**
  * The validation-review gates, in the order the live chain evaluates them:

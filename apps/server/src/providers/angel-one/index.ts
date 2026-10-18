@@ -23,6 +23,7 @@ import type {
   SubscriptionMode,
 } from '@fno/shared';
 import { isExpiryActive } from '@fno/shared';
+import { exchangeTimesOf } from './exchange-time.js';
 
 // Angel One can reject the current access token (HTTP 200, status:false,
 // message like "Invalid Token") well before its own 24h expiry — a
@@ -671,6 +672,8 @@ export class AngelOneProvider implements MarketDataProvider {
                   }
                 : undefined,
               timestamp: Date.now(),
+              // Audit 2026-10-18 (DATA-1): the exchange's own times (FULL mode), so a quote's real age is measurable.
+              ...exchangeTimesOf(item),
             });
           }
         } else {

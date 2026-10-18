@@ -160,6 +160,7 @@ this repo is set up for Railway, but Render/Fly.io work the same way.
 | `GEMINI_API_KEY`, `GROQ_API_KEY` | Railway (backend service) only | Yes | Free-tier keys for the AI assistant and commentary (Google AI Studio, console.groq.com). Gemini is tried first, Groq second. `ANTHROPIC_API_KEY` (paid) is a third, optional fallback. Optional: `AI_PROVIDERS` (order), `GEMINI_MODEL`, `GROQ_MODEL` (each may list several models, comma-separated, tried in turn). |
 | `LD_PRELOAD` | Railway (backend service) only | No | `/usr/lib/x86_64-linux-gnu/libjemalloc.so.2`: runs the backend on jemalloc (installed by `nixpacks.toml`), which returns freed memory; glibc kept ~2 GB per market session. `GET /api/health/memory` shows `\"allocator\"`. |
 | `MALLOC_ARENA_MAX` | Railway (backend service) only | No | Set to `2`. The container reports 48 CPUs, so the C allocator can keep many per-thread memory arenas that never shrink, and Railway bills that memory. Check the effect at `GET /api/health/memory`. |
+| `STALE_QUOTE_GATE`, `STALE_QUOTE_MAX_AGE_S` | Railway (backend service) only | No | Input freshness, measured on the exchange's clock (audit DATA-1). `SHADOW` (default) records a `STALE_QUOTE` gate-diagnostic row on every taken trade: the option quote's age by the exchange's own time (Angel One FULL-mode `exchFeedTime`) against `STALE_QUOTE_MAX_AGE_S` (default 120). `OFF` records none. It never refuses a trade: enforcement is a strategy change and waits for the shadow evidence. |
 
 ## Security
 

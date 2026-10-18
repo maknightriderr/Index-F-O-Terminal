@@ -37,7 +37,7 @@ import { logger } from '../lib/logger.js';
 import { decisionNow } from './decision-clock.js';
 import { classifyRefusal } from './research-contract.js';
 import type { GateDiagnostic } from './gate-diagnostics.js';
-import { signalAgeSeconds, validUntil, type InputTimestamps, type StalenessAssessment } from './signal-freshness.js';
+import { exchangeQuoteAgeSeconds, signalAgeSeconds, staleQuoteDiagnostic, STALE_QUOTE_MODE, validUntil, type InputTimestamps, type StalenessAssessment } from './signal-freshness.js';
 import type { StrategyLabelResult } from './strategy-label.js';
 import { provisionalExecutionScore, type VoteContributions } from './confidence-dimensions.js';
 import type { ExitReason } from './exit-reason.js';
@@ -200,6 +200,13 @@ export function recordDecisionSnapshot(input: DecisionSnapshotInput): string {
   const ageSeconds = ts ? signalAgeSeconds(at.getTime(), ts) : null;
   const quoteAgeSeconds = ts?.optionQuote != null ? Math.max(0, (at.getTime() - ts.optionQuote) / 1000) : null;
   const execution = provisionalExecutionScore(spreadPct, quoteAgeSeconds);
+  // Audit 2026-10-18 (DATA-1): the exchange's own times for the option quote, and its age by the exchange clock
+  // (unclamped: negative = server clock behind). Recorded in the option block; keys absent when the broker gave none.
+  const optionBlock = {
+    ...(input.option ?? {}),
+    ...(ts?.optionExchange != null ? { exchangeTimestamp: ts.optionExchange, exchangeAgeSeconds: exchangeQuoteAgeSeconds(at.getTime(), ts) } : {}),
+    ...(ts?.optionLastTrade != null ? { lastTradeTimestamp: ts.optionLastTrade } : {}),
+  };
   const strategyLabels = input.strategy?.labels ?? [];
   const dims = input.confidenceDimensions ?? null;
 
@@ -311,7 +318,7 @@ export function recordDecisionSnapshot(input: DecisionSnapshotInput): string {
       ${sql.json((input.underlying ?? {}) as never)},
       ${sql.json((input.market ?? {}) as never)},
       ${sql.json((input.futures ?? {}) as never)},
-      ${sql.json((input.option ?? {}) as never)},
+      ${sql.json(optionBlock as never)},
       ${sql.json((input.location ?? {}) as never)},
       ${sql.json((input.room ?? {}) as never)},
       ${sql.json((input.risk ?? {}) as never)}
@@ -328,6 +335,10 @@ export function recordDecisionSnapshot(input: DecisionSnapshotInput): string {
       // Phase 2 exposure: same after-the-row, never-throws pattern.
       if (input.exposure) {
         await recordExposure(decisionId, await input.exposure());
+      }
+      // Audit 2026-10-18 (DATA-1): STALE_QUOTE, measured on every TAKE (shadow; never deciding). OFF writes nothing.
+      if (input.decision === 'TAKE' && STALE_QUOTE_MODE === 'SHADOW') {
+        await recordGateDiagnostics(decisionId, [staleQuoteDiagnostic(at.getTime(), ts)]);
       }
     })
     .catch((err: any) =>
