@@ -68,6 +68,7 @@ import {
   minutesSinceSessionOpen,
   getSessionWindow,
   optionStatutoryPct,
+  isMarketOpen,
 } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveSpotToken, resolveNearestFuturesContract, buildOptionChain } from './option-chain.js';
@@ -369,6 +370,20 @@ export async function buildMarketBias(
   // variations of the same one, so they need their own cache slot rather
   // than overwriting each other.
   const cacheKey = `bias_result:${exchange}:${underlying}:${mode}`;
+
+  // Audit 2026-10-18 (OPS-1): with every exchange closed a computation can only refuse MARKET_CLOSED, and it wrote
+  // a decision row saying so (99 on weekends since 1 Oct). The last computed result is returned instead. A replay, or
+  // a call inside a decision clock, always computes; without a cached result it computes as before.
+  if (!isReplaying() && !hasDecisionTime() && !(['NSE', 'BSE', 'MCX'] as const).some((ex) => isMarketOpen(ex, Date.now()))) {
+    const cached = await redis.get(cacheKey).catch(() => null);
+    if (cached) {
+      try {
+        return JSON.parse(cached) as MarketBiasResult;
+      } catch {
+        /* unreadable cache: compute below */
+      }
+    }
+  }
 
   try {
     const result = await pollWithTape(provider, underlying, exchange, mode, cacheKey);

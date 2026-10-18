@@ -127,6 +127,8 @@ export const FILES = [
   '041_bar_archive.sql',
   // Measurement only: every decision configuration snapshotted under, with its logic stamp and commit (audit REPL-1).
   '042_config_registry.sql',
+  // Storage: drop oi_snapshots' four unused indexes; the lossless archive of raw OI past retention (audit OPS-1).
+  '043_oi_storage.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */

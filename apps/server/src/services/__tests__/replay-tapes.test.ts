@@ -103,7 +103,8 @@ describe('config registry', () => {
   });
   it('042 is registered at boot and is plain idempotent DDL', async () => {
     const { FILES, splitStatements } = await vi.importActual<typeof import('../ensure-capture-schema.js')>('../ensure-capture-schema.js');
-    expect(FILES.at(-1)).toBe('042_config_registry.sql');
+    expect(FILES).toContain('042_config_registry.sql');
+    expect(FILES.indexOf('042_config_registry.sql')).toBe(FILES.indexOf('041_bar_archive.sql') + 1);
     const stmts = splitStatements(read('../../database/init/042_config_registry.sql'));
     expect(stmts).toHaveLength(1);
     expect(stmts[0]).toMatch(/^CREATE TABLE IF NOT EXISTS config_registry/);

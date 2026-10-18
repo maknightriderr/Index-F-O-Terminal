@@ -38,7 +38,7 @@ ALTER TABLE futures_snapshots ADD COLUMN IF NOT EXISTS capture_run_id UUID;
 ALTER TABLE pcr_history ADD COLUMN IF NOT EXISTS capture_run_id UUID;
 ALTER TABLE market_ticks ADD COLUMN IF NOT EXISTS capture_run_id UUID;
 
-CREATE INDEX IF NOT EXISTS idx_oi_capture_run ON oi_snapshots(capture_run_id);
+-- idx_oi_capture_run (oi_snapshots.capture_run_id) removed 2026-10-18: 0 scans in a month; 043 drops it.
 CREATE INDEX IF NOT EXISTS idx_futures_capture_run ON futures_snapshots(capture_run_id);
 
 -- ============================================================
@@ -108,4 +108,4 @@ ALTER TABLE oi_snapshots ADD COLUMN IF NOT EXISTS model_iv_input DECIMAL(10,6);
 ALTER TABLE oi_snapshots ADD COLUMN IF NOT EXISTS model_rate DECIMAL(8,6);
 ALTER TABLE oi_snapshots ADD COLUMN IF NOT EXISTS model_time_to_expiry DECIMAL(12,8);
 
-CREATE INDEX IF NOT EXISTS idx_oi_greeks_model ON oi_snapshots(greeks_model_name, greeks_model_version);
+-- idx_oi_greeks_model removed 2026-10-18: 0 scans in a month; 043 drops it.
