@@ -6,6 +6,7 @@
 // ============================================================
 
 import type { MeasurementReport } from './use-measurement';
+import { saveSession, sessionToken, signalSessionRequired } from './session';
 
 /** What "Why this trade?" / "Why no trade?" explains: a paper trade by id, or a symbol's latest decision. */
 export type ExplainTarget = { kind: 'trade'; id: string } | { kind: 'decision'; symbol: string; exchange: 'NSE' | 'BSE' | 'MCX'; mode: 'INTRADAY' | 'POSITIONAL' };
@@ -51,6 +52,14 @@ import type {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
+/** Server lib/api-auth.ts: ENFORCED = sign-in required; OPEN_DEV = development without a password; MISCONFIGURED = locked. */
+export type TerminalAuthMode = 'ENFORCED' | 'OPEN_DEV' | 'MISCONFIGURED';
+export interface TerminalSessionStatus {
+  mode: TerminalAuthMode;
+  authenticated: boolean;
+  reason: string | null;
+}
+
 interface ApiOptions {
   method?: string;
   body?: unknown;
@@ -58,16 +67,16 @@ interface ApiOptions {
   signal?: AbortSignal;
 }
 
+/** The terminal session (lib/session.ts) answered 401 / locked 503: tell the sign-in gate. */
+function noteAuthFailure(status: number, code: string | undefined): void {
+  if ((status === 401 && code === 'AUTH_REQUIRED') || (status === 503 && code === 'AUTH_NOT_CONFIGURED')) signalSessionRequired(code);
+}
+
 class ApiClient {
   private baseUrl: string;
-  private sessionToken: string | null = null;
 
   constructor(baseUrl: string) {
     this.baseUrl = baseUrl;
-  }
-
-  setSessionToken(token: string | null) {
-    this.sessionToken = token;
   }
 
   async request<T>(endpoint: string, options: ApiOptions = {}): Promise<T> {
@@ -78,8 +87,9 @@ class ApiClient {
       ...headers,
     };
 
-    if (this.sessionToken) {
-      allHeaders['Authorization'] = `Bearer ${this.sessionToken}`;
+    const token = sessionToken();
+    if (token) {
+      allHeaders['Authorization'] = `Bearer ${token}`;
     }
 
     const response = await fetch(`${this.baseUrl}${endpoint}`, {
@@ -92,6 +102,7 @@ class ApiClient {
     const data = await response.json();
 
     if (!response.ok || !data.success) {
+      noteAuthFailure(response.status, data.error?.code);
       throw new ApiError(
         data.error?.message || `API error: ${response.status}`,
         data.error?.code || 'UNKNOWN_ERROR',
@@ -105,14 +116,16 @@ class ApiClient {
   /** Like request(), but keeps the response's `meta` (read-only source, as-of time, age) beside the data. */
   async requestEnvelope<T>(endpoint: string, options: ApiOptions = {}): Promise<{ data: T; meta: ReadOnlyMeta | undefined }> {
     const { method = 'GET', body, headers = {}, signal } = options;
+    const token = sessionToken();
     const response = await fetch(`${this.baseUrl}${endpoint}`, {
       method,
-      headers: { 'Content-Type': 'application/json', ...(this.sessionToken ? { Authorization: `Bearer ${this.sessionToken}` } : {}), ...headers },
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...headers },
       body: body ? JSON.stringify(body) : undefined,
       signal,
     });
     const json = await response.json();
     if (!response.ok || !json.success) {
+      noteAuthFailure(response.status, json.error?.code);
       throw new ApiError(json.error?.message || `API error: ${response.status}`, json.error?.code || 'UNKNOWN_ERROR', response.status);
     }
     return { data: json.data as T, meta: json.meta as ReadOnlyMeta | undefined };
@@ -138,18 +151,16 @@ class ApiClient {
 
   // --- Domain Methods ---
 
-  async login(credentials: {
-    apiKey: string;
-    clientId: string;
-    password: string;
-    totpSecret?: string;
-  }) {
-    const result = await this.post<{ sessionToken: string; expiresAt: number }>(
-      '/api/auth/login',
-      credentials
-    );
-    this.sessionToken = result.sessionToken;
-    return result;
+  /** Is the API locked, and is this browser signed in? (public route) */
+  async getSession() {
+    return this.get<TerminalSessionStatus>('/api/session');
+  }
+
+  /** Sign in with the terminal password; the token is kept by lib/session.ts. A wrong password throws ApiError WRONG_PASSWORD. */
+  async signIn(password: string) {
+    const r = await this.post<{ mode: TerminalAuthMode; token: string | null; expiresAt: number | null }>('/api/session', { password });
+    if (r.token && r.expiresAt) saveSession({ token: r.token, expiresAt: r.expiresAt });
+    return r;
   }
 
   async getAuthStatus() {

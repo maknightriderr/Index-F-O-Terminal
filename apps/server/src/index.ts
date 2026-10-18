@@ -24,6 +24,8 @@ import { startSystemLearningAudit } from './services/system-learning-audit.js';
 import { createMarketWebSocketServer } from './ws/server.js';
 import { AngelOneProvider } from './providers/angel-one/index.js';
 import { createAuthRoutes } from './api/auth.js';
+import { createSessionRoutes } from './api/session.js';
+import { apiAuthConfigFrom, authMode, requireSession } from './lib/api-auth.js';
 import { createInstrumentRoutes } from './api/instruments.js';
 import { createMarketDataRoutes } from './api/market.js';
 import { createOptionChainRoutes } from './api/option-chain.js';
@@ -113,6 +115,14 @@ app.use((req, _res, next) => {
   next();
 });
 
+// --- Terminal sign-in (audit 2026-10-18, SEC-1) ---
+// Every /api route registered below needs a session, except the health probes
+// and /api/session itself (lib/api-auth.ts PUBLIC_ROUTES). It must stay ABOVE
+// the routers: Express runs middleware in registration order.
+const apiAuth = apiAuthConfigFrom(process.env, config.jwt.secret);
+app.use('/api', requireSession(apiAuth));
+app.use('/api/session', createSessionRoutes(apiAuth));
+
 // --- API Routes ---
 
 app.use('/api/auth', createAuthRoutes(provider));
@@ -194,6 +204,23 @@ app.get('/api/health', async (_req, res) => {
   const nowMs = Date.now();
   const sessions = (['NSE', 'BSE', 'MCX'] as const).map((exchange) => ({ exchange, open: isMarketOpen(exchange, nowMs) }));
 
+  // Without a session the probe answers status only: no per-token feed detail, services or order-flow state.
+  if (res.locals.authenticated !== true) {
+    res.json({
+      success: true,
+      data: {
+        status: overall,
+        uptime: process.uptime(),
+        timestamp: nowMs,
+        services: { api: services.api, redis: { status: services.redis.status }, database: { status: services.database.status }, websocket: { status: services.websocket.status } },
+        sessions,
+        version: '0.1.0',
+        detail: 'Sign in for the full report.',
+      },
+    });
+    return;
+  }
+
   res.json({
     success: true,
     data: {
@@ -260,7 +287,12 @@ const server = app.listen(config.server.port, config.server.host, () => {
   }
 });
 
-createMarketWebSocketServer(server, subscriptionManager);
+createMarketWebSocketServer(server, subscriptionManager, apiAuth);
+{
+  const { mode, reason } = authMode(apiAuth);
+  if (mode === 'MISCONFIGURED') logger.error({ reason }, 'Terminal API auth: LOCKED — every protected route answers 503 until this is fixed');
+  else logger.info({ mode }, 'Terminal API auth (ENFORCED = a session is required; OPEN_DEV = development without TERMINAL_PASSWORD)');
+}
 
 // --- Boot-time Angel One Authentication ---
 // Single-user, read-only terminal: credentials live in env vars, not a

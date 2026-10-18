@@ -132,7 +132,7 @@ this repo is set up for Railway, but Render/Fly.io work the same way.
 3. Add a service for the backend, pointed at this repo, **root directory left as the repo root** (not `apps/server` — the build needs the whole workspace):
    - Build command: `npm install && npm run build`
    - Start command: `npm start --workspace=@fno/server`
-4. In that service's **Variables**, add (see the table below for what each one is): `ANGEL_ONE_API_KEY`, `ANGEL_ONE_CLIENT_ID`, `ANGEL_ONE_PASSWORD`, `ANGEL_ONE_TOTP_SECRET`, `JWT_SECRET`, `CORS_ORIGINS`, `NODE_ENV=production`. Reference the Postgres/Redis plugins' own `DATABASE_URL`/`REDIS_URL` variables (Railway lets you reference `${{Postgres.DATABASE_URL}}` etc. directly — you don't retype them).
+4. In that service's **Variables**, add (see the table below for what each one is): `ANGEL_ONE_API_KEY`, `ANGEL_ONE_CLIENT_ID`, `ANGEL_ONE_PASSWORD`, `ANGEL_ONE_TOTP_SECRET`, `JWT_SECRET`, `TERMINAL_PASSWORD`, `CORS_ORIGINS`, `NODE_ENV=production`. Reference the Postgres/Redis plugins' own `DATABASE_URL`/`REDIS_URL` variables (Railway lets you reference `${{Postgres.DATABASE_URL}}` etc. directly — you don't retype them).
 5. Once deployed, run the schema migration once against that database: `DATABASE_URL="<railway postgres url>" npm run db:migrate --workspace=@fno/server` (from your machine, or as a one-off Railway command). Railway's Postgres plugin is plain Postgres — the TimescaleDB-specific parts of the schema (hypertables, retention, compression) apply best-effort and simply no-op there; everything else works normally. See `database/init/` for the migration files themselves.
 6. Note the public URL Railway gives the backend service (e.g. `https://your-app.up.railway.app`) — the frontend needs it next.
 
@@ -153,6 +153,7 @@ this repo is set up for Railway, but Render/Fly.io work the same way.
 |---|---|---|---|
 | `ANGEL_ONE_API_KEY`, `ANGEL_ONE_CLIENT_ID`, `ANGEL_ONE_PASSWORD`, `ANGEL_ONE_TOTP_SECRET` | Railway (backend service) only | Yes | Your broker credentials. Never put these on Vercel — the frontend never needs them, the backend is the only thing that talks to Angel One. |
 | `JWT_SECRET` | Railway (backend service) only | Yes | Generate a random 32+ char string (e.g. `openssl rand -base64 32`), don't reuse the `.env.example` placeholder. |
+| `TERMINAL_PASSWORD` | Railway (backend service) only | Yes | The password the terminal's sign-in screen asks for. Every `/api` route and the `/ws` feed need a session from it, except the health probes. **Required in production**: without it (or with a short or development `JWT_SECRET`) the API answers 503 `AUTH_NOT_CONFIGURED`, so set it before deploying. Changing it signs every browser out. A session lasts 7 days. |
 | `DATABASE_URL`, `REDIS_URL` | Railway (backend service) only | Yes | Reference the Postgres/Redis plugins' own variables — don't hand-type connection strings. |
 | `CORS_ORIGINS` | Railway (backend service) only | No | Your Vercel URL. Not secret, but must be correct or the frontend gets CORS errors. |
 | `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_WS_URL` | Vercel (frontend project) only | No | `NEXT_PUBLIC_*` vars are bundled into the browser JS — never put a secret behind this prefix, anywhere. |
@@ -162,6 +163,7 @@ this repo is set up for Railway, but Render/Fly.io work the same way.
 
 ## Security
 
+- Sign-in: every `/api` route and the `/ws` feed need a terminal session (`TERMINAL_PASSWORD`). Only `GET /api/health`, `/api/health/memory`, `/api/health/ready` and `/api/session` answer without one, and `/api/health` then reports status only.
 - ⚠️ Never commit `.env` files
 - ⚠️ All secrets in environment variables
 - ⚠️ API keys never exposed to frontend

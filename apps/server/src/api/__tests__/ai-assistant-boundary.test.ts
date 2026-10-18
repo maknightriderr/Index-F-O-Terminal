@@ -85,6 +85,17 @@ describe('/ws hardening', () => {
     expect(authorizeWsUpgrade({ origin: 'https://terminal.example', url: '/ws?token=nope', allowedOrigins: allowed, token: 's3cret' })).toMatchObject({ ok: false, status: 401 });
     expect(authorizeWsUpgrade({ origin: 'https://terminal.example', url: '/ws', allowedOrigins: allowed, token: 's3cret' })).toMatchObject({ ok: false, status: 401 });
   });
+  it('a locked API locks the feed: a session (or the static token) is required; a browser still needs an allowed origin', () => {
+    const session = { required: true, verify: (t: string) => t === 'good-jwt' };
+    expect(authorizeWsUpgrade({ origin: 'https://terminal.example', url: '/ws?token=good-jwt', allowedOrigins: allowed, token: null, session })).toEqual({ ok: true });
+    expect(authorizeWsUpgrade({ origin: undefined, url: '/ws?token=good-jwt', allowedOrigins: allowed, token: null, session })).toEqual({ ok: true });
+    expect(authorizeWsUpgrade({ origin: 'https://terminal.example', url: '/ws', allowedOrigins: allowed, token: null, session })).toMatchObject({ ok: false, status: 401 });
+    expect(authorizeWsUpgrade({ origin: 'https://terminal.example', url: '/ws?token=forged', allowedOrigins: allowed, token: null, session })).toMatchObject({ ok: false, status: 401 });
+    expect(authorizeWsUpgrade({ origin: 'https://evil.example', url: '/ws?token=good-jwt', allowedOrigins: allowed, token: null, session })).toMatchObject({ ok: false, status: 403 });
+    expect(authorizeWsUpgrade({ origin: undefined, url: '/ws?token=s3cret', allowedOrigins: allowed, token: 's3cret', session })).toEqual({ ok: true });
+    // Not required (development without a password): the Phase 7 rules, unchanged.
+    expect(authorizeWsUpgrade({ origin: 'https://terminal.example', url: '/ws', allowedOrigins: allowed, token: null, session: { required: false, verify: () => false } })).toEqual({ ok: true });
+  });
   it('per-client subscription limit and well-formed targets only', () => {
     const t = (token: string) => ({ token, exchange: 'NSE' as const, exchangeSegment: 'NSE_FO' });
     const held = new Set(['NSE_FO:1', 'NSE_FO:2']);
