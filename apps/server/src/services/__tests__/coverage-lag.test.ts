@@ -126,11 +126,14 @@ describe('MCX close time follows US DST the right way round', () => {
 describe('background bias evaluator — targets and gating', () => {
   const SYMBOLS = parseBackgroundSymbols(undefined).symbols;
 
-  it('defaults to SENSEX (BSE), CRUDEOIL and GOLD (MCX); junk entries are rejected, not guessed', () => {
+  it('defaults to SENSEX (BSE), CRUDEOIL, GOLD, SILVER and NATURALGAS (MCX); junk entries are rejected, not guessed', () => {
+    // SILVER and NATURALGAS since 2026-10-18 (audit COV-1): 0 decisions from 12 Oct while they were left to browser polls.
     expect(SYMBOLS).toEqual([
       { symbol: 'SENSEX', exchange: 'BSE' },
       { symbol: 'CRUDEOIL', exchange: 'MCX' },
       { symbol: 'GOLD', exchange: 'MCX' },
+      { symbol: 'SILVER', exchange: 'MCX' },
+      { symbol: 'NATURALGAS', exchange: 'MCX' },
     ]);
     const parsed = parseBackgroundSymbols('silver:mcx, BANKEX:BSE, NIFTY, FOO:NYSE, SILVER:MCX');
     expect(parsed.symbols).toEqual([
@@ -147,13 +150,22 @@ describe('background bias evaluator — targets and gating', () => {
       'MCX:CRUDEOIL:POSITIONAL',
       'MCX:GOLD:INTRADAY',
       'MCX:GOLD:POSITIONAL',
+      'MCX:SILVER:INTRADAY',
+      'MCX:SILVER:POSITIONAL',
+      'MCX:NATURALGAS:INTRADAY',
+      'MCX:NATURALGAS:POSITIONAL',
     ]);
     expect(backgroundTargets(SYMBOLS, { MCX_POSITIONAL_BACKGROUND: false }).map(targetId)).toEqual([
       'BSE:SENSEX:INTRADAY',
       'MCX:CRUDEOIL:INTRADAY',
       'MCX:GOLD:INTRADAY',
+      'MCX:SILVER:INTRADAY',
+      'MCX:NATURALGAS:INTRADAY',
     ]);
   });
+
+  // The tick behaviour below is about gating and sequencing, not the default list: a fixed three-symbol list.
+  const THREE = parseBackgroundSymbols('SENSEX:BSE,CRUDEOIL:MCX,GOLD:MCX').symbols;
 
   const NOW = ist('2026-09-28', '17:10');
   const baseDeps = (over: Partial<EvaluatorDeps> = {}): EvaluatorDeps => ({
@@ -196,7 +208,7 @@ describe('background bias evaluator — targets and gating', () => {
         return { bias: { direction: 'BEARISH', confidence: 60, regime: 'RANGE_BOUND' }, tradeSetup: { available: false, reason: 'x' } };
       }) as unknown as EvaluatorDeps['buildBias'],
     });
-    const report = await runBackgroundBiasTick(backgroundTargets(SYMBOLS, { MCX_POSITIONAL_BACKGROUND: true }), deps);
+    const report = await runBackgroundBiasTick(backgroundTargets(THREE, { MCX_POSITIONAL_BACKGROUND: true }), deps);
     expect(order).toEqual(['MCX:CRUDEOIL:INTRADAY', 'MCX:CRUDEOIL:POSITIONAL']);
     expect(report.evaluated).toEqual(order);
     expect(report.skipped).toEqual({
@@ -216,7 +228,7 @@ describe('background bias evaluator — targets and gating', () => {
         return { bias: { direction: 'NEUTRAL', confidence: 50, regime: 'RANGE_BOUND' }, tradeSetup: { available: false, reason: 'x' } };
       }) as unknown as EvaluatorDeps['buildBias'],
     });
-    const report = await runBackgroundBiasTick(backgroundTargets(SYMBOLS, { MCX_POSITIONAL_BACKGROUND: false }), deps);
+    const report = await runBackgroundBiasTick(backgroundTargets(THREE, { MCX_POSITIONAL_BACKGROUND: false }), deps);
     expect(report.failed).toEqual(['MCX:CRUDEOIL:INTRADAY']);
     expect(report.evaluated).toEqual(['BSE:SENSEX:INTRADAY', 'MCX:GOLD:INTRADAY']);
     expect(warn).toHaveBeenCalledTimes(1);
@@ -227,8 +239,9 @@ describe('background bias evaluator — targets and gating', () => {
   it('is started from index.ts next to the other background services', () => {
     const src = readFileSync(path.join(REPO_ROOT, 'apps/server/src/index.ts'), 'utf-8');
     expect(src).toContain("import { startBackgroundBiasEvaluator } from './services/background-bias-evaluator.js';");
-    // Since Phase 6 every background service is started through the ServiceSupervisor.
-    expect(src).toContain("timerService('backgroundBiasEvaluator', () => startBackgroundBiasEvaluator(provider))");
+    // Since Phase 6 every background service is started through the ServiceSupervisor; since the 2026-10-18 audit
+    // (REL-1) it waits out the boot hold after a restart in session.
+    expect(src).toContain("timerService('backgroundBiasEvaluator', () => startBackgroundBiasEvaluator(provider), held())");
   });
 });
 

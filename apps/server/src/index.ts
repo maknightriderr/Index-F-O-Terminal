@@ -408,7 +408,7 @@ for (const spec of [
   timerService('cacheWarmer', () => startCacheWarmer(provider), held()),
   timerService('strategyTracker', () => startStrategyTracker(provider), held()),
   timerService('positionalStockScan', () => startPositionalStockScan(provider), held()),
-  // Non-NSE dashboard symbols (SENSEX, CRUDEOIL, GOLD by default) evaluated on a timer — flag BACKGROUND_BIAS.
+  // Non-NSE symbols (SENSEX, CRUDEOIL, GOLD, SILVER, NATURALGAS by default) evaluated on a timer — flag BACKGROUND_BIAS.
   timerService('backgroundBiasEvaluator', () => startBackgroundBiasEvaluator(provider), held()),
   timerService('marketStateCapture', () => startMarketStateCapture(provider), held(schemaReady)),
   timerService('missedWinnerAudit', () => startMissedWinnerAudit(provider), held(schemaReady)),

@@ -223,8 +223,12 @@ export interface BackgroundSymbol {
   exchange: 'NSE' | 'BSE' | 'MCX';
 }
 
-/** The non-NSE dashboard symbols. NSE indices stay with the market scanner. */
-export const BACKGROUND_BIAS_SYMBOLS_DEFAULT = 'SENSEX:BSE,CRUDEOIL:MCX,GOLD:MCX';
+/**
+ * The non-NSE symbols. NSE indices stay with the market scanner. SILVER and NATURALGAS joined on 2026-10-18 (audit
+ * COV-1): they are in the terminal's intended universe, but were only ever evaluated while a browser polled the old
+ * trade-minting GET, so they had 0 decisions from 12 Oct. MIDCPNIFTY is not in the intended universe.
+ */
+export const BACKGROUND_BIAS_SYMBOLS_DEFAULT = 'SENSEX:BSE,CRUDEOIL:MCX,GOLD:MCX,SILVER:MCX,NATURALGAS:MCX';
 
 /** "SYMBOL:EXCHANGE,..." -> the valid entries, plus what was rejected so the caller can log it. */
 export function parseBackgroundSymbols(raw: string | undefined): { symbols: BackgroundSymbol[]; rejected: string[] } {

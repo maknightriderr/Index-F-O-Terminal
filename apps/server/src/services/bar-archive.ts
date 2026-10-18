@@ -45,6 +45,9 @@ export const ALWAYS_ARCHIVED: ReadonlyArray<{ symbol: string; exchange: Exchange
   { symbol: 'SENSEX', exchange: 'BSE' },
   { symbol: 'CRUDEOIL', exchange: 'MCX' },
   { symbol: 'GOLD', exchange: 'MCX' },
+  // 2026-10-18 (audit COV-1): the rest of the intended MCX universe.
+  { symbol: 'SILVER', exchange: 'MCX' },
+  { symbol: 'NATURALGAS', exchange: 'MCX' },
 ];
 
 const istDate = (ms: number) => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });

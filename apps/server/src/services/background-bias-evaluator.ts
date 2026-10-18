@@ -9,8 +9,9 @@
 // CRUDEOIL's 270-point fall — there were zero CRUDEOIL decisions, because the
 // terminal was showing GOLD.
 //
-// This runs buildMarketBias for BACKGROUND_BIAS_SYMBOLS (default SENSEX on BSE,
-// CRUDEOIL and GOLD on MCX) every BACKGROUND_BIAS_INTERVAL_MS, exactly as an
+// This runs buildMarketBias for BACKGROUND_BIAS_SYMBOLS (default SENSEX on BSE;
+// CRUDEOIL, GOLD, SILVER and NATURALGAS on MCX — the last two since the
+// 2026-10-18 audit, COV-1) every BACKGROUND_BIAS_INTERVAL_MS, exactly as an
 // on-screen poll would: same gates, same mint path, same notifications. With
 // MCX_POSITIONAL_BACKGROUND on it also runs POSITIONAL mode for MCX symbols,
 // whose 15-30 DTE contracts pass reward:risk on a multi-day move where a
