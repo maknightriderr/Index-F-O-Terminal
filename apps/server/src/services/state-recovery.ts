@@ -35,6 +35,10 @@
 //   * an INTRADAY open row from an earlier session that no slot tracks is
 //     closed TRACKING_LOST the same way (sweepLostTrades, also run by the
 //     price monitor periodically).
+// 2026-10-18 (audit LIFE-1): the sweep covers every mode — also a superseded
+// row that is not the newest on its slot, and a row whose option expired —
+// and a lost row whose option plan recorded a close gets that close instead
+// of a void.
 // ============================================================
 
 import type { SetupWatchRow } from '@fno/shared';
@@ -44,6 +48,7 @@ import { logger } from '../lib/logger.js';
 import { schemaFileReady } from './ensure-capture-schema.js';
 import { canonicalJson } from './decision-record.js';
 import { drainPendingOutcomes } from './pending-outcomes.js';
+import { delSlotIfSame, slotIdentity } from '../lib/slot-cas.js';
 
 const istDate = (t: number) => new Date(t).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
@@ -65,30 +70,136 @@ export async function voidLostTrades(ids: readonly string[], why: string): Promi
   return rows.length;
 }
 
+export const LOST_EARLIER_SESSION = 'an intraday trade from an earlier session that no slot tracks';
+export const LOST_SUPERSEDED = 'a later trade on the same slot superseded it while its close was never recorded';
+
+export interface LostTradeCandidate {
+  id: string;
+  time: Date | string;
+  symbol: string;
+  exchange: string | null;
+  mode: string;
+  expiry: string | null;
+}
+
 /**
- * INTRADAY open rows from an earlier session that no trade_setup slot holds:
- * nothing will ever close them at a real price. Run on boot and periodically.
+ * Pure (audit 2026-10-18, LIFE-1): the open rows no trade_setup slot holds that nothing will ever close at a real
+ * price, in EVERY mode: an intraday row from an earlier session, a row a later trade on the same slot (exchange,
+ * symbol, mode) superseded, or a row whose option has expired. Only intraday rows were swept before, so a superseded
+ * POSITIONAL trade (e41a6899, CRUDEOIL PE 8950) stayed open past its expiry. A held row is never touched.
  */
-export async function sweepLostTrades(now = Date.now()): Promise<number> {
-  const today = istDate(now);
-  const open = await sql<{ id: string; time: Date; symbol: string; inputs: any }[]>`
-    SELECT id, time, symbol, inputs FROM signals
-    WHERE signal_type = 'TRADE_SETUP' AND (inputs->>'outcome') IS NULL AND coalesce(inputs->>'mode', 'INTRADAY') = 'INTRADAY'
-      AND time > NOW() - INTERVAL '35 days'
+export function lostTradeVerdicts(args: { open: readonly LostTradeCandidate[]; trades: readonly LostTradeCandidate[]; held: ReadonlySet<string>; today: string }): Array<{ id: string; why: string }> {
+  const out: Array<{ id: string; why: string }> = [];
+  for (const r of args.open) {
+    if (args.held.has(r.id)) continue;
+    const sameSlot = args.trades.filter((o) => o.symbol === r.symbol && o.exchange === r.exchange && o.mode === r.mode);
+    if (r.mode === 'INTRADAY' && istDate(new Date(r.time).getTime()) !== args.today) out.push({ id: r.id, why: LOST_EARLIER_SESSION });
+    else if (isSuperseded(r, sameSlot)) out.push({ id: r.id, why: LOST_SUPERSEDED });
+    else if (isPastExpiry(r.expiry, args.today)) out.push({ id: r.id, why: `its option expired on ${r.expiry} and no slot can price it` });
+  }
+  return out;
+}
+
+/** Pure: the close an option plan's CLOSED event recorded ("WIN (TARGET) at 328.4"); null without a price or when it does not parse. */
+export function planCloseOf(reason: string | null | undefined): { outcome: 'WIN' | 'LOSS' | 'EXPIRED'; closeReason: string; exitPrice: number } | null {
+  const m = /^(WIN|LOSS|EXPIRED) \(([A-Z0-9_]+)\) at (-?\d+(?:\.\d+)?)$/.exec(reason?.trim() ?? '');
+  if (!m) return null;
+  const exitPrice = Number(m[3]);
+  return Number.isFinite(exitPrice) ? { outcome: m[1] as 'WIN' | 'LOSS' | 'EXPIRED', closeReason: m[2], exitPrice } : null;
+}
+
+/**
+ * A lost row whose option plan DID record a close (the plan event was written, the trade row was not — 8 Oct) gets
+ * that close, its FIRST CLOSED event (the monitor's own exit; a later one came from a revival), instead of a void.
+ * Only an open row is written. Returns the ids recovered.
+ */
+async function recoverRecordedCloses(ids: readonly string[]): Promise<Set<string>> {
+  const done = new Set<string>();
+  if (ids.length === 0 || !schemaFileReady('035_option_plans.sql')) return done;
+  const rows = await sql<{ signal_id: string; reason: string | null; at: Date; minted: Date }[]>`
+    SELECT DISTINCT ON (p.signal_id) p.signal_id, e.reason, e.at, s.time AS minted
+    FROM option_plans p JOIN option_plan_events e ON e.plan_id = p.plan_id JOIN signals s ON s.id = p.signal_id
+    WHERE p.signal_id = ANY(${ids as string[]}) AND e.event_type = 'CLOSED'
+    ORDER BY p.signal_id, e.at ASC
   `;
-  const stale = open.filter((r) => istDate(new Date(r.time).getTime()) !== today);
-  if (stale.length === 0) return 0;
-  const held = new Set<string>();
+  for (const r of rows) {
+    const close = planCloseOf(r.reason);
+    if (!close) continue;
+    const exitTime = new Date(r.at).getTime();
+    const patch = { ...close, exitTime, holdMinutes: Math.round((exitTime - new Date(r.minted).getTime()) / 60000), recoveredFrom: 'OPTION_PLAN_CLOSED_EVENT' };
+    const updated = await sql<{ id: string }[]>`
+      UPDATE signals SET inputs = inputs || ${sql.json(patch as any)}
+      WHERE id = ${r.signal_id} AND (inputs->>'outcome') IS NULL
+      RETURNING id
+    `;
+    if (updated.length) {
+      done.add(r.signal_id);
+      logger.warn({ id: r.signal_id, close: r.reason }, 'Lost trade: its plan recorded a close the trade row never got — applied that close');
+    }
+  }
+  return done;
+}
+
+/** Close lost rows: the recorded close when the plan has one, else TRACKING_LOST (voided). */
+async function closeLostTrades(lost: ReadonlyArray<{ id: string; why: string }>): Promise<number> {
+  if (lost.length === 0) return 0;
+  const recovered = await recoverRecordedCloses(lost.map((l) => l.id));
+  let n = recovered.size;
+  const byWhy = new Map<string, string[]>();
+  for (const l of lost) if (!recovered.has(l.id)) byWhy.set(l.why, [...(byWhy.get(l.why) ?? []), l.id]);
+  for (const [why, ids] of byWhy) n += await voidLostTrades(ids, why);
+  return n;
+}
+
+/** Pure: the option of this row has expired (an ISO expiry date before today, IST). */
+export function isPastExpiry(expiry: string | null | undefined, today: string): boolean {
+  return expiry != null && /^\d{4}-\d{2}-\d{2}$/.test(expiry) && expiry < today;
+}
+
+/** signalId → the trade_setup slot key that holds it. */
+async function heldSlots(): Promise<Map<string, string>> {
+  const held = new Map<string, string>();
   for (const k of await scanKeys('trade_setup:*')) {
     const raw = await redis.get(k);
     try {
       const v = raw ? JSON.parse(raw) : null;
-      if (v?.signalId) held.add(v.signalId);
+      if (v?.signalId) held.set(v.signalId, k);
     } catch {
       /* unreadable slot: holds nothing we can match */
     }
   }
-  return voidLostTrades(stale.filter((r) => !held.has(r.id)).map((r) => r.id), 'an intraday trade from an earlier session that no slot tracks');
+  return held;
+}
+
+/**
+ * The open rows no trade_setup slot holds that nothing will ever close at a real price (lostTradeVerdicts), in every
+ * mode. Run on boot and every 30 minutes by the price monitor.
+ */
+export async function sweepLostTrades(now = Date.now()): Promise<number> {
+  const today = istDate(now);
+  const open = await sql<LostTradeCandidate[]>`
+    SELECT id, time, symbol, inputs->>'exchange' AS exchange, coalesce(inputs->>'mode', 'INTRADAY') AS mode, inputs->>'expiry' AS expiry FROM signals
+    WHERE signal_type = 'TRADE_SETUP' AND (inputs->>'outcome') IS NULL AND time > NOW() - INTERVAL '35 days'
+  `;
+  if (open.length === 0) return 0;
+  const slots = await heldSlots();
+  // A slot holding a trade whose option has expired can never price it (the chain has moved to the next expiry) and
+  // blocks the symbol: release it (only if it still holds that trade), and the row is lost like any other.
+  for (const r of open) {
+    const key = slots.get(r.id);
+    if (key && isPastExpiry(r.expiry, today) && (await delSlotIfSame(key, slotIdentity({ signalId: r.id })))) {
+      slots.delete(r.id);
+      logger.warn({ key, id: r.id, expiry: r.expiry }, 'Lost-trade sweep: released a slot whose option has expired');
+    }
+  }
+  const held = new Set(slots.keys());
+  const unheld = open.filter((r) => !held.has(r.id));
+  if (unheld.length === 0) return 0;
+  const later = await sql<LostTradeCandidate[]>`
+    SELECT id, time, symbol, inputs->>'exchange' AS exchange, coalesce(inputs->>'mode', 'INTRADAY') AS mode, inputs->>'expiry' AS expiry FROM signals
+    WHERE signal_type = 'TRADE_SETUP' AND time > ${new Date(Math.min(...unheld.map((r) => new Date(r.time).getTime())))}
+  `;
+  return closeLostTrades(lostTradeVerdicts({ open: unheld, trades: later, held, today }));
 }
 const INTRADAY_TTL = 60 * 60 * 24 * 2;
 const POSITIONAL_TTL = 60 * 60 * 24 * 30;
@@ -295,7 +406,7 @@ export async function rehydrateFromPostgres(now = Date.now()): Promise<Rehydrati
         latest.delete(k);
       }
     }
-    await voidLostTrades(superseded, 'a later trade on the same slot superseded it while its close was never recorded');
+    await closeLostTrades(superseded.map((id) => ({ id, why: LOST_SUPERSEDED })));
 
     for (const k of keys) {
       const row = latest.get(k) ?? null;
