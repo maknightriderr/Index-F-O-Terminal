@@ -244,6 +244,29 @@ app.get('/api/health/memory', (_req, res) => {
   res.json({ success: true, data: memoryStatus(true) });
 });
 
+// Audit 2026-10-18 (REL-1): Railway's readiness probe (railway.json healthcheckPath). A new deploy takes traffic, and
+// the old one is stopped, only once this answers 200: the database and Redis answer and the boot schema check has
+// finished, so a deploy that cannot start never replaces a working one. It deliberately does NOT wait for the broker
+// session or the tick feed: Angel One allows one session per login, so a new container waiting for its own feed while
+// the old one still ran would have the two log each other out. Feed and broker state are on /api/health (OBS-1).
+let schemaChecked = false;
+app.get('/api/health/ready', async (_req, res) => {
+  const [redisHealth, dbHealth] = await Promise.all([withProbeTimeout(pingRedis(), 'Redis'), withProbeTimeout(pingDb(), 'Database')]);
+  const ready = redisHealth.healthy && dbHealth.healthy && schemaChecked;
+  res.status(ready ? 200 : 503).json({
+    success: ready,
+    data: {
+      ready,
+      database: dbHealth.healthy,
+      redis: redisHealth.healthy,
+      schemaChecked,
+      brokerAuthenticated: provider.isAuthenticated(),
+      uptime: process.uptime(),
+      commit: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) ?? null,
+    },
+  });
+});
+
 // --- 404 Handler ---
 
 app.use((_req, res) => {
@@ -343,35 +366,50 @@ authenticateOnBoot();
 const schemaReady = ensureCaptureSchema().catch((err: any) => {
   logger.error({ error: err.message }, 'Capture schema check failed — starting capture anyway');
 });
+void schemaReady.then(() => {
+  schemaChecked = true;
+});
 const recoveryReady = schemaReady
   .then(() => Promise.race([rehydrateFromPostgres(), new Promise((r) => setTimeout(r, 20_000).unref())]))
   .catch((err: any) => logger.error({ error: err.message }, 'State recovery failed — Redis left as it was'));
 const anySession = (now: number) => isMarketOpen('NSE', now) || isMarketOpen('BSE', now) || isMarketOpen('MCX', now);
+// Audit 2026-10-18 (REL-1): a restart in session started every job at once; their candle bursts saturated the broker's
+// rate limit and the open trades' price checks queued behind them for 4-16 minutes (15-16 Oct). After a boot while
+// any exchange trades, the scanners, decision timers and archive jobs wait BOOT_HOLD_MS; the price monitor, recovery
+// and the database-only jobs do not. A boot outside every session holds nothing.
+const BOOT_HOLD_MS = 5 * 60_000;
+const bootHold: Promise<void> = anySession(Date.now())
+  ? new Promise<void>((resolve) => {
+      setTimeout(resolve, BOOT_HOLD_MS).unref();
+      logger.info({ holdMinutes: BOOT_HOLD_MS / 60_000 }, 'Booted in session: scanners and archive jobs start after the hold; open trades are watched first');
+    })
+  : Promise.resolve();
+const held = (after?: Promise<unknown>) => ({ ready: () => Promise.all([bootHold, after]) });
 
 serviceSupervisor.setLogger(logger);
 const timerService = (name: string, start: () => unknown, opts: Partial<ServiceSpec> = {}): ServiceSpec => ({
   name, critical: false, startupTimeoutMs: 30_000, heartbeatIntervalMs: 0, kind: 'TIMER', start, ...opts,
 });
 for (const spec of [
-  timerService('alertScanner', () => startAlertScanner(provider)),
-  timerService('patternScanner', () => startPatternScanner(provider)),
-  timerService('institutionalFlowScanner', () => startInstitutionalFlowScanner(provider)),
+  timerService('alertScanner', () => startAlertScanner(provider), held()),
+  timerService('patternScanner', () => startPatternScanner(provider), held()),
+  timerService('institutionalFlowScanner', () => startInstitutionalFlowScanner(provider), held()),
   timerService('tradeSetupPriceMonitor', () => startTradeSetupPriceMonitor(provider, subscriptionManager), { critical: true, ready: () => recoveryReady }),
-  timerService('marketScanner', () => startMarketScanner(provider)),
+  timerService('marketScanner', () => startMarketScanner(provider), held()),
   timerService('fiiDiiTracker', () => startFiiDiiTracker()),
   timerService('abandonedSetupSweep', () => startAbandonedSetupSweep()),
-  timerService('oiCloseSnapshot', () => startOiCloseSnapshot(provider)),
-  timerService('cacheWarmer', () => startCacheWarmer(provider)),
-  timerService('strategyTracker', () => startStrategyTracker(provider)),
-  timerService('positionalStockScan', () => startPositionalStockScan(provider)),
+  timerService('oiCloseSnapshot', () => startOiCloseSnapshot(provider), held()),
+  timerService('cacheWarmer', () => startCacheWarmer(provider), held()),
+  timerService('strategyTracker', () => startStrategyTracker(provider), held()),
+  timerService('positionalStockScan', () => startPositionalStockScan(provider), held()),
   // Non-NSE dashboard symbols (SENSEX, CRUDEOIL, GOLD by default) evaluated on a timer — flag BACKGROUND_BIAS.
-  timerService('backgroundBiasEvaluator', () => startBackgroundBiasEvaluator(provider)),
-  timerService('marketStateCapture', () => startMarketStateCapture(provider), { ready: () => schemaReady }),
-  timerService('missedWinnerAudit', () => startMissedWinnerAudit(provider), { ready: () => schemaReady }),
-  timerService('setupEventsGrading', () => startSetupEventsGrading(provider), { ready: () => schemaReady }),
-  timerService('opportunityCensus', () => startOpportunityCensus(provider), { ready: () => schemaReady }),
+  timerService('backgroundBiasEvaluator', () => startBackgroundBiasEvaluator(provider), held()),
+  timerService('marketStateCapture', () => startMarketStateCapture(provider), held(schemaReady)),
+  timerService('missedWinnerAudit', () => startMissedWinnerAudit(provider), held(schemaReady)),
+  timerService('setupEventsGrading', () => startSetupEventsGrading(provider), held(schemaReady)),
+  timerService('opportunityCensus', () => startOpportunityCensus(provider), held(schemaReady)),
   // Research only (2026-10-15): stores closed 15m / daily bars while no exchange trades. Never read by a decision.
-  timerService('barArchive', () => startBarArchive(provider), { ready: () => schemaReady }),
+  timerService('barArchive', () => startBarArchive(provider), held(schemaReady)),
   timerService('dailyReview', () => startDailyReview(), { ready: () => schemaReady }),
   // Audit 2026-10-18 (REC-1): once a day, every closed plan against its trade row; alerts a disagreement once. Read-only.
   timerService('recordReconciliation', () => startRecordReconciliation(), { ready: () => schemaReady }),
