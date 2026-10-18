@@ -43,6 +43,8 @@ export interface HealthResponse {
   };
   sessions?: Array<{ exchange: string; open: boolean }>;
   orderFlow?: { status?: string; dataPlan?: string; lastPacketAt?: number | null; lastError?: string | null; deltaMode?: string; deltaModeReason?: string; failedConnections?: number };
+  /** Functional checks (server ops-monitor.ts, audit OBS-1): open incidents; DEGRADES ones degrade the overall status. */
+  ops?: { at?: number | null; incidents?: Array<{ key: string; check: string; severity: 'DEGRADES' | 'WARN'; detail: string; since: number }> };
 }
 
 export interface HealthRow {
@@ -98,6 +100,15 @@ const ORDER: HealthStatus[] = ['HEALTHY', 'MARKET_CLOSED', 'NOT_IMPLEMENTED', 'U
 const severity = (s: HealthStatus) => ORDER.indexOf(s);
 
 const FRESH_TO_STATUS: Record<Freshness, HealthStatus> = { FRESH: 'HEALTHY', STALE: 'STALE', DISCONNECTED: 'DISCONNECTED', UNAVAILABLE: 'UNAVAILABLE', MARKET_CLOSED: 'MARKET_CLOSED' };
+
+const OPS_LABEL: Record<string, string> = {
+  FEED_COVERAGE: 'Open trades without live ticks',
+  FEED_DOWN: 'Tick feed down in session',
+  FEED_GAP: 'Silent contract on an open trade',
+  ENGINE_STALE: 'Symbol not being evaluated',
+  OPEN_PAST_EXPIRY: 'Open trade past expiry',
+  RECORD_MISMATCH: 'Trade record mismatch',
+};
 
 const sessionOf = (sessions: Array<{ exchange: string; open: boolean }>, exchange: string): boolean | null => {
   const s = sessions.find((x) => x.exchange === exchange);
@@ -217,6 +228,29 @@ export function buildHealthModel(i: HealthInputs): HealthModel {
       detail: `${s.state}${s.critical ? ' (critical)' : ''}${s.lastError ? `: ${s.lastError}` : s.note ? `: ${s.note}` : ''}${s.lastSuccessAt ? `. Last success ${formatIstDateTime(s.lastSuccessAt, i.now)}.` : ''}`,
       observedAt: s.lastSuccessAt,
     });
+  }
+
+  // Functional incidents: what changes how a paper trade is watched (an open trade without ticks, a dead feed, an engine
+  // that stopped, a trade past expiry). Each is its own row; a WARN is shown without degrading the overall status.
+  if (d.ops) {
+    const incidents = d.ops.incidents ?? [];
+    if (incidents.length === 0) {
+      rows.push(
+        d.ops.at
+          ? { id: 'ops', name: 'Trade-watch checks', status: 'HEALTHY', detail: `No open incident (checked ${formatIstDateTime(d.ops.at, i.now)}).`, observedAt: d.ops.at }
+          : { id: 'ops', name: 'Trade-watch checks', status: 'UNAVAILABLE', detail: 'The checks have not run yet since the server started.' }
+      );
+    }
+    for (const inc of incidents) {
+      rows.push({
+        id: `ops-${inc.key}`,
+        name: OPS_LABEL[inc.check] ?? inc.check,
+        status: 'DEGRADED',
+        critical: inc.severity === 'DEGRADES',
+        detail: `${inc.detail} Since ${formatIstDateTime(inc.since, i.now)}.`,
+        observedAt: inc.since,
+      });
+    }
   }
 
   // Per-token feed rows, re-derived from the tick time and the token's own exchange session.

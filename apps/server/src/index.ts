@@ -64,6 +64,7 @@ import { startOpportunityCensus } from './services/opportunity-census-job.js';
 import { startBarArchive } from './services/bar-archive.js';
 import { startDailyReview } from './services/daily-review-job.js';
 import { startRecordReconciliation } from './services/record-reconciliation.js';
+import { opsStatus, startOpsMonitor } from './services/ops-monitor.js';
 import { orderFlowFeedActive, startOrderFlowFeed } from './services/dhan-feed.js';
 import { createDiagnosticsRoutes } from './api/diagnostics.js';
 import { ensureCaptureSchema } from './services/ensure-capture-schema.js';
@@ -193,10 +194,14 @@ app.get('/api/health', async (_req, res) => {
 
   // Phase 6: every supervised service, and the critical ones that are not RUNNING.
   const supervisor = { services: serviceSupervisor.snapshot(), degradedCritical: serviceSupervisor.degradedCritical().map((s) => s.name) };
+  // Audit 2026-10-18 (OBS-1): functional incidents (ops-monitor.ts) — an open trade with no live ticks, a dead feed in
+  // session, a symbol the engine stopped computing, an open trade past expiry. A DEGRADES incident degrades health.
+  const ops = opsStatus();
+  const opsDegraded = ops.incidents.some((i) => i.severity === 'DEGRADES');
   // The feed counts only while it is down in session (a token gap is shown per token, not as an outage);
   // a critical service that is not RUNNING degrades the whole system.
   const overall =
-    services.redis.status === 'HEALTHY' && services.database.status === 'HEALTHY' && !feed.upstreamDown && supervisor.degradedCritical.length === 0
+    services.redis.status === 'HEALTHY' && services.database.status === 'HEALTHY' && !feed.upstreamDown && supervisor.degradedCritical.length === 0 && !opsDegraded
       ? 'HEALTHY'
       : 'DEGRADED';
 
@@ -234,6 +239,7 @@ app.get('/api/health', async (_req, res) => {
       sessions,
       orderFlow: orderFlowFeedStatus(),
       memory: memoryStatus(),
+      ops,
       version: '0.1.0',
     },
   });
@@ -413,6 +419,8 @@ for (const spec of [
   timerService('dailyReview', () => startDailyReview(), { ready: () => schemaReady }),
   // Audit 2026-10-18 (REC-1): once a day, every closed plan against its trade row; alerts a disagreement once. Read-only.
   timerService('recordReconciliation', () => startRecordReconciliation(), { ready: () => schemaReady }),
+  // Audit 2026-10-18 (OBS-1): functional health checks every minute; one Telegram alert per incident. Read-only.
+  timerService('opsMonitor', () => startOpsMonitor(subscriptionManager), { ready: () => recoveryReady }),
   timerService('holidayCalendarCheck', () => startHolidayCalendarCheck()),
   // The self-audit: it can change what the system NOTICES, never what it DOES.
   timerService('systemLearningAudit', () => startSystemLearningAudit(provider)),

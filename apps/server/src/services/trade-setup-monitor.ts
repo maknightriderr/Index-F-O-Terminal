@@ -83,6 +83,11 @@ let watchesByToken = new Map<string, LockedSetupWatch>();
 const inFlight = new Set<string>();
 
 const setupKey = (w: { exchange: Exchange; underlying: string; mode: TradingMode }) => `${w.exchange}:${w.underlying}:${w.mode}`;
+
+/** The open trades the tick feed currently watches (read by the ops monitor, OBS-1). A copy: callers never change it. */
+export function watchedSetups(): LockedSetupWatch[] {
+  return [...watchesByToken.values()].map((w) => ({ ...w }));
+}
 const targetFor = (w: LockedSetupWatch): SubscriptionTarget => ({ token: w.token, exchange: w.exchange, exchangeSegment: FO_SEGMENT[w.exchange] });
 
 export function startTradeSetupPriceMonitor(provider: MarketDataProvider, subscriptions?: SubscriptionManager): void {

@@ -167,12 +167,14 @@ describe('boot registrations and shutdown order (index.ts)', () => {
     'dailyReview',
     // 2026-10-18 (audit REC-1): the nightly plan-vs-trade reconciliation (read-only; alerts a disagreement once).
     'recordReconciliation',
+    // 2026-10-18 (audit OBS-1): functional health checks and one alert per incident (read-only).
+    'opsMonitor',
     'holidayCalendarCheck', 'systemLearningAudit',
   ];
-  it('registers exactly the 18 original services plus the bar archive, daily review and reconciliation, and three justified COMPONENT extras', () => {
+  it('registers exactly the 18 original services plus the bar archive, daily review, reconciliation and ops monitor, and three justified COMPONENT extras', () => {
     const timer = [...src.matchAll(/timerService\('(\w+)'/g)].map((m) => m[1]);
     expect(timer).toEqual(EXISTING);
-    expect(new Set(timer).size).toBe(21);
+    expect(new Set(timer).size).toBe(22);
     const components = [...src.matchAll(/name: '(\w+)', critical: (true|false)[^\n]*kind: 'COMPONENT'/g)].map((m) => m[1]);
     expect(components).toEqual(['signalEngine', 'setupLifecycle', 'orderFlowFeed']);
     expect((src.match(/note: 'Extra:/g) ?? []).length).toBe(3);

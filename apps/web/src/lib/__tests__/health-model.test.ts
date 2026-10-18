@@ -87,4 +87,16 @@ describe('buildHealthModel', () => {
     const m = buildHealthModel({ data: d, apiError: null, now, browserSocket });
     expect(m.overall).toBe('HEALTHY');
   });
+
+  it('an ops incident (open trade without ticks) degrades the overall status; a WARN is shown but does not', () => {
+    const inc = (key: string, severity: 'DEGRADES' | 'WARN') => ({ key, check: key, severity, detail: `${key} detail.`, since: now - 180_000 });
+    let m = buildHealthModel({ data: healthy({ ops: { at: now, incidents: [inc('FEED_COVERAGE', 'DEGRADES')] } }), apiError: null, now, browserSocket });
+    expect(row(m, 'ops-FEED_COVERAGE')).toMatchObject({ name: 'Open trades without live ticks', status: 'DEGRADED', critical: true });
+    expect(m.overall).toBe('DEGRADED');
+    m = buildHealthModel({ data: healthy({ ops: { at: now, incidents: [inc('RECORD_MISMATCH', 'WARN')] } }), apiError: null, now, browserSocket });
+    expect(row(m, 'ops-RECORD_MISMATCH').status).toBe('DEGRADED');
+    expect(m.overall).toBe('HEALTHY');
+    m = buildHealthModel({ data: healthy({ ops: { at: now, incidents: [] } }), apiError: null, now, browserSocket });
+    expect(row(m, 'ops')).toMatchObject({ status: 'HEALTHY' });
+  });
 });
