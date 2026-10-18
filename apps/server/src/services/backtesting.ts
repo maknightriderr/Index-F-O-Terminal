@@ -108,25 +108,9 @@ export async function closeAbandonedTradeSetups(): Promise<number> {
       logger.info({ count: voided.length }, 'Backtesting: voided WIN outcomes recorded by the tick decoder bug');
     }
 
-    // Repair for the positional rows the old 2-day window closed while they
-    // were still live. Only touches rows this sweep itself closed — marked
-    // abandoned with no exitTime and no return (a real outcome always stamps
-    // an exitTime) — and young enough that their Redis key can still exist,
-    // so their monitor can resolve them properly. Idempotent.
-    const reopened = await sql<{ id: string }[]>`
-      UPDATE signals
-      SET inputs = inputs - 'outcome' - 'exitPrice' - 'exitTime' - 'abandoned'
-      WHERE signal_type = 'TRADE_SETUP'
-        AND inputs->>'mode' = 'POSITIONAL'
-        AND inputs->>'abandoned' = 'true'
-        AND inputs->>'exitTime' IS NULL
-        AND fwd_1d_return IS NULL
-        AND time >= NOW() - ${`${ABANDONED_AFTER_DAYS_POSITIONAL} days`}::interval
-      RETURNING id
-    `;
-    if (reopened.length > 0) {
-      logger.info({ count: reopened.length }, 'Backtesting: reopened positional setups closed early by the old 2-day abandoned window');
-    }
+    // The one-off "reopen" repair (positional rows the old 2-day window closed while still live) is gone
+    // (audit 2026-10-18, REC-2): it had matched 0 rows for weeks (0 again on 18 Oct) and kept re-running
+    // an UPDATE that could only ever revive a trade.
 
     const rows = await sql<{ id: string }[]>`
       UPDATE signals

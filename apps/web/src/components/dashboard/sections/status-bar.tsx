@@ -8,6 +8,7 @@ import { useAllIndices } from '@/lib/use-all-indices';
 import { useLiveIndices } from '@/lib/use-live-indices';
 import { useFeedSummary } from '@/lib/use-feed-summary';
 import { classifyFreshness, FRESH_WITHIN_MS } from '@/lib/freshness';
+import { quoteObservedAt } from '@/lib/quote-time';
 import { formatArrowPercent, formatIstDateTime, formatNumber, MISSING } from '@/lib/format';
 import { FreshnessBadge, HealthBadge, StatusBadge } from '@/components/ui/status-badge';
 import { Card } from '@/components/ui/card';
@@ -29,12 +30,18 @@ function Cell({ label, children, detail }: { label: string; children: React.Reac
 }
 
 function IndexCell({ symbol, quote, observedAt, now, sessionOpen }: { symbol: string; quote: MarketQuote | null; observedAt: number | null; now: number; sessionOpen: boolean | null }) {
-  const f = classifyFreshness({ observedAt: quote?.timestamp ?? observedAt, now, sessionOpen, transportConnected: null, freshWithinMs: FRESH_WITHIN_MS.quote });
+  // The exchange's own time (audit 2026-10-18, UI-1): after the close the last close, not when the server re-fetched it.
+  const seenAt = quote ? quoteObservedAt(quote) : observedAt;
+  const f = classifyFreshness({ observedAt: seenAt, now, sessionOpen, transportConnected: null, freshWithinMs: FRESH_WITHIN_MS.quote });
   if (!quote) {
     return (
       <Cell label={symbol}>
         <div className="text-xl font-semibold text-[var(--text-secondary)]">{MISSING}</div>
-        <FreshnessBadge state="UNAVAILABLE" detail="No quote has been received." />
+        {sessionOpen === false ? (
+          <FreshnessBadge state="MARKET_CLOSED" detail="The market is closed and no quote has been received yet; the last close appears once the next quote arrives." />
+        ) : (
+          <FreshnessBadge state="UNAVAILABLE" detail="No quote has been received." />
+        )}
       </Cell>
     );
   }
@@ -50,7 +57,10 @@ function IndexCell({ symbol, quote, observedAt, now, sessionOpen }: { symbol: st
       </div>
       <div className="flex flex-wrap items-center gap-1">
         <FreshnessBadge state={f.state} detail={f.detail} />
-        <span className="text-xs text-[var(--text-secondary)]">{formatIstDateTime(quote.timestamp, now)}</span>
+        <span className="text-xs text-[var(--text-secondary)]">
+          {sessionOpen === false ? 'Last close ' : ''}
+          {formatIstDateTime(seenAt, now)}
+        </span>
       </div>
     </Cell>
   );

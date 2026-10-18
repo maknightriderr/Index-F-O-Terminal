@@ -127,8 +127,11 @@ export function measureSetupCost(args: {
   atr: number | null;
   option: OptionQuoteInput | null;
   costVersion: string;
+  /** COST-3.0: the exchange's dated statutory + exchange charges (% of premium; optionStatutoryPct). Default = COST-2.0's 0.2%. */
+  statutoryPct?: number;
 }): SetupCostMeasurement {
   const { entry, stop, t1, option, costVersion } = args;
+  const statutoryPct = args.statutoryPct ?? TRADING_COST_MODEL.statutoryPct;
   const stopPts = finite(entry) && finite(stop) ? Math.abs(entry - stop) : null;
   const grossR = stopPts != null && stopPts > 0 && finite(t1) && finite(entry) ? round4(Math.abs(t1 - entry) / stopPts) : null;
   const stopDistance = measureStopDistance({ entry, stop, atr: args.atr, option });
@@ -147,7 +150,7 @@ export function measureSetupCost(args: {
   const slippage = premium * (TRADING_COST_MODEL.slippagePct / 100);
   const brokerage = 2 * TRADING_COST_MODEL.brokeragePerOrder * (1 + TRADING_COST_MODEL.gstPct / 100);
   const brokeragePerUnit = finite(option.lotSize) && option.lotSize > 0 ? brokerage / option.lotSize : 0;
-  const charges = premium * (TRADING_COST_MODEL.statutoryPct / 100) + brokeragePerUnit;
+  const charges = premium * (statutoryPct / 100) + brokeragePerUnit;
   const total = spread + slippage + charges;
 
   // Cost in the underlying's R: per-unit cost → underlying points via |delta| → ÷ underlying stop.

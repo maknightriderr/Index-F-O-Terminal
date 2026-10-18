@@ -223,8 +223,12 @@ export interface BackgroundSymbol {
   exchange: 'NSE' | 'BSE' | 'MCX';
 }
 
-/** The non-NSE dashboard symbols. NSE indices stay with the market scanner. */
-export const BACKGROUND_BIAS_SYMBOLS_DEFAULT = 'SENSEX:BSE,CRUDEOIL:MCX,GOLD:MCX';
+/**
+ * The non-NSE symbols. NSE indices stay with the market scanner. SILVER and NATURALGAS joined on 2026-10-18 (audit
+ * COV-1): they are in the terminal's intended universe, but were only ever evaluated while a browser polled the old
+ * trade-minting GET, so they had 0 decisions from 12 Oct. MIDCPNIFTY is not in the intended universe.
+ */
+export const BACKGROUND_BIAS_SYMBOLS_DEFAULT = 'SENSEX:BSE,CRUDEOIL:MCX,GOLD:MCX,SILVER:MCX,NATURALGAS:MCX';
 
 /** "SYMBOL:EXCHANGE,..." -> the valid entries, plus what was rejected so the caller can log it. */
 export function parseBackgroundSymbols(raw: string | undefined): { symbols: BackgroundSymbol[]; rejected: string[] } {
@@ -441,7 +445,11 @@ export const OPTION_VERSION = 'OPTION-2.0';
 // COST-2.0: setup_events carry a per-setup cost measured at the fill from the
 // leg's live quote (setup-cost.ts; spread observed, slippage/charges modelled
 // from TRADING_COST_MODEL). COST-1.0 rows carry no cost at all.
-export const COST_VERSION = 'COST-2.0';
+// COST-3.0 (audit 2026-10-18, COST-1): the statutory part is the exchange's dated
+// charges (STT/CTT, exchange transaction, SEBI, stamp, GST on fees —
+// OPTION_CHARGES in @fno/shared) in the builder, the setup_events measurement and
+// the per-trade cost record, instead of one flat 0.2% for every exchange.
+export const COST_VERSION = 'COST-3.0';
 /**
  * The multi-path event engine and trigger registry (@fno/analytics
  * event-engine), RESEARCH only: stamped on major_move_diagnostics rows. Not
@@ -840,6 +848,38 @@ export interface LogicStamp {
   };
   /** The indicator engine's confidence and location modes (absent on setups minted before them: the 75 and POOR_LOCATION gates). */
   indicator?: { confidenceMode: IndicatorConfidenceMode; locationMode?: IndicatorConfidenceMode };
+  /** What each validation-review switch actually does in the running modes (absent before 2026-10-18; effectiveTradingFlags). */
+  effectiveFlags?: Record<keyof TradingFlags, EffectiveFlag>;
+}
+
+/** ACTIVE = on and changing decisions; INERT = on, but the running mode gives it nothing to do; OFF = off. */
+export interface EffectiveFlag {
+  on: boolean;
+  effect: 'ACTIVE' | 'INERT' | 'OFF';
+  why: string | null;
+}
+
+/**
+ * Audit 2026-10-18 (DOC-1): a switch can be on and still change nothing. Every trade's stamp said RICH_IV_RR=true and
+ * LOCATION_GATE=true though neither could refuse anything in the active modes. Recorded beside the raw flags so a
+ * reader of the stamp sees what was in force.
+ */
+export function effectiveTradingFlags(flags: Readonly<TradingFlags> = TRADING_FLAGS, locationMode: IndicatorConfidenceMode = INDICATOR_LOCATION_MODE): Record<keyof TradingFlags, EffectiveFlag> {
+  const plain = (k: keyof TradingFlags): EffectiveFlag => ({ on: flags[k], effect: flags[k] ? 'ACTIVE' : 'OFF', why: null });
+  return {
+    STRUCTURAL_STOP: plain('STRUCTURAL_STOP'),
+    LOCATION_GATE: flags.LOCATION_GATE
+      ? locationGateEnforced(locationMode, true)
+        ? { on: true, effect: 'ACTIVE', why: null }
+        : { on: true, effect: 'INERT', why: `INDICATOR_LOCATION_MODE=${locationMode}: the location score is recorded, never a refusal (only LEGACY enforces it).` }
+      : plain('LOCATION_GATE'),
+    ROOM_GATE: plain('ROOM_GATE'),
+    CONCURRENCY_CAP: plain('CONCURRENCY_CAP'),
+    CLOSING_GUARD: plain('CLOSING_GUARD'),
+    RICH_IV_RR: flags.RICH_IV_RR
+      ? { on: true, effect: 'INERT', why: 'Net R:R is display / ranking only since 5 Oct (rrGate off in every live build): the higher R:R bar it sets refuses nothing.' }
+      : plain('RICH_IV_RR'),
+  };
 }
 
 /**
@@ -956,5 +996,9 @@ export function liveLogicStamp(): LogicStamp {
     indicator: { confidenceMode: INDICATOR_CONFIDENCE_MODE, locationMode: INDICATOR_LOCATION_MODE },
   });
   // + the OB1 / OF1 paper-source suffix while either may take the slot (empty when both are off).
-  return { ...stamp, logicVersion: `${stamp.logicVersion}${RR_DISPLAY_ONLY_LOGIC_SUFFIX}${PARENT_IDENTITY_LOGIC_SUFFIX}${TRIGGER_DEMOTION_LOGIC_SUFFIX}${orderFlowLogicSuffix()}` };
+  return {
+    ...stamp,
+    logicVersion: `${stamp.logicVersion}${RR_DISPLAY_ONLY_LOGIC_SUFFIX}${PARENT_IDENTITY_LOGIC_SUFFIX}${TRIGGER_DEMOTION_LOGIC_SUFFIX}${orderFlowLogicSuffix()}`,
+    effectiveFlags: effectiveTradingFlags(),
+  };
 }

@@ -222,11 +222,10 @@ describe('GET /api/market/bias-snapshot/:symbol — read-only', () => {
     noEffects();
   });
 
-  it('the legacy engine-running route is untouched and still the only one that calls the engine', async () => {
+  it('the legacy engine-running route is gone (audit 2026-10-18, SEC-2): nothing under /api/market runs the engine', async () => {
     const res = await fetch(base() + '/api/market/bias/NIFTY');
-    expect(res.status).toBe(502); // our spy throws: proves THIS route still runs the engine
-    expect(spies.buildMarketBias).toHaveBeenCalledTimes(1);
-    expect(spies.noteBiasRequest).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(404);
+    noEffects();
   });
 });
 

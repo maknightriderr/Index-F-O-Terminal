@@ -13,7 +13,7 @@
 // ============================================================
 
 import { buildTradeSetup, evaluateOf1, OF1_VERSION, type Of1Bar, type Of1Candidate } from '@fno/analytics';
-import type { OptionChain } from '@fno/shared';
+import { optionStatutoryPct, type OptionChain } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { redis } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
@@ -49,6 +49,7 @@ export function of1TradeVerdict(
       spot: chain.spotPrice,
       tickSize: 0.05,
       realisticPayoff: { sessionHours },
+      statutoryPct: optionStatutoryPct(chain.exchange, chain.timestamp),
     });
     costPct = s.estimatedCostPct ?? null;
     plan = { available: s.available, code: s.noTradeCode ?? null, side: s.side ?? null, strike: s.strike ?? null, expiry: chain.expiry, entry: s.entry ?? null, stopLoss: s.stopLoss ?? null, target: s.target ?? null, riskReward: s.riskReward ?? null };

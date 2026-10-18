@@ -140,7 +140,12 @@ describe('best-setup ranking (decision-time fields only)', () => {
     expect(rank({ movePotential: { class: 'HIGH', remainingMovePct: 0.5 } as never }, {})).toMatchObject({ criterion: 'move potential' });
     expect(rank({ movePotential: { class: 'NORMAL', remainingMovePct: 0.8 } as never }, {})).toMatchObject({ criterion: 'remaining move' });
     expect(rank({}, {}, { ...ok, netR: 2.2 }, { ...ok, netR: 1.9 })).toMatchObject({ criterion: 'net-R geometry' });
-    expect(rank({ rToT1: 3 }, { rToT1: 2 })).toMatchObject({ criterion: 'net-R geometry' });
+    // ARB-1 (audit 2026-10-18): a measured cost ranks first — an unpriced candidate's gross R never beats a priced
+    // rival's net R — and two unpriced candidates still compare gross with gross (the line above).
+    const priced = rank({ rToT1: 1 }, { rToT1: 9 }, { ...ok, netR: 0.4 }, { ...ok, netR: null });
+    expect(priced).toMatchObject({ criterion: 'net-R geometry' });
+    expect(priced.cmp).toBeLessThan(0);
+    expect(rank({ rToT1: 9 }, { rToT1: 1 }, { ...ok, netR: null }, { ...ok, netR: -0.2 }).cmp).toBeGreaterThan(0);
     expect(rank({ eventIds: ['a', 'b', 'c'] }, {})).toMatchObject({ criterion: 'evidence' });
   });
   it('a deterministic tie-break: earlier bar, then trigger id', () => {

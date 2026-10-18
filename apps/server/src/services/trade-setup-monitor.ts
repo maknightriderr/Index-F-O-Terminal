@@ -51,6 +51,8 @@ import { drainPendingOutcomes } from './pending-outcomes.js';
 import { sweepLostTrades } from './state-recovery.js';
 import { onPostExitTick, samplePostExitWatches } from './post-exit-tracker.js';
 import { drainPendingCostRecords } from './trade-costs.js';
+import { runInteractive } from '../lib/request-priority.js';
+import type { Instrument } from '@fno/shared';
 
 /** How often the lost-trade sweep runs (intraday rows from earlier sessions no slot tracks). */
 const LOST_TRADE_SWEEP_MS = 30 * 60 * 1000;
@@ -81,6 +83,11 @@ let watchesByToken = new Map<string, LockedSetupWatch>();
 const inFlight = new Set<string>();
 
 const setupKey = (w: { exchange: Exchange; underlying: string; mode: TradingMode }) => `${w.exchange}:${w.underlying}:${w.mode}`;
+
+/** The open trades the tick feed currently watches (read by the ops monitor, OBS-1). A copy: callers never change it. */
+export function watchedSetups(): LockedSetupWatch[] {
+  return [...watchesByToken.values()].map((w) => ({ ...w }));
+}
 const targetFor = (w: LockedSetupWatch): SubscriptionTarget => ({ token: w.token, exchange: w.exchange, exchangeSegment: FO_SEGMENT[w.exchange] });
 
 export function startTradeSetupPriceMonitor(provider: MarketDataProvider, subscriptions?: SubscriptionManager): void {
@@ -98,8 +105,9 @@ export function startTradeSetupPriceMonitor(provider: MarketDataProvider, subscr
   if (subscriptions) {
     subscriptions.onTick((ticks) => onTicks(provider, subscriptions, ticks));
     subscriptions.onRecovering((gaps) => {
-      void checkGaps(provider, subscriptions, gaps).catch((err: any) => logger.error({ error: err.message }, 'Trade setup price monitor: gap check failed'));
+      void runInteractive(() => checkGaps(provider, subscriptions, gaps)).catch((err: any) => logger.error({ error: err.message }, 'Trade setup price monitor: gap check failed'));
     });
+    void primeSubscriptions(provider, subscriptions);
   }
 
   setTimeout(tick, INITIAL_DELAY_MS);
@@ -114,9 +122,69 @@ async function runMonitor(provider: MarketDataProvider, subscriptions?: Subscrip
   if (sweepRunning) return;
   sweepRunning = true;
   try {
-    await sweep(provider, subscriptions);
+    // Audit 2026-10-18 (REL-1): the open trades' price checks are served ahead of the scanners' candle bursts
+    // (lib/request-priority.ts; a background request still never waits more than its max-wait cap).
+    await runInteractive(() => sweep(provider, subscriptions));
   } finally {
     sweepRunning = false;
+  }
+}
+
+/** Pure: a stored setup's option token, from the instrument master (no quote call). Null for a spread or an unknown contract. */
+export function tokenForStoredSetup(
+  instruments: readonly Pick<Instrument, 'token' | 'underlying' | 'exchange' | 'strike' | 'optionType' | 'expiry'>[],
+  underlying: string,
+  exchange: string,
+  s: { structureType?: string; strike?: number | null; side?: string | null; expiry?: string | null } | null | undefined
+): string | null {
+  if (!s || s.structureType === 'SPREAD' || s.strike == null || !s.side || !s.expiry) return null;
+  const hit = instruments.find((i) => i.underlying === underlying && i.exchange === exchange && i.strike === s.strike && i.optionType === s.side && i.expiry === s.expiry);
+  return hit?.token ?? null;
+}
+
+const PRIME_WAIT_MS = 3 * 60_000;
+const PRIME_POLL_MS = 2_000;
+
+/**
+ * Audit 2026-10-18 (REL-1): right after boot, subscribe every open trade's option token straight from its slot and
+ * the instrument master, without waiting for the first full sweep. That sweep fetches a chain per trade and, behind
+ * every other job starting at once, took 4-16 minutes to subscribe anything (15-16 Oct restarts). Waits for the
+ * broker session (the feed needs it), at most PRIME_WAIT_MS. Skipped if a sweep is already running; the sweep then
+ * subscribes as before. Returns how many tokens are watched.
+ */
+export async function primeSubscriptions(provider: MarketDataProvider, subscriptions: SubscriptionManager, waitMs = PRIME_WAIT_MS, pollMs = PRIME_POLL_MS): Promise<number> {
+  try {
+    const until = Date.now() + waitMs;
+    while (!provider.isAuthenticated() && Date.now() < until) await new Promise((r) => setTimeout(r, pollMs));
+    if (!provider.isAuthenticated() || sweepRunning) return 0;
+    sweepRunning = true;
+    try {
+      const instruments = await provider.getInstrumentMaster();
+      const next = new Map(watchesByToken);
+      for (const key of await scanKeys('trade_setup:*')) {
+        const parts = key.split(':'); // trade_setup:{exchange}:{underlying}:{mode}
+        if (parts.length !== 4 || (parts[3] !== 'INTRADAY' && parts[3] !== 'POSITIONAL')) continue;
+        const [, exchange, underlying, mode] = parts;
+        let stored: any = null;
+        try {
+          const raw = await redis.get(key);
+          stored = raw ? JSON.parse(raw) : null;
+        } catch {
+          continue;
+        }
+        if (!stored?.available || stored.stopLoss == null || stored.target == null) continue;
+        const token = tokenForStoredSetup(instruments, underlying, exchange, stored);
+        if (token) next.set(token, { underlying, exchange: exchange as Exchange, mode: mode as TradingMode, token, stopLoss: stored.stopLoss, target: stored.target });
+      }
+      await syncSubscriptions(subscriptions, next);
+      logger.info({ tokens: next.size }, 'Trade setup price monitor: open trades subscribed at boot, before the first sweep');
+      return next.size;
+    } finally {
+      sweepRunning = false;
+    }
+  } catch (err: any) {
+    logger.warn({ error: err.message }, 'Trade setup price monitor: boot subscription failed — the first sweep subscribes instead');
+    return 0;
   }
 }
 
@@ -288,7 +356,7 @@ function onTicks(provider: MarketDataProvider, subscriptions: SubscriptionManage
     if (inFlight.has(id)) continue;
     inFlight.add(id);
 
-    checkLockedSetupPriceLevels(provider, watch.exchange, watch.underlying, watch.mode, tick.ltp)
+    runInteractive(() => checkLockedSetupPriceLevels(provider, watch.exchange, watch.underlying, watch.mode, tick.ltp))
       .then((stillOpen) => {
         if (stillOpen) {
           watchesByToken.set(stillOpen.token, stillOpen); // e.g. the stop has since trailed

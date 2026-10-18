@@ -9,6 +9,7 @@ import { TAPE_VERSION, decode, encode, type TapeEntry } from '../lib/io-tape.js'
 import { logger } from '../lib/logger.js';
 import { schemaFileReady } from './ensure-capture-schema.js';
 import { DECISION_RECORDS_MIGRATION } from './snapshot-context.js';
+import { liveLogicStamp } from '../config/trading-flags.js';
 import {
   canonicalJson,
   currentConfigHashFor,
@@ -23,9 +24,52 @@ import {
 /** Writes are attempted only once migration 034 applied cleanly at boot. */
 export const decisionRecordsReady = (): boolean => schemaFileReady(DECISION_RECORDS_MIGRATION);
 
+export const CONFIG_REGISTRY_MIGRATION = '042_config_registry.sql';
+const registeredConfigs = new Set<string>();
+
+/**
+ * Audit 2026-10-18 (REPL-1): the configuration a snapshot was decided under, once per process: its hash, the
+ * decision config, the full logic stamp and the git commit. A replay refused with CONFIG_MISMATCH can then name the
+ * commit and settings it needs. Never throws; a failed write is retried by the next snapshot.
+ */
+export async function registerConfig(snap: SignalDecisionSnapshot): Promise<void> {
+  const hash = snap.config?.configHash;
+  if (!hash || registeredConfigs.has(hash) || !schemaFileReady(CONFIG_REGISTRY_MIGRATION)) return;
+  registeredConfigs.add(hash);
+  try {
+    // insertOnce, not an upsert: this store never upserts (its rule-guarded tables refuse it; migration-036 test).
+    const stored = await insertOnce(sql`
+      INSERT INTO config_registry (config_hash, logic_flags_hash, config, logic_stamp, git_commit)
+      VALUES (${hash}, ${snap.versions?.logicFlagsHash ?? null}, ${sql.json(snap.config as never)}, ${sql.json(liveLogicStamp() as never)}, ${snap.versions?.gitCommit ?? null})
+    `);
+    if (stored === 'EXISTS') await sql`UPDATE config_registry SET last_seen = NOW() WHERE config_hash = ${hash}`;
+  } catch (err: any) {
+    registeredConfigs.delete(hash);
+    logger.warn({ error: err.message, configHash: hash }, 'Config registry: write failed (retried with the next snapshot)');
+  }
+}
+
+export interface RegisteredConfig {
+  configHash: string;
+  gitCommit: string | null;
+  firstSeen: string;
+  lastSeen: string;
+  logicStamp: unknown;
+}
+
+export async function loadRegisteredConfig(configHash: string): Promise<RegisteredConfig | null> {
+  if (!schemaFileReady(CONFIG_REGISTRY_MIGRATION)) return null;
+  const rows = await sql<{ config_hash: string; git_commit: string | null; first_seen: Date; last_seen: Date; logic_stamp: unknown }[]>`
+    SELECT config_hash, git_commit, first_seen, last_seen, logic_stamp FROM config_registry WHERE config_hash = ${configHash}
+  `;
+  const r = rows[0];
+  return r ? { configHash: r.config_hash, gitCommit: r.git_commit, firstSeen: new Date(r.first_seen).toISOString(), lastSeen: new Date(r.last_seen).toISOString(), logicStamp: r.logic_stamp } : null;
+}
+
 /** Inserts the snapshot (immutable; a second insert of the same id is a no-op). True when it is stored. */
 export async function persistSnapshot(snap: SignalDecisionSnapshot): Promise<boolean> {
   if (!decisionRecordsReady()) return false;
+  void registerConfig(snap);
   const row = freezeSnapshotRow(snap);
   try {
     await insertOnce(sql`
@@ -80,7 +124,7 @@ export async function loadDecisionRecord(snapshotId: string): Promise<{ record: 
 
 export type ReplayReport =
   | { status: 'NOT_FOUND'; snapshotId: string }
-  | { status: 'CONFIG_MISMATCH'; snapshotId: string; recordedConfigHash: string; currentConfigHash: string }
+  | { status: 'CONFIG_MISMATCH'; snapshotId: string; recordedConfigHash: string; currentConfigHash: string; recordedConfig: RegisteredConfig | null }
   | { status: 'MATCH' | 'DIFFERENT' | 'NO_STORED_RECORD'; snapshotId: string; hash: string; storedHash: string | null; diff: string[]; record: DecisionRecord };
 
 /**
@@ -93,7 +137,8 @@ export async function replay(snapshotId: string): Promise<ReplayReport> {
   if (!snap) return { status: 'NOT_FOUND', snapshotId };
   const stored = await loadDecisionRecord(snapshotId);
   const out = replaySnapshot(snap, currentConfigHashFor(snap));
-  if (out.status === 'CONFIG_MISMATCH') return { snapshotId, ...out };
+  // The registry names the commit and settings the snapshot needs (null for snapshots before 042, 2026-10-18).
+  if (out.status === 'CONFIG_MISMATCH') return { snapshotId, ...out, recordedConfig: await loadRegisteredConfig(out.recordedConfigHash).catch(() => null) };
   if (out.status !== 'OK') return { status: 'NOT_FOUND', snapshotId };
   if (!stored) return { status: 'NO_STORED_RECORD', snapshotId, hash: out.hash, storedHash: null, diff: [], record: out.record };
   const diff = recordDiff(stored.record, out.record);
@@ -102,10 +147,41 @@ export async function replay(snapshotId: string): Promise<ReplayReport> {
 
 // ---------------- full replay tapes (037) ----------------
 
-/** DECISION_TAPE (default on): record each snapshotted poll's I/O tape for full replay. */
-// OFF unless DECISION_TAPE=1. A production tape is ~MBs (a day of history, the full chain and every
-// SQL result): left on for every snapshot it filled the 5 GB database volume in three days (2026-10-08).
-export const DECISION_TAPE_ENABLED = /^(1|true|on|yes)$/i.test(process.env.DECISION_TAPE ?? '');
+/**
+ * DECISION_TAPE: which polls keep their I/O tape for full replay (audit 2026-10-18, REPL-1).
+ *   TAKE (default)  every live poll is recorded; the tape is STORED for each poll that minted a paper trade and
+ *                   for 1 in DECISION_TAPE_SAMPLE (default 20) of the others, chosen by snapshot id, so the Old
+ *                   Indicator's trades can be replayed exactly;
+ *   ALL             every snapshotted poll (1 / true / on / yes: the old switch). A production tape is ~MBs (a day
+ *                   of history, the full chain and every SQL result): left on for every snapshot it filled the
+ *                   5 GB database volume in three days (2026-10-08);
+ *   OFF             none (0 / false / off / no, or anything else).
+ * Recording costs CPU and memory on EVERY poll in TAKE and ALL (each read is copied into the tape); set OFF if
+ * GET /api/health/memory shows it matters.
+ */
+export type DecisionTapeMode = 'OFF' | 'TAKE' | 'ALL';
+export function parseDecisionTapeMode(raw: string | undefined): DecisionTapeMode {
+  const v = (raw ?? '').trim().toUpperCase();
+  if (v === '' || v === 'TAKE') return 'TAKE';
+  if (/^(1|TRUE|ON|YES|ALL)$/.test(v)) return 'ALL';
+  return 'OFF';
+}
+export const DECISION_TAPE_MODE: DecisionTapeMode = parseDecisionTapeMode(process.env.DECISION_TAPE);
+export const DECISION_TAPE_ENABLED = DECISION_TAPE_MODE !== 'OFF';
+/** In TAKE mode, 1 in this many non-minting polls keeps its tape (DECISION_TAPE_SAMPLE; 0 = none). */
+export const DECISION_TAPE_SAMPLE = (() => {
+  const n = Number(process.env.DECISION_TAPE_SAMPLE);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 20;
+})();
+
+/** Pure: keep this poll's tape? The sample is a hash of the snapshot id, so the choice is deterministic. */
+export function shouldStoreTape(mode: DecisionTapeMode, minted: boolean, snapshotId: string, sample: number = DECISION_TAPE_SAMPLE): boolean {
+  if (mode === 'OFF') return false;
+  if (mode === 'ALL' || minted) return true;
+  if (sample <= 0) return false;
+  const h = Number.parseInt(snapshotId.replace(/[^0-9a-f]/gi, '').slice(0, 8), 16);
+  return Number.isFinite(h) && h % sample === 0;
+}
 /** Tapes are kept this many days (DECISION_TAPE_RETENTION_DAYS, default 2), then removed by the forward-validation job. */
 export const DECISION_TAPE_RETENTION_DAYS = (() => {
   const n = Number(process.env.DECISION_TAPE_RETENTION_DAYS);

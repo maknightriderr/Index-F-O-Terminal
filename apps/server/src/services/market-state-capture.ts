@@ -62,6 +62,7 @@ import {
 } from './capture-quality.js';
 import { RISK_FREE_RATE, yearsToExpiry } from '@fno/shared';
 import { BACKGROUND_BIAS_SYMBOLS, COVERAGE_LAG_FLAGS } from '../config/trading-flags.js';
+import { archiveOldOiSnapshots } from './oi-archive.js';
 
 const EXCHANGES: Exchange[] = ['NSE', 'BSE', 'MCX'];
 
@@ -88,7 +89,7 @@ const STRIKES_EACH_SIDE = 21;
 const MAX_SYMBOLS_PER_PASS = 12;
 const STAGGER_MS = 2500;
 
-/** Fallback pruning horizon for a Postgres with no retention policies. */
+/** Fallback pruning horizon for a Postgres with no retention policies (futures, PCR, ticks; oi_snapshots: oi-archive.ts). */
 const PRUNE_HORIZON_DAYS = 400;
 const PRUNE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
@@ -701,8 +702,10 @@ async function pruneOldCaptures(): Promise<void> {
   const cutoff = new Date(Date.now() - PRUNE_HORIZON_DAYS * 24 * 60 * 60 * 1000);
   const dqCutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
 
+  // oi_snapshots (the large one) is archived losslessly and then removed after OI_RETENTION_DAYS (oi-archive.ts,
+  // audit 2026-10-18 OPS-1) instead of being deleted outright at the 400-day horizon.
   const deleted = {
-    oi: (await sql`DELETE FROM oi_snapshots WHERE time < ${cutoff}`).count,
+    oiArchived: await archiveOldOiSnapshots(),
     futures: (await sql`DELETE FROM futures_snapshots WHERE time < ${cutoff}`).count,
     pcr: (await sql`DELETE FROM pcr_history WHERE time < ${cutoff}`).count,
     ticks: (await sql`DELETE FROM market_ticks WHERE time < ${cutoff}`).count,

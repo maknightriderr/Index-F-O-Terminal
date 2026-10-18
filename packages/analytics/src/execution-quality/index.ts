@@ -35,6 +35,8 @@ export interface ExecutionQualityInput {
   stopLoss: number;
   target: number;
   lotSize: number;
+  /** COST-3.0 statutory % (the live builder's); absent = COST-2.0's flat 0.2%. */
+  statutoryPct?: number;
 }
 
 export interface ExecutionQualityResult {
@@ -56,9 +58,9 @@ export interface ExecutionQualityResult {
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /** The live path's net reward:risk formula, at a given entry. */
-function netR(entry: number, stopLoss: number, target: number, bid: number, ask: number, lotSize: number): number | null {
+function netR(entry: number, stopLoss: number, target: number, bid: number, ask: number, lotSize: number, statutoryPct?: number): number | null {
   if (!(entry > 0)) return null;
-  const cost = estimateRoundTripCost(entry, bid, ask, lotSize).perUnit;
+  const cost = estimateRoundTripCost(entry, bid, ask, lotSize, statutoryPct).perUnit;
   const risk = entry - stopLoss;
   const denom = risk + cost;
   if (!(denom > 0)) return null;
@@ -78,8 +80,8 @@ export function assessExecutionQuality(input: ExecutionQualityInput): ExecutionQ
   const basis: ExecutionQualityResult['basis'] = reliable ? 'ASK' : ltp > 0 ? 'LTP_FALLBACK' : 'NO_PRICE';
   const executionQuality: ExecutionQuality = reliable ? 'NORMAL' : 'DEGRADED';
 
-  const liveNetR = netR(input.liveEntry, input.stopLoss, input.target, bid, ask, input.lotSize);
-  const shadowNetR = shadowEntryPrice != null ? netR(shadowEntryPrice, input.stopLoss, input.target, bid, ask, input.lotSize) : null;
+  const liveNetR = netR(input.liveEntry, input.stopLoss, input.target, bid, ask, input.lotSize, input.statutoryPct);
+  const shadowNetR = shadowEntryPrice != null ? netR(shadowEntryPrice, input.stopLoss, input.target, bid, ask, input.lotSize, input.statutoryPct) : null;
 
   return {
     shadow: true,

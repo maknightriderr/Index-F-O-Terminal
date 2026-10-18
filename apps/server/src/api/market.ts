@@ -9,8 +9,6 @@ import type { MarketDataProvider } from '../providers/interface.js';
 import { CM_SEGMENT, FO_SEGMENT } from '@fno/shared';
 import type { CandleInterval, Exchange, TradingMode } from '@fno/shared';
 import { getLiveIndexQuotes, getMcxCommodityQuotes, ALL_INDEX_LIST } from '../services/indices.js';
-import { buildMarketBias } from '../services/market-bias.js';
-import { noteBiasRequest } from '../services/cache-warmer.js';
 import { readBiasSnapshot } from '../services/read-only-views.js';
 import { getCachedPatterns } from '../services/chart-patterns.js';
 
@@ -170,40 +168,15 @@ export function createMarketDataRoutes(provider: MarketDataProvider): Router {
     }
   });
 
-  /**
-   * GET /api/market/bias/:symbol
-   * Live market bias, regime, and intelligence score for an underlying —
-   * computed from real technicals + OI + PCR, not sample data.
-   */
-  router.get('/bias/:symbol', async (req: Request, res: Response) => {
-    try {
-      const symbol = req.params.symbol.toUpperCase();
-      const exchange = ((req.query.exchange as string) || 'NSE') as Exchange;
-      const modeParam = (req.query.mode as string || '').toUpperCase();
-      const mode: TradingMode = modeParam === 'POSITIONAL' ? 'POSITIONAL' : 'INTRADAY';
-
-      noteBiasRequest(symbol, exchange, mode);
-      const result = await buildMarketBias(provider, symbol, exchange, mode);
-
-      res.json({
-        success: true,
-        data: result,
-        meta: { timestamp: Date.now(), source: 'LIVE' },
-      });
-    } catch (error: any) {
-      logger.error({ error: error.message, symbol: req.params.symbol }, 'Market bias build failed');
-      res.status(502).json({
-        success: false,
-        error: { code: 'MARKET_BIAS_FAILED', message: error.message },
-      });
-    }
-  });
+  // GET /api/market/bias/:symbol was removed (audit 2026-10-18, SEC-2): a GET that ran the decision engine — it
+  // could mint a paper trade and wrote decision records. The engine runs from its own timers; pages read
+  // /bias-snapshot below.
 
   /**
    * GET /api/market/bias-snapshot/:symbol
    * The last assessment of a symbol, READ-ONLY: the engine's cached result while it is cached, else the last decision
-   * record. Unlike GET /api/market/bias/:symbol it never runs the engine — which can mint a paper trade and writes
-   * decision records — and never registers the symbol for background warming. The web terminal reads this one.
+   * record. It never runs the engine (which can mint a paper trade and writes decision records) and never registers
+   * the symbol for background warming. The web terminal reads this one.
    */
   router.get('/bias-snapshot/:symbol', async (req: Request, res: Response) => {
     try {

@@ -132,7 +132,7 @@ this repo is set up for Railway, but Render/Fly.io work the same way.
 3. Add a service for the backend, pointed at this repo, **root directory left as the repo root** (not `apps/server` — the build needs the whole workspace):
    - Build command: `npm install && npm run build`
    - Start command: `npm start --workspace=@fno/server`
-4. In that service's **Variables**, add (see the table below for what each one is): `ANGEL_ONE_API_KEY`, `ANGEL_ONE_CLIENT_ID`, `ANGEL_ONE_PASSWORD`, `ANGEL_ONE_TOTP_SECRET`, `JWT_SECRET`, `CORS_ORIGINS`, `NODE_ENV=production`. Reference the Postgres/Redis plugins' own `DATABASE_URL`/`REDIS_URL` variables (Railway lets you reference `${{Postgres.DATABASE_URL}}` etc. directly — you don't retype them).
+4. In that service's **Variables**, add (see the table below for what each one is): `ANGEL_ONE_API_KEY`, `ANGEL_ONE_CLIENT_ID`, `ANGEL_ONE_PASSWORD`, `ANGEL_ONE_TOTP_SECRET`, `JWT_SECRET`, `TERMINAL_PASSWORD`, `CORS_ORIGINS`, `NODE_ENV=production`. Reference the Postgres/Redis plugins' own `DATABASE_URL`/`REDIS_URL` variables (Railway lets you reference `${{Postgres.DATABASE_URL}}` etc. directly — you don't retype them).
 5. Once deployed, run the schema migration once against that database: `DATABASE_URL="<railway postgres url>" npm run db:migrate --workspace=@fno/server` (from your machine, or as a one-off Railway command). Railway's Postgres plugin is plain Postgres — the TimescaleDB-specific parts of the schema (hypertables, retention, compression) apply best-effort and simply no-op there; everything else works normally. See `database/init/` for the migration files themselves.
 6. Note the public URL Railway gives the backend service (e.g. `https://your-app.up.railway.app`) — the frontend needs it next.
 
@@ -153,15 +153,20 @@ this repo is set up for Railway, but Render/Fly.io work the same way.
 |---|---|---|---|
 | `ANGEL_ONE_API_KEY`, `ANGEL_ONE_CLIENT_ID`, `ANGEL_ONE_PASSWORD`, `ANGEL_ONE_TOTP_SECRET` | Railway (backend service) only | Yes | Your broker credentials. Never put these on Vercel — the frontend never needs them, the backend is the only thing that talks to Angel One. |
 | `JWT_SECRET` | Railway (backend service) only | Yes | Generate a random 32+ char string (e.g. `openssl rand -base64 32`), don't reuse the `.env.example` placeholder. |
+| `TERMINAL_PASSWORD` | Railway (backend service) only | Yes | The password the terminal's sign-in screen asks for. Every `/api` route and the `/ws` feed need a session from it, except the health probes. **Required in production**: without it (or with a short or development `JWT_SECRET`) the API answers 503 `AUTH_NOT_CONFIGURED`, so set it before deploying. Changing it signs every browser out. A session lasts 7 days. |
 | `DATABASE_URL`, `REDIS_URL` | Railway (backend service) only | Yes | Reference the Postgres/Redis plugins' own variables — don't hand-type connection strings. |
 | `CORS_ORIGINS` | Railway (backend service) only | No | Your Vercel URL. Not secret, but must be correct or the frontend gets CORS errors. |
 | `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_WS_URL` | Vercel (frontend project) only | No | `NEXT_PUBLIC_*` vars are bundled into the browser JS — never put a secret behind this prefix, anywhere. |
 | `GEMINI_API_KEY`, `GROQ_API_KEY` | Railway (backend service) only | Yes | Free-tier keys for the AI assistant and commentary (Google AI Studio, console.groq.com). Gemini is tried first, Groq second. `ANTHROPIC_API_KEY` (paid) is a third, optional fallback. Optional: `AI_PROVIDERS` (order), `GEMINI_MODEL`, `GROQ_MODEL` (each may list several models, comma-separated, tried in turn). |
 | `LD_PRELOAD` | Railway (backend service) only | No | `/usr/lib/x86_64-linux-gnu/libjemalloc.so.2`: runs the backend on jemalloc (installed by `nixpacks.toml`), which returns freed memory; glibc kept ~2 GB per market session. `GET /api/health/memory` shows `\"allocator\"`. |
 | `MALLOC_ARENA_MAX` | Railway (backend service) only | No | Set to `2`. The container reports 48 CPUs, so the C allocator can keep many per-thread memory arenas that never shrink, and Railway bills that memory. Check the effect at `GET /api/health/memory`. |
+| `OI_RETENTION_DAYS` | Railway (backend service) only | No | Days of raw `oi_snapshots` kept (default 60; `0` keeps raw rows forever). Older days are packed losslessly into `oi_snapshots_archive` (gzip'd JSON per day and symbol) before the raw rows are deleted (audit OPS-1). |
+| `DECISION_TAPE`, `DECISION_TAPE_SAMPLE`, `DECISION_TAPE_RETENTION_DAYS` | Railway (backend service) only | No | Full-replay I/O tapes (audit REPL-1). `TAKE` (default) keeps the tape of every poll that minted a paper trade and of 1 in `DECISION_TAPE_SAMPLE` (default 20) other polls. `ALL` keeps every snapshotted poll (this filled the 5 GB volume in three days on 8 Oct). `OFF` keeps none. Tapes are deleted after `DECISION_TAPE_RETENTION_DAYS` (default 2). Recording costs CPU and memory on every poll: set `OFF` if `GET /api/health/memory` shows it matters. |
+| `STALE_QUOTE_GATE`, `STALE_QUOTE_MAX_AGE_S` | Railway (backend service) only | No | Input freshness, measured on the exchange's clock (audit DATA-1). `SHADOW` (default) records a `STALE_QUOTE` gate-diagnostic row on every taken trade: the option quote's age by the exchange's own time (Angel One FULL-mode `exchFeedTime`) against `STALE_QUOTE_MAX_AGE_S` (default 120). `OFF` records none. It never refuses a trade: enforcement is a strategy change and waits for the shadow evidence. |
 
 ## Security
 
+- Sign-in: every `/api` route and the `/ws` feed need a terminal session (`TERMINAL_PASSWORD`). Only `GET /api/health`, `/api/health/memory`, `/api/health/ready` and `/api/session` answer without one, and `/api/health` then reports status only.
 - ⚠️ Never commit `.env` files
 - ⚠️ All secrets in environment variables
 - ⚠️ API keys never exposed to frontend

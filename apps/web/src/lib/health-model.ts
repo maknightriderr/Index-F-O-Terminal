@@ -43,6 +43,8 @@ export interface HealthResponse {
   };
   sessions?: Array<{ exchange: string; open: boolean }>;
   orderFlow?: { status?: string; dataPlan?: string; lastPacketAt?: number | null; lastError?: string | null; deltaMode?: string; deltaModeReason?: string; failedConnections?: number };
+  /** Functional checks (server ops-monitor.ts, audit OBS-1): open incidents; DEGRADES ones degrade the overall status. */
+  ops?: { at?: number | null; incidents?: Array<{ key: string; check: string; severity: 'DEGRADES' | 'WARN'; detail: string; since: number }> };
 }
 
 export interface HealthRow {
@@ -98,6 +100,15 @@ const ORDER: HealthStatus[] = ['HEALTHY', 'MARKET_CLOSED', 'NOT_IMPLEMENTED', 'U
 const severity = (s: HealthStatus) => ORDER.indexOf(s);
 
 const FRESH_TO_STATUS: Record<Freshness, HealthStatus> = { FRESH: 'HEALTHY', STALE: 'STALE', DISCONNECTED: 'DISCONNECTED', UNAVAILABLE: 'UNAVAILABLE', MARKET_CLOSED: 'MARKET_CLOSED' };
+
+const OPS_LABEL: Record<string, string> = {
+  FEED_COVERAGE: 'Open trades without live ticks',
+  FEED_DOWN: 'Tick feed down in session',
+  FEED_GAP: 'Silent contract on an open trade',
+  ENGINE_STALE: 'Symbol not being evaluated',
+  OPEN_PAST_EXPIRY: 'Open trade past expiry',
+  RECORD_MISMATCH: 'Trade record mismatch',
+};
 
 const sessionOf = (sessions: Array<{ exchange: string; open: boolean }>, exchange: string): boolean | null => {
   const s = sessions.find((x) => x.exchange === exchange);
@@ -160,20 +171,23 @@ export function buildHealthModel(i: HealthInputs): HealthModel {
         : { id: 'provider', name: `${prov.name ?? 'Angel One'} provider`, status: 'DISCONNECTED', detail: 'Not authenticated; quotes and chains cannot be fetched.' }
   );
 
-  // Market-data tick feed: evidence = a recent tick WHILE a session is open.
+  // Market-data tick feed: evidence = a recent tick WHILE a session is open. The newest tick's EXCHANGE time when the
+  // per-token feed reports it (audit 2026-10-18, UI-1); the server's receive time made a Sunday reconnect read as fresh.
   const ws = d.services?.websocket;
+  const exchangeTicks = (d.feed?.perToken ?? []).map((t) => t.lastTickTime ?? 0).filter((t) => t > 0);
+  const lastTickAt = exchangeTicks.length ? Math.max(...exchangeTicks) : ws?.lastTickAt;
   if (!ws) {
     rows.push({ id: 'tick-feed', name: 'Market-data tick feed', status: 'UNAVAILABLE', detail: 'The health response did not include the feed.' });
   } else {
-    const f = classifyFreshness({ observedAt: ws.lastTickAt ?? null, now: i.now, sessionOpen: sessions.length ? anyOpen : null, transportConnected: !!ws.connected, freshWithinMs: FRESH_WITHIN_MS.quote });
+    const f = classifyFreshness({ observedAt: lastTickAt ?? null, now: i.now, sessionOpen: sessions.length ? anyOpen : null, transportConnected: !!ws.connected, freshWithinMs: FRESH_WITHIN_MS.quote });
     const status: HealthStatus = f.state === 'FRESH' ? 'HEALTHY' : f.state === 'MARKET_CLOSED' ? 'MARKET_CLOSED' : f.state === 'STALE' ? 'STALE' : f.state === 'DISCONNECTED' ? 'DISCONNECTED' : ws.connected ? 'DEGRADED' : 'UNAVAILABLE';
     const sockets = `${ws.connected ? 'Connected' : 'Not connected'} to the broker feed, ${ws.subscriptionCount ?? 0} subscriptions.`;
     rows.push({
       id: 'tick-feed',
       name: 'Market-data tick feed',
       status,
-      detail: `${sockets} ${ws.lastTickAt ? `Last tick ${formatIstDateTime(ws.lastTickAt, i.now)} (${formatAge(i.now - ws.lastTickAt)}).` : 'No tick has been received since the server started.'}${d.feed?.upstreamDown ? ' Upstream feed is down.' : ''}`,
-      observedAt: ws.lastTickAt ?? null,
+      detail: `${sockets} ${lastTickAt ? `Last tick ${formatIstDateTime(lastTickAt, i.now)} (${formatAge(i.now - lastTickAt)})${exchangeTicks.length ? ', exchange time' : ''}.` : 'No tick has been received since the server started.'}${d.feed?.upstreamDown ? ' Upstream feed is down.' : ''}`,
+      observedAt: lastTickAt ?? null,
     });
   }
 
@@ -195,6 +209,8 @@ export function buildHealthModel(i: HealthInputs): HealthModel {
       DISCONNECTED: { status: anyOpen ? 'DISCONNECTED' : 'MARKET_CLOSED', detail: anyOpen ? 'Not connected while a session is open.' : 'Not connected; it connects only during a session.' },
       DATA_PLAN_INACTIVE: { status: 'UNAVAILABLE', detail: 'The Dhan Data API plan is not active; order flow is unavailable until it is.' },
       NOT_CONFIGURED: { status: 'UNAVAILABLE', detail: 'Dhan credentials are not configured; order flow is unavailable.' },
+      // Audit 2026-10-18 (UI-1): the server has reported this since 17 Oct (PR #46); it read "Unrecognised status".
+      TOKEN_REJECTED: { status: 'UNAVAILABLE', detail: 'Dhan rejected the access token (401/403). Order flow is unavailable until a valid token is set; the feed retries every 30 minutes.' },
     };
     const m = map[of.status ?? ''] ?? { status: 'UNAVAILABLE' as HealthStatus, detail: `Unrecognised status ${of.status ?? 'unknown'}.` };
     rows.push({
@@ -217,6 +233,29 @@ export function buildHealthModel(i: HealthInputs): HealthModel {
       detail: `${s.state}${s.critical ? ' (critical)' : ''}${s.lastError ? `: ${s.lastError}` : s.note ? `: ${s.note}` : ''}${s.lastSuccessAt ? `. Last success ${formatIstDateTime(s.lastSuccessAt, i.now)}.` : ''}`,
       observedAt: s.lastSuccessAt,
     });
+  }
+
+  // Functional incidents: what changes how a paper trade is watched (an open trade without ticks, a dead feed, an engine
+  // that stopped, a trade past expiry). Each is its own row; a WARN is shown without degrading the overall status.
+  if (d.ops) {
+    const incidents = d.ops.incidents ?? [];
+    if (incidents.length === 0) {
+      rows.push(
+        d.ops.at
+          ? { id: 'ops', name: 'Trade-watch checks', status: 'HEALTHY', detail: `No open incident (checked ${formatIstDateTime(d.ops.at, i.now)}).`, observedAt: d.ops.at }
+          : { id: 'ops', name: 'Trade-watch checks', status: 'UNAVAILABLE', detail: 'The checks have not run yet since the server started.' }
+      );
+    }
+    for (const inc of incidents) {
+      rows.push({
+        id: `ops-${inc.key}`,
+        name: OPS_LABEL[inc.check] ?? inc.check,
+        status: 'DEGRADED',
+        critical: inc.severity === 'DEGRADES',
+        detail: `${inc.detail} Since ${formatIstDateTime(inc.since, i.now)}.`,
+        observedAt: inc.since,
+      });
+    }
   }
 
   // Per-token feed rows, re-derived from the tick time and the token's own exchange session.

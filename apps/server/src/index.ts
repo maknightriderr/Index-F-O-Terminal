@@ -24,6 +24,8 @@ import { startSystemLearningAudit } from './services/system-learning-audit.js';
 import { createMarketWebSocketServer } from './ws/server.js';
 import { AngelOneProvider } from './providers/angel-one/index.js';
 import { createAuthRoutes } from './api/auth.js';
+import { createSessionRoutes } from './api/session.js';
+import { apiAuthConfigFrom, authMode, requireSession } from './lib/api-auth.js';
 import { createInstrumentRoutes } from './api/instruments.js';
 import { createMarketDataRoutes } from './api/market.js';
 import { createOptionChainRoutes } from './api/option-chain.js';
@@ -61,6 +63,8 @@ import { startSetupEventsGrading } from './services/setup-events-grading.js';
 import { startOpportunityCensus } from './services/opportunity-census-job.js';
 import { startBarArchive } from './services/bar-archive.js';
 import { startDailyReview } from './services/daily-review-job.js';
+import { startRecordReconciliation } from './services/record-reconciliation.js';
+import { opsStatus, startOpsMonitor } from './services/ops-monitor.js';
 import { orderFlowFeedActive, startOrderFlowFeed } from './services/dhan-feed.js';
 import { createDiagnosticsRoutes } from './api/diagnostics.js';
 import { ensureCaptureSchema } from './services/ensure-capture-schema.js';
@@ -112,6 +116,14 @@ app.use((req, _res, next) => {
   logger.info({ method: req.method, url: req.url }, 'Request');
   next();
 });
+
+// --- Terminal sign-in (audit 2026-10-18, SEC-1) ---
+// Every /api route registered below needs a session, except the health probes
+// and /api/session itself (lib/api-auth.ts PUBLIC_ROUTES). It must stay ABOVE
+// the routers: Express runs middleware in registration order.
+const apiAuth = apiAuthConfigFrom(process.env, config.jwt.secret);
+app.use('/api', requireSession(apiAuth));
+app.use('/api/session', createSessionRoutes(apiAuth));
 
 // --- API Routes ---
 
@@ -182,10 +194,14 @@ app.get('/api/health', async (_req, res) => {
 
   // Phase 6: every supervised service, and the critical ones that are not RUNNING.
   const supervisor = { services: serviceSupervisor.snapshot(), degradedCritical: serviceSupervisor.degradedCritical().map((s) => s.name) };
+  // Audit 2026-10-18 (OBS-1): functional incidents (ops-monitor.ts) — an open trade with no live ticks, a dead feed in
+  // session, a symbol the engine stopped computing, an open trade past expiry. A DEGRADES incident degrades health.
+  const ops = opsStatus();
+  const opsDegraded = ops.incidents.some((i) => i.severity === 'DEGRADES');
   // The feed counts only while it is down in session (a token gap is shown per token, not as an outage);
   // a critical service that is not RUNNING degrades the whole system.
   const overall =
-    services.redis.status === 'HEALTHY' && services.database.status === 'HEALTHY' && !feed.upstreamDown && supervisor.degradedCritical.length === 0
+    services.redis.status === 'HEALTHY' && services.database.status === 'HEALTHY' && !feed.upstreamDown && supervisor.degradedCritical.length === 0 && !opsDegraded
       ? 'HEALTHY'
       : 'DEGRADED';
 
@@ -193,6 +209,23 @@ app.get('/api/health', async (_req, res) => {
   // read as a failed feed) and the Dhan order-flow feed's own status. In-memory state only; nothing is fetched.
   const nowMs = Date.now();
   const sessions = (['NSE', 'BSE', 'MCX'] as const).map((exchange) => ({ exchange, open: isMarketOpen(exchange, nowMs) }));
+
+  // Without a session the probe answers status only: no per-token feed detail, services or order-flow state.
+  if (res.locals.authenticated !== true) {
+    res.json({
+      success: true,
+      data: {
+        status: overall,
+        uptime: process.uptime(),
+        timestamp: nowMs,
+        services: { api: services.api, redis: { status: services.redis.status }, database: { status: services.database.status }, websocket: { status: services.websocket.status } },
+        sessions,
+        version: '0.1.0',
+        detail: 'Sign in for the full report.',
+      },
+    });
+    return;
+  }
 
   res.json({
     success: true,
@@ -206,6 +239,7 @@ app.get('/api/health', async (_req, res) => {
       sessions,
       orderFlow: orderFlowFeedStatus(),
       memory: memoryStatus(),
+      ops,
       version: '0.1.0',
     },
   });
@@ -214,6 +248,29 @@ app.get('/api/health', async (_req, res) => {
 // Memory telemetry (2026-10-15, measurement only): the last 24 hours of 15-minute samples.
 app.get('/api/health/memory', (_req, res) => {
   res.json({ success: true, data: memoryStatus(true) });
+});
+
+// Audit 2026-10-18 (REL-1): Railway's readiness probe (railway.json healthcheckPath). A new deploy takes traffic, and
+// the old one is stopped, only once this answers 200: the database and Redis answer and the boot schema check has
+// finished, so a deploy that cannot start never replaces a working one. It deliberately does NOT wait for the broker
+// session or the tick feed: Angel One allows one session per login, so a new container waiting for its own feed while
+// the old one still ran would have the two log each other out. Feed and broker state are on /api/health (OBS-1).
+let schemaChecked = false;
+app.get('/api/health/ready', async (_req, res) => {
+  const [redisHealth, dbHealth] = await Promise.all([withProbeTimeout(pingRedis(), 'Redis'), withProbeTimeout(pingDb(), 'Database')]);
+  const ready = redisHealth.healthy && dbHealth.healthy && schemaChecked;
+  res.status(ready ? 200 : 503).json({
+    success: ready,
+    data: {
+      ready,
+      database: dbHealth.healthy,
+      redis: redisHealth.healthy,
+      schemaChecked,
+      brokerAuthenticated: provider.isAuthenticated(),
+      uptime: process.uptime(),
+      commit: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) ?? null,
+    },
+  });
 });
 
 // --- 404 Handler ---
@@ -260,7 +317,12 @@ const server = app.listen(config.server.port, config.server.host, () => {
   }
 });
 
-createMarketWebSocketServer(server, subscriptionManager);
+createMarketWebSocketServer(server, subscriptionManager, apiAuth);
+{
+  const { mode, reason } = authMode(apiAuth);
+  if (mode === 'MISCONFIGURED') logger.error({ reason }, 'Terminal API auth: LOCKED — every protected route answers 503 until this is fixed');
+  else logger.info({ mode }, 'Terminal API auth (ENFORCED = a session is required; OPEN_DEV = development without TERMINAL_PASSWORD)');
+}
 
 // --- Boot-time Angel One Authentication ---
 // Single-user, read-only terminal: credentials live in env vars, not a
@@ -310,36 +372,55 @@ authenticateOnBoot();
 const schemaReady = ensureCaptureSchema().catch((err: any) => {
   logger.error({ error: err.message }, 'Capture schema check failed — starting capture anyway');
 });
+void schemaReady.then(() => {
+  schemaChecked = true;
+});
 const recoveryReady = schemaReady
   .then(() => Promise.race([rehydrateFromPostgres(), new Promise((r) => setTimeout(r, 20_000).unref())]))
   .catch((err: any) => logger.error({ error: err.message }, 'State recovery failed — Redis left as it was'));
 const anySession = (now: number) => isMarketOpen('NSE', now) || isMarketOpen('BSE', now) || isMarketOpen('MCX', now);
+// Audit 2026-10-18 (REL-1): a restart in session started every job at once; their candle bursts saturated the broker's
+// rate limit and the open trades' price checks queued behind them for 4-16 minutes (15-16 Oct). After a boot while
+// any exchange trades, the scanners, decision timers and archive jobs wait BOOT_HOLD_MS; the price monitor, recovery
+// and the database-only jobs do not. A boot outside every session holds nothing.
+const BOOT_HOLD_MS = 5 * 60_000;
+const bootHold: Promise<void> = anySession(Date.now())
+  ? new Promise<void>((resolve) => {
+      setTimeout(resolve, BOOT_HOLD_MS).unref();
+      logger.info({ holdMinutes: BOOT_HOLD_MS / 60_000 }, 'Booted in session: scanners and archive jobs start after the hold; open trades are watched first');
+    })
+  : Promise.resolve();
+const held = (after?: Promise<unknown>) => ({ ready: () => Promise.all([bootHold, after]) });
 
 serviceSupervisor.setLogger(logger);
 const timerService = (name: string, start: () => unknown, opts: Partial<ServiceSpec> = {}): ServiceSpec => ({
   name, critical: false, startupTimeoutMs: 30_000, heartbeatIntervalMs: 0, kind: 'TIMER', start, ...opts,
 });
 for (const spec of [
-  timerService('alertScanner', () => startAlertScanner(provider)),
-  timerService('patternScanner', () => startPatternScanner(provider)),
-  timerService('institutionalFlowScanner', () => startInstitutionalFlowScanner(provider)),
+  timerService('alertScanner', () => startAlertScanner(provider), held()),
+  timerService('patternScanner', () => startPatternScanner(provider), held()),
+  timerService('institutionalFlowScanner', () => startInstitutionalFlowScanner(provider), held()),
   timerService('tradeSetupPriceMonitor', () => startTradeSetupPriceMonitor(provider, subscriptionManager), { critical: true, ready: () => recoveryReady }),
-  timerService('marketScanner', () => startMarketScanner(provider)),
+  timerService('marketScanner', () => startMarketScanner(provider), held()),
   timerService('fiiDiiTracker', () => startFiiDiiTracker()),
   timerService('abandonedSetupSweep', () => startAbandonedSetupSweep()),
-  timerService('oiCloseSnapshot', () => startOiCloseSnapshot(provider)),
-  timerService('cacheWarmer', () => startCacheWarmer(provider)),
-  timerService('strategyTracker', () => startStrategyTracker(provider)),
-  timerService('positionalStockScan', () => startPositionalStockScan(provider)),
-  // Non-NSE dashboard symbols (SENSEX, CRUDEOIL, GOLD by default) evaluated on a timer — flag BACKGROUND_BIAS.
-  timerService('backgroundBiasEvaluator', () => startBackgroundBiasEvaluator(provider)),
-  timerService('marketStateCapture', () => startMarketStateCapture(provider), { ready: () => schemaReady }),
-  timerService('missedWinnerAudit', () => startMissedWinnerAudit(provider), { ready: () => schemaReady }),
-  timerService('setupEventsGrading', () => startSetupEventsGrading(provider), { ready: () => schemaReady }),
-  timerService('opportunityCensus', () => startOpportunityCensus(provider), { ready: () => schemaReady }),
+  timerService('oiCloseSnapshot', () => startOiCloseSnapshot(provider), held()),
+  timerService('cacheWarmer', () => startCacheWarmer(provider), held()),
+  timerService('strategyTracker', () => startStrategyTracker(provider), held()),
+  timerService('positionalStockScan', () => startPositionalStockScan(provider), held()),
+  // Non-NSE symbols (SENSEX, CRUDEOIL, GOLD, SILVER, NATURALGAS by default) evaluated on a timer — flag BACKGROUND_BIAS.
+  timerService('backgroundBiasEvaluator', () => startBackgroundBiasEvaluator(provider), held()),
+  timerService('marketStateCapture', () => startMarketStateCapture(provider), held(schemaReady)),
+  timerService('missedWinnerAudit', () => startMissedWinnerAudit(provider), held(schemaReady)),
+  timerService('setupEventsGrading', () => startSetupEventsGrading(provider), held(schemaReady)),
+  timerService('opportunityCensus', () => startOpportunityCensus(provider), held(schemaReady)),
   // Research only (2026-10-15): stores closed 15m / daily bars while no exchange trades. Never read by a decision.
-  timerService('barArchive', () => startBarArchive(provider), { ready: () => schemaReady }),
+  timerService('barArchive', () => startBarArchive(provider), held(schemaReady)),
   timerService('dailyReview', () => startDailyReview(), { ready: () => schemaReady }),
+  // Audit 2026-10-18 (REC-1): once a day, every closed plan against its trade row; alerts a disagreement once. Read-only.
+  timerService('recordReconciliation', () => startRecordReconciliation(), { ready: () => schemaReady }),
+  // Audit 2026-10-18 (OBS-1): functional health checks every minute; one Telegram alert per incident. Read-only.
+  timerService('opsMonitor', () => startOpsMonitor(subscriptionManager), { ready: () => recoveryReady }),
   timerService('holidayCalendarCheck', () => startHolidayCalendarCheck()),
   // The self-audit: it can change what the system NOTICES, never what it DOES.
   timerService('systemLearningAudit', () => startSystemLearningAudit(provider)),

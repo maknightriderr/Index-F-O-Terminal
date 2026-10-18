@@ -46,6 +46,8 @@ export type SetupEventType =
   | 'REJECTED'
   | 'INVALIDATED'
   | 'LOW_RR'
+  /** The structure engine's LOW_RR stage with no T1 at all ("no opposite-side pool", audit 2026-10-18 DOC-1): not a reward:risk question. */
+  | 'NO_TARGET'
   | 'LATE'
   | 'MISSED'
   | 'TRADED'
@@ -91,6 +93,7 @@ const DECISION_BY_EVENT_TYPE: Record<SetupEventType, SetupDecision> = {
   REJECTED: 'REJECTED',
   INVALIDATED: 'REJECTED',
   LOW_RR: 'REJECTED',
+  NO_TARGET: 'REJECTED',
   LATE: 'REJECTED',
   MISSED: 'REJECTED',
   TRADED: 'TRADED',
@@ -189,6 +192,16 @@ export interface SetupEventInput {
 }
 
 /**
+ * Pure: the event type of a lifecycle transition. Audit 2026-10-18 (DOC-1): the structure engine's LOW_RR stage also
+ * covers "no opposite-side pool" — no T1 at all, which is not a reward:risk question and cannot be graded against a
+ * T1 — so that one is NO_TARGET.
+ */
+export function setupEventTypeOf(toStage: string, t1: number | null | undefined): SetupEventType {
+  const staged = EVENT_TYPE_BY_STAGE[toStage] ?? (toStage as SetupEventType);
+  return staged === 'LOW_RR' && t1 == null ? 'NO_TARGET' : staged;
+}
+
+/**
  * One `setup_events` row. Fire-and-forget, like every capture writer in this
  * codebase: a failure is logged (never silently caught) and never blocks or
  * alters the lifecycle it was called from.
@@ -200,7 +213,7 @@ export function recordSetupEvent(input: SetupEventInput): void {
 }
 
 async function insertSetupEvent(input: SetupEventInput, snapshotId: string | null = null): Promise<void> {
-  const eventType = EVENT_TYPE_BY_STAGE[input.toStage] ?? (input.toStage as SetupEventType);
+  const eventType = setupEventTypeOf(input.toStage, input.t1);
   const decision = DECISION_BY_EVENT_TYPE[eventType] ?? 'DETECTED';
   const grossRr = input.entry != null && input.stop != null && input.t1 != null && Math.abs(input.entry - input.stop) > 0 ? round4(Math.abs(input.t1 - input.entry) / Math.abs(input.entry - input.stop)) : null;
   const grade = gradeFromScore(input.scoreTotal);

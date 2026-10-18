@@ -67,6 +67,8 @@ import {
   getSessionCloseTime,
   minutesSinceSessionOpen,
   getSessionWindow,
+  optionStatutoryPct,
+  isMarketOpen,
 } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveSpotToken, resolveNearestFuturesContract, buildOptionChain } from './option-chain.js';
@@ -240,13 +242,13 @@ import {
   type SlotEntry,
 } from './slot-arbitration.js';
 import { recordSetupEvent } from './setup-events.js';
-import { currentSnapshotId, runInSnapshotScope, setScopeSnapshotId } from './snapshot-context.js';
+import { currentSnapshotId, noteScopeTake, runInSnapshotScope, scopeTook, setScopeSnapshotId } from './snapshot-context.js';
 import { serviceFailure, serviceHeartbeat } from '../lib/service-supervisor.js';
 import { buildNoTradeDiagnostics } from './no-trade-diagnostics.js';
 import { recordSlotDecision, slotDecisionRow } from './slot-decisions.js';
 import { ARBITRATION_VERSION, OPTION_SELECTION_VERSION, OPTION_VERSION } from '../config/trading-flags.js';
 import { isReplaying, runRecording, tapedInput, tapedProvider, tapedValue, tapeMode } from '../lib/io-tape.js';
-import { persistTape, DECISION_TAPE_ENABLED } from './decision-record-store.js';
+import { persistTape, DECISION_TAPE_ENABLED, DECISION_TAPE_MODE, shouldStoreTape } from './decision-record-store.js';
 import { buildSignalDecisionSnapshot, currentVersions, decisionConfig, deriveDecisionRecord } from './decision-record.js';
 import { persistDecisionRecord, persistSnapshot } from './decision-record-store.js';
 import { buildOptionPlanRow, optionLevelsOf, persistOptionPlan, planIdFor, recordOptionPlanEvent, type UnderlyingPlan } from './option-plans.js';
@@ -369,6 +371,20 @@ export async function buildMarketBias(
   // than overwriting each other.
   const cacheKey = `bias_result:${exchange}:${underlying}:${mode}`;
 
+  // Audit 2026-10-18 (OPS-1): with every exchange closed a computation can only refuse MARKET_CLOSED, and it wrote
+  // a decision row saying so (99 on weekends since 1 Oct). The last computed result is returned instead. A replay, or
+  // a call inside a decision clock, always computes; without a cached result it computes as before.
+  if (!isReplaying() && !hasDecisionTime() && !(['NSE', 'BSE', 'MCX'] as const).some((ex) => isMarketOpen(ex, Date.now()))) {
+    const cached = await redis.get(cacheKey).catch(() => null);
+    if (cached) {
+      try {
+        return JSON.parse(cached) as MarketBiasResult;
+      } catch {
+        /* unreadable cache: compute below */
+      }
+    }
+  }
+
   try {
     const result = await pollWithTape(provider, underlying, exchange, mode, cacheKey);
     if (!isReplaying()) serviceHeartbeat('signalEngine');
@@ -406,13 +422,14 @@ async function pollWithTape(provider: MarketDataProvider, underlying: string, ex
     const run = () =>
       runInSnapshotScope(async () => {
         const r = await computeMarketBias(p, underlying, exchange, cacheKey, mode);
-        return { r, snapshotId: currentSnapshotId() };
+        return { r, snapshotId: currentSnapshotId(), minted: scopeTook() };
       });
     return hasDecisionTime() ? run() : withDecisionTime(Date.now(), run);
   };
   if (tapeMode() != null || !DECISION_TAPE_ENABLED) return (await compute(provider)).r;
   const { result, tape } = await runRecording(() => compute(tapedProvider(provider)));
-  if (result.snapshotId) void persistTape(result.snapshotId, tape, result.r);
+  // Audit 2026-10-18 (REPL-1): every poll that minted a paper trade keeps its tape, plus a sample of the rest.
+  if (result.snapshotId && shouldStoreTape(DECISION_TAPE_MODE, result.minted, result.snapshotId)) void persistTape(result.snapshotId, tape, result.r);
   return result.r;
 }
 
@@ -4106,6 +4123,8 @@ async function resolveStickyTradeSetup(
             rrGate: false,
             // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
             realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
+            // COST-3.0 (audit 2026-10-18): this exchange's dated statutory + exchange charges, not the flat 0.2%.
+            statutoryPct: optionStatutoryPct(exchange, decisionNow()),
             // EVIDENCE: the builder's own confidence floor is off too — confidence ranks, it does not refuse.
             ...(INDICATOR_CONFIDENCE_MODE === 'EVIDENCE' ? { confidenceGate: false } : {}),
           // An R:R refusal still carries its option levels (shown for a confirmed setup; never traded).
@@ -4572,6 +4591,8 @@ async function resolveMomentumBreakSetup(ctx: {
           rrGate: false,
           // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
           realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
+          // COST-3.0 (audit 2026-10-18): this exchange's dated statutory + exchange charges, not the flat 0.2%.
+          statutoryPct: optionStatutoryPct(exchange, decisionNow()),
           ...(FNO_VALIDATION
             ? { fnoValidation: { enabled: true, maxCostPctOfPremium: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM, minOptionStopAtr: FNO_VALIDATION_PARAMS.MIN_OPTION_STOP_ATR } }
             : {}),
@@ -5223,6 +5244,8 @@ async function resolveStructureSetup(ctx: {
           rrGate: false,
           // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
           realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
+          // COST-3.0 (audit 2026-10-18): this exchange's dated statutory + exchange charges, not the flat 0.2%.
+          statutoryPct: optionStatutoryPct(exchange, decisionNow()),
           ...(FNO_VALIDATION
             ? {
                 fnoValidation: {
@@ -5352,6 +5375,8 @@ async function planForLifecycle(
       rrGate: false,
       // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
       realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
+      // COST-3.0 (audit 2026-10-18): this exchange's dated statutory + exchange charges, not the flat 0.2%.
+      statutoryPct: optionStatutoryPct(exchange, decisionNow()),
       plan: true,
       ...(FNO_VALIDATION
         ? { fnoValidation: { enabled: true, maxCostPctOfPremium: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM, minOptionStopAtr: FNO_VALIDATION_PARAMS.MIN_OPTION_STOP_ATR, ...(fiveMinute ? { noiseAtrPoints: lc.atr } : {}) } }
@@ -5642,6 +5667,8 @@ async function buildStructurePreview(
           rrGate: false,
           // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
           realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
+          // COST-3.0 (audit 2026-10-18): this exchange's dated statutory + exchange charges, not the flat 0.2%.
+          statutoryPct: optionStatutoryPct(exchange, decisionNow()),
           ...(FNO_VALIDATION
             ? {
                 fnoValidation: {
@@ -5989,6 +6016,8 @@ async function recordTradeSetupGenerated(
       )
       RETURNING id
     `;
+    // A trade minted in this poll (not a late-written row of an earlier mint): the poll keeps its tape (REPL-1).
+    if (rows[0]?.id && at == null) noteScopeTake();
     return rows[0]?.id;
   } catch (err: any) {
     logger.warn({ error: err.message, underlying }, 'Backtesting: failed to record generated trade setup');
@@ -6625,6 +6654,8 @@ function computeShadowModels(
   if (setup.strike == null || !setup.side || setup.entry == null || setup.stopLoss == null || setup.target == null) return null;
   try {
     const leg = findLeg(chain, setup.strike, setup.side);
+    // The live builder's own cost basis (COST-3.0), so the shadow's "live net R" is the live one.
+    const statutoryPct = optionStatutoryPct(chain.exchange, decisionNow());
     const strikeSelection = scoreStrikeCandidates({
       strikes: chain.strikes,
       // The strike actually traded: chain.atmStrike with FNO_VALIDATION off, the delta-band strike with it on.
@@ -6646,6 +6677,7 @@ function computeShadowModels(
       stopLoss: setup.stopLoss,
       target: setup.target,
       lotSize: chain.lotSize,
+      statutoryPct,
     });
     const targetV2 = leg
       ? estimateTargetV2({
@@ -6660,6 +6692,7 @@ function computeShadowModels(
           bid: leg.bid,
           ask: leg.ask,
           lotSize: chain.lotSize,
+          statutoryPct,
         })
       : null;
     return { strikeSelection, execution, targetV2 };
@@ -6701,7 +6734,7 @@ function measureStructureFillCost(chain: OptionChain, lc: LiveLifecycle, side: '
     const strike = traded ?? selected ?? chain.atmStrike;
     const strikeBasis = traded != null ? 'TRADED' : selected != null ? 'SELECTED' : 'ATM_PROXY';
     const leg = findLeg(chain, strike, side);
-    const base = { entry: lc.entry, stop: lc.stop, t1: lc.t1?.price ?? null, atr: lc.atr, costVersion: COST_VERSION };
+    const base = { entry: lc.entry, stop: lc.stop, t1: lc.t1?.price ?? null, atr: lc.atr, costVersion: COST_VERSION, statutoryPct: optionStatutoryPct(chain.exchange, decisionNow()) };
     if (!leg) return measureSetupCost({ ...base, option: null });
     const twoSided = leg.bid > 0 && leg.ask > leg.bid;
     const quotePremium = twoSided ? (leg.bid + leg.ask) / 2 : leg.ltp > 0 ? leg.ltp : null;

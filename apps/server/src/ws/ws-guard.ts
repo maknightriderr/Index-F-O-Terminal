@@ -7,6 +7,9 @@
 //   * token: when WS_AUTH_TOKEN is set, the upgrade must carry ?token= equal
 //     to it (compared in constant time) — the only way in without an allowed
 //     origin (non-browser clients);
+//   * session (audit 2026-10-18, SEC-1): when the API is locked (lib/api-auth.ts
+//     ENFORCED or MISCONFIGURED) the upgrade must carry ?token=<session JWT>
+//     (or the WS_AUTH_TOKEN), and a browser must still come from an allowed origin;
 //   * limits: at most WS_MAX_SUBSCRIPTIONS_PER_CLIENT tokens per client, a
 //     bounded message size, and only well-formed subscription targets.
 // Pure: every check takes its inputs as arguments.
@@ -28,8 +31,17 @@ const sameToken = (a: string, b: string) => {
   return x.length === y.length && timingSafeEqual(x, y);
 };
 
-/** Decide an upgrade: allowed origin, or (when a token is configured) the right token. */
-export function authorizeWsUpgrade(args: { origin: string | undefined; url: string | undefined; allowedOrigins: readonly string[]; token: string | null }): { ok: true } | { ok: false; status: 401 | 403; reason: string } {
+/**
+ * Decide an upgrade: allowed origin, or (when a token is configured) the right token.
+ * With `session.required` (the API is locked) a valid session — or the static token — is needed whatever the origin.
+ */
+export function authorizeWsUpgrade(args: {
+  origin: string | undefined;
+  url: string | undefined;
+  allowedOrigins: readonly string[];
+  token: string | null;
+  session?: { required: boolean; verify: (token: string) => boolean };
+}): { ok: true } | { ok: false; status: 401 | 403; reason: string } {
   const allowed = args.allowedOrigins.map((o) => o.trim().replace(/\/$/, '')).filter(Boolean);
   const origin = args.origin?.trim().replace(/\/$/, '') ?? null;
   let given: string | null = null;
@@ -37,6 +49,12 @@ export function authorizeWsUpgrade(args: { origin: string | undefined; url: stri
     given = new URL(args.url ?? '/', 'http://x').searchParams.get('token');
   } catch {
     given = null;
+  }
+  if (args.session?.required) {
+    if (origin != null && !allowed.includes(origin)) return { ok: false, status: 403, reason: `Origin ${origin} is not allowed.` };
+    if (given == null) return { ok: false, status: 401, reason: 'Session required.' };
+    if (args.session.verify(given) || (args.token != null && sameToken(given, args.token))) return { ok: true };
+    return { ok: false, status: 401, reason: 'Invalid or expired session.' };
   }
   if (args.token) {
     if (given != null && sameToken(given, args.token)) return { ok: true };

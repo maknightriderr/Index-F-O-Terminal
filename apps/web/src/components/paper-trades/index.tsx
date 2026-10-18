@@ -63,7 +63,10 @@ export function PaperTradesPage() {
             <MetricTile label="Win" value={counts.win} tone="ok" />
             <MetricTile label="Loss" value={counts.loss} tone="bad" />
             <MetricTile label="Expired" value={counts.expired} sub="own category, never counted as win or loss" />
-            <MetricTile label="Count in performance" value={counts.includedClosed} sub={`of ${counts.win + counts.loss + counts.expired} closed shown`} />
+            {counts.expiredUntracked > 0 && (
+              <MetricTile label="Expired, untracked" value={counts.expiredUntracked} sub="no exit price was ever recorded (abandoned or tracking lost); never in performance" tone="warn" />
+            )}
+            <MetricTile label="Count in performance" value={counts.includedClosed} sub={`of ${counts.win + counts.loss + counts.expired + counts.expiredUntracked} closed shown`} />
           </MetricGrid>
           {exclusions.length > 0 && (
             <p className="mt-3 text-sm text-[var(--text-secondary)]">

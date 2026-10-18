@@ -17,16 +17,20 @@
 // reconciliation field proves the parts add up to that same number.
 // ============================================================
 
-import { TRADING_COST_MODEL } from '@fno/shared';
+import { TRADING_COST_MODEL, optionChargesFor, optionStatutoryParts } from '@fno/shared';
 import type { OptionChain, TradeSetup } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { insertOnce } from '../lib/insert-once.js';
 import { logger } from '../lib/logger.js';
 import { redis } from '../lib/redis.js';
 import { schemaFileReady } from './ensure-capture-schema.js';
+import { COST_VERSION } from '../config/trading-flags.js';
 
 export const TRADE_MEASUREMENT_MIGRATION = '040_trade_measurement.sql';
-export const COST_RECORD_VERSION = 'COST-1.0';
+// The RECORD FORMAT's version, named apart from the cost MODEL's (COST_VERSION, COST-3.0) so the two never read as one
+// (audit 2026-10-18, DOC-1: stamps said COST-2.0 while records said COST-1.0). COSTREC-1.1: the statutory charges in
+// their parts. Rows before 18 Oct carry 'COST-1.0' (format 1.0).
+export const COST_RECORD_VERSION = 'COSTREC-1.1';
 export const COST_BASIS = 'ESTIMATED_MODEL' as const;
 
 const r4 = (n: number) => Math.round(n * 10_000) / 10_000;
@@ -40,7 +44,10 @@ export interface CostPart {
 }
 
 export interface TradeCostRecord {
+  /** The record format (COSTREC-x). */
   version: string;
+  /** The cost MODEL the figures come from (COST-3.0: the dated per-exchange charges). Absent on records before 18 Oct. */
+  costModel?: string;
   basis: typeof COST_BASIS;
   /** What the quote and sizing inputs were. */
   inputs: { entry: number; stopLoss: number; target: number; bid: number | null; ask: number | null; lotSize: number | null };
@@ -48,6 +55,8 @@ export interface TradeCostRecord {
   spread: CostPart & { source: 'QUOTE' | 'FALLBACK_ASSUMED'; assumedPct: number | null };
   slippage: CostPart & { assumedPct: number };
   statutory: CostPart & { assumedPct: number };
+  /** COST-3.0: the statutory charges in their parts (STT/CTT, exchange, SEBI, stamp, GST on fees) and the schedule used; null = COST-2.0's flat rate. */
+  statutoryParts: { sellTax: CostPart; exchangeTxn: CostPart; sebi: CostPart; stamp: CostPart; gstOnFees: CostPart; exchange: string; effectiveFrom: string } | null;
   brokerage: CostPart & { orders: number; perOrderInr: number; perLotInr: number };
   gstOnBrokerage: CostPart & { gstPct: number; perLotInr: number };
   /** Nothing else is configured in TRADING_COST_MODEL; listed so an addition is visible. */
@@ -75,6 +84,9 @@ export interface CostInput {
   lotSize: number | null;
   /** TradeSetup.estimatedCostPct, for the reconciliation. */
   setupEstimatedCostPct?: number | null;
+  /** COST-3.0: the exchange and instant whose dated charges apply (the live builder's). Absent = COST-2.0's flat rate. */
+  exchange?: string | null;
+  at?: number | null;
 }
 
 /** Pure: the cost of one trade in its parts. Same arithmetic as estimateRoundTripCost (analytics), written out component by component. */
@@ -90,7 +102,11 @@ export function buildCostRecord(i: CostInput): TradeCostRecord | null {
   const part = (perUnit: number): CostPart => ({ perUnit: r4(perUnit), pctOfEntry: r4((perUnit / entry) * 100) });
 
   const slippage = entry * (TRADING_COST_MODEL.slippagePct / 100);
-  const statutory = entry * (TRADING_COST_MODEL.statutoryPct / 100);
+  const parts = i.exchange && i.at != null ? optionStatutoryParts(i.exchange, i.at) : null;
+  const schedule = parts && i.exchange && i.at != null ? optionChargesFor(i.exchange, i.at) : null;
+  const statutoryPct = parts?.total ?? TRADING_COST_MODEL.statutoryPct;
+  const statutory = entry * (statutoryPct / 100);
+  const pctPart = (pct: number) => part(entry * (pct / 100));
   const brokeragePerUnit = lot ? brokerageInr / lot : 0;
   const gstPerUnit = lot ? gstInr / lot : 0;
   const totalPerUnit = spreadPerUnit + slippage + statutory + brokeragePerUnit + gstPerUnit;
@@ -101,11 +117,16 @@ export function buildCostRecord(i: CostInput): TradeCostRecord | null {
   const setupPct = i.setupEstimatedCostPct ?? null;
   return {
     version: COST_RECORD_VERSION,
+    costModel: parts ? COST_VERSION : 'COST-2.0',
     basis: COST_BASIS,
     inputs: { entry, stopLoss, target, bid: i.bid, ask: i.ask, lotSize: lot },
     spread: { ...part(spreadPerUnit), source: quoted ? 'QUOTE' : 'FALLBACK_ASSUMED', assumedPct: quoted ? null : TRADING_COST_MODEL.fallbackSpreadPct },
     slippage: { ...part(slippage), assumedPct: TRADING_COST_MODEL.slippagePct },
-    statutory: { ...part(statutory), assumedPct: TRADING_COST_MODEL.statutoryPct },
+    statutory: { ...part(statutory), assumedPct: r4(statutoryPct) },
+    statutoryParts:
+      parts && schedule
+        ? { sellTax: pctPart(parts.sellTax), exchangeTxn: pctPart(parts.exchangeTxn), sebi: pctPart(parts.sebi), stamp: pctPart(parts.stamp), gstOnFees: pctPart(parts.gstOnFees), exchange: i.exchange!, effectiveFrom: schedule.effectiveFrom }
+        : null,
     brokerage: { ...part(brokeragePerUnit), orders: brokerageOrders, perOrderInr: TRADING_COST_MODEL.brokeragePerOrder, perLotInr: brokerageInr },
     gstOnBrokerage: { ...part(gstPerUnit), gstPct: TRADING_COST_MODEL.gstPct, perLotInr: r2(gstInr) },
     otherConfigured: [],
@@ -129,7 +150,7 @@ export function legOfSetup(chain: Pick<OptionChain, 'strikes'>, setup: Pick<Trad
 }
 
 /** Pure: the record for a minted naked-long setup and the chain it was priced from. Null for anything it cannot describe. */
-export function costRecordForSetup(setup: TradeSetup, chain: Pick<OptionChain, 'strikes' | 'lotSize'>): TradeCostRecord | null {
+export function costRecordForSetup(setup: TradeSetup, chain: Pick<OptionChain, 'strikes' | 'lotSize'>, at?: { exchange: string; at: number }): TradeCostRecord | null {
   if (!setup.available || (setup.structureType ?? 'NAKED_LONG') !== 'NAKED_LONG') return null;
   if (setup.entry == null || setup.stopLoss == null || setup.target == null) return null;
   const leg = legOfSetup(chain, setup);
@@ -141,6 +162,8 @@ export function costRecordForSetup(setup: TradeSetup, chain: Pick<OptionChain, '
     ask: leg ? Number(leg.ask) : null,
     lotSize: setup.positionSize?.lotSize ?? chain.lotSize ?? null,
     setupEstimatedCostPct: setup.estimatedCostPct ?? null,
+    exchange: at?.exchange ?? null,
+    at: at?.at ?? null,
   });
 }
 
@@ -220,7 +243,7 @@ export function recordTradeCosts(args: {
   chain: Pick<OptionChain, 'strikes' | 'lotSize'>;
 }): void {
   try {
-    const record = costRecordForSetup(args.setup, args.chain);
+    const record = costRecordForSetup(args.setup, args.chain, { exchange: args.exchange, at: args.mintedAt });
     if (!record) return;
     void persistTradeCostRecord({ signalId: args.signalId, symbol: args.symbol, exchange: args.exchange, mode: args.mode, source: args.source, mintedAt: args.mintedAt, record });
   } catch (err: any) {

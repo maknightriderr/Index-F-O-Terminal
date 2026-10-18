@@ -84,8 +84,19 @@ export function formatHold(minutes: number | null | undefined): string {
   return `${h} h ${Math.round(minutes % 60)} min`;
 }
 
-/** A rate with its denominator: "76.9% (50 of 65)"; an em dash when there is no denominator. */
+/**
+ * A share as a percentage, FLOORED (audit 2026-10-18, UI-1): 313 of 314 reads 99.6%, never a rounded-up 100.0% —
+ * 100% only when it is complete.
+ */
+export function formatShare(numerator: number, denominator: number, decimals = 1): string {
+  if (!(denominator > 0)) return MISSING;
+  if (numerator === denominator) return `${(100).toFixed(decimals)}%`;
+  const f = 10 ** decimals;
+  return `${(Math.floor((numerator / denominator) * 100 * f) / f).toFixed(decimals)}%`;
+}
+
+/** A rate with its denominator: "76.9% (50 of 65)" (floored, formatShare); an em dash when there is no denominator. */
 export function formatRate(numerator: number, denominator: number, decimals = 1): string {
   if (!(denominator > 0)) return MISSING;
-  return `${((numerator / denominator) * 100).toFixed(decimals)}% (${numerator} of ${denominator})`;
+  return `${formatShare(numerator, denominator, decimals)} (${numerator} of ${denominator})`;
 }

@@ -130,8 +130,7 @@ CREATE TABLE IF NOT EXISTS oi_snapshots (
   vega DECIMAL(8,4)
 );
 
-CREATE INDEX IF NOT EXISTS idx_oi_symbol ON oi_snapshots(symbol, time DESC);
-CREATE INDEX IF NOT EXISTS idx_oi_strike ON oi_snapshots(symbol, strike, option_type, time DESC);
+-- idx_oi_symbol and idx_oi_strike removed 2026-10-18 (audit OPS-1): 0 scans in a month of production use; 043 drops them.
 
 -- --- Futures Snapshots ---
 CREATE TABLE IF NOT EXISTS futures_snapshots (

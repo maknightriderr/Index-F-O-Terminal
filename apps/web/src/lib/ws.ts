@@ -12,10 +12,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSystemHealthStore } from '@/stores';
 import type { Tick, Exchange, ExchangeSegment } from '@fno/shared';
+import { sessionToken } from './session';
 
 // Phase 7: the server checks the origin; when WS_AUTH_TOKEN is set there, the same value goes here.
+// Audit 2026-10-18 (SEC-1): a locked API locks the feed too — the terminal session token goes in ?token=, read at
+// every connect so a sign-in (or a new token) is used by the next connection.
 const WS_TOKEN = process.env.NEXT_PUBLIC_WS_AUTH_TOKEN;
-const WS_URL = (process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:4000') + '/ws' + (WS_TOKEN ? `?token=${encodeURIComponent(WS_TOKEN)}` : '');
+const WS_BASE = (process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:4000') + '/ws';
+
+export function marketSocketUrl(session: string | null = sessionToken()): string {
+  const token = session ?? WS_TOKEN ?? null;
+  return WS_BASE + (token ? `?token=${encodeURIComponent(token)}` : '');
+}
 
 export interface WsSubscriptionTarget {
   token: string;
@@ -51,11 +59,13 @@ class MarketWebSocketClient {
   private healthHandlers = new Set<HealthHandler>();
   private activeSubscriptions = new Map<string, WsSubscriptionTarget>();
   private lastMessageAt = 0;
+  private stopped = false;
 
   connect(): void {
+    this.stopped = false;
     if (this.socket && this.socket.readyState <= WebSocket.OPEN) return;
 
-    const socket = new WebSocket(WS_URL);
+    const socket = new WebSocket(marketSocketUrl());
     this.socket = socket;
 
     socket.onopen = () => {
@@ -120,10 +130,10 @@ class MarketWebSocketClient {
    * do nothing. Forces a fresh connection whenever the socket isn't OPEN,
    * or hasn't received anything in a while despite claiming to be OPEN.
    */
-  reconnectIfStale(): void {
+  reconnectIfStale(force = false): void {
     const notOpen = !this.socket || this.socket.readyState !== WebSocket.OPEN;
     const stale = this.lastMessageAt > 0 && Date.now() - this.lastMessageAt > STALE_CONNECTION_MS;
-    if (!notOpen && !stale) return;
+    if (!force && !notOpen && !stale) return;
 
     this.socket?.close();
     this.socket = null;
@@ -135,8 +145,19 @@ class MarketWebSocketClient {
     this.connect();
   }
 
+  /** Signed out: close and stay closed until the next connect(). */
+  stop(): void {
+    this.stopped = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.socket?.close();
+    this.socket = null;
+  }
+
   private scheduleReconnect(): void {
-    if (this.reconnectTimer) return;
+    if (this.stopped || this.reconnectTimer) return;
     const delay = Math.min(1000 * 2 ** this.reconnectAttempts, 30000);
     this.reconnectAttempts++;
     this.reconnectTimer = setTimeout(() => {
@@ -154,6 +175,16 @@ let client: MarketWebSocketClient | null = null;
 function getClient(): MarketWebSocketClient {
   if (!client) client = new MarketWebSocketClient();
   return client;
+}
+
+/** After a sign-in: reconnect now with the new session token instead of waiting out the back-off. */
+export function restartMarketSocket(): void {
+  client?.reconnectIfStale(true);
+}
+
+/** Signed out (or the session expired): close the feed and stop retrying until the terminal mounts again. */
+export function stopMarketSocket(): void {
+  client?.stop();
 }
 
 /** Connects once and keeps System Health's WS/data-freshness state live. Mount at the app shell level. */

@@ -55,6 +55,11 @@ export interface TradeCounts {
   win: number;
   loss: number;
   expired: number;
+  /**
+   * EXPIRED with no exit price (audit 2026-10-18, REC-2): the abandoned sweep's 47 rows of 27 Aug - 17 Sep and the
+   * TRACKING_LOST voids. Counted apart so the headline "Expired" is only expiries that have a recorded exit.
+   */
+  expiredUntracked: number;
   /** Closed trades that count in performance. */
   includedClosed: number;
   /** Closed trades that do not, by reason. */
@@ -63,7 +68,7 @@ export interface TradeCounts {
 
 /** Counts of exactly the rows given (the denominators shown beside the table). */
 export function countTrades(trades: readonly PaperTradeView[]): TradeCounts {
-  const c: TradeCounts = { shown: trades.length, open: 0, openTracked: 0, openUntracked: 0, win: 0, loss: 0, expired: 0, includedClosed: 0, excluded: {} };
+  const c: TradeCounts = { shown: trades.length, open: 0, openTracked: 0, openUntracked: 0, win: 0, loss: 0, expired: 0, expiredUntracked: 0, includedClosed: 0, excluded: {} };
   for (const t of trades) {
     if (t.state === 'OPEN') {
       c.open++;
@@ -73,6 +78,7 @@ export function countTrades(trades: readonly PaperTradeView[]): TradeCounts {
     }
     if (t.state === 'WIN') c.win++;
     else if (t.state === 'LOSS') c.loss++;
+    else if (t.exitPrice == null) c.expiredUntracked++;
     else c.expired++;
     if (t.includedInPerformance) c.includedClosed++;
     else {

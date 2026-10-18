@@ -9,6 +9,7 @@ import { useFeedSummary } from '@/lib/use-feed-summary';
 import { formatArrowPercent, formatIstDateTime } from '@/lib/format';
 import { FreshnessBadge } from '@/components/ui/status-badge';
 import { AlertBell } from './alert-bell';
+import { SignOutButton } from '@/components/auth/sign-out-button';
 
 // ============================================================
 // TOP BAR — the two headline indices, one honest data-freshness pill, alerts, theme, clock
@@ -50,6 +51,7 @@ export function TopBar() {
 
       <AlertBell />
       <ThemeSwitcher />
+      <SignOutButton />
 
       <div className="shrink-0 text-right font-mono text-sm tabular-nums text-[var(--text-secondary)]" style={{ fontFamily: "'JetBrains Mono', monospace" }} aria-label={`Current time ${clock} IST`}>
         <span className="sm:hidden">{clock.slice(0, 5)}</span>

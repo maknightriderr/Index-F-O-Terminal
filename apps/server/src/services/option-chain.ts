@@ -332,6 +332,9 @@ async function buildOptionChainUncached(
       moneyness: classifyStrike(strike, spotPrice, optionType, strikeInterval),
       greeksSource: sanitized ? 'BROKER' : 'CALCULATED',
       timestamp: now,
+      // Audit 2026-10-18 (DATA-1): the exchange's own quote times, only when the broker gave them.
+      ...(quote?.exchangeTimestamp != null ? { exchangeTimestamp: quote.exchangeTimestamp } : {}),
+      ...(quote?.lastTradeTimestamp != null ? { lastTradeTimestamp: quote.lastTradeTimestamp } : {}),
     };
   };
 

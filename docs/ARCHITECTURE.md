@@ -297,7 +297,7 @@ Runs on the opportunity census's post-session tick (no new service); grades only
 - **Measurement fixes**: `returnedToEntryOf` (post-exit), `sessionEndExitTime` (session-end exits stamped at the close), `segmentOf` INDEX / STOCK / MCX, order-flow ALL_TOUCHED row, `costForDiagnostics` (no cost in R stored for a quote whose spread exceeds 50% of mid; `measureSetupCost` itself unchanged).
 - Write-up with every test and comparison: `docs/AUDIT-FIXES-2026-10-15.md`.
 
-## 8. Background services (20) — supervised (Phase 6)
+## 8. Background services (22) — supervised (Phase 6)
 
 `ServiceSupervisor` (lib/service-supervisor.ts) starts, watches and stops every service. Each registers
 {name, critical, startupTimeoutMs, heartbeatIntervalMs}. States STARTING → RUNNING ⇄ DEGRADED → FAILED →
@@ -311,7 +311,13 @@ Critical: tradeSetupPriceMonitor, signalEngine, setupLifecycle — any not RUNNI
 | Registration | Critical | Kind | Notes |
 |---|---|---|---|
 | alertScanner, patternScanner, institutionalFlowScanner, marketScanner, fiiDiiTracker, abandonedSetupSweep, oiCloseSnapshot, cacheWarmer, strategyTracker, positionalStockScan, backgroundBiasEvaluator, holidayCalendarCheck, systemLearningAudit | no | TIMER | heartbeat = own interval |
-| marketStateCapture, missedWinnerAudit, setupEventsGrading, opportunityCensus, barArchive, dailyReview | no | TIMER | start after the capture schema check |
+| marketStateCapture, missedWinnerAudit, setupEventsGrading, opportunityCensus, barArchive, dailyReview, recordReconciliation | no | TIMER | start after the capture schema check |
+| opsMonitor | no | TIMER | starts after Redis is rebuilt; functional checks every minute (audit OBS-1) |
+
+Boot hold (audit REL-1): after a boot while any exchange trades, the scanners, decision timers and archive jobs
+(alertScanner, patternScanner, institutionalFlowScanner, marketScanner, oiCloseSnapshot, cacheWarmer, strategyTracker,
+positionalStockScan, backgroundBiasEvaluator, marketStateCapture, missedWinnerAudit, setupEventsGrading,
+opportunityCensus, barArchive) wait 5 minutes; the price monitor subscribes the open trades' tokens first.
 | tradeSetupPriceMonitor | **yes** | TIMER | starts after Redis is rebuilt from PostgreSQL; its sweep reports its own outcome |
 | signalEngine (extra) | **yes** | COMPONENT | the bias / signal computation has no single service among the 20 (browser polls, marketScanner, backgroundBiasEvaluator all run it); heartbeat = a completed computation, expected only in session (10 min) |
 | setupLifecycle (extra) | **yes** | COMPONENT | the structure lifecycle advance runs inside the signal computation; heartbeat = a completed advance (20 min, in session) |
@@ -325,7 +331,7 @@ recorded one; a cached trade with no PG row yet is kept for the existing backfil
 
 Shutdown: supervisor + every service timer → server.close → WS disconnect → logout → sql.end → redis.disconnect.
 
-The 20 services:
+The 22 services:
 
 | Service | Frequency | Role |
 |---|---|---|
@@ -340,23 +346,28 @@ The 20 services:
 | cacheWarmer | in-session | FNO scan cache |
 | strategyTracker | periodic | live strategy metrics |
 | positionalStockScan | periodic | positional stock opportunities |
-| backgroundBiasEvaluator | 2 min | SENSEX, CRUDEOIL, GOLD bias / slot |
+| backgroundBiasEvaluator | 2 min | SENSEX, CRUDEOIL, GOLD, SILVER, NATURALGAS bias / slot |
 | marketStateCapture | periodic | market-state capture tables |
 | missedWinnerAudit | periodic | refusals graded against the price path |
 | setupEventsGrading | periodic | setup_events grading |
 | opportunityCensus | post-session | opportunities vs setups |
 | barArchive | 30 min, only while NSE, BSE and MCX are all closed | closed 15m + daily bars into `bar_archive` (research only) |
 | dailyReview | 5 min; acts 20 min to 4 h after the NSE and MCX closes | one end-of-session paper-trade review per session to Telegram + `daily-review:history` (measurement only) |
+| recordReconciliation | 15 min; acts once a day 01:00–07:00 IST | every closed option plan against its trade row; a new disagreement alerts once (read-only) |
+| opsMonitor | 1 min | open trades without ticks, feed down, silent contract, engine not computing, open past expiry, record mismatch → DEGRADED + one alert per incident |
 | holidayCalendarCheck | daily | holiday calendar populated |
 | systemLearningAudit | daily (EOD) | learning detectors (observation only) |
 
 ## 9. REST API
 
-`POST /api/auth/login|logout`, `GET /api/auth/status`, `GET /api/instruments/search|:token`, `GET /api/market/bias/:symbol` (full MarketBias incl. `setupWatch`), `GET /api/market/history|quote`, `GET /api/option-chain/:symbol`, `GET /api/futures/:symbol`, `POST/GET/DELETE /api/alerts`, `POST /api/ai-assistant/chat|explain`, `GET /api/ai-assistant/daily-review`, `GET /api/institutional-flow`, `POST/GET /api/backtesting/*`, `GET /api/learning/*`, `GET /api/loss-attribution`, `GET /api/structure/:symbol`, `GET /api/market-scanner/scan`, `GET /api/strategy-scanner/scan`, `GET /api/fii-dii`, `GET /api/news/:symbol`, `GET /api/corporate-actions`, `GET /api/diagnostics/*` (summary, rejections, census, grades, leakage, performance, opportunity, major-moves, triggers, shadow, versions, setup-outcomes, scorecard, signal-quality, gate-validation, portfolio-risk), `GET /api/health`, `GET /api/health/memory` (24 h of 15-minute process memory samples).
+Every route needs a terminal session (`Authorization: Bearer <jwt>` from `POST /api/session`; `/ws` takes `?token=`) except `GET /api/health` (status only without one), `GET /api/health/memory`, `GET /api/health/ready` (Railway's health check: DB, Redis, schema) and `GET|POST /api/session` (audit SEC-1, lib/api-auth.ts).
+
+`GET|POST /api/session`, `GET /api/auth/status`, `GET /api/instruments/search|:token`, `GET /api/market/bias-snapshot/:symbol` (read-only), `GET /api/market/history|quote`, `GET /api/option-chain/:symbol`, `GET /api/futures/:symbol`, `POST/GET/DELETE /api/alerts`, `POST /api/ai-assistant/chat|explain`, `GET /api/ai-assistant/daily-review`, `GET /api/institutional-flow`, `POST/GET /api/backtesting/*`, `GET /api/learning/*`, `GET /api/loss-attribution`, `GET /api/structure/:symbol`, `GET /api/market-scanner/scan`, `GET /api/strategy-scanner/scan`, `GET /api/fii-dii`, `GET /api/news/:symbol`, `GET /api/corporate-actions`, `GET /api/diagnostics/*` (summary, rejections, census, grades, leakage, performance, opportunity, major-moves, triggers, shadow, versions, setup-outcomes, scorecard, signal-quality, gate-validation, portfolio-risk, reconciliation), `GET /api/health`, `GET /api/health/memory` (24 h of 15-minute process memory samples), `GET /api/health/ready`.
 
 Decision research view (Phase 8): `GET /api/diagnostics/decisions?symbol=&limit=` (recent snapshotted decisions) and `GET /api/diagnostics/decision/:snapshotId[?replay=1]` — input snapshot summary, per-input dataQuality (asOf, decisionBarTime, ageMs, source, status), market state, events, trigger candidates + parentId, common metrics, option candidates (+ every strike of each persisted plan, rejected ones with stage and reason), arbitration (pre-build ranking + the live slot rows with role, rank, slot decision and the criterion each loser lost on), final status, outcome (setup_events grading of the rows the decision produced), every version field; replay re-derives offline and compares. Shown in Signal Diagnostics → "Decision Record". Also `GET /api/diagnostics/feed-gaps` (Phase 5).
 
 Removed 2026-10-05: `GET /api/diagnostics/rr-recovery` (it measured recovery to 1.50R; with no R:R gate nothing recovers).
+Removed 2026-10-18 (audit SEC-1, SEC-2): `POST /api/auth/login|logout` (anyone could open or end the broker session) and `GET /api/market/bias/:symbol` (a GET that ran the decision engine).
 
 ## 10. Frontend pages
 
@@ -455,3 +466,4 @@ Observation only: `startSystemLearningAudit` → `learningDetectors.ts` → `lea
 - **2026-10-16 — Free AI providers.** `lib/llm.ts` replaces `lib/anthropic.ts`: the AI assistant and institutional-flow commentary try Gemini (free tier), then Groq (free tier), then Claude, each only when its key is set (`GEMINI_API_KEY`, `GROQ_API_KEY`, `ANTHROPIC_API_KEY`; order via `AI_PROVIDERS`). Replies name the provider. Still read-only and outside the decision path (Phase 7 boundary test unchanged).
 - **2026-10-16 — jemalloc for the backend.** A day of memory samples (15 Oct, `MALLOC_ARENA_MAX=2` active): JavaScript heap ~100 MB used / ~110 MB reserved, buffers ~5 MB, yet resident memory rose from 128 MB at boot to ~2.0 GB by the NSE close and held flat overnight. The memory was native and retained by glibc malloc after the session's bursts (every response is gzip-compressed through zlib); the arena cap did not change it. `nixpacks.toml` installs `libjemalloc2`; the Railway variable `LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2` loads it (a missing library only warns). `/api/health/memory` reports the active `allocator`.
 - **2026-10-16 — AI explanations, end-of-session review, floating assistant.** `POST /api/ai-assistant/explain` and the "Why this trade?" / "Why no trade?" buttons; the `dailyReview` service (20 services) with one Telegram note per session; the assistant moved from a sidebar page to a floating panel on every page. All read-only: the two AI modules are inside the Phase 7 boundary, and no trading code changed.
+- **2026-10-18 — Audit fixes, Part A (A1–A13).** Terminal sign-in on every route and `/ws` (SEC-1); the engine-running GET removed (SEC-2); lost trades swept in every mode, a plan's recorded close recovered (LIFE-1); nightly plan-vs-trade reconciliation (REC-1, `recordReconciliation`); exchange quote times and a shadow-only `STALE_QUOTE` measurement (DATA-1); restart safety: boot subscription, boot hold, `/api/health/ready` (REL-1); functional health and alerts (OBS-1, `opsMonitor`; 22 services); SILVER and NATURALGAS evaluated (COV-1); `DECISION_TAPE=TAKE` and `042_config_registry.sql` (REPL-1); COST-3.0 dated per-exchange charges and GOLD/GOLDM lot multipliers (COST-1); priced before unpriced in arbitration (ARB-1); UI labels (UI-1); effective flags, `NO_TARGET`, COSTREC-1.1, gate-chain drift test (DOC-1); untracked expiries apart, reopen repair removed (REC-2); `043_oi_storage.sql`: unused indexes dropped, lossless OI archive past 60 days, no evaluation with every exchange closed (OPS-1). Strategy fingerprints and the 316 golden snapshots unchanged; the full-replay fingerprint moved for COST-3.0 only (cost fields). Details: `docs/AUDIT-FIXES-2026-10-18.md`.

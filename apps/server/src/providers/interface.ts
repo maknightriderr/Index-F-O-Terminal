@@ -86,7 +86,12 @@ export interface ProviderQuote {
   bidQty?: number;
   askQty?: number;
   depth?: { buy: QuoteDepthLevel[]; sell: QuoteDepthLevel[] };
+  /** When the server received this quote (epoch ms). */
   timestamp: number;
+  /** When the EXCHANGE published it (Angel One FULL-mode exchFeedTime), epoch ms. Absent when the broker did not say. */
+  exchangeTimestamp?: number;
+  /** When the last trade happened (exchTradeTime), epoch ms. Absent when the broker did not say. */
+  lastTradeTimestamp?: number;
 }
 
 // --- WebSocket Connection ---

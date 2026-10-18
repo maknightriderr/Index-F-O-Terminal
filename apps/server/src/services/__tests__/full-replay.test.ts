@@ -80,6 +80,8 @@ vi.mock('../decision-record-store.js', async () => {
   const { encode, decode } = await import('../../lib/io-tape.js');
   return {
     DECISION_TAPE_ENABLED: true,
+    DECISION_TAPE_MODE: 'ALL',
+    shouldStoreTape: () => true,
     persistSnapshot: async (s: any) => ((stored.snap = s), true),
     persistDecisionRecord: async () => true,
     persistTape: async (_id: string, tape: any, live: any) => {
@@ -182,13 +184,17 @@ describe('full replay of the real decision path', () => {
   // reproduced exactly with ORDER_BLOCK_MODE=SHADOW OF1_TRADING=false). With
   // OB1 / OF1 paper-trading on, the decision must still be identical; only the
   // logic stamp gains its +ob1-paper.1 / +of1-paper.1 suffix.
+  // COST-3.0 (2026-10-18, audit COST-1) moved it deliberately from 3fc2838a0e7fc273: NSE's dated charges (0.237% of
+  // premium, STT 0.15% since 1 Apr 2026) replace the flat 0.2%, so the estimated cost reads 1.82% instead of 1.79%.
+  // Diffed field by field: estimatedCostPct, the F&O record's costPct and the reason text only — the same F3 trade,
+  // strike, stop and target.
   it('the live decision is identical to main (end-to-end fingerprint, logic stamps aside)', async () => {
     const { stripVolatile } = await import('../full-replay.js');
     const { createHash } = await import('node:crypto');
     const noStamp = JSON.parse(JSON.stringify(live, (k, v) => (k === 'logicVersion' || k === 'logic' ? undefined : v)));
     const fp = createHash('sha256').update(JSON.stringify(stripVolatile(noStamp))).digest('hex').slice(0, 16);
     if (process.env.PRINT_FINGERPRINT) console.log(`FP e2e '${fp}'`);
-    expect(fp).toBe('3fc2838a0e7fc273');
+    expect(fp).toBe('fd67cf7bc29d204b');
     expect(live.tradeSetup).toMatchObject({ available: true, strategy: 'STRUCTURE', strike: 24950, researchTrigger: 'F3' });
   });
 

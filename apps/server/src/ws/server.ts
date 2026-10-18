@@ -7,7 +7,8 @@
 // One connection. Ticks are fanned out only to clients that
 // asked for that token.
 //
-// Phase 7: upgrades are authorised (allowed origin and/or WS_AUTH_TOKEN),
+// Phase 7: upgrades are authorised (allowed origin and/or WS_AUTH_TOKEN; since
+// audit 2026-10-18 also a terminal session when the API is locked),
 // messages are bounded and validated, and each client may hold at most
 // WS_MAX_SUBSCRIPTIONS_PER_CLIENT tokens (ws-guard.ts).
 // ============================================================
@@ -20,6 +21,7 @@ import { SubscriptionManager, type SubscriptionTarget } from '../lib/subscriptio
 import type { Tick } from '@fno/shared';
 import { config } from '../lib/config.js';
 import { WS_MAX_PAYLOAD_BYTES, admitSubscriptions, authorizeWsUpgrade, parseMaxSubscriptions, validTargets } from './ws-guard.js';
+import { authMode, verifySession, type ApiAuthConfig } from '../lib/api-auth.js';
 
 const MAX_SUBSCRIPTIONS_PER_CLIENT = parseMaxSubscriptions(process.env.WS_MAX_SUBSCRIPTIONS_PER_CLIENT);
 const WS_AUTH_TOKEN = process.env.WS_AUTH_TOKEN?.trim() || null;
@@ -33,14 +35,17 @@ const HEALTH_INTERVAL_MS = 5000;
 
 export function createMarketWebSocketServer(
   httpServer: Server,
-  subscriptionManager: SubscriptionManager
+  subscriptionManager: SubscriptionManager,
+  apiAuth: ApiAuthConfig
 ): WebSocketServer {
+  // A locked API (ENFORCED, or MISCONFIGURED = nobody gets in) locks the feed too.
+  const session = { required: authMode(apiAuth).mode !== 'OPEN_DEV', verify: (token: string) => verifySession(token, apiAuth) };
   const wss = new WebSocketServer({
     server: httpServer,
     path: '/ws',
     maxPayload: WS_MAX_PAYLOAD_BYTES,
     verifyClient: (info, done) => {
-      const verdict = authorizeWsUpgrade({ origin: info.origin, url: info.req.url, allowedOrigins: config.cors.origins, token: WS_AUTH_TOKEN });
+      const verdict = authorizeWsUpgrade({ origin: info.origin, url: info.req.url, allowedOrigins: config.cors.origins, token: WS_AUTH_TOKEN, session });
       if (verdict.ok) return done(true);
       logger.warn({ origin: info.origin, reason: verdict.reason }, 'WS upgrade refused');
       done(false, verdict.status, verdict.reason);

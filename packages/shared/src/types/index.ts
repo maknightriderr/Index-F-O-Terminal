@@ -170,7 +170,10 @@ export interface MarketQuote {
   changeOi?: number;
   bid?: number;
   ask?: number;
+  /** When the server fetched this quote (epoch ms). */
   timestamp: number;
+  /** When the EXCHANGE published it (epoch ms; audit 2026-10-18). After the close this is the last close, not the fetch. */
+  exchangeTimestamp?: number;
 }
 
 // --- Option Chain ---
@@ -219,7 +222,12 @@ export interface OptionChainLeg {
   moneyness: 'ITM' | 'ATM' | 'OTM';
   /** Greeks/IV source: broker-provided, or internally calculated when the broker had none. */
   greeksSource: 'BROKER' | 'CALCULATED';
+  /** When the server fetched this leg's quote (epoch ms). */
   timestamp: number;
+  /** When the EXCHANGE published that quote (epoch ms; audit 2026-10-18, DATA-1). Absent when the broker did not say. */
+  exchangeTimestamp?: number;
+  /** When this contract last traded (epoch ms). Absent when the broker did not say. */
+  lastTradeTimestamp?: number;
 }
 
 export interface OptionChain {

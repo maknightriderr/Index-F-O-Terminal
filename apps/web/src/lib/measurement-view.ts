@@ -11,7 +11,7 @@
 // ============================================================
 
 import type { Tally } from './use-measurement';
-import { formatNumber, formatR, MISSING } from './format';
+import { formatNumber, formatR, formatShare, MISSING } from './format';
 
 /** Below this many closed trades a group is a sample, not evidence. */
 export const SMALL_SAMPLE_BELOW = 30;
@@ -81,12 +81,20 @@ export function displayTally(t: Tally): TallyDisplay {
 }
 
 /** The cutoff and versions the server reports, as labelled lines. Nothing is hardcoded. */
-export function reliabilityLines(r: { measurementsReliableFrom?: string; tradesSinceReliable?: number; withCostRecord?: number; costRecordCoveragePct?: number | null } | undefined) {
+export function reliabilityLines(r: { measurementsReliableFrom?: string; tradesSinceReliable?: number; eligibleSinceReliable?: number; withCostRecord?: number; costRecordCoveragePct?: number | null } | undefined) {
   if (!r) return [] as Array<[string, string]>;
   return [
     ['Measurement-reliable from', r.measurementsReliableFrom ? new Date(r.measurementsReliableFrom).toLocaleString('en-GB', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' }) + ' IST' : MISSING],
     ['Trades minted since', r.tradesSinceReliable != null ? String(r.tradesSinceReliable) : MISSING],
     ['of which with a cost record', r.withCostRecord != null ? String(r.withCostRecord) : MISSING],
-    ['Cost record coverage', r.costRecordCoveragePct != null ? `${formatNumber(r.costRecordCoveragePct, 1)}%` : 'not yet measurable (no trade in the period)'],
+    // Over the ELIGIBLE trades (the server's own denominator), so "313 of 314" never sits beside an unexplained 100.0%.
+    [
+      'Cost record coverage',
+      r.eligibleSinceReliable != null && r.withCostRecord != null
+        ? `${formatShare(r.withCostRecord, r.eligibleSinceReliable)} of eligible trades (${r.withCostRecord} of ${r.eligibleSinceReliable})${r.tradesSinceReliable != null && r.tradesSinceReliable > r.eligibleSinceReliable ? `; ${r.tradesSinceReliable - r.eligibleSinceReliable} not eligible` : ''}`
+        : r.costRecordCoveragePct != null
+          ? `${formatNumber(r.costRecordCoveragePct, 1)}%`
+          : 'not yet measurable (no trade in the period)',
+    ],
   ] as Array<[string, string]>;
 }

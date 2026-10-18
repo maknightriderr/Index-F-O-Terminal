@@ -53,6 +53,13 @@ export interface InputTimestamps {
   iv: number | null;
   greeks: number | null;
   volume: number | null;
+  /**
+   * Audit 2026-10-18 (DATA-1): the EXCHANGE's own times for that option quote (Angel One FULL mode). The fields
+   * above are the server's fetch times, so a quote the exchange published minutes earlier looked fresh. Present
+   * only when the broker gave them.
+   */
+  optionExchange?: number | null;
+  optionLastTrade?: number | null;
 }
 
 const validTs = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null);
@@ -66,10 +73,12 @@ const validTs = (v: unknown): number | null => (typeof v === 'number' && Number.
  */
 export function inputTimestampsFrom(
   chain: { timestamp?: number | null } | null | undefined,
-  leg: { timestamp?: number | null } | null | undefined
+  leg: { timestamp?: number | null; exchangeTimestamp?: number | null; lastTradeTimestamp?: number | null } | null | undefined
 ): InputTimestamps {
   const chainTs = validTs(chain?.timestamp);
   const legTs = validTs(leg?.timestamp);
+  const exchangeTs = validTs(leg?.exchangeTimestamp);
+  const lastTradeTs = validTs(leg?.lastTradeTimestamp);
   return {
     underlyingQuote: chainTs,
     optionQuote: legTs,
@@ -78,15 +87,74 @@ export function inputTimestampsFrom(
     iv: legTs,
     greeks: legTs,
     volume: legTs,
+    ...(exchangeTs != null ? { optionExchange: exchangeTs } : {}),
+    ...(lastTradeTs != null ? { optionLastTrade: lastTradeTs } : {}),
   };
 }
 
-/** Seconds between the OLDEST input and the decision. Null when no input carried a timestamp. */
+const RECEIVED_FIELDS = ['underlyingQuote', 'optionQuote', 'oi', 'pcr', 'iv', 'greeks', 'volume'] as const;
+
+/**
+ * Seconds between the OLDEST input and the decision, on the server's receive times (as recorded since Phase 1, so
+ * rows stay comparable). Null when no input carried a timestamp. The exchange-time age is exchangeQuoteAgeSeconds.
+ */
 export function signalAgeSeconds(decidedAt: number, timestamps: InputTimestamps): number | null {
-  const all = Object.values(timestamps).filter((v): v is number => v != null);
+  const all = RECEIVED_FIELDS.map((k) => timestamps[k]).filter((v): v is number => v != null);
   if (all.length === 0) return null;
   const oldest = Math.min(...all);
   return Math.max(0, Math.round((decidedAt - oldest) / 10) / 100);
+}
+
+/**
+ * Seconds from when the EXCHANGE published the option quote to the decision. Deliberately NOT clamped: a negative
+ * age means the server clock is behind the exchange's, and hiding that is how the old clamp made skew invisible.
+ * Null when the broker gave no exchange time.
+ */
+export function exchangeQuoteAgeSeconds(decidedAt: number, timestamps: InputTimestamps | null | undefined): number | null {
+  const ex = timestamps?.optionExchange;
+  return ex != null ? Math.round((decidedAt - ex) / 10) / 100 : null;
+}
+
+// --- STALE_QUOTE (audit 2026-10-18, DATA-1): measured, never enforced ---
+// The pre-registered limit is 120 s of exchange age on the option quote a decision used. SHADOW (the default)
+// writes a STALE_QUOTE gate-diagnostic row for every recorded decision that has an exchange time; OFF writes none.
+// There is deliberately no ENFORCE yet: refusing trades is a strategy change, made only once the shadow rows show
+// what it would have refused and how those trades did.
+
+export type StaleQuoteMode = 'SHADOW' | 'OFF';
+export function parseStaleQuoteMode(raw: string | undefined): StaleQuoteMode {
+  return raw?.trim().toUpperCase() === 'OFF' ? 'OFF' : 'SHADOW';
+}
+export const STALE_QUOTE_MODE: StaleQuoteMode = parseStaleQuoteMode(process.env.STALE_QUOTE_GATE);
+export const STALE_QUOTE_MAX_AGE_S = envNumber('STALE_QUOTE_MAX_AGE_S', 120);
+/** An exchange time this far AHEAD of the server clock is recorded as clock skew. */
+const CLOCK_SKEW_S = 5;
+
+/** The STALE_QUOTE shadow row: PASS / FAIL on the exchange age; NOT_EVALUATED without an exchange time. Never deciding. */
+export function staleQuoteDiagnostic(decidedAt: number, timestamps: InputTimestamps | null | undefined, maxAgeS: number = STALE_QUOTE_MAX_AGE_S): GateDiagnostic {
+  const age = exchangeQuoteAgeSeconds(decidedAt, timestamps);
+  const status = age == null ? 'NOT_EVALUATED' : age > maxAgeS ? 'FAIL' : 'PASS';
+  return {
+    gate: 'STALE_QUOTE',
+    status,
+    reason:
+      age == null
+        ? 'Not measurable: the broker gave no exchange time for this option quote.'
+        : age > maxAgeS
+          ? `The option quote was ${age}s old by the exchange's clock, beyond the ${maxAgeS}s limit. Measured only — the decision was NOT changed.`
+          : `The option quote was ${age}s old by the exchange's clock, inside the ${maxAgeS}s limit.`,
+    threshold: { staleQuoteMaxAgeSeconds: maxAgeS },
+    input_values: {
+      exchangeAgeSeconds: age,
+      optionExchangeTimestamp: timestamps?.optionExchange ?? null,
+      optionLastTradeTimestamp: timestamps?.optionLastTrade ?? null,
+      optionReceivedTimestamp: timestamps?.optionQuote ?? null,
+      clockSkew: age != null && age < -CLOCK_SKEW_S,
+      enforced: false,
+    },
+    timestamp: decidedAt,
+    was_deciding_gate: false,
+  };
 }
 
 export function validUntil(decidedAt: number, validitySeconds: number = SIGNAL_VALIDITY_SECONDS): number {
