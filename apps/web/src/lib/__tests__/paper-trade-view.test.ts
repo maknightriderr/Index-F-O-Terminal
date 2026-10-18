@@ -89,6 +89,12 @@ describe('countTrades', () => {
     expect(c).toMatchObject({ shown: 7, open: 2, openTracked: 1, openUntracked: 1, win: 1, loss: 2, expired: 2, includedClosed: 3 });
     expect(c.excluded).toEqual({ VOIDED: 1, TRACKING_LOST: 1 });
   });
+  it('an expiry with no exit price is counted apart as untracked (audit REC-2), never as a plain expiry', () => {
+    const abandoned = trade({ id: 'aband', state: 'EXPIRED', exitPrice: null, grossR: null, netR: null, status: 'INCOMPLETE', includedInPerformance: false, excludedReason: 'NO_GEOMETRY' });
+    const c = countTrades([...set, abandoned]);
+    expect(c.expired).toBe(countTrades(set).expired);
+    expect(c.expiredUntracked).toBe(countTrades(set).expiredUntracked + 1);
+  });
   it('handles an empty list', () => {
     expect(countTrades([])).toMatchObject({ shown: 0, open: 0, includedClosed: 0 });
   });
