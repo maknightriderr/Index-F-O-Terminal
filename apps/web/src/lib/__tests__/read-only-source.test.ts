@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-// Page loads must only read recorded data. The legacy GET /api/market/bias/:symbol runs the decision engine
-// (it can mint trades and write decision rows), so no web source may call it; the UI reads /bias-snapshot instead.
+// Page loads must only read recorded data. The legacy GET /api/market/bias/:symbol ran the decision engine
+// (it could mint trades and write decision rows); the server removed it (audit 2026-10-18, SEC-2) and no web
+// source may call it. The UI reads /bias-snapshot instead.
 
 const SRC = join(__dirname, '..', '..');
 const files = (dir: string): string[] =>
@@ -18,15 +19,9 @@ describe('web source is read-only on page load', () => {
   const code = (t: string) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   const all = files(SRC).map((p) => [p, code(readFileSync(p, 'utf8'))] as const);
 
-  it('never calls the legacy decision-engine bias route', () => {
-    const offenders = all.filter(([p, s]) => !p.endsWith('api.ts') && (/\/api\/market\/bias\//.test(s) || /\bgetMarketBias\s*\(/.test(s))).map(([p]) => p);
+  it('never calls the removed decision-engine bias route, not even from api.ts', () => {
+    const offenders = all.filter(([, s]) => /\/api\/market\/bias\//.test(s) || /\bgetMarketBias\b/.test(s)).map(([p]) => p);
     expect(offenders).toEqual([]);
-  });
-
-  it('api.ts only keeps getMarketBias as a deprecated export', () => {
-    const api = all.find(([p]) => p.endsWith('lib\\api.ts') || p.endsWith('lib/api.ts'))![1];
-    expect(readFileSync(join(SRC, 'lib', 'api.ts'), 'utf8')).toMatch(/@deprecated/);
-    expect(api).toBeTruthy();
   });
 
   it('the only POST to the market scanner is the explicit run, never a mount-time call', () => {

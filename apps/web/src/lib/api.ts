@@ -24,9 +24,6 @@ import type {
   OptionChain,
   FuturesChainResponse,
   MarketQuote,
-  MarketBias,
-  IntelligenceScore,
-  TradeSetup,
   FnoScannerRow,
   Alert,
   DetectedChartPattern,
@@ -42,8 +39,6 @@ import type {
   MarketScanResult,
   StrategyTrackRecord,
   FiiDiiActivity,
-  StructureBlock,
-  SetupWatchRow,
   StructureLifecycleView,
   BiasSnapshot,
   PaperTradesResponse,
@@ -298,16 +293,6 @@ class ApiClient {
 
   async getFutures(symbol: string, exchange = 'NSE') {
     return this.get<FuturesChainResponse>(`/api/futures/${symbol}?exchange=${exchange}`);
-  }
-
-  /**
-   * @deprecated The terminal no longer calls this. GET /api/market/bias/:symbol runs the decision engine (it can mint a
-   * paper trade and writes decision records), so a page load must not use it. Kept only for external callers.
-   */
-  async getMarketBias(symbol: string, exchange = 'NSE', mode: 'INTRADAY' | 'POSITIONAL' = 'INTRADAY') {
-    return this.get<{ bias: MarketBias; score: IntelligenceScore; tradeSetup: TradeSetup; structure?: StructureBlock; setupWatch?: SetupWatchRow[] }>(
-      `/api/market/bias/${symbol}?exchange=${exchange}&mode=${mode}`
-    );
   }
 
   /** The last assessment of a symbol (the engine's cached result, else the last decision record). Read-only. */
