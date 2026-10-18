@@ -503,7 +503,7 @@ export async function diagnosticsSetupOutcomes(lifecycleIds: readonly string[]) 
       fill_status, result_r::text, net_result_r::text, exit_reason, rejection_reason, would_be_valid_if, grade, graded_at
     FROM setup_events
     WHERE lifecycle_id IN ${sql(lifecycleIds as string[])}
-      AND event_type IN ('TRADED', 'REJECTED', 'LOW_RR', 'LATE', 'MISSED', 'INVALIDATED')
+      AND event_type IN ('TRADED', 'REJECTED', 'LOW_RR', 'NO_TARGET', 'LATE', 'MISSED', 'INVALIDATED')
     ORDER BY lifecycle_id, time DESC
   `;
   return rows.map((r) => ({

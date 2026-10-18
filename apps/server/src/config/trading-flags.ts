@@ -848,6 +848,38 @@ export interface LogicStamp {
   };
   /** The indicator engine's confidence and location modes (absent on setups minted before them: the 75 and POOR_LOCATION gates). */
   indicator?: { confidenceMode: IndicatorConfidenceMode; locationMode?: IndicatorConfidenceMode };
+  /** What each validation-review switch actually does in the running modes (absent before 2026-10-18; effectiveTradingFlags). */
+  effectiveFlags?: Record<keyof TradingFlags, EffectiveFlag>;
+}
+
+/** ACTIVE = on and changing decisions; INERT = on, but the running mode gives it nothing to do; OFF = off. */
+export interface EffectiveFlag {
+  on: boolean;
+  effect: 'ACTIVE' | 'INERT' | 'OFF';
+  why: string | null;
+}
+
+/**
+ * Audit 2026-10-18 (DOC-1): a switch can be on and still change nothing. Every trade's stamp said RICH_IV_RR=true and
+ * LOCATION_GATE=true though neither could refuse anything in the active modes. Recorded beside the raw flags so a
+ * reader of the stamp sees what was in force.
+ */
+export function effectiveTradingFlags(flags: Readonly<TradingFlags> = TRADING_FLAGS, locationMode: IndicatorConfidenceMode = INDICATOR_LOCATION_MODE): Record<keyof TradingFlags, EffectiveFlag> {
+  const plain = (k: keyof TradingFlags): EffectiveFlag => ({ on: flags[k], effect: flags[k] ? 'ACTIVE' : 'OFF', why: null });
+  return {
+    STRUCTURAL_STOP: plain('STRUCTURAL_STOP'),
+    LOCATION_GATE: flags.LOCATION_GATE
+      ? locationGateEnforced(locationMode, true)
+        ? { on: true, effect: 'ACTIVE', why: null }
+        : { on: true, effect: 'INERT', why: `INDICATOR_LOCATION_MODE=${locationMode}: the location score is recorded, never a refusal (only LEGACY enforces it).` }
+      : plain('LOCATION_GATE'),
+    ROOM_GATE: plain('ROOM_GATE'),
+    CONCURRENCY_CAP: plain('CONCURRENCY_CAP'),
+    CLOSING_GUARD: plain('CLOSING_GUARD'),
+    RICH_IV_RR: flags.RICH_IV_RR
+      ? { on: true, effect: 'INERT', why: 'Net R:R is display / ranking only since 5 Oct (rrGate off in every live build): the higher R:R bar it sets refuses nothing.' }
+      : plain('RICH_IV_RR'),
+  };
 }
 
 /**
@@ -964,5 +996,9 @@ export function liveLogicStamp(): LogicStamp {
     indicator: { confidenceMode: INDICATOR_CONFIDENCE_MODE, locationMode: INDICATOR_LOCATION_MODE },
   });
   // + the OB1 / OF1 paper-source suffix while either may take the slot (empty when both are off).
-  return { ...stamp, logicVersion: `${stamp.logicVersion}${RR_DISPLAY_ONLY_LOGIC_SUFFIX}${PARENT_IDENTITY_LOGIC_SUFFIX}${TRIGGER_DEMOTION_LOGIC_SUFFIX}${orderFlowLogicSuffix()}` };
+  return {
+    ...stamp,
+    logicVersion: `${stamp.logicVersion}${RR_DISPLAY_ONLY_LOGIC_SUFFIX}${PARENT_IDENTITY_LOGIC_SUFFIX}${TRIGGER_DEMOTION_LOGIC_SUFFIX}${orderFlowLogicSuffix()}`,
+    effectiveFlags: effectiveTradingFlags(),
+  };
 }

@@ -24,10 +24,13 @@ import { insertOnce } from '../lib/insert-once.js';
 import { logger } from '../lib/logger.js';
 import { redis } from '../lib/redis.js';
 import { schemaFileReady } from './ensure-capture-schema.js';
+import { COST_VERSION } from '../config/trading-flags.js';
 
 export const TRADE_MEASUREMENT_MIGRATION = '040_trade_measurement.sql';
-// COST-1.1 (audit 2026-10-18, COST-3.0 costs): the statutory charges are the exchange's dated rates, in their parts.
-export const COST_RECORD_VERSION = 'COST-1.1';
+// The RECORD FORMAT's version, named apart from the cost MODEL's (COST_VERSION, COST-3.0) so the two never read as one
+// (audit 2026-10-18, DOC-1: stamps said COST-2.0 while records said COST-1.0). COSTREC-1.1: the statutory charges in
+// their parts. Rows before 18 Oct carry 'COST-1.0' (format 1.0).
+export const COST_RECORD_VERSION = 'COSTREC-1.1';
 export const COST_BASIS = 'ESTIMATED_MODEL' as const;
 
 const r4 = (n: number) => Math.round(n * 10_000) / 10_000;
@@ -41,7 +44,10 @@ export interface CostPart {
 }
 
 export interface TradeCostRecord {
+  /** The record format (COSTREC-x). */
   version: string;
+  /** The cost MODEL the figures come from (COST-3.0: the dated per-exchange charges). Absent on records before 18 Oct. */
+  costModel?: string;
   basis: typeof COST_BASIS;
   /** What the quote and sizing inputs were. */
   inputs: { entry: number; stopLoss: number; target: number; bid: number | null; ask: number | null; lotSize: number | null };
@@ -111,6 +117,7 @@ export function buildCostRecord(i: CostInput): TradeCostRecord | null {
   const setupPct = i.setupEstimatedCostPct ?? null;
   return {
     version: COST_RECORD_VERSION,
+    costModel: parts ? COST_VERSION : 'COST-2.0',
     basis: COST_BASIS,
     inputs: { entry, stopLoss, target, bid: i.bid, ask: i.ask, lotSize: lot },
     spread: { ...part(spreadPerUnit), source: quoted ? 'QUOTE' : 'FALLBACK_ASSUMED', assumedPct: quoted ? null : TRADING_COST_MODEL.fallbackSpreadPct },

@@ -76,7 +76,8 @@ describe('measurement agrees with the builder', () => {
     const entry = 2000;
     const built = estimateRoundTripCost(entry, 1990, 2010, 100, optionStatutoryPct('MCX', at));
     const rec = buildCostRecord({ entry, stopLoss: 1600, target: 2400, bid: 1990, ask: 2010, lotSize: 100, setupEstimatedCostPct: Math.round(built.pct * 100) / 100, exchange: 'MCX', at })!;
-    expect(rec.version).toBe('COST-1.1');
+    expect(rec.version).toBe('COSTREC-1.1');
+    expect(rec.costModel).toBe('COST-3.0');
     expect(rec.statutoryParts).toMatchObject({ exchange: 'MCX', effectiveFrom: '2024-10-01' });
     const p = rec.statutoryParts!;
     expect(p.sellTax.perUnit + p.exchangeTxn.perUnit + p.sebi.perUnit + p.stamp.perUnit + p.gstOnFees.perUnit).toBeCloseTo(rec.statutory.perUnit, 3);
