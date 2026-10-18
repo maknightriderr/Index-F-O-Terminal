@@ -21,6 +21,7 @@
 //   GET /api/diagnostics/versions    strategy/cost versions present
 //   GET /api/diagnostics/setup-outcomes?lifecycleIds=a,b  per-setup measurement
 //                                    for the Trade Setup card
+//   GET /api/diagnostics/reconciliation the last nightly plan-vs-trade check
 //
 // Query: from=YYYY-MM-DD, to=YYYY-MM-DD, instrument=SYMBOL, strategyVersion,
 // costVersion (all optional; without an instrument every instrument is
@@ -31,6 +32,7 @@ import { Router, type Request, type Response } from 'express';
 import { logger } from '../lib/logger.js';
 import { redis, scanKeys } from '../lib/redis.js';
 import { decisionDiagnostics, listDecisions } from '../services/decision-diagnostics.js';
+import { readReconciliationReport } from '../services/record-reconciliation.js';
 
 const SNAPSHOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import {
@@ -311,6 +313,16 @@ export function createDiagnosticsRoutes(): Router {
   evidenceRoute('/signal-quality', 'signal-quality', signalQualityReport);
   evidenceRoute('/gate-validation', 'gate-validation', gateValidationReport);
   evidenceRoute('/portfolio-risk', 'portfolio-risk', portfolioRiskReport);
+
+  // Audit 2026-10-18 (REC-1): the last nightly plan-vs-trade reconciliation. Read-only: the stored report, never a run.
+  router.get('/reconciliation', async (_req: Request, res: Response) => {
+    try {
+      res.json({ success: true, data: await readReconciliationReport() });
+    } catch (err: any) {
+      logger.error({ error: err.message }, 'Reconciliation report read failed');
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
 
   // Phase 5: feed-gap checks of open paper trades (last 3 days) — FILL_UNCERTAIN /
   // MISSED_TOUCH_POSSIBLE are surfaced here; nothing was assumed for them.

@@ -63,6 +63,7 @@ import { startSetupEventsGrading } from './services/setup-events-grading.js';
 import { startOpportunityCensus } from './services/opportunity-census-job.js';
 import { startBarArchive } from './services/bar-archive.js';
 import { startDailyReview } from './services/daily-review-job.js';
+import { startRecordReconciliation } from './services/record-reconciliation.js';
 import { orderFlowFeedActive, startOrderFlowFeed } from './services/dhan-feed.js';
 import { createDiagnosticsRoutes } from './api/diagnostics.js';
 import { ensureCaptureSchema } from './services/ensure-capture-schema.js';
@@ -372,6 +373,8 @@ for (const spec of [
   // Research only (2026-10-15): stores closed 15m / daily bars while no exchange trades. Never read by a decision.
   timerService('barArchive', () => startBarArchive(provider), { ready: () => schemaReady }),
   timerService('dailyReview', () => startDailyReview(), { ready: () => schemaReady }),
+  // Audit 2026-10-18 (REC-1): once a day, every closed plan against its trade row; alerts a disagreement once. Read-only.
+  timerService('recordReconciliation', () => startRecordReconciliation(), { ready: () => schemaReady }),
   timerService('holidayCalendarCheck', () => startHolidayCalendarCheck()),
   // The self-audit: it can change what the system NOTICES, never what it DOES.
   timerService('systemLearningAudit', () => startSystemLearningAudit(provider)),
