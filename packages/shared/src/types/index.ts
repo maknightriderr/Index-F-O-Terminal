@@ -170,7 +170,10 @@ export interface MarketQuote {
   changeOi?: number;
   bid?: number;
   ask?: number;
+  /** When the server fetched this quote (epoch ms). */
   timestamp: number;
+  /** When the EXCHANGE published it (epoch ms; audit 2026-10-18). After the close this is the last close, not the fetch. */
+  exchangeTimestamp?: number;
 }
 
 // --- Option Chain ---

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MISSING, formatAge, formatArrowPercent, formatHold, formatIstTime, formatNumber, formatR, formatRate, formatRupees, formatSignedPercent } from '../format';
+import { MISSING, formatAge, formatArrowPercent, formatHold, formatIstTime, formatNumber, formatR, formatRate, formatRupees, formatShare, formatSignedPercent } from '../format';
 
 describe('format: unknown is never 0', () => {
   it.each([null, undefined, NaN])('shows an em dash for %s', (v) => {
@@ -49,5 +49,12 @@ describe('format: time and rates', () => {
   it('always shows the denominator and refuses to divide by zero', () => {
     expect(formatRate(50, 65)).toBe('76.9% (50 of 65)');
     expect(formatRate(0, 0)).toBe(MISSING);
+  });
+  it('floors a share, so an incomplete one never reads 100% (audit UI-1: 313 of 314 read 100.0%)', () => {
+    expect(formatShare(313, 314)).toBe('99.6%');
+    expect(formatShare(999, 1000)).toBe('99.9%');
+    expect(formatShare(314, 314)).toBe('100.0%');
+    expect(formatShare(2, 3)).toBe('66.6%');
+    expect(formatRate(313, 314)).toBe('99.6% (313 of 314)');
   });
 });

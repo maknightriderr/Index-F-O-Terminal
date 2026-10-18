@@ -147,8 +147,11 @@ export async function measurementReport(q: MeasurementQuery) {
       measurementsReliableFrom: new Date(MEASUREMENT_RELIABLE_FROM).toISOString(),
       note: 'Cost records and post-exit watches exist only for trades minted / closed after the release; earlier trades are never back-filled, and the conservative-fill scenario uses the cost model\'s fallback spread for them (spreadBasis FALLBACK_ASSUMED).',
       tradesSinceReliable: sinceReliable.length,
+      // The coverage's own denominator (audit 2026-10-18, UI-1): it is over the ELIGIBLE trades, not every trade minted.
+      eligibleSinceReliable: eligibleSinceReliable.length,
       withCostRecord: withCost,
-      costRecordCoveragePct: eligibleSinceReliable.length ? Math.round((withCost / eligibleSinceReliable.length) * 1000) / 10 : null,
+      // Floored, so an incomplete coverage never reads 100.0%.
+      costRecordCoveragePct: eligibleSinceReliable.length ? Math.floor((withCost / eligibleSinceReliable.length) * 1000) / 10 : null,
     },
     conservativeFillMethod: {
       id: CONSERVATIVE_FILL.id,

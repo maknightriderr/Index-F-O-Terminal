@@ -171,20 +171,23 @@ export function buildHealthModel(i: HealthInputs): HealthModel {
         : { id: 'provider', name: `${prov.name ?? 'Angel One'} provider`, status: 'DISCONNECTED', detail: 'Not authenticated; quotes and chains cannot be fetched.' }
   );
 
-  // Market-data tick feed: evidence = a recent tick WHILE a session is open.
+  // Market-data tick feed: evidence = a recent tick WHILE a session is open. The newest tick's EXCHANGE time when the
+  // per-token feed reports it (audit 2026-10-18, UI-1); the server's receive time made a Sunday reconnect read as fresh.
   const ws = d.services?.websocket;
+  const exchangeTicks = (d.feed?.perToken ?? []).map((t) => t.lastTickTime ?? 0).filter((t) => t > 0);
+  const lastTickAt = exchangeTicks.length ? Math.max(...exchangeTicks) : ws?.lastTickAt;
   if (!ws) {
     rows.push({ id: 'tick-feed', name: 'Market-data tick feed', status: 'UNAVAILABLE', detail: 'The health response did not include the feed.' });
   } else {
-    const f = classifyFreshness({ observedAt: ws.lastTickAt ?? null, now: i.now, sessionOpen: sessions.length ? anyOpen : null, transportConnected: !!ws.connected, freshWithinMs: FRESH_WITHIN_MS.quote });
+    const f = classifyFreshness({ observedAt: lastTickAt ?? null, now: i.now, sessionOpen: sessions.length ? anyOpen : null, transportConnected: !!ws.connected, freshWithinMs: FRESH_WITHIN_MS.quote });
     const status: HealthStatus = f.state === 'FRESH' ? 'HEALTHY' : f.state === 'MARKET_CLOSED' ? 'MARKET_CLOSED' : f.state === 'STALE' ? 'STALE' : f.state === 'DISCONNECTED' ? 'DISCONNECTED' : ws.connected ? 'DEGRADED' : 'UNAVAILABLE';
     const sockets = `${ws.connected ? 'Connected' : 'Not connected'} to the broker feed, ${ws.subscriptionCount ?? 0} subscriptions.`;
     rows.push({
       id: 'tick-feed',
       name: 'Market-data tick feed',
       status,
-      detail: `${sockets} ${ws.lastTickAt ? `Last tick ${formatIstDateTime(ws.lastTickAt, i.now)} (${formatAge(i.now - ws.lastTickAt)}).` : 'No tick has been received since the server started.'}${d.feed?.upstreamDown ? ' Upstream feed is down.' : ''}`,
-      observedAt: ws.lastTickAt ?? null,
+      detail: `${sockets} ${lastTickAt ? `Last tick ${formatIstDateTime(lastTickAt, i.now)} (${formatAge(i.now - lastTickAt)})${exchangeTicks.length ? ', exchange time' : ''}.` : 'No tick has been received since the server started.'}${d.feed?.upstreamDown ? ' Upstream feed is down.' : ''}`,
+      observedAt: lastTickAt ?? null,
     });
   }
 
@@ -206,6 +209,8 @@ export function buildHealthModel(i: HealthInputs): HealthModel {
       DISCONNECTED: { status: anyOpen ? 'DISCONNECTED' : 'MARKET_CLOSED', detail: anyOpen ? 'Not connected while a session is open.' : 'Not connected; it connects only during a session.' },
       DATA_PLAN_INACTIVE: { status: 'UNAVAILABLE', detail: 'The Dhan Data API plan is not active; order flow is unavailable until it is.' },
       NOT_CONFIGURED: { status: 'UNAVAILABLE', detail: 'Dhan credentials are not configured; order flow is unavailable.' },
+      // Audit 2026-10-18 (UI-1): the server has reported this since 17 Oct (PR #46); it read "Unrecognised status".
+      TOKEN_REJECTED: { status: 'UNAVAILABLE', detail: 'Dhan rejected the access token (401/403). Order flow is unavailable until a valid token is set; the feed retries every 30 minutes.' },
     };
     const m = map[of.status ?? ''] ?? { status: 'UNAVAILABLE' as HealthStatus, detail: `Unrecognised status ${of.status ?? 'unknown'}.` };
     rows.push({

@@ -88,6 +88,29 @@ describe('buildHealthModel', () => {
     expect(m.overall).toBe('HEALTHY');
   });
 
+  it('order flow TOKEN_REJECTED is recognised (audit UI-1); an optional feed never degrades the overall status', () => {
+    const m = buildHealthModel({ data: healthy({ orderFlow: { status: 'TOKEN_REJECTED' } }), apiError: null, now, browserSocket });
+    expect(row(m, 'order-flow')).toMatchObject({ status: 'UNAVAILABLE' });
+    expect(row(m, 'order-flow').detail).toMatch(/rejected the access token/);
+    expect(row(m, 'order-flow').detail).not.toMatch(/Unrecognised/);
+    expect(m.overall).toBe('HEALTHY');
+  });
+
+  it("'last tick' is the newest tick's EXCHANGE time when the per-token feed reports it, not the server's receive time", () => {
+    const sunday = Date.UTC(2026, 9, 18, 8, 0, 0);
+    const fridayClose = Date.UTC(2026, 9, 16, 9, 59, 50);
+    const d = healthy({
+      timestamp: sunday,
+      sessions: [{ exchange: 'NSE', open: false }],
+      services: { ...healthy().services, websocket: { status: 'HEALTHY', connected: true, subscriptionCount: 2, lastTickAt: sunday - 60_000 } },
+      feed: { perToken: [{ token: '1', exchange: 'NSE', lastTickTime: fridayClose }, { token: '2', exchange: 'NSE', lastTickTime: fridayClose - 5_000 }] },
+    });
+    const m = buildHealthModel({ data: d, apiError: null, now: sunday, browserSocket });
+    expect(row(m, 'tick-feed').observedAt).toBe(fridayClose);
+    expect(row(m, 'tick-feed').detail).toMatch(/exchange time/);
+    expect(row(m, 'tick-feed').status).toBe('MARKET_CLOSED');
+  });
+
   it('an ops incident (open trade without ticks) degrades the overall status; a WARN is shown but does not', () => {
     const inc = (key: string, severity: 'DEGRADES' | 'WARN') => ({ key, check: key, severity, detail: `${key} detail.`, since: now - 180_000 });
     let m = buildHealthModel({ data: healthy({ ops: { at: now, incidents: [inc('FEED_COVERAGE', 'DEGRADES')] } }), apiError: null, now, browserSocket });

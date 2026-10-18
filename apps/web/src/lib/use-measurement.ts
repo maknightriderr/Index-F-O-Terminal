@@ -11,7 +11,7 @@ export interface MeasurementReport {
   versions?: Record<string, string>;
   schemaReady?: boolean;
   cohortBoundaries?: Record<string, string>;
-  reliability?: { measurementsReliableFrom?: string; note?: string; tradesSinceReliable?: number; withCostRecord?: number; costRecordCoveragePct?: number | null };
+  reliability?: { measurementsReliableFrom?: string; note?: string; tradesSinceReliable?: number; eligibleSinceReliable?: number; withCostRecord?: number; costRecordCoveragePct?: number | null };
   populations?: { historical?: string; measurementReliable?: string; netR?: string; historicalRows?: number; measurementReliableRows?: number };
   conservativeFillMethod?: { id?: string; label?: string; rule?: string; params?: Record<string, number>; limitation?: string };
   byCohort?: Array<{ cohort: string; tally: Tally }>;

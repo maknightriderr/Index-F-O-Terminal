@@ -102,6 +102,8 @@ export async function getLiveIndexQuotes(
           close: q.close,
           volume: q.volume,
           timestamp: now,
+          // The exchange's own time (FULL mode, audit 2026-10-18): after the close it is the last close, not this fetch.
+          ...(q.exchangeTimestamp != null ? { exchangeTimestamp: q.exchangeTimestamp } : {}),
         });
       }
     })
@@ -170,6 +172,8 @@ export async function getMcxCommodityQuotes(provider: MarketDataProvider): Promi
       close: q.close,
       volume: q.volume,
       timestamp: now,
+      // The exchange's own time (FULL mode, audit 2026-10-18): after the close it is the last close, not this fetch.
+      ...(q.exchangeTimestamp != null ? { exchangeTimestamp: q.exchangeTimestamp } : {}),
     });
   }
 
