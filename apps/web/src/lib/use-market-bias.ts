@@ -112,6 +112,21 @@ const keyOf = (symbol: string, exchange: string, mode: TradingMode) => `${exchan
  * `isLive` means the assessment is recent enough to treat as current; `assessedAt` and `origin` say exactly what is
  * on screen. The cards must show "as of <time>" when it is not live.
  */
+/**
+ * Pure: what the symbol page shows for a bias state (2026-10-19). The engine re-reads each symbol every few minutes
+ * (5-11 min with every MCX symbol on the background timer and the broker rate-limiting), so a read older than the
+ * 6-minute freshness window is still the engine's latest: it is shown, labelled with its age, instead of being hidden
+ * behind "Waiting for the live signal engine". The waiting note is only for a symbol with no engine read at all.
+ */
+export function biasDisplayOf(s: Pick<BiasState, 'isLive' | 'origin' | 'assessedAt'>, now: number): { showCards: boolean; note: string | null } {
+  if (s.origin === 'ENGINE_CACHE' && s.assessedAt != null) {
+    if (s.isLive) return { showCards: true, note: null };
+    const min = Math.max(1, Math.round((now - s.assessedAt) / 60_000));
+    return { showCards: true, note: `Last engine read ${min} min ago — the engine re-reads each symbol every few minutes; the figures below are from that read.` };
+  }
+  return { showCards: false, note: null };
+}
+
 export function useMarketBias(symbol: string, exchange: string, mode: TradingMode = 'INTRADAY'): BiasState {
   const [state, setState] = useState<BiasState>(() => cache.get(keyOf(symbol, exchange, mode)) ?? biasStateFromSnapshot(symbol, null, null, Date.now()));
 

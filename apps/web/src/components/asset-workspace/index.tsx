@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { useMarketStore } from '@/stores';
 import { api, ApiError } from '@/lib/api';
-import { useMarketBias } from '@/lib/use-market-bias';
+import { biasDisplayOf, useMarketBias } from '@/lib/use-market-bias';
 import { useCorporateActionsForSymbol } from '@/lib/use-corporate-actions';
 import { formatIndianNumber, formatCompact, formatExpiryDate, calculateDTE, isMarketOpen, DEFAULT_RISK_CONFIG, engineBadge } from '@fno/shared';
 import type { SetupWatchRow,
@@ -74,7 +74,9 @@ export function AssetWorkspace() {
   // Hooks can't be called conditionally, so this runs even before the
   // "no asset selected" early return below — harmless, just polls NIFTY
   // until an asset is actually picked.
-  const { bias, score, tradeSetup, structure, setupWatch, isLive: biasLive } = useMarketBias(selectedSymbol || 'NIFTY', selectedExchange || 'NSE', biasMode);
+  const biasState = useMarketBias(selectedSymbol || 'NIFTY', selectedExchange || 'NSE', biasMode);
+  const { bias, score, tradeSetup, structure, setupWatch } = biasState;
+  const biasDisplay = biasDisplayOf(biasState, Date.now());
   const { actions: corporateActions } = useCorporateActionsForSymbol(selectedSymbol || 'NIFTY', selectedExchange || 'NSE');
   const [chain, setChain] = useState<OptionChain | null>(null);
   const [futures, setFutures] = useState<FuturesChainResponse | null>(null);
@@ -286,12 +288,15 @@ export function AssetWorkspace() {
             ))}
           </div>
         </div>
-        {!biasLive ? (
+        {!biasDisplay.showCards ? (
           <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3 mb-2 text-amber-400 light:text-amber-700 text-xs font-medium">
             Waiting for the live signal engine — bias, regime, score and levels appear once {selectedSymbol || 'this symbol'} has a live read.
           </div>
         ) : (
           <>
+            {biasDisplay.note && (
+              <div className="mb-2 rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-2 text-xs font-medium text-amber-400 light:text-amber-700">{biasDisplay.note}</div>
+            )}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
               <MarketBiasCard bias={bias} symbol={selectedSymbol} />
               <MarketRegimeCard bias={bias} />
