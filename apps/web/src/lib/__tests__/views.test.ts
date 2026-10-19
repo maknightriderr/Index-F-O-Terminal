@@ -115,3 +115,21 @@ describe('measurement display', () => {
     expect(reliabilityLines({})[0][1]).toBe(MISSING);
   });
 });
+
+import { biasDisplayOf } from '../use-market-bias';
+
+describe('symbol page bias display (2026-10-19)', () => {
+  const now = Date.UTC(2026, 9, 19, 6, 0);
+  it('a fresh engine read shows the cards with no note', () => {
+    expect(biasDisplayOf({ isLive: true, origin: 'ENGINE_CACHE', assessedAt: now - 60_000 }, now)).toEqual({ showCards: true, note: null });
+  });
+  it('an older engine read is still shown, labelled with its age, never hidden behind "waiting"', () => {
+    const d = biasDisplayOf({ isLive: false, origin: 'ENGINE_CACHE', assessedAt: now - 9 * 60_000 }, now);
+    expect(d.showCards).toBe(true);
+    expect(d.note).toMatch(/Last engine read 9 min ago/);
+  });
+  it('no engine read (or only a decision record) keeps the waiting note', () => {
+    expect(biasDisplayOf({ isLive: false, origin: 'NONE', assessedAt: null }, now).showCards).toBe(false);
+    expect(biasDisplayOf({ isLive: false, origin: 'LAST_DECISION_RECORD', assessedAt: now - 60_000 }, now).showCards).toBe(false);
+  });
+});
