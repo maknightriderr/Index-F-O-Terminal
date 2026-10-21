@@ -142,6 +142,37 @@ export function tokenForStoredSetup(
   return hit?.token ?? null;
 }
 
+/** Pure: what to watch for an open naked trade, read from its slot and the instrument master alone (no quote call). */
+export function watchFromSlot(
+  instruments: readonly Pick<Instrument, 'token' | 'underlying' | 'exchange' | 'strike' | 'optionType' | 'expiry'>[],
+  exchange: string,
+  underlying: string,
+  mode: string,
+  stored: any
+): LockedSetupWatch | null {
+  if (!stored?.available || stored.stopLoss == null || stored.target == null) return null;
+  const token = tokenForStoredSetup(instruments, underlying, exchange, stored);
+  return token ? { underlying, exchange: exchange as Exchange, mode: mode as TradingMode, token, stopLoss: stored.stopLoss, target: stored.target } : null;
+}
+
+/**
+ * Fix 2026-10-21: a price check that returned no watch is not proof the trade closed. When the chain could not be
+ * fetched (Angel One refusing quotes: "Unable to resolve a live spot price"), the sweep used to drop the watch and
+ * unsubscribe the open trade's token, so its stop and target lost their tick coverage exactly while quotes were
+ * failing (VMM and LTM, 21 Oct, 20 minutes). Re-reads the slot: still open → the watch from the slot and the
+ * instrument master; closed or unknown → null, as before.
+ */
+export async function watchForOpenSlot(provider: MarketDataProvider, exchange: string, underlying: string, mode: string): Promise<LockedSetupWatch | null> {
+  try {
+    const raw = await redis.get(`trade_setup:${exchange}:${underlying}:${mode}`);
+    const stored = raw ? JSON.parse(raw) : null;
+    if (!stored?.available) return null;
+    return watchFromSlot(await provider.getInstrumentMaster(), exchange, underlying, mode, stored);
+  } catch {
+    return null;
+  }
+}
+
 const PRIME_WAIT_MS = 3 * 60_000;
 const PRIME_POLL_MS = 2_000;
 
@@ -172,9 +203,8 @@ export async function primeSubscriptions(provider: MarketDataProvider, subscript
         } catch {
           continue;
         }
-        if (!stored?.available || stored.stopLoss == null || stored.target == null) continue;
-        const token = tokenForStoredSetup(instruments, underlying, exchange, stored);
-        if (token) next.set(token, { underlying, exchange: exchange as Exchange, mode: mode as TradingMode, token, stopLoss: stored.stopLoss, target: stored.target });
+        const watch = watchFromSlot(instruments, exchange, underlying, mode, stored);
+        if (watch) next.set(watch.token, watch);
       }
       await syncSubscriptions(subscriptions, next);
       logger.info({ tokens: next.size }, 'Trade setup price monitor: open trades subscribed at boot, before the first sweep');
@@ -212,7 +242,7 @@ async function sweep(provider: MarketDataProvider, subscriptions?: SubscriptionM
 
     inFlight.add(id);
     try {
-      const watch = await checkLockedSetupPriceLevels(provider, exchange as Exchange, underlying, mode);
+      const watch = (await checkLockedSetupPriceLevels(provider, exchange as Exchange, underlying, mode)) ?? (await watchForOpenSlot(provider, exchange, underlying, mode));
       if (watch) next.set(watch.token, watch);
     } catch (err: any) {
       logger.warn({ error: err.message, key }, 'Trade setup price monitor: one symbol check failed');

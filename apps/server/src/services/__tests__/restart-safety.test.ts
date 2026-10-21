@@ -44,6 +44,27 @@ describe('tokenForStoredSetup (pure)', () => {
   });
 });
 
+describe('a price check that could not price an open trade keeps its tick watch (fix 2026-10-21)', () => {
+  beforeEach(() => mem.kv.clear());
+  const provider = { isAuthenticated: () => true, getInstrumentMaster: async () => instruments } as never;
+  it('still open: watched from its slot and the instrument master', async () => {
+    mem.kv.set('trade_setup:NSE:TCS:INTRADAY', JSON.stringify({ available: true, strike: 2440, side: 'CE', expiry: '2026-10-27', stopLoss: 23.54, target: 86.16 }));
+    expect(await M.watchForOpenSlot(provider, 'NSE', 'TCS', 'INTRADAY')).toEqual({ underlying: 'TCS', exchange: 'NSE', mode: 'INTRADAY', token: '43210', stopLoss: 23.54, target: 86.16 });
+  });
+  it('closed, gone, a spread or an unknown contract: no watch, as before', async () => {
+    mem.kv.set('trade_setup:NSE:NIFTY:INTRADAY', JSON.stringify({ available: false, strike: 2440, side: 'CE', expiry: '2026-10-27', stopLoss: 1, target: 2 }));
+    mem.kv.set('trade_setup:NSE:BANKNIFTY:INTRADAY', JSON.stringify({ available: true, structureType: 'SPREAD', stopLoss: 1, target: 2 }));
+    mem.kv.set('trade_setup:MCX:CRUDEOIL:INTRADAY', JSON.stringify({ available: true, strike: 9000, side: 'PE', expiry: '2026-11-17', stopLoss: 1, target: 2 }));
+    expect(await M.watchForOpenSlot(provider, 'NSE', 'NIFTY', 'INTRADAY')).toBeNull();
+    expect(await M.watchForOpenSlot(provider, 'NSE', 'BANKNIFTY', 'INTRADAY')).toBeNull();
+    expect(await M.watchForOpenSlot(provider, 'MCX', 'CRUDEOIL', 'INTRADAY')).toBeNull();
+    expect(await M.watchForOpenSlot(provider, 'NSE', 'SBIN', 'INTRADAY')).toBeNull();
+  });
+  it('the sweep falls back to the slot only when the price check returned no watch', () => {
+    expect(read('src/services/trade-setup-monitor.ts')).toMatch(/\(await checkLockedSetupPriceLevels\(provider, exchange as Exchange, underlying, mode\)\) \?\? \(await watchForOpenSlot\(provider, exchange, underlying, mode\)\)/);
+  });
+});
+
 describe('boot subscription, before the first sweep', () => {
   beforeEach(() => mem.kv.clear());
   it('subscribes every open naked trade from its slot once the broker session is up; skips closed slots and spreads', async () => {
