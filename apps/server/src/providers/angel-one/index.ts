@@ -12,6 +12,7 @@ import { logger } from '../../lib/logger.js';
 import { RateLimiter } from '../../lib/rate-limiter.js';
 import { isInteractiveRequest } from '../../lib/request-priority.js';
 import { currentCaller, endpointOf, recordBrokerCall } from '../../lib/broker-call-stats.js';
+import { dhanQuotes } from '../dhan/quotes.js';
 import type {
   Exchange,
   ExchangeSegment,
@@ -599,6 +600,17 @@ export class AngelOneProvider implements MarketDataProvider {
     exchangeSegment: ExchangeSegment,
     tokens: string[]
   ): Promise<Array<{ token: string; ltp: number }>> {
+    // QUOTE_PROVIDER=DHAN (2026-10-21): what Dhan can serve comes from it, the rest from Angel One.
+    const fromDhan = await dhanQuotes(exchangeSegment, tokens, () => this.getInstrumentMaster());
+    const rest = tokens.filter((t) => !fromDhan.has(t));
+    const fromAngel = rest.length > 0 ? await this.getLTPFromAngel(exchangeSegment, rest) : [];
+    return [...[...fromDhan.values()].map((q) => ({ token: q.token, ltp: q.ltp })), ...fromAngel];
+  }
+
+  private async getLTPFromAngel(
+    exchangeSegment: ExchangeSegment,
+    tokens: string[]
+  ): Promise<Array<{ token: string; ltp: number }>> {
     await this.ensureAuthenticated();
 
     try {
@@ -638,6 +650,21 @@ export class AngelOneProvider implements MarketDataProvider {
     exchangeSegment: ExchangeSegment,
     tokens: string[],
     mode: QuoteMode = 'FULL'
+  ): Promise<ProviderQuote[]> {
+    // QUOTE_PROVIDER=DHAN (2026-10-21): what Dhan can serve comes from it (a FULL quote, whatever the mode), the
+    // rest — indices, anything Dhan did not answer — from Angel One as before. In the order asked.
+    const fromDhan = await dhanQuotes(exchangeSegment, tokens, () => this.getInstrumentMaster());
+    if (fromDhan.size === 0) return this.getQuoteFromAngel(exchangeSegment, tokens, mode);
+    const rest = tokens.filter((t) => !fromDhan.has(t));
+    const fromAngel = rest.length > 0 ? await this.getQuoteFromAngel(exchangeSegment, rest, mode) : [];
+    const byToken = new Map<string, ProviderQuote>([...fromDhan, ...fromAngel.map((q) => [q.token, q] as const)]);
+    return [...new Set(tokens)].map((t) => byToken.get(t)).filter((q): q is ProviderQuote => q != null);
+  }
+
+  private async getQuoteFromAngel(
+    exchangeSegment: ExchangeSegment,
+    tokens: string[],
+    mode: QuoteMode
   ): Promise<ProviderQuote[]> {
     await this.ensureAuthenticated();
 
