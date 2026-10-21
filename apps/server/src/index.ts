@@ -10,6 +10,7 @@ import rateLimit from 'express-rate-limit';
 import { config } from './lib/config.js';
 import { logger } from './lib/logger.js';
 import { memoryStatus, startMemoryTelemetry, stopMemoryTelemetry } from './lib/memory-telemetry.js';
+import { brokerCallStats } from './lib/broker-call-stats.js';
 import { redis, pingRedis } from './lib/redis.js';
 import { sql, pingDb } from './lib/db.js';
 import { SubscriptionManager } from './lib/subscription-manager.js';
@@ -247,7 +248,7 @@ app.get('/api/health', async (_req, res) => {
 
 // Memory telemetry (2026-10-15, measurement only): the last 24 hours of 15-minute samples.
 app.get('/api/health/memory', (_req, res) => {
-  res.json({ success: true, data: memoryStatus(true) });
+  res.json({ success: true, data: { ...memoryStatus(true), brokerCalls: brokerCallStats() } });
 });
 
 // Audit 2026-10-18 (REL-1): Railway's readiness probe (railway.json healthcheckPath). A new deploy takes traffic, and

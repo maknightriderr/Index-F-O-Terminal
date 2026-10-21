@@ -11,6 +11,7 @@ import { authenticator } from 'otplib';
 import { logger } from '../../lib/logger.js';
 import { RateLimiter } from '../../lib/rate-limiter.js';
 import { isInteractiveRequest } from '../../lib/request-priority.js';
+import { currentCaller, endpointOf, recordBrokerCall } from '../../lib/broker-call-stats.js';
 import type {
   Exchange,
   ExchangeSegment,
@@ -196,6 +197,18 @@ export class AngelOneProvider implements MarketDataProvider {
       await limiterFor(config.url).acquire(isInteractiveRequest() ? 'high' : 'normal');
       return config;
     });
+
+    // Measurement only (2026-10-21): every attempt counted by endpoint and caller (lib/broker-call-stats.ts).
+    this.api.interceptors.response.use(
+      (response) => {
+        recordBrokerCall('ANGEL', endpointOf(response.config?.url), currentCaller(), 'OK');
+        return response;
+      },
+      (error) => {
+        recordBrokerCall('ANGEL', endpointOf(error?.config?.url), currentCaller(), isRateLimitResponse(error) ? 'RATE_LIMITED' : 'FAILED');
+        return Promise.reject(error);
+      }
+    );
 
     // A request can still get rate-limited despite the queue above (the
     // exact per-endpoint limits aren't publicly precise, so the queue's
