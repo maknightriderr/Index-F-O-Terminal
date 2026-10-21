@@ -22,6 +22,8 @@
 // /api/health DEGRADED.
 // ============================================================
 
+import { runAsCaller } from './broker-call-stats.js';
+
 /** A captured callback may resolve to this after reporting its own failure (serviceFailure): no heartbeat for that run. */
 export const TICK_FAILED: unique symbol = Symbol('TICK_FAILED');
 
@@ -177,7 +179,7 @@ export class ServiceSupervisor {
     if (this.stopped || e.status.state === 'STOPPED') return;
     let out: unknown;
     try {
-      out = this.captureInto(e, fn);
+      out = this.captureInto(e, () => runAsCaller(e.spec.name, fn));
     } catch (err) {
       this.failure(e.spec.name, err);
       return;
@@ -207,7 +209,7 @@ export class ServiceSupervisor {
     try {
       if (e.spec.ready) await e.spec.ready();
       if (this.stopped) return;
-      const started = this.captureInto(e, () => e.spec.start());
+      const started = this.captureInto(e, () => runAsCaller(e.spec.name, () => e.spec.start()));
       const timeout = new Promise<'TIMEOUT'>((r) => {
         const h = this.clock.setTimeout(() => r('TIMEOUT'), e.spec.startupTimeoutMs);
         (h as any)?.unref?.();
@@ -289,7 +291,7 @@ export class ServiceSupervisor {
       else {
         // Nothing periodic was captured: start it again.
         try {
-          this.captureInto(e, () => e.spec.start());
+          this.captureInto(e, () => runAsCaller(e.spec.name, () => e.spec.start()));
         } catch (err) {
           this.failure(e.spec.name, err);
           return;

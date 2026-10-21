@@ -202,9 +202,12 @@ describe('Dhan feed packets (data only)', () => {
     expect(url.startsWith('wss://api-feed.dhan.co?version=2')).toBe(true);
     expect(url).toContain('authType=2');
   });
-  it('without credentials the feed is NOT_CONFIGURED', () => {
-    expect(flags.dhanCredentials({} as any)).toBeNull();
-    expect(flags.dhanCredentials({ DHAN_CLIENT_ID: 'x', DHAN_ACCESS_TOKEN: 'y' } as any)).toEqual({ clientId: 'x', accessToken: 'y' });
+  it('without credentials the feed is NOT_CONFIGURED', async () => {
+    const { dhanConfigured, dhanEnv } = await import('../dhan-session.js');
+    expect(dhanConfigured(dhanEnv({} as any))).toBe(false);
+    expect(dhanConfigured(dhanEnv({ DHAN_CLIENT_ID: 'x', DHAN_ACCESS_TOKEN: 'y' } as any))).toBe(true);
+    expect(dhanConfigured(dhanEnv({ DHAN_CLIENT_ID: 'x', DHAN_PIN: '123456', DHAN_TOTP_SECRET: 'S' } as any))).toBe(true);
+    expect(dhanConfigured(dhanEnv({ DHAN_CLIENT_ID: 'x', DHAN_PIN: '123456' } as any))).toBe(false);
   });
 });
 

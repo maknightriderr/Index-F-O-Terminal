@@ -33,7 +33,8 @@ import { isMarketOpen } from '@fno/shared';
 import { logger } from '../lib/logger.js';
 import { serviceHeartbeat } from '../lib/service-supervisor.js';
 import { DHAN_RESPONSE, DHAN_SEGMENT_CODE, dhanFeedUrl, fullSubscription, parseDhanFrame, resolveNearestFutures, type DhanFullPacket, type DhanSegment } from '../lib/dhan-feed-packets.js';
-import { dhanCredentials, ORDER_BLOCK_MODE, ORDER_BLOCK_MODE_REJECTED, OF1_TRADING_REQUESTED, ORDER_FLOW_SUPPORTED, ORDER_FLOW_SYMBOLS, ORDER_FLOW_SYMBOLS_REJECTED } from '../config/order-flow-flags.js';
+import { ORDER_BLOCK_MODE, ORDER_BLOCK_MODE_REJECTED, OF1_TRADING_REQUESTED, ORDER_FLOW_SUPPORTED, ORDER_FLOW_SYMBOLS, ORDER_FLOW_SYMBOLS_REJECTED } from '../config/order-flow-flags.js';
+import { dhanConfigured, dhanSession, dhanSessionStatus, ensureDhanSession, markDhanTokenRejected } from './dhan-session.js';
 import { closeFlowBars, recordFlowTrade, registerFlowSymbol, setFlowFeedConnected } from './order-flow-store.js';
 
 export const DHAN_SCRIP_MASTER_URL = 'https://images.dhan.co/api-data/api-scrip-master.csv';
@@ -105,6 +106,10 @@ const state = {
   profileRetryAt: 0,
   /** Dhan answered 401/403 to the last profile check: no connection is attempted until a check succeeds. */
   tokenRejected: false,
+  /** The token the open socket was opened with: a refreshed token reconnects it. */
+  wsToken: null as string | null,
+  /** The token the last failed profile check used: a new one is checked right away. */
+  rejectedToken: null as string | null,
 };
 
 /**
@@ -170,6 +175,7 @@ function onFrame(data: WebSocket.RawData): void {
 function connect(creds: { clientId: string; accessToken: string }): void {
   const ws = new WebSocket(dhanFeedUrl(creds.clientId, creds.accessToken));
   state.ws = ws;
+  state.wsToken = creds.accessToken;
   state.packetsThisConnection = 0;
   state.rateLimited = false;
   ws.on('open', () => {
@@ -204,11 +210,26 @@ function connect(creds: { clientId: string; accessToken: string }): void {
 }
 
 async function tick(): Promise<void> {
-  const creds = dhanCredentials();
-  if (!creds) return;
+  if (!dhanConfigured()) return;
   const now = Date.now();
+  // Kept alive around the clock: a renewal must happen before the token expires, in session or not.
+  await ensureDhanSession(now);
   if (!inSessionWindow(now)) {
     if (state.ws) state.ws.close();
+    return;
+  }
+  const creds = dhanSession();
+  if (creds && state.tokenRejected && creds.accessToken !== state.rejectedToken) {
+    // A new token (TOTP login or a pasted one): check it now instead of waiting out the back-off.
+    state.tokenRejected = false;
+    state.profileRetryAt = 0;
+  }
+  if (state.ws && creds && state.wsToken !== creds.accessToken) state.ws.close(); // reconnects with the new token
+  if (!creds) {
+    state.tokenRejected = true;
+    state.lastError = dhanSessionStatus().lastError ?? 'No valid Dhan access token';
+    if (state.ws) state.ws.close();
+    await closeFlowBars(now, false, 'TOKEN_REJECTED').catch((err: any) => logger.warn({ error: err.message }, 'Order flow: bar close failed'));
     return;
   }
   try {
@@ -238,6 +259,10 @@ async function tick(): Promise<void> {
       const waitMs = profileRetryDelay(status);
       state.profileRetryAt = now + waitMs;
       state.tokenRejected = status === 401 || status === 403;
+      if (state.tokenRejected) {
+        state.rejectedToken = creds.accessToken;
+        markDhanTokenRejected(creds.accessToken);
+      }
       state.lastError = state.tokenRejected
         ? `Dhan rejected the access token (HTTP ${status}): refresh DHAN_ACCESS_TOKEN. Next check in ${Math.round(waitMs / 60_000)} minutes.`
         : `Dhan profile check failed: ${err.message}. Next check in ${Math.round(waitMs / 60_000)} minutes.`;
@@ -260,9 +285,9 @@ export function startOrderFlowFeed(): void {
   if (ORDER_BLOCK_MODE_REJECTED) logger.warn({ asked: ORDER_BLOCK_MODE_REJECTED, using: ORDER_BLOCK_MODE }, 'ORDER_BLOCK_MODE: PAPER, SHADOW or OFF only — OB-2.0 never enters the indicator vote by a setting');
   if (OF1_TRADING_REQUESTED) logger.warn('OF1_TRADING=true ignored: OF1_ENABLED is false');
   if (ORDER_FLOW_SYMBOLS_REJECTED.length) logger.warn({ rejected: ORDER_FLOW_SYMBOLS_REJECTED }, 'ORDER_FLOW_SYMBOLS: no Dhan futures mapping for these symbols — ignored');
-  state.configured = dhanCredentials() != null;
+  state.configured = dhanConfigured();
   if (!state.configured) {
-    logger.info('Dhan feed: NOT_CONFIGURED (DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN not set) — order flow UNAVAILABLE, OF1 records nothing');
+    logger.info('Dhan feed: NOT_CONFIGURED (DHAN_CLIENT_ID with DHAN_ACCESS_TOKEN, or DHAN_PIN + DHAN_TOTP_SECRET, not set) — order flow UNAVAILABLE, OF1 records nothing');
     return;
   }
   setInterval(() => void tick(), TICK_MS);
@@ -282,9 +307,10 @@ export function orderFlowFeedStatus() {
     trades: state.trades,
     lastPacketAt: state.lastPacketAt,
     lastError: state.lastError,
+    session: dhanSessionStatus(),
     symbols: ORDER_FLOW_SYMBOLS,
   };
 }
 
 /** Whether the supervisor should expect heartbeats right now. */
-export const orderFlowFeedActive = (now: number) => dhanCredentials() != null && (isMarketOpen('NSE', now) || isMarketOpen('MCX', now));
+export const orderFlowFeedActive = (now: number) => dhanConfigured() && (isMarketOpen('NSE', now) || isMarketOpen('MCX', now));

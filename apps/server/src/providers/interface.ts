@@ -92,6 +92,8 @@ export interface ProviderQuote {
   exchangeTimestamp?: number;
   /** When the last trade happened (exchTradeTime), epoch ms. Absent when the broker did not say. */
   lastTradeTimestamp?: number;
+  /** Which feed served it (QUOTE_PROVIDER=DHAN routes most quotes to Dhan; providers/dhan/quotes.ts). Absent = Angel One. */
+  source?: 'ANGEL' | 'DHAN';
 }
 
 // --- WebSocket Connection ---
