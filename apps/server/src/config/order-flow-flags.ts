@@ -24,8 +24,11 @@
 //                     Dhan (NSE_FNO / MCX_COMM). Symbols outside the supported
 //                     list are refused.
 //   DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN  the Dhan market-feed credentials (data
-//                     only — no order API is ever called). Absent → the feed is
-//                     NOT_CONFIGURED and every order-flow measure UNAVAILABLE.
+//                     only — no order API is ever called). DHAN_PIN +
+//                     DHAN_TOTP_SECRET log in automatically instead (a token
+//                     lasts 24 hours; services/dhan-session.ts). Absent → the
+//                     feed is NOT_CONFIGURED and every order-flow measure
+//                     UNAVAILABLE.
 // ============================================================
 
 // Local copy of trading-flags' parseFlag: trading-flags imports this file (the logic-stamp suffix).
@@ -95,8 +98,3 @@ export const ORDER_FLOW_PRICE_STEP: Readonly<Record<string, number>> = Object.fr
   CRUDEOIL: 2, CRUDEOILM: 2, GOLD: 10, GOLDM: 10, SILVER: 25, SILVERM: 25, NATURALGAS: 0.2, NATGASMINI: 0.2,
 });
 
-export function dhanCredentials(env: NodeJS.ProcessEnv = process.env): { clientId: string; accessToken: string } | null {
-  const clientId = env.DHAN_CLIENT_ID?.trim();
-  const accessToken = env.DHAN_ACCESS_TOKEN?.trim();
-  return clientId && accessToken ? { clientId, accessToken } : null;
-}
