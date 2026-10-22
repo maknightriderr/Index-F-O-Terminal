@@ -36,8 +36,11 @@ import { dhanSession, markDhanTokenRejected } from '../../services/dhan-session.
 export const DHAN_QUOTE_URL = 'https://api.dhan.co/v2/marketfeed/quote';
 export const DHAN_SCRIP_MASTER_URL = 'https://images.dhan.co/api-data/api-scrip-master.csv';
 const MAX_INSTRUMENTS_PER_CALL = 1000;
-/** Dhan allows 1 quote call a second; a small margin. */
-const MIN_CALL_INTERVAL_MS = 1100;
+/**
+ * Dhan allows 1 quote call a second. At 1.1 s apart, 8 of the first 54 calls in production (23 Oct) were still
+ * refused (429): two requests sent 1.1 s apart can arrive under a second apart. 1.5 s leaves room for that jitter.
+ */
+export const MIN_CALL_INTERVAL_MS = 1500;
 const RATE_LIMIT_PAUSE_MS = 10_000;
 
 export type QuoteProvider = 'ANGEL' | 'DHAN';
