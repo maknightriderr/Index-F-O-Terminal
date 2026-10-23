@@ -83,7 +83,8 @@ describe('OF1: location + order flow + price response', () => {
     const fps = new Map([[bars[I].time, buyFlow(bars[I].time)]]);
     const [c, ...rest] = A.evaluateOf1(bars, I, fps);
     expect(rest).toHaveLength(0);
-    expect(c).toMatchObject({ version: 'OF1-1.0', direction: 'BULLISH', decisionIndex: I, subtype: 'PDL_IMBALANCE', location: { kind: 'PDL', price: 95 }, entry: 100.5, deltaMode: 'INFERRED' });
+    expect(c).toMatchObject({ version: 'OF1-1.1', direction: 'BULLISH', decisionIndex: I, subtype: 'PDL_IMBALANCE', location: { kind: 'PDL', price: 95 }, entry: 100.5, deltaMode: 'INFERRED', levelInteraction: 'TRADED_THROUGH', flowBasis: 'INFERRED' });
+    expect(c.priceConfirmation).toMatch(/^reclaimed PDL 95: traded through it/);
     expect(c.evidence).toEqual(expect.arrayContaining(['DELTA', 'IMBALANCE', 'ACCEPTANCE']));
     expect(c.measurable).not.toContain('POC_UP'); // no previous footprint → not measurable, not counted
     expect(c.stop).toBeCloseTo(94.5 - 0.1 * c.atr, 6);
@@ -95,6 +96,32 @@ describe('OF1: location + order flow + price response', () => {
     expect(A.evaluateOf1(bars, I, new Map([[t, balanced]]))).toEqual([]);
     expect(A.evaluateOf1(bars, I, new Map([[t, A.unavailableFootprint(t, M15)]]))).toEqual([]);
     expect(A.evaluateOf1(bars, I, new Map())).toEqual([]);
+  });
+  // OF1-1.1: a bar that came within the tolerance of the level without trading at it (low 95.5 > PDL 95) is a NEAR_TEST.
+  const nearTest = () => {
+    const b = session();
+    b[I] = { ...b[I], low: 95.5 };
+    return b;
+  };
+  // Buyers 1.5x sellers at 97-100 (delta % 0.2), no 3:1 imbalance, no selling in the bar's lowest third: DELTA only.
+  const deltaOnly = (t: number) => A.buildFootprint([97, 98, 99, 100].flatMap((p, k) => [{ time: t + 10 + k, price: p, qty: 150, side: 'BUY' as const }, { time: t + 20 + k, price: p, qty: 100, side: 'SELL' as const }]), t, M15, 1, 'INFERRED');
+  it('OF1-1.1: acceptance is unmeasurable on a bar that never traded at the level, so it no longer makes up a second confirmation', () => {
+    const b = nearTest();
+    const t = b[I].time;
+    expect(A.evaluateOf1(b, I, new Map([[t, deltaOnly(t)]]))).toEqual([]); // 1.0: DELTA + an automatic ACCEPTANCE = 2
+    const traded = session(); // the same flow on a bar that traded through the level (low 94.5): acceptance is real
+    const [c] = A.evaluateOf1(traded, I, new Map([[traded[I].time, deltaOnly(traded[I].time)]]));
+    expect(c.evidence).toEqual(['DELTA', 'ACCEPTANCE']);
+    expect(c.levelInteraction).toBe('TRADED_THROUGH');
+  });
+  it('OF1-1.1: a near-test with two real confirmations still qualifies, and is named a hold, not a reclaim', () => {
+    const b = nearTest();
+    const t = b[I].time;
+    const [c] = A.evaluateOf1(b, I, new Map([[t, buyFlow(t)]]));
+    expect(c).toMatchObject({ levelInteraction: 'NEAR_TEST', flowBasis: 'INFERRED', location: { kind: 'PDL', price: 95 } });
+    expect(c.measurable).not.toContain('ACCEPTANCE');
+    expect(c.evidence).toEqual(expect.arrayContaining(['DELTA', 'IMBALANCE']));
+    expect(c.priceConfirmation).toMatch(/^held above PDL 95 without trading at it \(near-test\)/);
   });
   it('no price response, no candidate: a close back below the level', () => {
     const b = session();

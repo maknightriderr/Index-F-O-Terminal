@@ -84,7 +84,7 @@ export async function recordOf1Shadow(a: {
           expected_move, delta_mode, delta, delta_pct, poc, vah, val, imbalances, absorption, evidence, price_confirmation, option_plan, cost_pct, would_trade_if_live, would_not_trade_reason)
         VALUES (${a.underlying}, ${a.exchange}, ${a.mode}, ${new Date(decisionBar)}, ${c.direction}, ${OF1_VERSION}, ${c.subtype}, ${c.location.kind}, ${c.location.price}, ${c.atr}, ${c.entry}, ${c.stop},
           ${c.target?.price ?? null}, ${c.target?.kind ?? null}, ${v.expectedMove}, ${c.deltaMode}, ${c.delta}, ${c.deltaPct}, ${c.poc}, ${c.vah}, ${c.val}, ${c.imbalances}, ${c.absorption},
-          ${sql.json({ found: c.evidence, measurable: c.measurable } as any)}, ${c.priceConfirmation}, ${v.plan ? sql.json(v.plan as any) : null}, ${v.costPct}, ${v.wouldTrade}, ${v.reasons.length ? v.reasons.join('; ') : null})
+          ${sql.json({ found: c.evidence, measurable: c.measurable, levelInteraction: c.levelInteraction, flowBasis: c.flowBasis } as any)}, ${c.priceConfirmation}, ${v.plan ? sql.json(v.plan as any) : null}, ${v.costPct}, ${v.wouldTrade}, ${v.reasons.length ? v.reasons.join('; ') : null})
         ON CONFLICT (symbol, exchange, mode, decision_bar_time, direction) DO NOTHING
       `;
     }
