@@ -27,6 +27,9 @@ import {
   EXPERIMENTS_VERSION,
   armEntryDecision,
   armFor,
+  invalidatedSetupOf,
+  reclaimsSetup,
+  type InvalidatedSetup,
   isLive,
   lossOf,
   onDecisionRead,
@@ -78,6 +81,8 @@ function save(p: ArmPosition, events: string[], at: number): void {
   const day = istDay(at);
   const l = lossOf(p, day);
   if (l && events.some((e) => e === 'OFFICIAL_STOP_LOSS')) losses.set(p.arm, [...(losses.get(p.arm) ?? []).filter((x) => at - x.at < 36 * 3600_000), l]);
+  const inv = events.includes('OFFICIAL_STRUCTURE_INVALIDATED') ? invalidatedSetupOf(p, day) : null;
+  if (inv) invalidated.set(p.arm, [...(invalidated.get(p.arm) ?? []).filter((x) => x.day === day), inv]);
   if (!isLive(p)) {
     positions.delete(p.id);
     if (p.candidate.token && subs && ![...positions.values()].some((o) => o.candidate.token === p.candidate.token)) {
@@ -126,6 +131,8 @@ const taken = new Set<string>(); // arm|candidateId: a routed candidate recurs o
 // Fresh-trigger ids already seen: production claims each once (Redis NX), so it reverses a held trade only on its first
 // poll. In memory: a restart inside the trigger's bar could see it once more (restarts are outside market hours).
 const seenTriggers = new Set<string>();
+// V2 1.1: setups (direction + level) retired by an invalidation exit, per arm, until a close reclaims the level.
+const invalidated = new Map<string, InvalidatedSetup[]>();
 
 function open(arm: ArmDef, c: ExpCandidate, pollAt: number): void {
   // The poll's clock starts before the candidate's contract build (a median 17 s, up to 98 s on 23 Oct): a position
@@ -184,13 +191,17 @@ export async function onIndicatorPoll(poll: IndicatorPoll): Promise<void> {
         open(arm, c, poll.at);
       }
     }
+    // V2 1.1: this poll's closed bar may reclaim a retired setup's level on this symbol.
+    if (poll.lastClosedBar) {
+      for (const list of invalidated.values()) for (const b of list) if (!b.reclaimed && b.symbol === poll.symbol && b.exchange === poll.exchange && b.mode === poll.mode && reclaimsSetup(b, poll.lastClosedBar)) b.reclaimed = true;
+    }
     if (poll.direction !== 'BULLISH' && poll.direction !== 'BEARISH') return;
     const indicatorArms = armsOf('INDICATOR');
     if (indicatorArms.every(slotHeld)) return;
     const c = await poll.buildCandidate();
     if (!c) return;
     for (const arm of indicatorArms) {
-      const d = armEntryDecision(arm, c, slotHeld(arm), losses.get(arm.id) ?? [], poll.at, day);
+      const d = armEntryDecision(arm, c, slotHeld(arm), losses.get(arm.id) ?? [], poll.at, day, invalidated.get(arm.id) ?? []);
       recordDecision(arm, c, d.take, d.code, poll.at);
       if (!d.take) continue;
       open(arm, c, poll.at);
@@ -239,6 +250,10 @@ async function load(): Promise<void> {
     taken.add(`${r.state.arm}|${r.state.candidate.candidateId}`);
     const l = lossOf(r.state, istDay(r.state.official.exitAt ?? r.state.openedAt));
     if (l) losses.set(r.state.arm, [...(losses.get(r.state.arm) ?? []), l]);
+    // A setup retired before a restart stays retired; whether a close reclaimed it meanwhile is unknown, so it waits
+    // for the next closed bar (restarts are outside market hours).
+    const inv = invalidatedSetupOf(r.state, istDay(r.state.official.exitAt ?? r.state.openedAt));
+    if (inv && inv.day === istDay(Date.now())) invalidated.set(r.state.arm, [...(invalidated.get(r.state.arm) ?? []), inv]);
   }
   for (const arm of ARMS) {
     await sql`
@@ -282,6 +297,7 @@ export function __resetExperimentEngine(): void {
   decided.clear();
   taken.clear();
   seenTriggers.clear();
+  invalidated.clear();
   started = false;
   subs = null;
 }

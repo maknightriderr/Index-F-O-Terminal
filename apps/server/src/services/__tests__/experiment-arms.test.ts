@@ -4,6 +4,10 @@ import {
   RETIRED_ARMS,
   armFor,
   armCooldownCode,
+  invalidatedSetupOf,
+  lossOf,
+  reclaimsSetup,
+  sameSetup,
   armEntryDecision,
   fillBlocker,
   officialNetR,
@@ -170,7 +174,7 @@ describe('exits on later reads', () => {
 describe('EXP-3.0 trigger capture arms (A3R, OF1R)', () => {
   const read = (o: object) => ({ at: T0 + 30 * 60_000, direction: 'BEARISH', confidence: 90, minConfidence: 60, confirmMs: 0, lastClosedBar: null, ...o });
   it('the Indicator arms are unchanged: same versions, bias-reversal exit, no structural exit', () => {
-    expect(ARMS.filter((a) => a.source === 'INDICATOR').map((a) => a.version)).toEqual(['R0-REPLICA-1.0', 'A-TARGET-0.5R-1.0', 'B-NO-LATE-NSE-1.0', 'C-A-AND-B-1.0', 'IND-V2-INVALIDATION-1.0']);
+    expect(ARMS.filter((a) => a.source === 'INDICATOR').map((a) => a.version)).toEqual(['R0-REPLICA-1.0', 'A-TARGET-0.5R-1.0', 'B-NO-LATE-NSE-1.0', 'C-A-AND-B-1.0', 'IND-V2-INVALIDATION-1.1']);
     expect(ARMS.filter((a) => a.source === 'INDICATOR').every((a) => a.biasReversalExit && !a.structureExit)).toBe(true);
     expect(ARMS.filter((a) => a.source !== 'INDICATOR').map((a) => [a.id, a.version, a.kind, a.source])).toEqual([['A3R', 'A3-R0-1.1', 'CONTROL_REPLICA', 'A3'], ['OF1R', 'OF1-R0-1.1', 'CONTROL_REPLICA', 'OF1']]);
     expect(ARMS.filter((a) => a.source === 'INDICATOR').every((a) => !a.triggerReversalExit)).toBe(true); // EXP-2.0 arms as activated
@@ -186,6 +190,53 @@ describe('EXP-3.0 trigger capture arms (A3R, OF1R)', () => {
     expect(onDecisionRead(bear, arm('OF1R'), read({ lastClosedBar: { close: 2421, closeAt: T0 + 15 * 60_000 } }))).toContain('OFFICIAL_SWEEP_RECLAIMED');
     const before = openPosition(arm('A3R'), cand({ sweepExtreme: 2385 }), 's3', T0);
     expect(onDecisionRead(before, arm('A3R'), read({ lastClosedBar: { close: 2300, closeAt: T0 - 60_000 } }))).toEqual([]);
+  });
+});
+
+describe('IND-V2-INVALIDATION-1.1: an invalidation retires its setup (direction + level) until a close reclaims the level', () => {
+  const read = (o: object = {}) => ({ at: T0 + 30 * 60_000, direction: 'BULLISH', confidence: 70, minConfidence: 60, confirmMs: 0, lastClosedBar: null, ...o });
+  const retire = (version: string, o: Partial<ExpCandidate> = {}) => {
+    const a = armFor('V2', version)!;
+    const p = openPosition(a, cand({ behindKind: 'PIVOT', ...o }), 'inv-' + version, T0);
+    onQuote(p, q({ ltp: 90, bid: 89.5, ask: 90.5 }, T0 + 20 * 60_000), T0 + 20 * 60_000);
+    onDecisionRead(p, a, read({ lastClosedBar: { close: 2370, closeAt: T0 + 30 * 60_000 } })); // 2370 < 2380 - 0.25 x 10
+    return { p, b: invalidatedSetupOf(p, '2026-10-26') };
+  };
+  const day = '2026-10-26';
+  it('the retired setup blocks an entry leaning on the same level the same way', () => {
+    const { p, b } = retire('IND-V2-INVALIDATION-1.1');
+    expect(p.official.reason).toBe('STRUCTURE_INVALIDATED');
+    expect(b).toMatchObject({ symbol: 'TCS', direction: 'BULLISH', level: 2380, kind: 'PIVOT', reclaimed: false });
+    const again = cand({ behindLevel: 2380, behindKind: 'PIVOT' });
+    expect(armEntryDecision(arm('V2'), again, false, [], T0 + 31 * 60_000, day, [b!])).toEqual({ take: false, code: 'INVALIDATED_SETUP' });
+  });
+  it('a fresh setup is not blocked: another level, the other direction, another symbol', () => {
+    const { b } = retire('IND-V2-INVALIDATION-1.1');
+    for (const fresh of [cand({ behindLevel: 2350, behindKind: 'PIVOT' }), cand({ behindLevel: 2380, behindKind: 'OI_WALL' }), cand({ direction: 'BEARISH', side: 'PE', behindLevel: 2380, behindKind: 'PIVOT' }), cand({ symbol: 'INFY', behindLevel: 2380, behindKind: 'PIVOT' })])
+      expect(armEntryDecision(arm('V2'), fresh, false, [], T0 + 31 * 60_000, day, [b!]).take).toBe(true);
+  });
+  it('a close back on the trade side of the level re-arms the setup; a bar before the invalidation never does', () => {
+    const { b } = retire('IND-V2-INVALIDATION-1.1');
+    expect(reclaimsSetup(b!, { close: 2390, closeAt: T0 + 10 * 60_000 })).toBe(false); // before the invalidation
+    expect(reclaimsSetup(b!, { close: 2375, closeAt: T0 + 45 * 60_000 })).toBe(false); // still below
+    expect(reclaimsSetup(b!, { close: 2381, closeAt: T0 + 45 * 60_000 })).toBe(true);
+    const rearmed = { ...b!, reclaimed: true };
+    expect(armEntryDecision(arm('V2'), cand({ behindLevel: 2380, behindKind: 'PIVOT' }), false, [], T0 + 46 * 60_000, day, [rearmed]).take).toBe(true);
+  });
+  it('VWAP drifts every bar, so it is the same level by kind', () => {
+    const { b } = retire('IND-V2-INVALIDATION-1.1', { behindKind: 'VWAP', behindLevel: 2380 });
+    expect(sameSetup(b!, cand({ behindLevel: 2383.7, behindKind: 'VWAP' }))).toBe(true);
+    expect(sameSetup(b!, cand({ behindLevel: 2383.7, behindKind: 'PIVOT' }))).toBe(false);
+  });
+  it('no cooldown: the arm loss bookkeeping is unchanged, and a retired setup expires with its day', () => {
+    const { p, b } = retire('IND-V2-INVALIDATION-1.1');
+    expect(lossOf(p, day)).toBeNull(); // not a stop-loss: no settle, no day bar, no same-side cooldown
+    expect(armEntryDecision(arm('V2'), cand({ behindLevel: 2380, behindKind: 'PIVOT' }), false, [], T0 + 86_400_000, '2026-10-27', [b!]).take).toBe(true);
+  });
+  it('1.0 positions retire nothing; R0 / A / B / C never read retired setups', () => {
+    expect(retire('IND-V2-INVALIDATION-1.0').b).toBeNull();
+    const { b } = retire('IND-V2-INVALIDATION-1.1');
+    for (const id of ['R0', 'A', 'B', 'C']) expect(armEntryDecision(arm(id), cand({ behindLevel: 2380, behindKind: 'PIVOT', target: 120 }), false, [], T0 + 31 * 60_000, day, [b!]).code).not.toBe('INVALIDATED_SETUP');
   });
 });
 
@@ -215,6 +266,6 @@ describe('EXP-3.1: TRIGGER_REVERSAL on the trigger arms (production triggerSlotA
     expect(armFor('A3R', 'A3-R0-1.1')?.triggerReversalExit).toBe(true);
     expect(armFor('R0', 'R0-REPLICA-1.0')?.biasReversalExit).toBe(true);
     expect(armFor('A3R', 'A3-R0-9.9')).toBeNull();
-    expect(RETIRED_ARMS.map((a) => a.version)).toEqual(['A3-R0-1.0', 'OF1-R0-1.0']);
+    expect(RETIRED_ARMS.map((a) => a.version)).toEqual(['IND-V2-INVALIDATION-1.0', 'A3-R0-1.0', 'OF1-R0-1.0']);
   });
 });

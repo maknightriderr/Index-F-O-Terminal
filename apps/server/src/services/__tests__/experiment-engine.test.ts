@@ -90,6 +90,29 @@ describe('experiment engine: one candidate stream, independent arm state', () =>
     await E.onIndicatorPoll(poll({ at: T0 + 5_000 })); // a quote older than the poll never back-dates it
     expect(new Set(E.__positions().map((p) => p.openedAt))).toEqual(new Set([T0 + 5_000]));
   });
+  it('V2 1.1: the same setup is not re-entered after its invalidation; a reclaiming close re-arms it; 1.0 re-entered', async () => {
+    const later = T0 + 30 * 60_000;
+    const q = { ltp: 90, bid: 89.5, ask: 90.5, timestamp: later, exchangeTimestamp: later - 1000 };
+    const quoteAt = (t: number) => ({ ltp: 90, bid: 89.5, ask: 90.5, bidQty: 1000, askQty: 1000, exchangeAt: t - 1000, receivedAt: t, feedState: null, source: 'CHAIN' });
+    const same = (t: number) => async () => candidate({ at: t, target: 130, behindLevel: 2380, behindKind: 'PIVOT', quote: quoteAt(t) });
+    for (const [version, reenters] of [['IND-V2-INVALIDATION-1.1', false], ['IND-V2-INVALIDATION-1.0', true]] as const) {
+      E.__resetExperimentEngine();
+      E.__startedForTest();
+      await E.onIndicatorPoll(poll({ buildCandidate: async () => candidate({ target: 130, behindKind: 'PIVOT' }) }));
+      E.__positions().filter((p) => p.arm === 'V2').forEach((p) => (p.armVersion = version));
+      await E.onIndicatorPoll(poll({ at: later, chain: chain(q), lastClosedBar: { close: 2370, closeAt: later }, buildCandidate: same(later) }));
+      expect(E.__positions().some((p) => p.arm === 'V2' && p.openedAt === later)).toBe(reenters);
+      expect(E.__positions().some((p) => p.arm === 'R0' && p.openedAt === T0)).toBe(true);
+    }
+    // 1.1: a later closed bar back above 2380 re-arms the setup; the same level may then be traded again.
+    E.__resetExperimentEngine();
+    E.__startedForTest();
+    await E.onIndicatorPoll(poll({ buildCandidate: async () => candidate({ target: 130, behindKind: 'PIVOT' }) }));
+    await E.onIndicatorPoll(poll({ at: later, chain: chain(q), lastClosedBar: { close: 2370, closeAt: later }, buildCandidate: same(later) }));
+    const t2 = later + 15 * 60_000;
+    await E.onIndicatorPoll(poll({ at: t2, chain: chain({ ...q, timestamp: t2, exchangeTimestamp: t2 - 1000 }), lastClosedBar: { close: 2385, closeAt: t2 }, buildCandidate: same(t2) }));
+    expect(E.__positions().some((p) => p.arm === 'V2' && p.openedAt === t2)).toBe(true);
+  });
   it('a failing candidate builder never throws into the poll', async () => {
     await expect(E.onIndicatorPoll(poll({ buildCandidate: async () => { throw new Error('boom'); } }))).resolves.toBeUndefined();
   });
