@@ -159,7 +159,7 @@ describe('2-3. the shared slot', () => {
     const src = readFileSync(path.join(REPO_ROOT, 'apps/server/src/services/market-bias.ts'), 'utf-8');
     const hold = src.indexOf("} else if (slotAction.kind === 'HOLD_TRIGGER') {");
     const hit = src.indexOf('    if (hitSL || hitTarget) {\n      const outcome = classifyPriceHitOutcome');
-    const reversal = src.indexOf("reason: 'BIAS_REVERSED' });");
+    const reversal = src.indexOf("reason: 'BIAS_REVERSED', quote: storedLegQuote(storedChain, stored!) });");
     expect(hit).toBeGreaterThan(0);
     expect(hold).toBeGreaterThan(hit);
     expect(reversal).toBeGreaterThan(hold);

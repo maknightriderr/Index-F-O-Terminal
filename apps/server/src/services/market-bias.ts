@@ -72,6 +72,7 @@ import {
 } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveSpotToken, resolveNearestFuturesContract, buildOptionChain } from './option-chain.js';
+import { ledgerTradeOf, observeChainLeg, recordLedger, recordMark, type QuoteObservation } from './paper-execution-ledger.js';
 import { buildFuturesData } from './futures.js';
 import { getCorporateActionsForSymbol } from './corporate-actions.js';
 import { cached } from '../lib/cache.js';
@@ -3111,6 +3112,9 @@ function recordSlotArbitration(underlying: string, exchange: Exchange, records: 
           role: r.role,
           rank: r.rank,
           preBuildRank: r.preBuildRank,
+          // Kept here because setup_events.rejection_reason is only written for REJECTED / SHADOW rows: an
+          // ARBITRATION row's refusal text (e.g. an ENGINE_ERROR's exception) was otherwise lost (2026-10-23).
+          reason: r.reason ?? null,
           parentId: r.slot.parentId,
           anchorKeys: r.slot.anchorKeys,
           refusalCode: r.refusalCode,
@@ -3352,13 +3356,14 @@ async function resolveStickyTradeSetup(
         exchange,
         mode,
         reason: closeReasonForPriceHit(stored!, isSpread, hitTarget),
+        quote: storedLegQuote(storedChain, stored!),
       });
       // falls through to fresh generation below (subject to the losing-close cooldown)
     } else if (slotAction.kind === 'HOLD_TRIGGER') {
       return surfaceSticky(stored!, currentValue, isSpread, storedChain, underlying);
     } else if (slotAction.kind === 'CLOSE') {
       logger.info({ underlying, exchange, mode, reason: slotAction.reason, held: stored!.strategy ?? 'CONSENSUS', heldDirection: stored!.direction }, 'Trigger family: closing the held setup');
-      await recordTradeSetupOutcome(stored!, 'EXPIRED', currentValue, { underlying, exchange, mode, reason: slotAction.reason });
+      await recordTradeSetupOutcome(stored!, 'EXPIRED', currentValue, { underlying, exchange, mode, reason: slotAction.reason, quote: storedLegQuote(storedChain, stored!) });
       // falls through to fresh generation below
     } else if (stored!.direction === direction) {
       // Bias still agrees with the locked setup — fully sticky. Clear any
@@ -3396,12 +3401,12 @@ async function resolveStickyTradeSetup(
       // Reversal confirmed across enough polls — inconclusive, not a loss.
       // Still worth a mark-to-market exit price where we can get one, so
       // it's not just a blank row in the backtest.
-      await recordTradeSetupOutcome(stored!, 'EXPIRED', currentValue, { underlying, exchange, mode, reason: 'BIAS_REVERSED' });
+      await recordTradeSetupOutcome(stored!, 'EXPIRED', currentValue, { underlying, exchange, mode, reason: 'BIAS_REVERSED', quote: storedLegQuote(storedChain, stored!) });
     }
   } else if (storedIsPlausible && stored?.signalId) {
     // Day rolled over — a setup from a prior session is unconditionally
     // stale regardless of direction, no debounce needed.
-    await recordTradeSetupOutcome(stored!, 'EXPIRED', currentExitValue(storedChain, stored!), { underlying, exchange, mode, reason: 'SESSION_ENDED' });
+    await recordTradeSetupOutcome(stored!, 'EXPIRED', currentExitValue(storedChain, stored!), { underlying, exchange, mode, reason: 'SESSION_ENDED', quote: storedLegQuote(storedChain, stored!) });
   } else if (!storedIsPlausible && stored?.available && stored?.signalId) {
     // A previously-implausible setup (e.g. a diverging IV solver's target,
     // or a bad-quote spread) is about to be silently replaced below — found
@@ -3409,7 +3414,7 @@ async function resolveStickyTradeSetup(
     // permanently stuck at outcome: null ("OPEN" forever), since neither
     // branch above ever ran for it. Close it out as EXPIRED first so the
     // self-heal doesn't leave a zombie row behind.
-    await recordTradeSetupOutcome(stored!, 'EXPIRED', currentExitValue(storedChain, stored!), { underlying, exchange, mode, reason: 'SETUP_INVALIDATED' });
+    await recordTradeSetupOutcome(stored!, 'EXPIRED', currentExitValue(storedChain, stored!), { underlying, exchange, mode, reason: 'SETUP_INVALIDATED', quote: storedLegQuote(storedChain, stored!) });
   }
 
   // ALL ENGINES → ALL CANDIDATES → PARENT GROUPING → COMMON ELIGIBILITY →
@@ -5799,6 +5804,11 @@ async function mintTradeSetup(ctx: {
       ? { source: 'MOMENTUM_BREAK', candidateId: `${ctx.momentumBreak.direction}:${ctx.momentumBreak.barTime}` }
       : { source: 'INDICATOR', candidateId: null };
   const signalId = await recordTradeSetupGenerated(underlying, exchange, fresh, direction, confidence, regime, intelligenceScore, mode, voteSnapshot, entryContext, logic, origin);
+  // Measurement only (LEDGER-1.0): the quote the entry was decided on, beside the official mid entry.
+  if (signalId && fresh.structureType !== 'SPREAD') {
+    const lt = ledgerTradeOf({ ...fresh, signalId, initialStopLoss: fresh.stopLoss }, underlying, exchange, mode);
+    if (lt) recordLedger({ event: 'ENTRY', trade: lt, quote: observeChainLeg(chain, fresh.strike, fresh.side ?? null, fresh.expiry ?? null, decisionNow()), closeReason: null, assignedFill: fresh.entry ?? null });
+  }
 
   logDecision({
     at: decisionNow(),
@@ -6030,6 +6040,13 @@ interface TradeCloseContext {
   exchange: Exchange;
   mode: TradingMode;
   reason: TradeCloseReason;
+  /** Measurement only (LEDGER-1.0): the quote observed when the exit fired. Never changes the recorded exit. */
+  quote?: QuoteObservation | null;
+}
+
+/** The observed quote of a stored setup's own contract on a chain (measurement only). */
+function storedLegQuote(chain: OptionChain | null, stored: StoredTradeSetup): QuoteObservation {
+  return observeChainLeg(chain, stored.strike, stored.side ?? null, stored.expiry ?? null, decisionNow());
 }
 
 async function recordTradeSetupOutcome(
@@ -6100,6 +6117,11 @@ async function recordTradeSetupOutcome(
     if (status === 'DUPLICATE') {
       logger.info({ signalId: stored.signalId, outcome, reason: close.reason }, 'Trade already closed by another caller — duplicate close ignored');
       return status;
+    }
+    // Measurement only (LEDGER-1.0): the observed quote beside the official exit price.
+    if (close.quote) {
+      const lt = ledgerTradeOf(stored, close.underlying, close.exchange, close.mode);
+      if (lt) recordLedger({ event: 'EXIT', trade: lt, quote: close.quote, closeReason: close.reason, assignedFill: exitValue });
     }
     // Measurement only (2026-10-09): watch the contract and its underlying for the rest of the session. Changes nothing about this close.
     registerPostExitWatch(stored, {
@@ -6348,6 +6370,8 @@ export interface LockedSetupWatch {
   token: string;
   stopLoss: number;
   target: number;
+  /** The trade row (measurement only: the execution ledger's MARK rows). */
+  signalId?: string;
 }
 
 /**
@@ -6368,7 +6392,9 @@ export async function checkLockedSetupPriceLevels(
   exchange: Exchange,
   underlying: string,
   mode: TradingMode = 'INTRADAY',
-  observedLtp?: number
+  observedLtp?: number,
+  /** Measurement only (LEDGER-1.0): the tick behind observedLtp, for the execution ledger. */
+  observedTick?: QuoteObservation
 ): Promise<LockedSetupWatch | null> {
   const key = `trade_setup:${exchange}:${underlying}:${mode}`;
 
@@ -6408,7 +6434,7 @@ export async function checkLockedSetupPriceLevels(
     // comparison: 32 DB rows had no outcome, but only 9 were still backed
     // by a real Redis key; the other 23 were exactly this. Same close-out
     // resolveStickyTradeSetup itself uses for a same-poll day rollover.
-    await recordTradeSetupOutcome(stored, 'EXPIRED', currentExitValue(pricingChain, stored), { underlying, exchange, mode: 'INTRADAY', reason: 'SESSION_ENDED' });
+    await recordTradeSetupOutcome(stored, 'EXPIRED', currentExitValue(pricingChain, stored), { underlying, exchange, mode: 'INTRADAY', reason: 'SESSION_ENDED', quote: storedLegQuote(pricingChain, stored) });
     try {
       await delSlotIfSame(key, slotIdentity(stored));
     } catch (err: any) {
@@ -6446,7 +6472,7 @@ export async function checkLockedSetupPriceLevels(
     hitSL = currentLtp != null && currentLtp <= stored.stopLoss;
     hitTarget = currentLtp != null && currentLtp >= stored.target;
     const token = pricingChain ? findLeg(pricingChain, stored.strike, stored.side)?.token : undefined;
-    if (token) watch = { underlying, exchange, mode, token, stopLoss: stored.stopLoss, target: stored.target };
+    if (token) watch = { underlying, exchange, mode, token, stopLoss: stored.stopLoss, target: stored.target, ...(stored.signalId ? { signalId: stored.signalId } : {}) };
   } else {
     return null;
   }
@@ -6531,7 +6557,12 @@ export async function checkLockedSetupPriceLevels(
     }
   }
 
-  if (!hitSL && !hitTarget) return watch;
+  if (!hitSL && !hitTarget) {
+    // Measurement only (LEDGER-1.0): at most one quote a minute while the trade is open, from this sweep's own chain read.
+    const lt = !isSpread ? ledgerTradeOf(stored, underlying, exchange, mode) : null;
+    if (lt) recordMark(lt, observedTick ?? storedLegQuote(pricingChain, stored));
+    return watch;
+  }
 
   const outcome = classifyPriceHitOutcome(stored, isSpread, hitTarget);
   await recordTradeSetupOutcome(stored, outcome, exitValueForPriceHit(stored, isSpread, hitTarget, currentValue), {
@@ -6539,6 +6570,8 @@ export async function checkLockedSetupPriceLevels(
     exchange,
     mode,
     reason: closeReasonForPriceHit(stored, isSpread, hitTarget),
+    // The tick that fired the check, when there was one; else the chain quote.
+    quote: observedTick && observedLtp != null && observedTick.ltp === observedLtp ? observedTick : storedLegQuote(pricingChain, stored),
   });
   // recordTradeSetupOutcome only updates the DB row — resolveStickyTradeSetup's
   // on-demand path normally clears/overwrites this Redis key itself right

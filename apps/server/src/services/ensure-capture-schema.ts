@@ -129,6 +129,8 @@ export const FILES = [
   '042_config_registry.sql',
   // Storage: drop oi_snapshots' four unused indexes; the lossless archive of raw OI past retention (audit OPS-1).
   '043_oi_storage.sql',
+  // Measurement only: the paper execution ledger — observed quotes beside the official paper prices (LEDGER-1.0).
+  '044_paper_execution_ledger.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */
