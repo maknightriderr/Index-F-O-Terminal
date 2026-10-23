@@ -1,0 +1,39 @@
+{
+  "name": "trigger-capture-arms",
+  "version": "EXP-3.0",
+  "frozen_at": "2026-10-23T15:30:00+05:30",
+  "activation": "Each arm version's real activation instant is written by production to experiment_arms.activated_at the first time the engine starts after deploy. Only positions opened at or after it exist. The EXP-2.0 Indicator arms keep their versions and activation instants (unchanged).",
+  "status_at_freeze": "BUILT, NOT MERGED, NOT ACTIVE (branch feat/a3-of1-arms)",
+  "what_this_is": "MEASUREMENT, NOT A STRATEGY CHANGE. No A3 or OF1 rule is changed: the evidence did not support a V2 for either (analysis/a3-of1-2026-10-23/a3_of1_diagnosis.md). These arms give option-level outcomes to every routed A3 / OF1 candidate, including those that lose production arbitration or meet a held production slot.",
+  "code": {
+    "core": "apps/server/src/services/experiment-arms.ts (ARMS A3R, OF1R)",
+    "engine": "apps/server/src/services/experiment-engine.ts (triggerCandidates, one position per arm per routed candidate)",
+    "candidate_builder": "apps/server/src/services/market-bias.ts buildTriggerExperimentCandidate (runs buildStructureContract, the production structure chain's own contract build)",
+    "kill_switch": "EXPERIMENT_ARMS=off"
+  },
+  "scope": {
+    "strategies": ["A3", "OF1"],
+    "mode": "INTRADAY, 15m candidates only",
+    "never": ["positional trades", "broker execution", "the production baseline's state", "the EXP-2.0 Indicator arms"]
+  },
+  "candidate_stream": "The router's MULTIPATH family candidates with triggerId A3 / OF1 on each production poll (paper stage, computed before the production slot logic), built side-effect free behind the production structure chain's stateless gates: risk-off when enabled, feed quality, session window, reliability, sequence check, pre-mint check. Each routed candidate (lifecycleId) is taken at most once per arm.",
+  "independent_state_per_arm": {
+    "slot": "one open official position per symbol+mode",
+    "cooldowns": "the baseline's rules applied to the arm's OWN official stop-outs",
+    "exits": "target; stop with trailing; SWEEP_RECLAIMED (a closed 15m bar after entry back beyond the sweep extreme, as production's triggerSlotAction); session end. No bias-reversal exit (production has none for trigger trades).",
+    "divergence_from_production": "TRIGGER_REVERSAL (an opposite trigger claim later in the poll) is not replicated; 1 occurrence in the trigger trade history."
+  },
+  "arms": {
+    "A3R": {"version": "A3-R0-1.0", "kind": "CONTROL_REPLICA", "rule": "every routed A3 candidate, production rules"},
+    "OF1R": {"version": "OF1-R0-1.0", "kind": "CONTROL_REPLICA", "rule": "every routed OF1 candidate, production rules"}
+  },
+  "ledgers": "Official (FILL-1.0: decision mid entry, target at min(LTP, target), other exits at LTP, the official cost model) and simulated (ask entry, bid exits, target only when the bid reaches it, fresh quote <= 60 s exchange age or <= 15 s receipt, >= 1 lot; otherwise NOT_OPENED / EXIT_PENDING / UNRESOLVED), reported apart. Same as EXP-2.0.",
+  "recorded_context_not_read_by_rules": ["decisionTime", "rToT1", "bucket", "arbitrationRole", "triggerId", "sweepExtreme"],
+  "comparisons": {
+    "replication": "A3R / OF1R positions vs production A3 / OF1 trades in the same period, matched on candidateId = lifecycleId",
+    "arbitration_losses": "positions whose arbitrationRole is not SELECTED, reported apart",
+    "hypotheses": "analysis/a3-of1-2026-10-23/hypotheses.json (A3-OF1-HYP-1.0), each at its own minimum session count"
+  },
+  "counting": "Open, EXIT_PENDING, NOT_OPENED and UNRESOLVED positions are counted, never given a return. Exchange-session bootstrap, 90%.",
+  "promotion": "none automatic; any rule change is a separate proposal"
+}

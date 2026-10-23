@@ -1,0 +1,26 @@
+{
+  "name": "trigger-capture-arms",
+  "version": "EXP-3.1",
+  "frozen_at": "2026-10-23T16:30:00+05:30",
+  "supersedes": "EXP-3.0 (definitions_exp3.json, sha256 10a1dc3f...): A3-R0-1.0 / OF1-R0-1.0, activated 2026-10-23 15:20:07 IST on 133b82e. Those versions keep their activation rows and their positions, which finish under 1.0 rules. They take no new candidate once 3.1 is deployed. Results from 1.0 and 1.1 are reported apart, never pooled.",
+  "activation": "experiment_arms.activated_at of A3-R0-1.1 / OF1-R0-1.1, written by production at the first engine start after deploy.",
+  "status_at_freeze": "BUILT, NOT MERGED, NOT ACTIVE (branch fix/exp3-trigger-fidelity)",
+  "what_this_is": "MEASUREMENT, NOT A STRATEGY CHANGE. No A3 or OF1 trading rule is changed. 1.1 corrects the replicas' fidelity to production.",
+  "changes_from_1_0": {
+    "trigger_reversal_exit": "Added. Production (momentum-break-live.ts triggerSlotAction) closes a held trigger trade with TRIGGER_REVERSAL when a fresh trigger the other way is claimed in the same poll: a momentum-break trigger (MOMENTUM_BREAK, off by default) or an S1 structure fill (STRUCTURE, on by default). 1.0 omitted it. The arm reads the same decision, made by the same code (structureFillDecision, shared with claimStructureFill) with no claim. Each trigger counts once by the claim's own id, as the Redis NX claim does. Checked after SWEEP_RECLAIMED, as in production.",
+    "candidate_recording": "1.0 recorded a decision only for candidates it built. 1.1 records every routed A3 / OF1 candidate once per arm: TAKE, the arm's own skip codes, ARM_SLOT_HELD when the arm's slot is held (never built), and NOT_BUILT when the stateless gates or the contract build refused it.",
+    "arbitration_split": "Replaced. 1.0's recorded arbitrationRole is the router's observation arbitration: present for A3, always null for OF1 (order-flow candidates join the pool without it). Production's real selection happens later in slot arbitration. The report therefore classifies each position by whether production traded the same candidate id (signals.inputs.candidateId = lifecycleId)."
+  },
+  "known_divergences": [
+    "Restart inside a trigger's bar: the arm's set of seen trigger ids is in memory, so a fill still visible after a restart could count once more. Restarts are outside market hours.",
+    "Simulated fills use chain / tick quotes. Chain quotes carry no exchange time, so freshness is judged on receipt (<= 15 s)."
+  ],
+  "unchanged": "Everything else in EXP-3.0: candidate stream, independent slot, cooldowns and exits, both ledgers, counting, no automatic promotion. The EXP-2.0 Indicator arms (R0/A/B/C/V2) are untouched.",
+  "indicator_arms_note": "Production also applies TRIGGER_REVERSAL to Old Indicator trades (8 of 13 TRIGGER_REVERSAL closes in the trade history through 23 Oct). R0 does not replicate it. This is left as activated: changing it would redefine the active EXP-2.0 arms. It affects R0 and V2 alike, so their comparison is like-for-like, but R0 differs from production on those closes.",
+  "arms": {
+    "A3R": {"version": "A3-R0-1.1", "kind": "CONTROL_REPLICA", "rule": "every routed A3 candidate, production rules including TRIGGER_REVERSAL"},
+    "OF1R": {"version": "OF1-R0-1.1", "kind": "CONTROL_REPLICA", "rule": "every routed OF1 candidate, production rules including TRIGGER_REVERSAL"}
+  },
+  "hypotheses": "hypotheses_a3_of1.json (A3-OF1-HYP-1.0, sha256 d0afcd03...), unchanged",
+  "report": "exp3_report.py"
+}

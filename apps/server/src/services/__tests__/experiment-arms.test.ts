@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   ARMS,
+  RETIRED_ARMS,
+  armFor,
   armCooldownCode,
   armEntryDecision,
   fillBlocker,
@@ -148,7 +150,8 @@ describe('EXP-3.0 trigger capture arms (A3R, OF1R)', () => {
   it('the Indicator arms are unchanged: same versions, bias-reversal exit, no structural exit', () => {
     expect(ARMS.filter((a) => a.source === 'INDICATOR').map((a) => a.version)).toEqual(['R0-REPLICA-1.0', 'A-TARGET-0.5R-1.0', 'B-NO-LATE-NSE-1.0', 'C-A-AND-B-1.0', 'IND-V2-INVALIDATION-1.0']);
     expect(ARMS.filter((a) => a.source === 'INDICATOR').every((a) => a.biasReversalExit && !a.structureExit)).toBe(true);
-    expect(ARMS.filter((a) => a.source !== 'INDICATOR').map((a) => [a.id, a.version, a.kind, a.source])).toEqual([['A3R', 'A3-R0-1.0', 'CONTROL_REPLICA', 'A3'], ['OF1R', 'OF1-R0-1.0', 'CONTROL_REPLICA', 'OF1']]);
+    expect(ARMS.filter((a) => a.source !== 'INDICATOR').map((a) => [a.id, a.version, a.kind, a.source])).toEqual([['A3R', 'A3-R0-1.1', 'CONTROL_REPLICA', 'A3'], ['OF1R', 'OF1-R0-1.1', 'CONTROL_REPLICA', 'OF1']]);
+    expect(ARMS.filter((a) => a.source === 'INDICATOR').every((a) => !a.triggerReversalExit)).toBe(true); // EXP-2.0 arms as activated
   });
   it('SWEEP_RECLAIMED: a bar closing after entry back beyond the sweep extreme exits a trigger arm; a bias read never does', () => {
     const p = openPosition(arm('A3R'), cand({ sweepExtreme: 2385, triggerId: 'A3' }), 's1', T0);
@@ -161,5 +164,35 @@ describe('EXP-3.0 trigger capture arms (A3R, OF1R)', () => {
     expect(onDecisionRead(bear, arm('OF1R'), read({ lastClosedBar: { close: 2421, closeAt: T0 + 15 * 60_000 } }))).toContain('OFFICIAL_SWEEP_RECLAIMED');
     const before = openPosition(arm('A3R'), cand({ sweepExtreme: 2385 }), 's3', T0);
     expect(onDecisionRead(before, arm('A3R'), read({ lastClosedBar: { close: 2300, closeAt: T0 - 60_000 } }))).toEqual([]);
+  });
+});
+
+describe('EXP-3.1: TRIGGER_REVERSAL on the trigger arms (production triggerSlotAction)', () => {
+  const read = (o: object = {}) => ({ at: T0 + 30 * 60_000, direction: 'NEUTRAL', confidence: 0, minConfidence: 60, confirmMs: 0, lastClosedBar: null, ...o });
+  it('a fresh trigger the other way closes a held A3R / OF1R trade; one the same way does not', () => {
+    const p = openPosition(arm('A3R'), cand({ sweepExtreme: 2385, triggerId: 'A3' }), 't1', T0);
+    expect(onDecisionRead(p, arm('A3R'), read({ freshTriggers: [{ direction: 'BULLISH' }] }))).toEqual([]);
+    expect(onDecisionRead(p, arm('A3R'), read({ freshTriggers: [{ direction: 'BEARISH' }] }))).toContain('OFFICIAL_TRIGGER_REVERSAL');
+    expect(p.official.reason).toBe('TRIGGER_REVERSAL');
+    const bear = openPosition(arm('OF1R'), cand({ direction: 'BEARISH', side: 'PE', sweepExtreme: 2420, triggerId: 'OF1' }), 't2', T0);
+    expect(onDecisionRead(bear, arm('OF1R'), read({ freshTriggers: [{ direction: 'BULLISH' }] }))).toContain('OFFICIAL_TRIGGER_REVERSAL');
+  });
+  it('SWEEP_RECLAIMED is judged first, as in production', () => {
+    const p = openPosition(arm('A3R'), cand({ sweepExtreme: 2385 }), 't3', T0);
+    onDecisionRead(p, arm('A3R'), read({ lastClosedBar: { close: 2384, closeAt: T0 + 15 * 60_000 }, freshTriggers: [{ direction: 'BEARISH' }] }));
+    expect(p.official.reason).toBe('SWEEP_RECLAIMED');
+  });
+  it('the Indicator arms and the retired 1.0 trigger arms keep their rules: no TRIGGER_REVERSAL', () => {
+    for (const a of [...ARMS.filter((x) => x.source === 'INDICATOR'), ...RETIRED_ARMS]) {
+      const p = openPosition(a, cand({ sweepExtreme: 2385 }), 'r-' + a.id, T0);
+      expect(onDecisionRead(p, a, read({ freshTriggers: [{ direction: 'BEARISH' }] }))).not.toContain('OFFICIAL_TRIGGER_REVERSAL');
+    }
+  });
+  it('a position resolves to the version it was opened under', () => {
+    expect(armFor('A3R', 'A3-R0-1.0')?.triggerReversalExit).toBe(false);
+    expect(armFor('A3R', 'A3-R0-1.1')?.triggerReversalExit).toBe(true);
+    expect(armFor('R0', 'R0-REPLICA-1.0')?.biasReversalExit).toBe(true);
+    expect(armFor('A3R', 'A3-R0-9.9')).toBeNull();
+    expect(RETIRED_ARMS.map((a) => a.version)).toEqual(['A3-R0-1.0', 'OF1-R0-1.0']);
   });
 });

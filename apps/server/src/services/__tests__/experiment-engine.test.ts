@@ -105,6 +105,45 @@ describe('EXP-3.0: routed trigger candidates feed only their own capture arm, on
     await E.onIndicatorPoll(poll({ at: T0 + 15 * 60_000, direction: 'NEUTRAL', triggerCandidates: [trig('OF1', 'NSE:TCS:MP:OF1:BULLISH:2', { at: T0 + 15 * 60_000 })] }));
     expect(E.__positions().map((p) => p.arm)).toEqual(['OF1R']); // a new candidate is a new position
   });
+  it('a fresh opposite trigger closes the held A3R trade on its first poll only (as the claim), never again', async () => {
+    await E.onIndicatorPoll(poll({ direction: 'NEUTRAL', triggerCandidates: [trig('A3', 'NSE:TCS:MP:A3:BULLISH:1')] }));
+    const fresh = [{ id: 'S:lc-9', direction: 'BEARISH' as const }];
+    await E.onIndicatorPoll(poll({ at: T0 + 60_000, direction: 'NEUTRAL', freshTriggers: fresh }));
+    expect(E.__positions()[0].official).toMatchObject({ status: 'CLOSED', reason: 'TRIGGER_REVERSAL' }); // its simulated exit waits for a fresh bid
+    await E.onIndicatorPoll(poll({ at: T0 + 120_000, direction: 'NEUTRAL', triggerCandidates: [trig('A3', 'NSE:TCS:MP:A3:BULLISH:2', { at: T0 + 120_000 })] }));
+    await E.onIndicatorPoll(poll({ at: T0 + 180_000, direction: 'NEUTRAL', freshTriggers: fresh })); // the same trigger, seen again
+    expect(E.__positions().filter((p) => p.official.status === 'OPEN').map((p) => p.candidate.candidateId)).toEqual(['NSE:TCS:MP:A3:BULLISH:2']);
+  });
+  it('a position opened under a retired version finishes under that version (no TRIGGER_REVERSAL for 1.0)', async () => {
+    await E.onIndicatorPoll(poll({ direction: 'NEUTRAL', triggerCandidates: [trig('A3', 'NSE:TCS:MP:A3:BULLISH:1')] }));
+    const p = E.__positions()[0];
+    p.armVersion = 'A3-R0-1.0';
+    await E.onIndicatorPoll(poll({ at: T0 + 60_000, direction: 'NEUTRAL', freshTriggers: [{ id: 'S:lc-7', direction: 'BEARISH' }] }));
+    expect(E.__positions()).toHaveLength(1);
+  });
+  it('every routed candidate is recorded: a held slot (ARM_SLOT_HELD) and a refused build (NOT_BUILT) included', async () => {
+    await E.onIndicatorPoll(poll({ direction: 'NEUTRAL', triggerCandidates: [trig('A3', 'NSE:TCS:MP:A3:BULLISH:1')] }));
+    m.writes.length = 0;
+    let built = 0;
+    await E.onIndicatorPoll(poll({ at: T0 + 60_000, direction: 'NEUTRAL', triggerCandidates: [{ source: 'A3' as const, candidateId: 'NSE:TCS:MP:A3:BULLISH:2', build: async () => { built++; return candidate(); } }] }));
+    expect(built).toBe(0); // never built while the arm's slot is held
+    expect(m.writes.filter((w) => w === 'INSERT INTO experiment_decisions')).toHaveLength(1);
+    await E.onIndicatorPoll(poll({ at: T0 + 60_000, direction: 'NEUTRAL', triggerCandidates: [{ source: 'OF1' as const, candidateId: 'NSE:TCS:MP:OF1:BULLISH:3', build: async () => null }] }));
+    expect(m.writes.filter((w) => w === 'INSERT INTO experiment_decisions')).toHaveLength(2);
+    const eng = read('src/services/experiment-engine.ts');
+    expect(eng).toMatch(/recordDecision\(arm, id, false, 'ARM_SLOT_HELD', poll\.at\)/);
+    expect(eng).toMatch(/recordDecision\(arm, id, false, 'NOT_BUILT', poll\.at\)/);
+  });
+  it("the fresh triggers are decided side effect free by the claims' own code, before the claims", () => {
+    const mb = read('src/services/market-bias.ts');
+    const hook = mb.slice(mb.indexOf('freshTriggers: ['), mb.indexOf('const trigger = momentumFamily?.trigger ? await claimMomentumTrigger'));
+    expect(hook).toMatch(/structureFillDecision\(structureFamily, chain\.spotPrice, structureFamily\.lastClosedBar \?\? lastClosedBar\)\.fill/);
+    expect(hook).not.toMatch(/redis\.|recordStructureOutcome|claimStructureFill\(/);
+    const claim = mb.slice(mb.indexOf('async function claimStructureFill('), mb.indexOf('async function claimStructureFill(') + 900);
+    expect(claim).toMatch(/const \{ fill: candidate, refused \} = structureFillDecision\(family, spot, closedBar\);/);
+    const decide = mb.slice(mb.indexOf('function structureFillDecision('), mb.indexOf('async function claimStructureFill('));
+    expect(decide).not.toMatch(/await|redis\.|recordStructureOutcome/);
+  });
   it('a candidate production never selects still reaches its arm (the arm does not read production arbitration)', () => {
     const mb = read('src/services/market-bias.ts');
     const hook = mb.slice(mb.indexOf('triggerCandidates: (triggers?.families'), mb.indexOf('triggerCandidates: (triggers?.families') + 600);
