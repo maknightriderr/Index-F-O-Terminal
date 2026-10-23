@@ -101,7 +101,7 @@ describe('no universal displacement gate', () => {
     expect(EVENT_ENGINE_TRIGGER_IDS).toEqual(TRIGGER_REGISTRY.map((t) => t.triggerId).filter((id) => id !== 'S1'));
   });
   it('trigger rows are versioned so pre-change rows stay distinguishable', () => {
-    expect(TRIGGER_VERSION).toBe('FAMILIES-1.0');
+    expect(TRIGGER_VERSION).toBe('FAMILIES-1.1');
   });
 });
 

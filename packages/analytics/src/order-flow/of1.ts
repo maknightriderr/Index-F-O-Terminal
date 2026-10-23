@@ -1,5 +1,5 @@
 // ============================================================
-// OF1 — Order Flow Confirmation (pre-registered, OF1-1.0)
+// OF1 — Order Flow Confirmation (pre-registered OF1-1.0; OF1-1.1 from 2026-10-23)
 // ============================================================
 // LOCATION + ORDER FLOW + PRICE RESPONSE, judged at the close of a decision
 // bar i on bars ≤ i only. Independent of every other family: it needs no
@@ -11,17 +11,31 @@
 //              an unfilled bullish FVG, a FRESH OB-2.0 block, the previous
 //              session's VAL / POC / VAH, a confirmed swing low — that bar i
 //              reaches: low_i ≤ level + locationTolAtr × ATR. The nearest such
-//              level to bar i's low is the location.
-//   PRICE      bar i closes above the level (reclaim / hold) and in the
-//              upper half of its own range.
+//              level to bar i's low is the location. The bar's interaction
+//              with it is recorded: TRADED_THROUGH (low_i ≤ level: it traded
+//              at or through the level) or NEAR_TEST (low_i within the
+//              tolerance above it: it came close and turned without trading
+//              at the level). A NEAR_TEST is a hold near the level, never a
+//              reclaim or a tested acceptance.
+//   PRICE      bar i closes above the level (reclaim when TRADED_THROUGH,
+//              hold when NEAR_TEST) and in the upper half of its own range.
 //   FLOW       at least minFlowEvidence of these, counted only where the
 //              footprint can measure them (an unmeasurable item never counts):
 //                DELTA        deltaPct ≥ deltaPctMin
 //                IMBALANCE    ≥ minImbalances buy-imbalance levels
 //                ABSORPTION   selling absorbed at the lows (order-flow/index.ts)
 //                POC_UP       the bar's POC above the previous bar's POC
-//                ACCEPTANCE   ≥ acceptanceShare of the bar's volume above the level
+//                ACCEPTANCE   ≥ acceptanceShare of the bar's volume above the level,
+//                             measurable only when the bar TRADED_THROUGH the
+//                             level (OF1-1.1): a bar that never traded at it has
+//                             all its volume above it by construction, which
+//                             says nothing about acceptance (1.0 counted it:
+//                             113 of 117 NEAR_TEST candidates, 9-23 Oct)
 //              and the footprint must exist (deltaMode ≠ UNAVAILABLE).
+//   The flow is INFERRED, never observed: the feed carries no aggressor side, so
+//   each trade's side is inferred (quote rule, else tick rule — the live ticks
+//   carry no book, so in practice the tick rule). DELTA, IMBALANCE, ABSORPTION
+//   and ACCEPTANCE read those inferred sides (flowBasis = 'INFERRED').
 // Entry = close_i. Stop = min(low_i, level) − stopBufferAtr × ATR. T1 = the
 // nearest RESISTANCE level above the entry by ≥ targetMinAtr × ATR (none →
 // no target: recorded, never tradeable).
@@ -32,7 +46,7 @@ import { detectFairValueGaps } from '../fvg/index.js';
 import { findSwingPoints } from '../patterns/index.js';
 import { absorption, valueArea, volumeShareBeyond, type DeltaMode, type FootprintBar } from './index.js';
 
-export const OF1_VERSION = 'OF1-1.0';
+export const OF1_VERSION = 'OF1-1.1';
 
 export const OF1_RULES = Object.freeze({
   locationTolAtr: 0.25,
@@ -75,6 +89,10 @@ export interface Of1Candidate {
   evidence: Of1Evidence[];
   /** Evidence items that could be measured on this footprint. */
   measurable: Of1Evidence[];
+  /** OF1-1.1: whether bar i traded at / through the level, or only came within the location tolerance of it. */
+  levelInteraction: 'TRADED_THROUGH' | 'NEAR_TEST';
+  /** The order-flow measures are inferred from trade prices (no aggressor side in the feed), never observed. */
+  flowBasis: 'INFERRED';
   deltaMode: DeltaMode;
   delta: number | null;
   deltaPct: number | null;
@@ -150,6 +168,7 @@ export function evaluateOf1(bars: readonly Of1Bar[], i: number, footprints: Read
     const range = bar.high - bar.low;
     const halfOk = range > 0 && (bull ? bar.close >= bar.low + range / 2 : bar.close <= bar.high - range / 2);
     if (!halfOk) continue;
+    const tradedThrough = bull ? bar.low <= loc.price : bar.high >= loc.price;
 
     const measurable: Of1Evidence[] = [];
     const evidence: Of1Evidence[] = [];
@@ -162,7 +181,8 @@ export function evaluateOf1(bars: readonly Of1Bar[], i: number, footprints: Read
     take('IMBALANCE', fp.delta == null ? null : (bull ? fp.buyImbalances : fp.sellImbalances) >= R.minImbalances);
     take('ABSORPTION', absorption(fp, bar, dir));
     take(bull ? 'POC_UP' : 'POC_DOWN', fp.poc == null || prevFp?.poc == null ? null : bull ? fp.poc > prevFp.poc : fp.poc < prevFp.poc);
-    const share = volumeShareBeyond(fp, loc.price, bull ? 'ABOVE' : 'BELOW');
+    // Acceptance needs volume on both sides of the level to mean anything: unmeasurable on a NEAR_TEST (OF1-1.1).
+    const share = tradedThrough ? volumeShareBeyond(fp, loc.price, bull ? 'ABOVE' : 'BELOW') : null;
     take('ACCEPTANCE', share == null ? null : share >= R.acceptanceShare);
     if (evidence.length < R.minFlowEvidence) continue;
 
@@ -187,6 +207,8 @@ export function evaluateOf1(bars: readonly Of1Bar[], i: number, footprints: Read
       target,
       evidence,
       measurable,
+      levelInteraction: tradedThrough ? 'TRADED_THROUGH' : 'NEAR_TEST',
+      flowBasis: 'INFERRED',
       deltaMode: fp.deltaMode,
       delta: fp.delta,
       deltaPct: fp.deltaPct,
@@ -195,7 +217,13 @@ export function evaluateOf1(bars: readonly Of1Bar[], i: number, footprints: Read
       val: fp.val,
       imbalances: bull ? fp.buyImbalances : fp.sellImbalances,
       absorption: absorption(fp, bar, dir),
-      priceConfirmation: bull ? `closed ${entry} above ${loc.kind} ${round(loc.price)}, upper half of its range` : `closed ${entry} below ${loc.kind} ${round(loc.price)}, lower half of its range`,
+      priceConfirmation: tradedThrough
+        ? bull
+          ? `reclaimed ${loc.kind} ${round(loc.price)}: traded through it, closed ${entry} above it, upper half of its range`
+          : `reclaimed ${loc.kind} ${round(loc.price)}: traded through it, closed ${entry} below it, lower half of its range`
+        : bull
+          ? `held above ${loc.kind} ${round(loc.price)} without trading at it (near-test), closed ${entry}, upper half of its range`
+          : `held below ${loc.kind} ${round(loc.price)} without trading at it (near-test), closed ${entry}, lower half of its range`,
     });
   }
   return out;

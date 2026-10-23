@@ -114,7 +114,7 @@ describe('wiring and tagging', () => {
     expect(mb).toMatch(/const orderBlocks = detectOrderBlocksLegacy\(c15\.highs, c15\.lows, c15\.closes\);/);
   });
   it('each trade carries its source and version; the backtest splits them out', () => {
-    expect(flags.ORDER_FLOW_SOURCE_VERSIONS).toEqual({ OB1: 'OB-2.0', OF1: 'OF1-1.0' });
+    expect(flags.ORDER_FLOW_SOURCE_VERSIONS).toEqual({ OB1: 'OB-2.0', OF1: 'OF1-1.1' });
     expect(mb).toMatch(/sourceVersion: ORDER_FLOW_SOURCE_VERSIONS\[ctx\.structure\.triggerId \?\? ''\] \?\? null/);
     expect(sourceOfSetup({ strategy: 'STRUCTURE', source: 'OB1' })).toBe('OB1');
     expect(sourceOfSetup({ strategy: 'STRUCTURE', logicVersion: 'x+paper-research.OF1' })).toBe('OF1');

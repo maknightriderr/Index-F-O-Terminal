@@ -2653,6 +2653,8 @@ interface StoredStructureTrade {
   /** The limit (underlying) and where the live price actually was when it filled. */
   entry: number;
   fillSpot: number;
+  /** FAMILIES-1.1: R to T1 left from fillSpot (the option's geometry); rToT1 stays the setup's own, from its entry. */
+  remainingRToT1?: number | null;
   fillAt: number;
   stop: number;
   t1: { kind: string; price: number };
@@ -4311,6 +4313,7 @@ export async function buildIndicatorExperimentCandidate(a: {
     brokeragePerLotInr: 2 * TRADING_COST_MODEL.brokeragePerOrder * (1 + TRADING_COST_MODEL.gstPct / 100),
     minutesSinceOpen: minutesSinceSessionOpen(exchange, at),
     behindLevel: entryContext?.locationBehindLevel ?? null,
+    behindKind: entryContext?.locationBehindKind ?? null,
     atr: entryContext?.atrPoints ?? null,
     quote: toExpQuote(quote),
   };
@@ -5088,6 +5091,33 @@ async function recordStructureOutcome(
 type StructureClosedBar = { time: number; close: number; open?: number; high?: number; low?: number } | null;
 
 /**
+ * The underlying price a structure-chain trade is built from: its stop distance, its target move and the
+ * STRUCTURE_SEQUENCE check (still between the stop and T1).
+ *
+ * S1 (REJECTION_CLOSE): the confirming bar's close, as before.
+ * Trigger families (FAMILIES-1.1): the live spot. Their option is bought at the live
+ * chain's mid, so a premium target and stop measured from the decision bar's close
+ * describe a move that has partly happened already. 1.0 did this: on 9-23 Oct, 14 of 53
+ * A3 / OF1 trades drifted >= 0.25 R between the close and the entry (SILVER 956c21ca:
+ * 1.1 R), and its validity check never saw the live price. The bar close stays the
+ * setup's own entry (lc.entry).
+ */
+/**
+ * Pure: the risk and reward LEFT from the entry spot to the setup's own structural levels (the stop and T1 are never
+ * moved; only the distances are measured from where the option is bought). remainingRToT1 is null without risk.
+ */
+export function remainingGeometry(lc: Pick<LiveLifecycle, 'stop' | 't1'>, spot: number): { stopDistance: number; targetMove: number; remainingRToT1: number | null } {
+  const stopDistance = Math.abs(lc.stop! - spot);
+  const targetMove = Math.abs(lc.t1!.price - spot);
+  return { stopDistance, targetMove, remainingRToT1: stopDistance > 0 ? Math.round((targetMove / stopDistance) * 1000) / 1000 : null };
+}
+
+export function structureEntrySpot(lc: Pick<LiveLifecycle, 'triggerId' | 'rejectionFillPrice'>, chain: Pick<OptionChain, 'spotPrice'>): number {
+  if (lc.triggerId && Number.isFinite(chain.spotPrice) && chain.spotPrice > 0) return chain.spotPrice;
+  return lc.rejectionFillPrice ?? chain.spotPrice;
+}
+
+/**
  * Pure: the structure fill this poll would claim (the candidate selection of claimStructureFill, without its claim or
  * its refusal record). Shared by claimStructureFill and the experiment engine's TRIGGER_REVERSAL mirror.
  */
@@ -5173,7 +5203,7 @@ export async function buildTriggerExperimentCandidate(a: {
   const lc = lifecycleFromCandidate(rc);
   if ((lc.direction !== 'BULLISH' && lc.direction !== 'BEARISH') || lc.timeframe === '5m' || lc.stop == null || lc.t1 == null) return null;
   const direction = lc.direction;
-  const spot = lc.rejectionFillPrice ?? chain.spotPrice;
+  const spot = structureEntrySpot(lc, chain);
   const side: 'CE' | 'PE' = direction === 'BEARISH' ? 'PE' : 'CE';
   const riskOff = DAILY_RISK_BREAKER_ENABLED ? await riskOffReason(exchange, mode) : null;
   const reliability = riskOff ? null : await checkReliabilityFilters(underlying, exchange, direction, mode);
@@ -5241,8 +5271,7 @@ async function buildStructureContract(a: {
   at: number;
 }) {
   const { provider, underlying, exchange, chain, lc, spot, side, direction, confidence, optionAtr, fiveMinute, entryContext, at } = a;
-  const stopDistance = Math.abs(lc.stop! - spot);
-  const targetMove = Math.abs(lc.t1!.price - spot);
+  const { stopDistance, targetMove } = remainingGeometry(lc, spot);
   const vix = await lookupIndiaVix(provider, exchange);
   const ivRank = await ivRankFor(underlying, chain.expiry, computeAtmIv(chain)).catch((err: any) => {
     logger.warn({ error: err.message, underlying }, 'Structure: IV rank unavailable — building without it');
@@ -5335,10 +5364,11 @@ async function resolveStructureSetup(ctx: {
   const direction: BiasDirection = lc.direction;
   const confidence = STRUCTURE_SEQUENCE_CONFIDENCE;
   const at = decisionNow();
-  // REJECTION_CLOSE: the real fill is the confirming bar's own close, set by
+  // REJECTION_CLOSE (S1): the real fill is the confirming bar's own close, set by
   // claimStructureFill — not necessarily the live spot at the time this poll
-  // runs. TOUCH (default): the live spot IS the fill.
-  const spot = lc.rejectionFillPrice ?? chain.spotPrice;
+  // runs. TOUCH (default): the live spot IS the fill. Trigger families: the live
+  // spot, where their option is bought (structureEntrySpot, FAMILIES-1.1).
+  const spot = structureEntrySpot(lc, chain);
   const side: 'CE' | 'PE' = direction === 'BEARISH' ? 'PE' : 'CE';
   // 5m mode: lc.atr is the 5m ATR. The option leg keeps the 15m ATR as
   // atrPoints (target, structural stop — at the engine's own stop) and gets
@@ -5370,6 +5400,7 @@ async function resolveStructureSetup(ctx: {
     zone: lc.zone,
     entry: lc.entry!,
     fillSpot: spot,
+    remainingRToT1: remainingGeometry(lc, spot).remainingRToT1,
     fillAt: at,
     stop: lc.stop!,
     t1: lc.t1!,

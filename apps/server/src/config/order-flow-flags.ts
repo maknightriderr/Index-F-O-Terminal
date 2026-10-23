@@ -64,7 +64,8 @@ export const OF1_TRADING_REQUESTED: boolean = parseFlag(process.env.OF1_TRADING,
 export const OB1_TRADING: boolean = ORDER_BLOCK_MODE === 'PAPER';
 
 /** Paper-trading candidate sources added 2026-10-09 and the version each trades under. */
-export const ORDER_FLOW_SOURCE_VERSIONS: Readonly<Record<string, string>> = Object.freeze({ OB1: 'OB-2.0', OF1: 'OF1-1.0' });
+// OF1-1.1 (2026-10-23): ACCEPTANCE counts only when the bar traded at / through the level (of1.ts).
+export const ORDER_FLOW_SOURCE_VERSIONS: Readonly<Record<string, string>> = Object.freeze({ OB1: 'OB-2.0', OF1: 'OF1-1.1' });
 
 /**
  * Live logic-stamp suffix while OB1 / OF1 may take the paper slot: the

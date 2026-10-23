@@ -44,7 +44,47 @@ import {
   toClosedMomentumBars,
   MOMENTUM_BREAK_STRATEGY,
 } from '../momentum-break-live.js';
-import { losingCloseCooldownReason } from '../market-bias.js';
+import { losingCloseCooldownReason, remainingGeometry, structureEntrySpot } from '../market-bias.js';
+import { structureSequenceRefusal } from '../structure-live.js';
+
+describe('FAMILIES-1.1: a trigger-family trade is built from the live spot it is bought at', () => {
+  it('a trigger lifecycle reads the live spot; S1 (no triggerId) keeps its confirming close', () => {
+    expect(structureEntrySpot({ triggerId: 'A3', rejectionFillPrice: 100 }, { spotPrice: 101.5 })).toBe(101.5);
+    expect(structureEntrySpot({ triggerId: 'OF1', rejectionFillPrice: 100 }, { spotPrice: 98 })).toBe(98);
+    expect(structureEntrySpot({ rejectionFillPrice: 100 }, { spotPrice: 101.5 })).toBe(100);
+    expect(structureEntrySpot({ triggerId: 'A3', rejectionFillPrice: 100 }, { spotPrice: 0 })).toBe(100); // no live price: the close
+  });
+  // A bearish A3: decided at the 15m close 24950, stop 25049.1 (its invalidation extreme + buffer), T1 24930.
+  const lc = { triggerId: 'A3', rejectionFillPrice: 24950, entry: 24950, stop: 25049.1, t1: { kind: 'PREV_DAY_LOW', price: 24930 }, direction: 'BEARISH' } as any;
+  it('price already beyond the invalidation at entry is refused (1.0, reading the close, would have entered)', () => {
+    const live = structureEntrySpot(lc, { spotPrice: 25060 });
+    expect(structureSequenceRefusal(lc, live)?.reason).toMatch(/already through the stop/);
+    expect(structureSequenceRefusal(lc, lc.rejectionFillPrice)).toBeNull();
+  });
+  it('price already at T1 at entry is refused: no reward is left', () => {
+    expect(structureSequenceRefusal(lc, structureEntrySpot(lc, { spotPrice: 24925 }))?.reason).toMatch(/already reached T1/);
+  });
+  it('the remaining reward and risk are measured from the entry spot to the setup\'s own, unmoved levels', () => {
+    const before = JSON.stringify(lc);
+    const atClose = remainingGeometry(lc, 24950);
+    expect(atClose.stopDistance).toBeCloseTo(99.1, 6);
+    expect(atClose).toMatchObject({ targetMove: 20, remainingRToT1: 0.202 });
+    const g = remainingGeometry(lc, structureEntrySpot(lc, { spotPrice: 24945 }));
+    expect(g.targetMove).toBeCloseTo(15, 6); // 5 points of the move already happened: the option is paid for 15, not 20
+    expect(g.stopDistance).toBeCloseTo(104.1, 6);
+    expect(g.remainingRToT1).toBe(0.144);
+    expect(JSON.stringify(lc)).toBe(before); // stop, T1 and the setup's entry are never moved
+  });
+  it('S1 (no triggerId) keeps the confirming close for its geometry and its sequence check', () => {
+    const s1 = { ...lc, triggerId: undefined };
+    expect(structureSequenceRefusal(s1, structureEntrySpot(s1, { spotPrice: 25060 }))).toBeNull();
+  });
+  it('the production chain and the replica builder both use it', () => {
+    const mb = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../market-bias.ts'), 'utf8');
+    expect(mb.match(/const spot = structureEntrySpot\(lc, chain\);/g)).toHaveLength(2);
+    expect(mb).not.toMatch(/const spot = lc\.rejectionFillPrice \?\? chain\.spotPrice;/);
+  });
+});
 import {
   LOGIC_VERSION,
   logicStamp,

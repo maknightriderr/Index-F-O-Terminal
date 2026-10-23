@@ -45,6 +45,46 @@ These are software fixes; no frozen definition or trading rule changes. Rows wri
   - The poll clock starts before the contract build: a median 17 s, up to 98 s, earlier.
   - That made 3 positions on 23 Oct appear to overlap their slot (MOTILALOFS in R0, A and V2). It also let a bar closing in that gap count as "after entry".
 
+## Strategy corrections (2026-10-23, PR #56)
+
+Each correction has its own version boundary. Rows written before it keep their version and values.
+
+### FAMILIES-1.1: trigger trades (A3, A6, OF1, …)
+
+A correctness fix to the trade geometry. No trigger rule changes.
+
+- **The fix:** the option stop distance, target move and entry-validity check are measured from the live spot the option is bought at, to the setup's own unmoved stop and T1. S1 is unchanged.
+- **Timing:** the spot and the option quote come from the same chain build (spot cached ≤ 5 s, chain ≤ 10 s).
+- **Recorded:** `entry` stays the setup's decision close; `fillSpot` is the live spot; `remainingRToT1` is the R left at entry.
+- **Established on 9–23 Oct:**
+  - 14 of 53 A3/OF1 trades drifted ≥ 0.25R between the decision close and the entry;
+  - 0 of 53 were entered with live price already past the stop or T1, so the validity check would have refused none of them.
+- **Unknown:** the historical profitability impact. The changed premium targets and stops, and any new UNREALISTIC_TARGET refusals, cannot be replayed without option quotes.
+
+### OF1-1.1: ACCEPTANCE requires the bar to have traded at the level
+
+A semantic correction.
+
+- **The intended meaning** (ARCHITECTURE.md §6e, of1.ts) is location + a close *back* beyond the level + flow. Acceptance means volume accepted on the reversal side of a level the bar interacted with.
+- **What 1.0 did:** a bar that only came within the 0.25-ATR location tolerance never traded at the level, so its volume was above the level by construction. 1.0 counted that as ACCEPTANCE: 113 of 117 such near-tests.
+- **What 1.1 does:**
+  - ACCEPTANCE is measurable only when the bar traded at or through the level.
+  - A near-test stays a valid location, recorded as `levelInteraction: NEAR_TEST` and described as a hold, never a reclaim.
+  - The flow is labelled `flowBasis: INFERRED`: the trade side is inferred from trade prices, never observed.
+- **Affected opportunities:** 31 of 266 recorded candidates no longer qualify; none of the 28 OF1 trades.
+- **Potential downside:** those 31 graded +0.47R (candidate-level 90% CI +0.08 to +0.87, 24 graded, 5 exchange-sessions), against −0.16R for the rest. The correction may remove the best-graded subgroup. That is not a reason to keep an incorrect confirmation, and it is not evidence either way about a correctly named near-test rule.
+
+### IND-V2-INVALIDATION-1.1: an invalidation retires its setup
+
+- **The change:** after a structural invalidation exit, an entry leaning on the *same* structural level, in the same direction, is refused (INVALIDATED_SETUP). It re-arms when a closed 15m bar closes back on the trade side of that level.
+- **What is not changed:** no cooldown; R0/A/B/C untouched. 1.0 is kept in `RETIRED_ARMS`, and its positions finish under it.
+- **Identity:** the Old Indicator has no setup lifecycle of its own. Its candidate id is shared by every entry on a symbol, direction and day, so the setup's identity is the level it leans on: kind + price, with VWAP matched by kind.
+- **Limitations:**
+  - VWAP setups cannot be told apart from each other within a session.
+  - Re-arming uses the level's price at invalidation.
+  - After a restart, a retired setup waits for the next closed bar.
+- **On 23 Oct:** 1 re-entry leaned on its just-broken level (NATURALGAS 260: invalidated 11:17, re-entered 11:56, +0.32R). Whether a closed bar reclaimed 260 in between is not in the stored data (the 23 Oct bar archive is written after the session), so whether 1.1 would have blocked it is undetermined. The other 5 same-poll re-entries leaned on a new level and are not blocked.
+
 ## R0 is a control, not production
 
 R0 replicates the Old Indicator's rules inside the engine. It omits production's TRIGGER_REVERSAL: in production, an opposite claimed S1 fill or momentum trigger closes a held Old Indicator trade.

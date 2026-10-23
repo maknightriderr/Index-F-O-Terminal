@@ -188,14 +188,20 @@ describe('full replay of the real decision path', () => {
   // premium, STT 0.15% since 1 Apr 2026) replace the flat 0.2%, so the estimated cost reads 1.82% instead of 1.79%.
   // Diffed field by field: estimatedCostPct, the F&O record's costPct and the reason text only — the same F3 trade,
   // strike, stop and target.
+  // FAMILIES-1.1 (2026-10-23) moved it deliberately from fd67cf7bc29d204b: a trigger-family trade is built from the
+  // live spot it is bought at (24945), not the decision bar's close (24950). F3's remaining move to T1 (24930) is then
+  // 15 points, which pays the PE 9.12 + 0.16 against 9.52 of decay over the 4.2 h hold: UNREALISTIC_TARGET, so F3 (and
+  // A2 on the same bar) no longer mint and the indicator's own PE 24950 takes the slot. Diffed field by field: the
+  // F3-specific fields (strategy, researchTrigger, structure, stop 72.44 -> the indicator's 78.83, target) only.
   it('the live decision is identical to main (end-to-end fingerprint, logic stamps aside)', async () => {
     const { stripVolatile } = await import('../full-replay.js');
     const { createHash } = await import('node:crypto');
     const noStamp = JSON.parse(JSON.stringify(live, (k, v) => (k === 'logicVersion' || k === 'logic' ? undefined : v)));
     const fp = createHash('sha256').update(JSON.stringify(stripVolatile(noStamp))).digest('hex').slice(0, 16);
     if (process.env.PRINT_FINGERPRINT) console.log(`FP e2e '${fp}'`);
-    expect(fp).toBe('fd67cf7bc29d204b');
-    expect(live.tradeSetup).toMatchObject({ available: true, strategy: 'STRUCTURE', strike: 24950, researchTrigger: 'F3' });
+    expect(fp).toBe('fc2e1006f19f2159');
+    expect(live.tradeSetup).toMatchObject({ available: true, strike: 24950, side: 'PE' });
+    expect(live.tradeSetup.researchTrigger).toBeUndefined(); // F3's live-spot target no longer pays its decay
   });
 
   it('replays to the same result — no divergence, no real I/O, days later on the wall clock', () => {
