@@ -111,6 +111,20 @@ export interface IndicatorPoll {
   lastClosedBar: { close: number; closeAt: number } | null;
   /** market-bias's side-effect-free Old Indicator candidate builder (null when it refuses). */
   buildCandidate: () => Promise<ExpCandidate | null>;
+  /** EXP-3.0: this poll's routed paper-stage trigger candidates (A3 / OF1), each with a side-effect-free builder. */
+  triggerCandidates?: Array<{ source: 'A3' | 'OF1'; candidateId: string; build: () => Promise<ExpCandidate | null> }>;
+}
+
+const armsOf = (source: ArmDef['source']) => ARMS.filter((a) => a.source === source);
+const taken = new Set<string>(); // arm|candidateId: a routed candidate recurs on every poll of its bar; one position per arm
+
+function open(arm: ArmDef, c: ExpCandidate, at: number): void {
+  const p = openPosition(arm, c, randomUUID(), at);
+  positions.set(p.id, p);
+  save(p, ['OPENED', p.sim.status === 'NOT_OPENED' ? 'SIM_ENTRY_UNAVAILABLE' : 'SIM_ENTRY_FILLED'], at);
+  if (c.token && subs) {
+    void subs.subscribe(CLIENT_ID, [{ token: c.token, exchange: c.exchange as Exchange, exchangeSegment: FO_SEGMENT[c.exchange as Exchange] }]).catch(() => undefined);
+  }
 }
 
 /** Called by every production poll of a symbol+mode. Never throws, never awaited by the poll. */
@@ -126,23 +140,35 @@ export async function onIndicatorPoll(poll: IndicatorPoll): Promise<void> {
       ev.push(...onDecisionRead(p, arm, { at: poll.at, direction: poll.direction, confidence: poll.confidence, minConfidence: MIN_CONFIDENCE, confirmMs: poll.confirmMs, lastClosedBar: poll.lastClosedBar }));
       save(p, ev, poll.at);
     }
-    // 2. A new candidate, only when some arm could take one (free slot) — never otherwise built.
-    if (poll.mode !== 'INTRADAY' || (poll.direction !== 'BULLISH' && poll.direction !== 'BEARISH')) return;
+    // 2. New candidates, only when some arm could take one (free slot) — never otherwise built.
+    if (poll.mode !== 'INTRADAY') return;
     const slotHeld = (arm: ArmDef) => [...positions.values()].some((p) => p.arm === arm.id && p.official.status === 'OPEN' && p.candidate.symbol === poll.symbol && p.candidate.exchange === poll.exchange && p.candidate.mode === poll.mode);
-    if (ARMS.every(slotHeld)) return;
+    const day = istDay(poll.at);
+    // EXP-3.0 trigger arms: each routed candidate of their trigger, once per arm.
+    for (const tc of poll.triggerCandidates ?? []) {
+      const arms = armsOf(tc.source).filter((a) => !taken.has(`${a.id}|${tc.candidateId}`));
+      if (arms.length === 0 || arms.every(slotHeld)) continue;
+      const c = await tc.build();
+      if (!c) continue;
+      for (const arm of arms) {
+        const d = armEntryDecision(arm, c, slotHeld(arm), losses.get(arm.id) ?? [], poll.at, day);
+        recordDecision(arm, c, d.take, d.code, poll.at);
+        if (!d.take) continue;
+        taken.add(`${arm.id}|${c.candidateId}`);
+        if (taken.size > 20_000) taken.clear();
+        open(arm, c, poll.at);
+      }
+    }
+    if (poll.direction !== 'BULLISH' && poll.direction !== 'BEARISH') return;
+    const indicatorArms = armsOf('INDICATOR');
+    if (indicatorArms.every(slotHeld)) return;
     const c = await poll.buildCandidate();
     if (!c) return;
-    const day = istDay(poll.at);
-    for (const arm of ARMS) {
+    for (const arm of indicatorArms) {
       const d = armEntryDecision(arm, c, slotHeld(arm), losses.get(arm.id) ?? [], poll.at, day);
       recordDecision(arm, c, d.take, d.code, poll.at);
       if (!d.take) continue;
-      const p = openPosition(arm, c, randomUUID(), poll.at);
-      positions.set(p.id, p);
-      save(p, ['OPENED', p.sim.status === 'NOT_OPENED' ? 'SIM_ENTRY_UNAVAILABLE' : 'SIM_ENTRY_FILLED'], poll.at);
-      if (c.token && subs) {
-        void subs.subscribe(CLIENT_ID, [{ token: c.token, exchange: c.exchange as Exchange, exchangeSegment: FO_SEGMENT[c.exchange as Exchange] }]).catch(() => undefined);
-      }
+      open(arm, c, poll.at);
     }
   } catch (err: any) {
     logger.warn({ error: err?.message, symbol: poll.symbol }, 'Experiments: poll hook failed (paper research only; production unaffected)');
@@ -178,9 +204,14 @@ function tick(): void {
 
 async function load(): Promise<void> {
   const rows = await sql<{ state: ArmPosition }[]>`SELECT state FROM experiment_positions WHERE official_status = 'OPEN' OR sim_status IN ('OPEN', 'EXIT_PENDING')`;
-  for (const r of rows) positions.set(r.state.id, r.state);
+  for (const r of rows) {
+    positions.set(r.state.id, r.state);
+    taken.add(`${r.state.arm}|${r.state.candidate.candidateId}`);
+  }
   const recent = await sql<{ state: ArmPosition }[]>`SELECT state FROM experiment_positions WHERE updated_at > NOW() - INTERVAL '36 hours' AND official_status = 'CLOSED'`;
   for (const r of recent) {
+    // A routed candidate recurs on every poll of its bar: one already taken before a restart is not taken again.
+    taken.add(`${r.state.arm}|${r.state.candidate.candidateId}`);
     const l = lossOf(r.state, istDay(r.state.official.exitAt ?? r.state.openedAt));
     if (l) losses.set(r.state.arm, [...(losses.get(r.state.arm) ?? []), l]);
   }
@@ -224,6 +255,7 @@ export function __resetExperimentEngine(): void {
   positions.clear();
   losses.clear();
   decided.clear();
+  taken.clear();
   started = false;
   subs = null;
 }

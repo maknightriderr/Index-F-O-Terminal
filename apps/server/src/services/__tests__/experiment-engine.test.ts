@@ -87,6 +87,39 @@ describe('experiment engine: one candidate stream, independent arm state', () =>
   });
 });
 
+describe('EXP-3.0: routed trigger candidates feed only their own capture arm, once each', () => {
+  beforeEach(() => {
+    E.__resetExperimentEngine();
+    E.__startedForTest();
+  });
+  const trig = (source: 'A3' | 'OF1', id: string, o: object = {}) => ({ source, candidateId: id, build: async () => candidate({ candidateId: id, triggerId: source, sweepExtreme: 2385, target: 130, ...o }) });
+  it('an A3 candidate opens A3R only; the Indicator arms ignore it; OF1R ignores it', async () => {
+    await E.onIndicatorPoll(poll({ direction: 'NEUTRAL', triggerCandidates: [trig('A3', 'NSE:TCS:MP:A3:BULLISH:1')] }));
+    expect(E.__positions().map((p) => p.arm)).toEqual(['A3R']);
+  });
+  it('the same routed candidate on later polls of its bar is not taken twice, even once its position closed', async () => {
+    const t = trig('OF1', 'NSE:TCS:MP:OF1:BULLISH:1');
+    await E.onIndicatorPoll(poll({ direction: 'NEUTRAL', triggerCandidates: [t] }));
+    await E.onIndicatorPoll(poll({ at: T0 + 60_000, direction: 'NEUTRAL', chain: chain({ ltp: 131, bid: 130.5, ask: 131.5, timestamp: T0 + 60_000, exchangeTimestamp: T0 + 59_000 }), triggerCandidates: [t] }));
+    expect(E.__positions()).toHaveLength(0); // closed at its target and not re-opened
+    await E.onIndicatorPoll(poll({ at: T0 + 15 * 60_000, direction: 'NEUTRAL', triggerCandidates: [trig('OF1', 'NSE:TCS:MP:OF1:BULLISH:2', { at: T0 + 15 * 60_000 })] }));
+    expect(E.__positions().map((p) => p.arm)).toEqual(['OF1R']); // a new candidate is a new position
+  });
+  it('a candidate production never selects still reaches its arm (the arm does not read production arbitration)', () => {
+    const mb = read('src/services/market-bias.ts');
+    const hook = mb.slice(mb.indexOf('triggerCandidates: (triggers?.families'), mb.indexOf('triggerCandidates: (triggers?.families') + 600);
+    expect(hook).toMatch(/\.filter\(\(rc\) => rc\.candidate\.triggerId === 'A3' \|\| rc\.candidate\.triggerId === 'OF1'\)/);
+    expect(hook).not.toMatch(/arbitration|SELECTED|structure_claimed/);
+  });
+  it('the trigger candidate builder runs the production contract build and has no side effect', () => {
+    const mb = read('src/services/market-bias.ts');
+    const fn = mb.slice(mb.indexOf('export async function buildTriggerExperimentCandidate'), mb.indexOf('async function buildStructureContract'));
+    expect(fn).toMatch(/await buildStructureContract\(/);
+    expect(fn).not.toMatch(/losingCloseCooldownReason|concurrencyGateReason|logDecision|recordDecisionSnapshot|recordStructureOutcome|redis\.|mintTradeSetup|setSlotIfSame|structure_claimed/);
+    expect(mb).toMatch(/const \{ validated, targetMove, expectedHoldHours, ivRank \} = await buildStructureContract\(\{ provider, underlying, exchange, chain, lc, spot, side, direction, confidence, optionAtr, fiveMinute, entryContext, at \}\);/);
+  });
+});
+
 describe('isolation from production (source wiring)', () => {
   const mb = read('src/services/market-bias.ts');
   it('the poll hands the engine its read fire-and-forget, before and outside the production slot logic', () => {
@@ -124,5 +157,5 @@ describe('durable linkage (2026-10-23)', () => {
     expect(slotDecisionRow({ ...base, minted: false })).toMatchObject({ signalId: null, decisionId: null });
     expect(read('src/services/slot-decisions.ts')).toMatch(/ON CONFLICT \(signal_id\) WHERE signal_id IS NOT NULL DO NOTHING/);
     expect(read('../../database/init/045_experiments_and_linkage.sql')).toMatch(/CREATE UNIQUE INDEX IF NOT EXISTS uq_slot_decisions_signal ON slot_decisions \(signal_id\) WHERE signal_id IS NOT NULL/);
-  });
+  }, 30_000); // the cold import of slot-decisions' module graph takes ~2 s alone and exceeded 5 s under full-suite load
 });

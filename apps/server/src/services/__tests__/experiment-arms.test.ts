@@ -142,3 +142,24 @@ describe('exits on later reads', () => {
     expect(p.stop).toBe(130);
   });
 });
+
+describe('EXP-3.0 trigger capture arms (A3R, OF1R)', () => {
+  const read = (o: object) => ({ at: T0 + 30 * 60_000, direction: 'BEARISH', confidence: 90, minConfidence: 60, confirmMs: 0, lastClosedBar: null, ...o });
+  it('the Indicator arms are unchanged: same versions, bias-reversal exit, no structural exit', () => {
+    expect(ARMS.filter((a) => a.source === 'INDICATOR').map((a) => a.version)).toEqual(['R0-REPLICA-1.0', 'A-TARGET-0.5R-1.0', 'B-NO-LATE-NSE-1.0', 'C-A-AND-B-1.0', 'IND-V2-INVALIDATION-1.0']);
+    expect(ARMS.filter((a) => a.source === 'INDICATOR').every((a) => a.biasReversalExit && !a.structureExit)).toBe(true);
+    expect(ARMS.filter((a) => a.source !== 'INDICATOR').map((a) => [a.id, a.version, a.kind, a.source])).toEqual([['A3R', 'A3-R0-1.0', 'CONTROL_REPLICA', 'A3'], ['OF1R', 'OF1-R0-1.0', 'CONTROL_REPLICA', 'OF1']]);
+  });
+  it('SWEEP_RECLAIMED: a bar closing after entry back beyond the sweep extreme exits a trigger arm; a bias read never does', () => {
+    const p = openPosition(arm('A3R'), cand({ sweepExtreme: 2385, triggerId: 'A3' }), 's1', T0);
+    expect(onDecisionRead(p, arm('A3R'), read({ lastClosedBar: null }))).toEqual([]); // confident opposite read: no BIAS_REVERSED
+    expect(onDecisionRead(p, arm('A3R'), read({ at: T0 + 400_000, lastClosedBar: null }))).toEqual([]);
+    expect(onDecisionRead(p, arm('A3R'), read({ lastClosedBar: { close: 2386, closeAt: T0 + 30 * 60_000 } }))).toEqual([]);
+    expect(onDecisionRead(p, arm('A3R'), read({ lastClosedBar: { close: 2384, closeAt: T0 + 45 * 60_000 } }))).toContain('OFFICIAL_SWEEP_RECLAIMED');
+    expect(p.official.reason).toBe('SWEEP_RECLAIMED');
+    const bear = openPosition(arm('OF1R'), cand({ direction: 'BEARISH', side: 'PE', sweepExtreme: 2420, triggerId: 'OF1' }), 's2', T0);
+    expect(onDecisionRead(bear, arm('OF1R'), read({ lastClosedBar: { close: 2421, closeAt: T0 + 15 * 60_000 } }))).toContain('OFFICIAL_SWEEP_RECLAIMED');
+    const before = openPosition(arm('A3R'), cand({ sweepExtreme: 2385 }), 's3', T0);
+    expect(onDecisionRead(before, arm('A3R'), read({ lastClosedBar: { close: 2300, closeAt: T0 - 60_000 } }))).toEqual([]);
+  });
+});

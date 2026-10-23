@@ -42,8 +42,10 @@
 //             (statutory + brokerage); the spread is in the prices.
 // ============================================================
 
-export const EXPERIMENTS_VERSION = 'EXP-2.0';
-export type ArmId = 'R0' | 'A' | 'B' | 'C' | 'V2';
+export const EXPERIMENTS_VERSION = 'EXP-3.0';
+export type ArmId = 'R0' | 'A' | 'B' | 'C' | 'V2' | 'A3R' | 'OF1R';
+/** Which candidate stream an arm consumes. */
+export type ArmSource = 'INDICATOR' | 'A3' | 'OF1';
 export type ArmKind = 'CONTROL_REPLICA' | 'FILTER_CONTROL' | 'HYPOTHESIS';
 
 export interface ExpQuote {
@@ -81,6 +83,15 @@ export interface ExpCandidate {
   behindLevel: number | null;
   atr: number | null;
   quote: ExpQuote;
+  /** Trigger-family candidates only: the trigger, and the sweep extreme its SWEEP_RECLAIMED exit reads. */
+  triggerId?: string;
+  sweepExtreme?: number | null;
+  /** Recorded for the forward comparison only (no arm rule reads them): the decision bar, the underlying R to T1,
+   *  the router's bucket, and production's arbitration role for this candidate on the poll it was captured. */
+  decisionTime?: number;
+  rToT1?: number | null;
+  bucket?: string;
+  arbitrationRole?: string | null;
 }
 
 export interface ArmDef {
@@ -90,6 +101,12 @@ export interface ArmDef {
   exploratory: boolean;
   description: string;
   invalidationExit: boolean;
+  /** EXP-3.0: the candidate stream; the exits of that stream's production chain. */
+  source: ArmSource;
+  /** Bias-reversal exit (the Old Indicator's); trigger-family trades never have it in production. */
+  biasReversalExit: boolean;
+  /** SWEEP_RECLAIMED exit (a closed 15m bar back beyond the sweep extreme) — the trigger families' structural exit. */
+  structureExit: boolean;
   /** A skip code when the arm's ENTRY rule refuses the candidate, else null. */
   entryRule: (c: ExpCandidate) => string | null;
 }
@@ -101,11 +118,16 @@ const ruleA = (c: ExpCandidate) => ((plannedTargetR(c) ?? -1) >= 0.5 ? null : 'T
 const ruleB = (c: ExpCandidate) => (lateNseBse(c) ? 'LATE_NSE_BSE_ENTRY' : null);
 
 export const ARMS: readonly ArmDef[] = Object.freeze([
-  { id: 'R0', version: 'R0-REPLICA-1.0', kind: 'CONTROL_REPLICA', exploratory: false, invalidationExit: false, description: 'Baseline Old Indicator intraday rules, inside the experiment engine (control).', entryRule: () => null },
-  { id: 'A', version: 'A-TARGET-0.5R-1.0', kind: 'FILTER_CONTROL', exploratory: false, invalidationExit: false, description: 'R0 + planned target >= 0.5R.', entryRule: ruleA },
-  { id: 'B', version: 'B-NO-LATE-NSE-1.0', kind: 'FILTER_CONTROL', exploratory: false, invalidationExit: false, description: 'R0 + no NSE/BSE entry 240+ min after the open.', entryRule: ruleB },
-  { id: 'C', version: 'C-A-AND-B-1.0', kind: 'FILTER_CONTROL', exploratory: true, invalidationExit: false, description: 'A and B (exploratory).', entryRule: (c) => ruleA(c) ?? ruleB(c) },
-  { id: 'V2', version: 'IND-V2-INVALIDATION-1.0', kind: 'HYPOTHESIS', exploratory: false, invalidationExit: true, description: 'R0 + exit when a closed 15m bar closes beyond the structural level behind (+0.25 ATR).', entryRule: () => null },
+  { id: 'R0', version: 'R0-REPLICA-1.0', kind: 'CONTROL_REPLICA', exploratory: false, invalidationExit: false, source: 'INDICATOR', biasReversalExit: true, structureExit: false, description: 'Baseline Old Indicator intraday rules, inside the experiment engine (control).', entryRule: () => null },
+  { id: 'A', version: 'A-TARGET-0.5R-1.0', kind: 'FILTER_CONTROL', exploratory: false, invalidationExit: false, source: 'INDICATOR', biasReversalExit: true, structureExit: false, description: 'R0 + planned target >= 0.5R.', entryRule: ruleA },
+  { id: 'B', version: 'B-NO-LATE-NSE-1.0', kind: 'FILTER_CONTROL', exploratory: false, invalidationExit: false, source: 'INDICATOR', biasReversalExit: true, structureExit: false, description: 'R0 + no NSE/BSE entry 240+ min after the open.', entryRule: ruleB },
+  { id: 'C', version: 'C-A-AND-B-1.0', kind: 'FILTER_CONTROL', exploratory: true, invalidationExit: false, source: 'INDICATOR', biasReversalExit: true, structureExit: false, description: 'A and B (exploratory).', entryRule: (c) => ruleA(c) ?? ruleB(c) },
+  { id: 'V2', version: 'IND-V2-INVALIDATION-1.0', kind: 'HYPOTHESIS', exploratory: false, invalidationExit: true, source: 'INDICATOR', biasReversalExit: true, structureExit: false, description: 'R0 + exit when a closed 15m bar closes beyond the structural level behind (+0.25 ATR).', entryRule: () => null },
+  // EXP-3.0 (2026-10-23): capture arms for the trigger families. No V2 rule: the evidence did not support one
+  // (analysis/a3-of1-2026-10-23). They take EVERY production paper-stage candidate of their trigger, including those
+  // that lose slot arbitration or meet a held production slot, so option-level outcomes exist for all of them.
+  { id: 'A3R', version: 'A3-R0-1.0', kind: 'CONTROL_REPLICA', exploratory: false, invalidationExit: false, source: 'A3', biasReversalExit: false, structureExit: true, description: 'A3 as routed by production (all paper-stage candidates), with its own slot, cooldowns and exits.', entryRule: () => null },
+  { id: 'OF1R', version: 'OF1-R0-1.0', kind: 'CONTROL_REPLICA', exploratory: false, invalidationExit: false, source: 'OF1', biasReversalExit: false, structureExit: true, description: 'OF1 as routed by production (all paper-stage candidates), with its own slot, cooldowns and exits.', entryRule: () => null },
 ]);
 
 // ---------------- the arm's own cooldowns (the baseline's rules, the arm's own losses) ----------------
@@ -361,6 +383,15 @@ export function onDecisionRead(p: ArmPosition, arm: ArmDef, d: DecisionRead): st
       return ev;
     }
   }
+  // Trigger families (momentum-break-live.ts triggerSlotAction): a closed bar back beyond the sweep extreme.
+  if (arm.structureExit && d.lastClosedBar && d.lastClosedBar.closeAt > p.openedAt && p.candidate.sweepExtreme != null) {
+    const reclaimed = p.candidate.direction === 'BEARISH' ? d.lastClosedBar.close > p.candidate.sweepExtreme : d.lastClosedBar.close < p.candidate.sweepExtreme;
+    if (reclaimed) {
+      exitBoth('SWEEP_RECLAIMED');
+      return ev;
+    }
+  }
+  if (!arm.biasReversalExit) return ev;
   // Bias reversal (market-bias.ts): a confident opposite read, confirmed over 2 reads and the confirm window.
   const opposite = d.direction !== p.candidate.direction && (d.direction === 'BULLISH' || d.direction === 'BEARISH') && d.confidence >= d.minConfidence;
   if (d.direction === p.candidate.direction) p.reversal = { streak: 0, since: null };
