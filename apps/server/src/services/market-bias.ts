@@ -3286,6 +3286,11 @@ async function resolveStickyTradeSetup(
       confirmMs: (isPositional ? REVERSAL_CONFIRM_SECONDS_POSITIONAL : REVERSAL_CONFIRM_SECONDS) * 1000,
       lastClosedBar: lastClosedBar ? { close: lastClosedBar.close, closeAt: lastClosedBar.time + BAR_MS_15M } : null,
       buildCandidate: () => buildIndicatorExperimentCandidate({ provider, underlying, exchange, mode, chain, direction, confidence, entryContext, voteSnapshot, at, today }),
+      // EXP-3.0: this poll's routed paper-stage A3 / OF1 candidates (the same ones production arbitrates), each with a
+      // side-effect-free builder — whether or not production later selects them or its slot is free.
+      triggerCandidates: (triggers?.families.find((f): f is MultipathFamilyInput => f.family === 'MULTIPATH')?.candidates ?? [])
+        .filter((rc) => rc.candidate.triggerId === 'A3' || rc.candidate.triggerId === 'OF1')
+        .map((rc) => ({ source: rc.candidate.triggerId as 'A3' | 'OF1', candidateId: rc.lifecycleId, build: () => buildTriggerExperimentCandidate({ provider, underlying, exchange, mode, chain, rc, entryContext, at }) })),
     });
   }
   const trigger = momentumFamily?.trigger ? await claimMomentumTrigger(exchange, underlying, mode, momentumFamily.trigger) : null;
@@ -5121,6 +5126,164 @@ async function claimStructureFill(
  * |Δ| × distance to the structural stop (sweep extreme + 0.1 ATR) through
  * slPremiumPct. The score is recorded, never gated on.
  */
+
+/**
+ * Isolated paper experiments (EXP-3.0): one routed trigger candidate (A3 / OF1) built with NO side effect — no
+ * decision log, snapshot, structure outcome, claim, Redis key, slot or trade row. It runs the production chain's own
+ * contract build (buildStructureContract) behind that chain's STATELESS gates: risk-off (when enabled), feed quality,
+ * session window, reliability and the sequence check. The baseline's stateful gates (its cooldowns, its concurrency)
+ * are not applied: each arm applies its own. Intraday, 15m only. Null when refused.
+ */
+export async function buildTriggerExperimentCandidate(a: {
+  provider: MarketDataProvider;
+  underlying: string;
+  exchange: Exchange;
+  mode: TradingMode;
+  chain: OptionChain;
+  rc: RoutedCandidate;
+  entryContext: SetupEntryContext | undefined;
+  at: number;
+}): Promise<ExpCandidate | null> {
+  const { provider, underlying, exchange, mode, chain, rc, entryContext, at } = a;
+  if (mode !== 'INTRADAY') return null;
+  const lc = lifecycleFromCandidate(rc);
+  if ((lc.direction !== 'BULLISH' && lc.direction !== 'BEARISH') || lc.timeframe === '5m' || lc.stop == null || lc.t1 == null) return null;
+  const direction = lc.direction;
+  const spot = lc.rejectionFillPrice ?? chain.spotPrice;
+  const side: 'CE' | 'PE' = direction === 'BEARISH' ? 'PE' : 'CE';
+  const riskOff = DAILY_RISK_BREAKER_ENABLED ? await riskOffReason(exchange, mode) : null;
+  const reliability = riskOff ? null : await checkReliabilityFilters(underlying, exchange, direction, mode);
+  const feedBlock = dataQualityBlock(exchange, underlying);
+  const session = sessionGateReason(exchange, mode, structureSessionOpts(STRUCTURE_PARAMS));
+  if (safetyRefusal({ riskOff, feedBlock, session, cooldown: null, reliability, concurrency: null }) ?? structureSequenceRefusal(lc, spot)) return null;
+  const confidence = STRUCTURE_SEQUENCE_CONFIDENCE;
+  const { validated } = await buildStructureContract({ provider, underlying, exchange, chain, lc, spot, side, direction, confidence, optionAtr: lc.atr, fiveMinute: false, entryContext, at });
+  const setup = validated.setup;
+  const used = validated.chain;
+  if (!setup.available || setup.entry == null || setup.stopLoss == null || setup.target == null || setup.strike == null || !setup.side) return null;
+  if (preMintCheck(setup, used, at)) return null;
+  const quote = observeChainLeg(used, setup.strike, setup.side, used.expiry, at);
+  const lotSize = setup.positionSize?.lotSize ?? used.lotSize ?? null;
+  if (!lotSize || !(lotSize > 0)) return null;
+  return {
+    at,
+    candidateId: rc.lifecycleId,
+    symbol: underlying,
+    exchange: exchange as ExpCandidate['exchange'],
+    mode,
+    direction,
+    confidence,
+    side: setup.side,
+    strike: setup.strike,
+    expiry: used.expiry,
+    token: quote.token,
+    lotSize,
+    entry: setup.entry,
+    stop: setup.stopLoss,
+    target: setup.target,
+    costPct: setup.estimatedCostPct ?? ESTIMATED_ROUND_TRIP_COST_PCT,
+    statutoryPct: optionStatutoryPct(exchange, at),
+    brokeragePerLotInr: 2 * TRADING_COST_MODEL.brokeragePerOrder * (1 + TRADING_COST_MODEL.gstPct / 100),
+    minutesSinceOpen: minutesSinceSessionOpen(exchange, at),
+    behindLevel: lc.sweepExtreme,
+    atr: lc.atr,
+    quote: toExpQuote(quote),
+    triggerId: rc.candidate.triggerId,
+    sweepExtreme: lc.sweepExtreme,
+    decisionTime: rc.candidate.decisionTime,
+    rToT1: rc.candidate.rToT1,
+    bucket: rc.candidate.bucket,
+    arbitrationRole: rc.arbitration?.role ?? null,
+  };
+}
+
+/**
+ * The structure / trigger families' option contract (moved verbatim out of resolveStructureSetup, 2026-10-23) so the
+ * production chain and the isolated experiment candidate builder (buildTriggerExperimentCandidate) run the same code.
+ */
+async function buildStructureContract(a: {
+  provider: MarketDataProvider;
+  underlying: string;
+  exchange: Exchange;
+  chain: OptionChain;
+  lc: LiveLifecycle;
+  spot: number;
+  side: 'CE' | 'PE';
+  direction: LiveLifecycle['direction'];
+  confidence: number;
+  optionAtr: number;
+  fiveMinute: boolean;
+  entryContext: SetupEntryContext | undefined;
+  at: number;
+}) {
+  const { provider, underlying, exchange, chain, lc, spot, side, direction, confidence, optionAtr, fiveMinute, entryContext, at } = a;
+  const stopDistance = Math.abs(lc.stop! - spot);
+  const targetMove = Math.abs(lc.t1!.price - spot);
+  const vix = await lookupIndiaVix(provider, exchange);
+  const ivRank = await ivRankFor(underlying, chain.expiry, computeAtmIv(chain)).catch((err: any) => {
+    logger.warn({ error: err.message, underlying }, 'Structure: IV rank unavailable — building without it');
+    return null;
+  });
+  const expectedHoldHours = Math.max(0.5, remainingSessionMinutesFrom(exchange, at) / 60);
+  // Part A applies to this family too; its target is a pool, so no IV cap.
+  const validated = await buildWithFnoValidation({
+    enabled: FNO_VALIDATION,
+    primary: chain,
+    side,
+    params: { deltaMin: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MIN, deltaMax: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MAX, deltaTarget: FNO_VALIDATION_PARAMS.OPTION_DELTA_TARGET },
+    contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: entryContext?.hvPct ?? null, ivCap: null, underlyingStopPoints: stopDistance }),
+    fetchNextExpiry: (expiry) => buildOptionChain(provider, underlying, exchange, expiry),
+    onError: (stage, err: any) => logger.warn({ error: err?.message ?? String(err), stage, underlying, exchange }, 'Structure: next-expiry chain unavailable — no fallback contract'),
+    build: (c, strike) => {
+      const sl = triggerSlPremiumPct(c.strikes, strike, direction, stopDistance);
+      return buildTradeSetup(
+        c.strikes,
+        strike,
+        direction,
+        confidence,
+        targetMove,
+        sl?.slPremiumPct,
+        vix,
+        c.dte,
+        c.lotSize,
+        optionAtr,
+        {
+          ivRank,
+          hvPct: entryContext?.hvPct ?? null,
+          tickSize: 0.05,
+          expectedHoldHours,
+          flags: { structuralStop: TRADING_FLAGS.STRUCTURAL_STOP, richIvRr: TRADING_FLAGS.RICH_IV_RR },
+          spot,
+          // The structural stop IS the sweep extreme + the engine's 0.1 ATR buffer.
+          // (5m: that buffer is 0.1 × the 5m ATR, already inside lc.stop, so the level is the stop itself.)
+          nearestBehindLevel: fiveMinute ? lc.stop! : lc.sweepExtreme,
+          structuralStopBufferAtr: fiveMinute ? 0 : STRUCTURE_RULES.stopBufferAtr,
+          ivVsHv: entryContext?.ivVsHv ?? null,
+          richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
+          // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
+          rrGate: false,
+          // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
+          realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
+          // COST-3.0 (audit 2026-10-18): this exchange's dated statutory + exchange charges, not the flat 0.2%.
+          statutoryPct: optionStatutoryPct(exchange, decisionNow()),
+          ...(FNO_VALIDATION
+            ? {
+                fnoValidation: {
+                  enabled: true,
+                  maxCostPctOfPremium: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM,
+                  minOptionStopAtr: FNO_VALIDATION_PARAMS.MIN_OPTION_STOP_ATR,
+                  ...(fiveMinute ? { noiseAtrPoints: lc.atr } : {}),
+                },
+              }
+            : {}),
+          plan: true,
+        }
+      );
+    },
+  });
+  return { validated, targetMove, expectedHoldHours, ivRank, stopDistance, vix };
+}
+
 async function resolveStructureSetup(ctx: {
   provider: MarketDataProvider;
   underlying: string;
@@ -5345,70 +5508,7 @@ async function resolveStructureSetup(ctx: {
     return { kind: 'REFUSED', slot: baseSlot, code: refusal.code, reason: refusal.reason, optionBuild: false };
   }
 
-  const stopDistance = Math.abs(lc.stop! - spot);
-  const targetMove = Math.abs(lc.t1!.price - spot);
-  const vix = await lookupIndiaVix(provider, exchange);
-  const ivRank = await ivRankFor(underlying, chain.expiry, computeAtmIv(chain)).catch((err: any) => {
-    logger.warn({ error: err.message, underlying }, 'Structure: IV rank unavailable — building without it');
-    return null;
-  });
-  const expectedHoldHours = Math.max(0.5, remainingSessionMinutesFrom(exchange, at) / 60);
-  // Part A applies to this family too; its target is a pool, so no IV cap.
-  const validated = await buildWithFnoValidation({
-    enabled: FNO_VALIDATION,
-    primary: chain,
-    side,
-    params: { deltaMin: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MIN, deltaMax: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MAX, deltaTarget: FNO_VALIDATION_PARAMS.OPTION_DELTA_TARGET },
-    contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: entryContext?.hvPct ?? null, ivCap: null, underlyingStopPoints: stopDistance }),
-    fetchNextExpiry: (expiry) => buildOptionChain(provider, underlying, exchange, expiry),
-    onError: (stage, err: any) => logger.warn({ error: err?.message ?? String(err), stage, underlying, exchange }, 'Structure: next-expiry chain unavailable — no fallback contract'),
-    build: (c, strike) => {
-      const sl = triggerSlPremiumPct(c.strikes, strike, direction, stopDistance);
-      return buildTradeSetup(
-        c.strikes,
-        strike,
-        direction,
-        confidence,
-        targetMove,
-        sl?.slPremiumPct,
-        vix,
-        c.dte,
-        c.lotSize,
-        optionAtr,
-        {
-          ivRank,
-          hvPct: entryContext?.hvPct ?? null,
-          tickSize: 0.05,
-          expectedHoldHours,
-          flags: { structuralStop: TRADING_FLAGS.STRUCTURAL_STOP, richIvRr: TRADING_FLAGS.RICH_IV_RR },
-          spot,
-          // The structural stop IS the sweep extreme + the engine's 0.1 ATR buffer.
-          // (5m: that buffer is 0.1 × the 5m ATR, already inside lc.stop, so the level is the stop itself.)
-          nearestBehindLevel: fiveMinute ? lc.stop! : lc.sweepExtreme,
-          structuralStopBufferAtr: fiveMinute ? 0 : STRUCTURE_RULES.stopBufferAtr,
-          ivVsHv: entryContext?.ivVsHv ?? null,
-          richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
-          // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
-          rrGate: false,
-          // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
-          realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
-          // COST-3.0 (audit 2026-10-18): this exchange's dated statutory + exchange charges, not the flat 0.2%.
-          statutoryPct: optionStatutoryPct(exchange, decisionNow()),
-          ...(FNO_VALIDATION
-            ? {
-                fnoValidation: {
-                  enabled: true,
-                  maxCostPctOfPremium: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM,
-                  minOptionStopAtr: FNO_VALIDATION_PARAMS.MIN_OPTION_STOP_ATR,
-                  ...(fiveMinute ? { noiseAtrPoints: lc.atr } : {}),
-                },
-              }
-            : {}),
-          plan: true,
-        }
-      );
-    },
-  });
+  const { validated, targetMove, expectedHoldHours, ivRank } = await buildStructureContract({ provider, underlying, exchange, chain, lc, spot, side, direction, confidence, optionAtr, fiveMinute, entryContext, at });
   const builtRaw = validated.setup;
   const usedChain = validated.chain;
   structureFnoRecord = validated.fnoValidation;
