@@ -45,6 +45,8 @@ import {
 
 export const EXPERIMENTS_MIGRATION = '045_experiments_and_linkage.sql';
 export const EXPERIMENT_ARMS_ENABLED = (process.env.EXPERIMENT_ARMS ?? 'on').toLowerCase() !== 'off';
+/** Rollback drain switch: unlike EXPERIMENT_ARMS=off, this leaves all exit monitoring running. */
+export const experimentEntriesEnabled = () => (process.env.EXPERIMENT_NEW_ENTRIES ?? 'on').toLowerCase() !== 'off';
 const CLIENT_ID = 'experiment-engine';
 const TICK_MS = 60_000;
 
@@ -163,6 +165,11 @@ export async function onIndicatorPoll(poll: IndicatorPoll): Promise<void> {
       ev.push(...onDecisionRead(p, arm, { at: poll.at, direction: poll.direction, confidence: poll.confidence, minConfidence: MIN_CONFIDENCE, confirmMs: poll.confirmMs, lastClosedBar: poll.lastClosedBar, freshTriggers }));
       save(p, ev, poll.at);
     }
+    // V2 1.1: this poll's closed bar may reclaim a retired setup's level on this symbol.
+    if (poll.lastClosedBar) {
+      for (const list of invalidated.values()) for (const b of list) if (!b.reclaimed && b.symbol === poll.symbol && b.exchange === poll.exchange && b.mode === poll.mode && reclaimsSetup(b, poll.lastClosedBar)) b.reclaimed = true;
+    }
+    if (!experimentEntriesEnabled()) return;
     // 2. New candidates, only when some arm could take one (free slot) — never otherwise built.
     if (poll.mode !== 'INTRADAY') return;
     const slotHeld = (arm: ArmDef) => [...positions.values()].some((p) => p.arm === arm.id && p.official.status === 'OPEN' && p.candidate.symbol === poll.symbol && p.candidate.exchange === poll.exchange && p.candidate.mode === poll.mode);
@@ -178,6 +185,7 @@ export async function onIndicatorPoll(poll: IndicatorPoll): Promise<void> {
         continue;
       }
       const c = await tc.build();
+      if (!experimentEntriesEnabled()) return;
       if (!c) {
         for (const arm of arms) recordDecision(arm, id, false, 'NOT_BUILT', poll.at);
         continue;
@@ -191,15 +199,11 @@ export async function onIndicatorPoll(poll: IndicatorPoll): Promise<void> {
         open(arm, c, poll.at);
       }
     }
-    // V2 1.1: this poll's closed bar may reclaim a retired setup's level on this symbol.
-    if (poll.lastClosedBar) {
-      for (const list of invalidated.values()) for (const b of list) if (!b.reclaimed && b.symbol === poll.symbol && b.exchange === poll.exchange && b.mode === poll.mode && reclaimsSetup(b, poll.lastClosedBar)) b.reclaimed = true;
-    }
     if (poll.direction !== 'BULLISH' && poll.direction !== 'BEARISH') return;
     const indicatorArms = armsOf('INDICATOR');
     if (indicatorArms.every(slotHeld)) return;
     const c = await poll.buildCandidate();
-    if (!c) return;
+    if (!c || !experimentEntriesEnabled()) return;
     for (const arm of indicatorArms) {
       const d = armEntryDecision(arm, c, slotHeld(arm), losses.get(arm.id) ?? [], poll.at, day, invalidated.get(arm.id) ?? []);
       recordDecision(arm, c, d.take, d.code, poll.at);

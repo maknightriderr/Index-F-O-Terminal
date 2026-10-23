@@ -139,7 +139,7 @@ async function buildOptionChainUncached(
   const underlyingChangePercent =
     spotClose > 0 ? Math.round(((spotPrice - spotClose) / spotClose) * 10000) / 100 : null;
 
-  if (spotPrice <= 0) {
+  if (!Number.isFinite(spotPrice) || spotPrice <= 0) {
     throw new Error(`Unable to resolve a live spot price for ${underlying}`);
   }
 

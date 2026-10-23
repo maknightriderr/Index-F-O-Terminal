@@ -393,10 +393,18 @@ export async function buildWithFnoValidation(args: {
   contextFor: (chain: OptionChain) => FnoChainContext;
   build: (chain: OptionChain, strike: number, context: FnoChainContext) => TradeSetup;
   fetchNextExpiry: (expiry: string) => Promise<OptionChain | null>;
+  /** Family geometry is rechecked before strike selection on EVERY expiry. */
+  validateChain?: (chain: OptionChain) => { code: TradeSetup['noTradeCode']; reason: string } | null;
   /** Failures are logged by the caller; the fallback is then treated as unavailable. */
   onError?: (stage: 'FETCH_NEXT_EXPIRY', err: unknown) => void;
 }): Promise<ValidatedBuild> {
   const { enabled, primary, side, params, contextFor, build, fetchNextExpiry, onError } = args;
+  const refusedChain = (chain: OptionChain): ValidatedBuild | null => {
+    const refusal = args.validateChain?.(chain);
+    return refusal ? { setup: { available: false, noTradeCode: refusal.code, reason: refusal.reason }, chain, fnoValidation: null } : null;
+  };
+  const primaryRefusal = refusedChain(primary);
+  if (primaryRefusal) return primaryRefusal;
   if (!enabled) {
     return { setup: build(primary, primary.atmStrike, contextFor(primary)), chain: primary, fnoValidation: null };
   }
@@ -422,6 +430,8 @@ export async function buildWithFnoValidation(args: {
     return { ...first, setup: { ...first.setup, reason: `${first.setup.reason}${note}`, fnoValidation: record }, fnoValidation: record };
   }
 
+  const nextRefusal = refusedChain(next);
+  if (nextRefusal) return nextRefusal;
   const second = validateOnChain({ chain: next, side, params, context: contextFor(next), build });
   const secondCode = second.setup.available ? null : second.setup.noTradeCode ?? null;
   const fallbackRecord = (base: TradeSetupFnoValidation, finalChain: OptionChain): TradeSetupFnoValidation => ({

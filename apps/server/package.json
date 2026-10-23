@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/api/ai-assistant.ts src/services/ai-assistant.ts src/services/ai-explain.ts src/services/ai-daily-review.ts",
     "test": "vitest run",
+    "experiment-rollback-check": "node --import tsx src/cli/experiment-rollback-check.ts",
     "clean": "rimraf dist",
     "db:migrate": "tsx src/database/migrate.ts",
     "learning": "tsx src/cli/learning.ts",

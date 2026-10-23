@@ -52,7 +52,7 @@ describe('FAMILIES-1.1: a trigger-family trade is built from the live spot it is
     expect(structureEntrySpot({ triggerId: 'A3', rejectionFillPrice: 100 }, { spotPrice: 101.5 })).toBe(101.5);
     expect(structureEntrySpot({ triggerId: 'OF1', rejectionFillPrice: 100 }, { spotPrice: 98 })).toBe(98);
     expect(structureEntrySpot({ rejectionFillPrice: 100 }, { spotPrice: 101.5 })).toBe(100);
-    expect(structureEntrySpot({ triggerId: 'A3', rejectionFillPrice: 100 }, { spotPrice: 0 })).toBe(100); // no live price: the close
+    expect(structureEntrySpot({ triggerId: 'A3', rejectionFillPrice: 100 }, { spotPrice: 0 })).toBe(0); // invalid live data is refused, never replaced by the close
   });
   // A bearish A3: decided at the 15m close 24950, stop 25049.1 (its invalidation extreme + buffer), T1 24930.
   const lc = { triggerId: 'A3', rejectionFillPrice: 24950, entry: 24950, stop: 25049.1, t1: { kind: 'PREV_DAY_LOW', price: 24930 }, direction: 'BEARISH' } as any;
@@ -81,7 +81,7 @@ describe('FAMILIES-1.1: a trigger-family trade is built from the live spot it is
   });
   it('the production chain and the replica builder both use it', () => {
     const mb = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../market-bias.ts'), 'utf8');
-    expect(mb.match(/const spot = structureEntrySpot\(lc, chain\);/g)).toHaveLength(2);
+    expect(mb.match(/(?:const|let) spot = structureEntrySpot\(lc, chain\);/g)).toHaveLength(2);
     expect(mb).not.toMatch(/const spot = lc\.rejectionFillPrice \?\? chain\.spotPrice;/);
   });
 });

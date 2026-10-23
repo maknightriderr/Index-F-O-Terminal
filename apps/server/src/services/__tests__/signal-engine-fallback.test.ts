@@ -163,7 +163,7 @@ describe('slot: if the best candidate fails, the next-best is evaluated', () => 
 
 describe('pre-mint check — genuine failures only (no R:R threshold)', () => {
   const leg = (bid: number, ask: number, ltp = (bid + ask) / 2) => ({ token: 't', ltp, bid, ask, delta: 0.5 }) as any;
-  const chain = (ts: number, l = leg(99.9, 100.1)): OptionChain => ({ expiry: '2026-08-13', timestamp: ts, strikes: [{ strike: 100, call: l, put: l }] }) as any;
+  const chain = (ts: number, l = leg(99.9, 100.1)): OptionChain => ({ expiry: '2026-08-13', lotSize: 75, timestamp: ts, strikes: [{ strike: 100, call: l, put: l }] }) as any;
   const setup = (entry: number, stop: number, target: number, cost = 1): TradeSetup => ({ available: true, reason: 'x', strike: 100, side: 'CE', expiry: '2026-08-13', entry, stopLoss: stop, target, estimatedCostPct: cost }) as any;
   const now = 10_000_000;
   it('passes a fresh, quoted, low-R:R setup (net R:R is not a threshold)', () => {

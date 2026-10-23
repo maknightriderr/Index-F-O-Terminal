@@ -134,6 +134,15 @@ const VIX_SL_SENSITIVITY = 15; // every this-many points of VIX above baseline a
 // from having no stop at all.
 const MAX_SL_PREMIUM_PCT = 0.45;
 
+/** New naked-long entries only. Historical positions retain their recorded levels. */
+export function validNakedLongGeometry(entry: unknown, stop: unknown, target: unknown): boolean {
+  if (typeof entry !== 'number' || typeof stop !== 'number' || typeof target !== 'number') return false;
+  return Number.isFinite(entry) && Number.isFinite(stop) && Number.isFinite(target)
+    && stop > 0 && stop < entry && target > entry
+    // The builder records premium levels to two decimals; allow only that rounding error.
+    && entry - stop <= entry * MAX_SL_PREMIUM_PCT + 0.005 + 1e-9;
+}
+
 // ---- Validation review (behind flags; absent flags = the rules above, unchanged) ----
 // Fix 1, structural stop: how far beyond the nearest level behind the entry
 // the stop sits, in the underlying's ATR. UNTESTED DEFAULT — a small buffer so
@@ -248,7 +257,7 @@ export function estimateRoundTripCost(
 // assumption the rest of this app already makes.
 function calculatePositionSize(entry: number, stopLoss: number, lotSize: number): PositionSize | null {
   const riskPerUnit = Math.abs(entry - stopLoss);
-  if (riskPerUnit <= 0 || lotSize <= 0) return null;
+  if (!Number.isFinite(riskPerUnit) || riskPerUnit <= 0 || !Number.isSafeInteger(lotSize) || lotSize <= 0) return null;
 
   const capital = DEFAULT_RISK_CONFIG.tradingCapital;
   const riskPct = DEFAULT_RISK_CONFIG.maxRiskPerTrade;
@@ -346,8 +355,16 @@ function buildNakedLong(
   const atmEntry = strikes.find((s) => s.strike === atmStrike);
   const leg = side === 'CE' ? atmEntry?.call : atmEntry?.put;
 
-  if (!leg || leg.ltp <= 0) {
+  if (!leg || !Number.isFinite(leg.ltp) || leg.ltp <= 0) {
     return { available: false, noTradeCode: 'NO_QUOTE', reason: `No live ${side} quote at the ATM strike (${atmStrike}) to build a setup from.` };
+  }
+
+  // A structural distance can require more than the premium-risk ceiling.
+  // Refuse that contract instead of accepting a negative stop or silently moving its invalidation.
+  if (!Number.isFinite(slPremiumPct) || slPremiumPct <= 0 || slPremiumPct > MAX_SL_PREMIUM_PCT
+      || !Number.isSafeInteger(lotSize) || lotSize <= 0
+      || (instrument.tickSize != null && (!Number.isFinite(instrument.tickSize) || instrument.tickSize <= 0))) {
+    return { available: false, noTradeCode: 'INVALID_TRADE_GEOMETRY', reason: 'Invalid lot/tick size or requested premium stop outside the 0–45% risk limit.' };
   }
 
   // Defense-in-depth: delta must be in [-1, 1]. If upstream sanitization
@@ -358,7 +375,7 @@ function buildNakedLong(
   }
 
   const deltaMove = Math.abs(leg.delta) * Math.max(expectedMovePoints, 0);
-  if (deltaMove <= 0) {
+  if (!Number.isFinite(deltaMove) || deltaMove <= 0) {
     return { available: false, noTradeCode: 'UNREALISTIC_TARGET', reason: `No usable delta/expected-move data at the ATM strike (${atmStrike}) to project a target.` };
   }
 
@@ -375,6 +392,9 @@ function buildNakedLong(
   // market (bid and ask both > 0) — if depth data is simply absent, fall
   // through to the LTP-only behavior below rather than blocking every setup
   // on symbols the depth feed doesn't cover.
+  if (!Number.isFinite(leg.bid) || !Number.isFinite(leg.ask) || leg.bid < 0 || leg.ask < 0 || (leg.bid > 0 && leg.ask > 0 && leg.ask < leg.bid)) {
+    return { available: false, noTradeCode: 'NO_QUOTE', reason: 'The option quote contains invalid or crossed bid/ask prices.' };
+  }
   const hasQuote = leg.bid > 0 && leg.ask > 0;
   const mid = hasQuote ? (leg.bid + leg.ask) / 2 : leg.ltp;
   const atmSpreadPct = hasQuote ? ((leg.ask - leg.bid) / mid) * 100 : null;
@@ -625,7 +645,7 @@ function buildNakedLong(
     // F&O validation rule 4: widen to the noise floor only as far as both the
     // 45% cap and the R:R-affordable width allow; otherwise refuse.
     if (noiseStopWidth != null && stopWidth < noiseStopWidth) {
-      const capCeiling = Math.max(entry * MAX_SL_PREMIUM_PCT, maxStopWidth);
+      const capCeiling = entry * MAX_SL_PREMIUM_PCT;
       // With the R:R gate, the R:R-affordable width also caps the widening; without it only the 45% cap does.
       const ceiling = rrGate ? Math.min(capCeiling, rrStopWidth) : capCeiling;
       if (noiseStopWidth > ceiling) return stopInsideNoise(stopWidth);
@@ -649,10 +669,8 @@ function buildNakedLong(
       spot != null && spot > 0 && level != null && Number.isFinite(level) && atrPoints != null && atrPoints > 0 && absDelta > 0
         ? absDelta * (Math.abs(spot - level) + bufferAtr * atrPoints)
         : null;
-    // The 45% ceiling. The base stop never exceeds it in practice (VIX and
-    // expiry widening are already capped there); max() only guarantees that a
-    // caller-supplied base above it is never tightened.
-    const capWidth = Math.max(entry * MAX_SL_PREMIUM_PCT, maxStopWidth);
+    // An oversized caller-supplied base was refused above; the ceiling is unconditional.
+    const capWidth = entry * MAX_SL_PREMIUM_PCT;
     stopWidth = Math.min(Math.max(maxStopWidth, structuralWidth ?? 0), capWidth);
     // F&O validation rule 4: the stop may widen to the noise floor, never past the cap.
     if (noiseStopWidth != null && stopWidth < noiseStopWidth) {
@@ -702,6 +720,9 @@ function buildNakedLong(
   const stopInAtr = atrPoints && atrPoints > 0 && delta > 0 ? stopWidth / delta / atrPoints : null;
 
   const stopLoss = round2(entry - stopWidth);
+  if (!validNakedLongGeometry(entry, stopLoss, target)) {
+    return { available: false, noTradeCode: 'INVALID_TRADE_GEOMETRY', reason: 'Premium levels must be finite, with 0 < stop < entry < target and risk within the 45% ceiling.' };
+  }
   const risk = entry - stopLoss;
   const reward = grossReward;
   const riskReward = risk > 0 ? round2(reward / risk) : 0;

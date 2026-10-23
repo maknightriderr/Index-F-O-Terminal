@@ -1,0 +1,13 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> @fno/server@0.1.0 experiment-rollback-check
+> node --import tsx src/cli/experiment-rollback-check.ts
+
+Requires an explicit DATABASE_URL and EXPERIMENT_NEW_ENTRIES=off. First pause entries on the running server; this CLI does not change server settings.
+npm error Lifecycle script `experiment-rollback-check` failed with error:
+npm error code 2
+npm error path /workspace/scratch/c1db35db8761/fno-review/apps/server
+npm error workspace @fno/server@0.1.0
+npm error location /workspace/scratch/c1db35db8761/fno-review/apps/server
+npm error command failed
+npm error command sh -c node --import tsx src/cli/experiment-rollback-check.ts

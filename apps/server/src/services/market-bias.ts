@@ -3618,7 +3618,7 @@ async function resolveStickyTradeSetup(
     entries,
     markTraded,
     // Best first: a candidate that fails this is recorded and the next-best is tried.
-    preMint: (entry) => preMintCheck(entry.setup, chain, decisionNow()),
+    preMint: (entry) => preMintCheck(entry.setup, entry.chain ?? chain, decisionNow()),
     // The traded setup's watch ends here (TRADED) — under the same id it was watched with.
     onSelected: async (slot) => {
       await endWatchRow(setupWatchKey(exchange, underlying, mode, today), { exchange, underlying }, slot.candidateId, 'FILLED', decisionNow());
@@ -4199,6 +4199,7 @@ async function resolveStickyTradeSetup(
     const at = decisionNow();
     return {
       kind: 'DEFERRED',
+      chain: usedChain,
       setup: fresh,
       // No anchor event: entry timing, move potential, remaining move and
       // event evidence are NOT_MEASURED (never an invented neutral value).
@@ -4288,7 +4289,7 @@ export async function buildIndicatorExperimentCandidate(a: {
   const setup = validated.setup;
   const used = validated.chain;
   if (!setup.available || setup.entry == null || setup.stopLoss == null || setup.target == null || setup.strike == null || !setup.side) return null;
-  if (preMintCheck(setup, used, at)) return null;
+  if (preMintCheck({ ...setup, expiry: used.expiry }, used, at)) return null;
   const quote = observeChainLeg(used, setup.strike, setup.side, used.expiry, at);
   const lotSize = setup.positionSize?.lotSize ?? used.lotSize ?? null;
   if (!lotSize || !(lotSize > 0)) return null;
@@ -4799,7 +4800,7 @@ async function resolveMomentumBreakSetup(ctx: {
   const decline = async (reason: string): Promise<void> => {
     recordRefusal('NOT_SELECTED', `${describe} ${reason}`, { ...fresh, available: false, noTradeCode: 'NOT_SELECTED', reason });
   };
-  return { kind: 'DEFERRED', setup: fresh, slot: { ...slot, netRR: netRiskReward(fresh) ?? NOT_MEASURED }, commit, decline };
+  return { kind: 'DEFERRED', chain: usedChain, setup: fresh, slot: { ...slot, netRR: netRiskReward(fresh) ?? NOT_MEASURED }, commit, decline };
 }
 
 // --- Structure family (flag STRUCTURE) ---
@@ -5113,8 +5114,14 @@ export function remainingGeometry(lc: Pick<LiveLifecycle, 'stop' | 't1'>, spot: 
 }
 
 export function structureEntrySpot(lc: Pick<LiveLifecycle, 'triggerId' | 'rejectionFillPrice'>, chain: Pick<OptionChain, 'spotPrice'>): number {
-  if (lc.triggerId && Number.isFinite(chain.spotPrice) && chain.spotPrice > 0) return chain.spotPrice;
+  if (lc.triggerId) return chain.spotPrice; // Never substitute an old close for a missing/invalid live price.
   return lc.rejectionFillPrice ?? chain.spotPrice;
+}
+
+/** Geometry for the actual chain being priced; S1 preserves its supplied confirming-close reference. */
+export function structureChainGeometry(lc: LiveLifecycle, chain: OptionChain, reference: number) {
+  const spot = lc.triggerId ? structureEntrySpot(lc, chain) : reference;
+  return { spot, ...remainingGeometry(lc, spot), refusal: structureSequenceRefusal(lc, spot) };
 }
 
 /**
@@ -5215,7 +5222,7 @@ export async function buildTriggerExperimentCandidate(a: {
   const setup = validated.setup;
   const used = validated.chain;
   if (!setup.available || setup.entry == null || setup.stopLoss == null || setup.target == null || setup.strike == null || !setup.side) return null;
-  if (preMintCheck(setup, used, at)) return null;
+  if (preMintCheck({ ...setup, expiry: used.expiry }, used, at)) return null;
   const quote = observeChainLeg(used, setup.strike, setup.side, used.expiry, at);
   const lotSize = setup.positionSize?.lotSize ?? used.lotSize ?? null;
   if (!lotSize || !(lotSize > 0)) return null;
@@ -5255,7 +5262,7 @@ export async function buildTriggerExperimentCandidate(a: {
  * The structure / trigger families' option contract (moved verbatim out of resolveStructureSetup, 2026-10-23) so the
  * production chain and the isolated experiment candidate builder (buildTriggerExperimentCandidate) run the same code.
  */
-async function buildStructureContract(a: {
+export async function buildStructureContract(a: {
   provider: MarketDataProvider;
   underlying: string;
   exchange: Exchange;
@@ -5271,7 +5278,7 @@ async function buildStructureContract(a: {
   at: number;
 }) {
   const { provider, underlying, exchange, chain, lc, spot, side, direction, confidence, optionAtr, fiveMinute, entryContext, at } = a;
-  const { stopDistance, targetMove } = remainingGeometry(lc, spot);
+  const geometryFor = (c: OptionChain) => structureChainGeometry(lc, c, spot);
   const vix = await lookupIndiaVix(provider, exchange);
   const ivRank = await ivRankFor(underlying, chain.expiry, computeAtmIv(chain)).catch((err: any) => {
     logger.warn({ error: err.message, underlying }, 'Structure: IV rank unavailable — building without it');
@@ -5284,10 +5291,15 @@ async function buildStructureContract(a: {
     primary: chain,
     side,
     params: { deltaMin: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MIN, deltaMax: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MAX, deltaTarget: FNO_VALIDATION_PARAMS.OPTION_DELTA_TARGET },
-    contextFor: () => ({ expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: entryContext?.hvPct ?? null, ivCap: null, underlyingStopPoints: stopDistance }),
+    validateChain: (c) => geometryFor(c).refusal,
+    contextFor: (c) => {
+      const { targetMove, stopDistance } = geometryFor(c);
+      return { expectedMovePoints: targetMove, expectedHoldHours, ivRank, hvPct: entryContext?.hvPct ?? null, ivCap: null, underlyingStopPoints: stopDistance };
+    },
     fetchNextExpiry: (expiry) => buildOptionChain(provider, underlying, exchange, expiry),
     onError: (stage, err: any) => logger.warn({ error: err?.message ?? String(err), stage, underlying, exchange }, 'Structure: next-expiry chain unavailable — no fallback contract'),
     build: (c, strike) => {
+      const { spot, stopDistance, targetMove } = geometryFor(c);
       const sl = triggerSlPremiumPct(c.strikes, strike, direction, stopDistance);
       return buildTradeSetup(
         c.strikes,
@@ -5334,7 +5346,7 @@ async function buildStructureContract(a: {
       );
     },
   });
-  return { validated, targetMove, expectedHoldHours, ivRank, stopDistance, vix };
+  return { validated, ...geometryFor(validated.chain), expectedHoldHours, ivRank, vix };
 }
 
 async function resolveStructureSetup(ctx: {
@@ -5368,7 +5380,7 @@ async function resolveStructureSetup(ctx: {
   // claimStructureFill — not necessarily the live spot at the time this poll
   // runs. TOUCH (default): the live spot IS the fill. Trigger families: the live
   // spot, where their option is bought (structureEntrySpot, FAMILIES-1.1).
-  const spot = structureEntrySpot(lc, chain);
+  let spot = structureEntrySpot(lc, chain);
   const side: 'CE' | 'PE' = direction === 'BEARISH' ? 'PE' : 'CE';
   // 5m mode: lc.atr is the 5m ATR. The option leg keeps the 15m ATR as
   // atrPoints (target, structural stop — at the engine's own stop) and gets
@@ -5389,7 +5401,7 @@ async function resolveStructureSetup(ctx: {
     ? await readExposureAtCreation({ key, exchange, underlying, mode, direction, strike: null, side: null, expiry: null, riskAmount: 0 }, today)
     : null;
   const concurrency = concurrencyGateReason({ enabled: TRADING_FLAGS.CONCURRENCY_CAP, exposure: concurrencyExposure, max: TRADING_PARAMS.MAX_CONCURRENT_SAME_DIRECTION });
-  const refusal = safetyRefusal({ riskOff, feedBlock, session, cooldown, reliability, concurrency }) ?? structureSequenceRefusal(lc, spot);
+  let refusal = safetyRefusal({ riskOff, feedBlock, session, cooldown, reliability, concurrency }) ?? structureSequenceRefusal(lc, spot);
 
   const stored: StoredStructureTrade = {
     lifecycleId: lc.id,
@@ -5536,23 +5548,23 @@ async function resolveStructureSetup(ctx: {
     recordDecisionSnapshot({
       ...snapshotInstrumentation(exchange, structureContext, setup),
       ...phase1Context,
-      freshness: { timestamps: inputTimestampsFrom(chain, findLeg(chain, chain.atmStrike, side)), underlyingPriceAtGeneration: spot },
+      freshness: { timestamps: inputTimestampsFrom(costChain, findLeg(costChain, setup?.strike ?? costChain.atmStrike, side)), underlyingPriceAtGeneration: spot },
       gateDiagnostics: gateDiagnosticsFor,
       contractValidation: setup?.contractValidation ?? null,
       symbol: underlying,
       exchange,
       mode,
-      expiry: chain.expiry,
+      expiry: costChain.expiry,
       decision: 'REFUSE',
       reasonCode: code,
       reason,
       regime,
       bias: direction,
       confidence,
-      pcr: chain.pcrDetail?.oiPCR ?? null,
+      pcr: costChain.pcrDetail?.oiPCR ?? null,
       underlyingPrice: spot,
       atr: lc.atr,
-      ...snapshotBlocks(chain, structureContext, setup, side),
+      ...snapshotBlocks(costChain, structureContext, setup, side),
     });
     await recordStructureOutcome(state, lc, { outcome: 'REFUSED', code: code ?? null, reason, at }, spot, measureStructureFillCost(costChain, lc, side, setup));
   };
@@ -5563,9 +5575,16 @@ async function resolveStructureSetup(ctx: {
     return { kind: 'REFUSED', slot: baseSlot, code: refusal.code, reason: refusal.reason, optionBuild: false };
   }
 
-  const { validated, targetMove, expectedHoldHours, ivRank } = await buildStructureContract({ provider, underlying, exchange, chain, lc, spot, side, direction, confidence, optionAtr, fiveMinute, entryContext, at });
+  const { validated, targetMove, expectedHoldHours, ivRank, spot: selectedSpot, remainingRToT1 } = await buildStructureContract({ provider, underlying, exchange, chain, lc, spot, side, direction, confidence, optionAtr, fiveMinute, entryContext, at });
   const builtRaw = validated.setup;
   const usedChain = validated.chain;
+  spot = selectedSpot;
+  stored.fillSpot = selectedSpot;
+  stored.remainingRToT1 = remainingRToT1;
+  if (structureContext?.setupClassification) {
+    structureContext.setupClassification.detail = { ...stored, atr: lc.atr, displacementBodyAtr: lc.displacementBodyAtr };
+  }
+  if (!builtRaw.available && builtRaw.noTradeCode === 'STRUCTURE_SEQUENCE') refusal = { code: 'STRUCTURE_SEQUENCE', reason: builtRaw.reason };
   structureFnoRecord = validated.fnoValidation;
   if (!builtRaw.available) {
     logger.info({ underlying, exchange, code: builtRaw.noTradeCode ?? null, lifecycleId: lc.id }, 'Structure: option leg refused by buildTradeSetup');
@@ -5611,6 +5630,7 @@ async function resolveStructureSetup(ctx: {
   };
   return {
     kind: 'DEFERRED',
+    chain: usedChain,
     setup: fresh,
     slot: { ...baseSlot, netRR: netRiskReward(fresh) ?? NOT_MEASURED },
     commit,

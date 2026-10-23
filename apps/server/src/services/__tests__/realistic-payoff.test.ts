@@ -102,10 +102,12 @@ describe('no cheap OTM chosen for its theoretical percentage return', () => {
     const atmC = cands.find((c) => c.strike === 25000)!;
     const otmC = cands.find((c) => c.strike === 25100)!;
     expect(otmC.status === 'RANKED' || otmC.status === 'REJECTED').toBe(true);
-    // Against the same underlying invalidation the ATM leg pays more per unit of risk once decay and costs are counted…
-    expect(atmC.comparableRR!).toBeGreaterThan(otmC.comparableRR!);
-    // …even though its own built stop (percentage rules: expiry-day widening) makes its raw net R:R look worse.
-    expect(otmC.netRR!).toBeGreaterThan(atmC.netRR!);
+    // The OTM contract needs 0.36 × 40 / 30 = 48% premium risk, beyond the 45% ceiling.
+    // It used to be ranked with an oversized stop. Refuse it instead of inventing a tighter invalidation.
+    expect(atmC.comparableRR!).toBeGreaterThan(0);
+    expect(otmC.status).toBe('REJECTED');
+    expect(otmC.rejectionReason).toMatch(/^INVALID_TRADE_GEOMETRY:/);
+    expect(otmC.comparableRR).toBeNull();
   });
 
   it('without a known underlying invalidation the ranking falls back to the built net R:R (as before)', () => {

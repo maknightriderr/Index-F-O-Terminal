@@ -1,0 +1,2 @@
+{"direction":"BULLISH","before":{"available":true,"entry":100,"stop":-50,"target":130},"after":{"available":false,"code":"INVALID_TRADE_GEOMETRY"}}
+{"direction":"BEARISH","before":{"available":true,"entry":100,"stop":-50,"target":130},"after":{"available":false,"code":"INVALID_TRADE_GEOMETRY"}}
