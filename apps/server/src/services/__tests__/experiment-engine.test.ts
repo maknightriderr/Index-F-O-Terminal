@@ -90,6 +90,20 @@ describe('experiment engine: one candidate stream, independent arm state', () =>
     await E.onIndicatorPoll(poll({ at: T0 + 5_000 })); // a quote older than the poll never back-dates it
     expect(new Set(E.__positions().map((p) => p.openedAt))).toEqual(new Set([T0 + 5_000]));
   });
+  it('V2 1.1: after its losing invalidation exit the same move is not re-entered in that poll; under the retired 1.0 it was', async () => {
+    const later = T0 + 30 * 60_000;
+    const q = { ltp: 90, bid: 89.5, ask: 90.5, timestamp: later, exchangeTimestamp: later - 1000 };
+    const second = () => poll({ at: later, chain: chain(q), lastClosedBar: { close: 2370, closeAt: later }, buildCandidate: async () => candidate({ at: later, target: 130, quote: { ltp: 90, bid: 89.5, ask: 90.5, bidQty: 1000, askQty: 1000, exchangeAt: later - 1000, receivedAt: later, feedState: null, source: 'CHAIN' } }) });
+    for (const [version, reenters] of [['IND-V2-INVALIDATION-1.1', false], ['IND-V2-INVALIDATION-1.0', true]] as const) {
+      E.__resetExperimentEngine();
+      E.__startedForTest();
+      await E.onIndicatorPoll(poll({ buildCandidate: async () => candidate({ target: 130 }) }));
+      E.__positions().filter((p) => p.arm === 'V2').forEach((p) => (p.armVersion = version));
+      await E.onIndicatorPoll(second());
+      expect(E.__positions().filter((p) => p.arm === 'V2' && p.openedAt === later).length > 0).toBe(reenters);
+      expect(E.__positions().some((p) => p.arm === 'R0' && p.openedAt === T0)).toBe(true); // R0 holds: no invalidation exit
+    }
+  });
   it('a failing candidate builder never throws into the poll', async () => {
     await expect(E.onIndicatorPoll(poll({ buildCandidate: async () => { throw new Error('boom'); } }))).resolves.toBeUndefined();
   });

@@ -45,6 +45,19 @@ These are software fixes; no frozen definition or trading rule changes. Rows wri
   - The poll clock starts before the contract build: a median 17 s, up to 98 s, earlier.
   - That made 3 positions on 23 Oct appear to overlap their slot (MOTILALOFS in R0, A and V2). It also let a bar closing in that gap count as "after entry".
 
+## Strategy corrections (2026-10-23)
+
+**IND-V2-INVALIDATION-1.1** supersedes 1.0, which is kept in `RETIRED_ARMS`. Positions opened under 1.0 finish under 1.0.
+
+- **The change:** a *losing* structural-invalidation exit now blocks the same signal (same symbol and direction) for the existing 60-minute same-side cooldown.
+- **Why:** 1.0 re-entered the same move in the same poll it had just invalidated. On 23 Oct that happened 6 times, all at 0 minutes.
+- **What stays as it was:** the exchange-wide settle, the day-confidence rule and the direction lock still read stop-losses only, as in production. Entry and every other exit are unchanged.
+- **Downside:** on 23 Oct the trades it would have blocked netted +0.32R (first-order, ignoring knock-on). One session; unvalidated.
+
+**FAMILIES-1.1** (production trigger families: A3, A6, OF1, …) is a software defect fix; no trading rule changes.
+
+- **The fix:** the option stop, target move and entry-validity check are measured from the live spot the option is bought at, not the decision bar's close. S1 is unchanged.
+
 ## R0 is a control, not production
 
 R0 replicates the Old Indicator's rules inside the engine. It omits production's TRIGGER_REVERSAL: in production, an opposite claimed S1 fill or momentum trigger closes a held Old Indicator trade.

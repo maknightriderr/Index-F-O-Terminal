@@ -112,6 +112,8 @@ export interface ArmDef {
   structureExit: boolean;
   /** TRIGGER_REVERSAL exit (momentum-break-live.ts triggerSlotAction): a fresh trigger the other way, claimed this poll. */
   triggerReversalExit: boolean;
+  /** A losing STRUCTURE_INVALIDATED exit blocks the same signal (same symbol + direction, 60 min). Absent = no. */
+  invalidationIsLoss?: boolean;
   /** A skip code when the arm's ENTRY rule refuses the candidate, else null. */
   entryRule: (c: ExpCandidate) => string | null;
 }
@@ -127,7 +129,11 @@ export const ARMS: readonly ArmDef[] = Object.freeze([
   { id: 'A', version: 'A-TARGET-0.5R-1.0', kind: 'FILTER_CONTROL', exploratory: false, invalidationExit: false, source: 'INDICATOR', biasReversalExit: true, structureExit: false, triggerReversalExit: false, description: 'R0 + planned target >= 0.5R.', entryRule: ruleA },
   { id: 'B', version: 'B-NO-LATE-NSE-1.0', kind: 'FILTER_CONTROL', exploratory: false, invalidationExit: false, source: 'INDICATOR', biasReversalExit: true, structureExit: false, triggerReversalExit: false, description: 'R0 + no NSE/BSE entry 240+ min after the open.', entryRule: ruleB },
   { id: 'C', version: 'C-A-AND-B-1.0', kind: 'FILTER_CONTROL', exploratory: true, invalidationExit: false, source: 'INDICATOR', biasReversalExit: true, structureExit: false, triggerReversalExit: false, description: 'A and B (exploratory).', entryRule: (c) => ruleA(c) ?? ruleB(c) },
-  { id: 'V2', version: 'IND-V2-INVALIDATION-1.0', kind: 'HYPOTHESIS', exploratory: false, invalidationExit: true, source: 'INDICATOR', biasReversalExit: true, structureExit: false, triggerReversalExit: false, description: 'R0 + exit when a closed 15m bar closes beyond the structural level behind (+0.25 ATR).', entryRule: () => null },
+  // IND-V2-INVALIDATION-1.1 (2026-10-23): its invalidation exit says the signal is wrong where it stands, so a losing
+  // one now blocks that same signal (same symbol + direction) for the existing 60-minute same-side cooldown. 1.0
+  // re-entered the same move in the same poll it was invalidated (6 of its 16 additional trades on 23 Oct, gap 0 min).
+  // The exchange-wide settle and day rules still read stop-losses only. Entry, exits and everything else unchanged.
+  { id: 'V2', version: 'IND-V2-INVALIDATION-1.1', kind: 'HYPOTHESIS', exploratory: false, invalidationExit: true, invalidationIsLoss: true, source: 'INDICATOR', biasReversalExit: true, structureExit: false, triggerReversalExit: false, description: 'R0 + exit when a closed 15m bar closes beyond the structural level behind (+0.25 ATR); a losing invalidation blocks the same symbol and direction for 60 min.', entryRule: () => null },
   // EXP-3.0 (2026-10-23): capture arms for the trigger families. No V2 rule: the evidence did not support one
   // (analysis/a3-of1-2026-10-23). They take EVERY production paper-stage candidate of their trigger, including those
   // that lose slot arbitration or meet a held production slot, so option-level outcomes exist for all of them.
@@ -141,6 +147,7 @@ export const ARMS: readonly ArmDef[] = Object.freeze([
  * candidate (not in ARMS).
  */
 export const RETIRED_ARMS: readonly ArmDef[] = Object.freeze([
+  { id: 'V2', version: 'IND-V2-INVALIDATION-1.0', kind: 'HYPOTHESIS', exploratory: false, invalidationExit: true, source: 'INDICATOR', biasReversalExit: true, structureExit: false, triggerReversalExit: false, description: 'R0 + exit when a closed 15m bar closes beyond the structural level behind (+0.25 ATR).', entryRule: () => null },
   { id: 'A3R', version: 'A3-R0-1.0', kind: 'CONTROL_REPLICA', exploratory: false, invalidationExit: false, source: 'A3', biasReversalExit: false, structureExit: true, triggerReversalExit: false, description: 'A3 as routed by production (all paper-stage candidates), with its own slot, cooldowns and exits.', entryRule: () => null },
   { id: 'OF1R', version: 'OF1-R0-1.0', kind: 'CONTROL_REPLICA', exploratory: false, invalidationExit: false, source: 'OF1', biasReversalExit: false, structureExit: true, triggerReversalExit: false, description: 'OF1 as routed by production (all paper-stage candidates), with its own slot, cooldowns and exits.', entryRule: () => null },
 ]);
@@ -162,14 +169,17 @@ export interface ArmLoss {
   mode: string;
   direction: string;
   positionId: string;
+  /** INVALIDATION (V2 1.1): blocks only the same signal (same symbol + direction, 60 min). Absent = a stop-loss. */
+  kind?: 'STOP' | 'INVALIDATION';
 }
 
 export function armCooldownCode(losses: readonly ArmLoss[], c: Pick<ExpCandidate, 'exchange' | 'symbol' | 'mode' | 'direction' | 'confidence'>, now: number, day: string): string | null {
   const ex = losses.filter((l) => l.exchange === c.exchange && l.mode === c.mode);
-  if (ex.some((l) => now - l.at < COOLDOWN.settleMinutes * 60_000)) return 'POST_LOSS_COOLDOWN';
-  if (ex.some((l) => l.day === day) && c.confidence < COOLDOWN.dayLossMinConfidence) return 'POST_LOSS_COOLDOWN';
+  const stops = ex.filter((l) => l.kind !== 'INVALIDATION'); // the exchange-wide and day rules read stop-losses only, as production
+  if (stops.some((l) => now - l.at < COOLDOWN.settleMinutes * 60_000)) return 'POST_LOSS_COOLDOWN';
+  if (stops.some((l) => l.day === day) && c.confidence < COOLDOWN.dayLossMinConfidence) return 'POST_LOSS_COOLDOWN';
   const same = ex.filter((l) => l.symbol === c.symbol && l.direction === c.direction);
-  if (same.filter((l) => l.day === day).length >= COOLDOWN.maxSameDirectionLossesPerDay) return 'DIRECTION_LOCKED';
+  if (same.filter((l) => l.day === day && l.kind !== 'INVALIDATION').length >= COOLDOWN.maxSameDirectionLossesPerDay) return 'DIRECTION_LOCKED';
   if (same.some((l) => now - l.at < COOLDOWN.sameSideMinutes * 60_000)) return 'SAME_SYMBOL_SIDE';
   return null;
 }
@@ -496,6 +506,8 @@ export function armEntryDecision(arm: ArmDef, c: ExpCandidate, openOnSlot: boole
 
 /** Pure: the loss an arm registers when its OFFICIAL ledger stops out (the baseline registers the same). */
 export function lossOf(p: ArmPosition, day: string): ArmLoss | null {
-  if (p.official.status !== 'CLOSED' || p.official.reason !== 'STOP_LOSS') return null;
-  return { at: p.official.exitAt!, day, exchange: p.candidate.exchange, symbol: p.candidate.symbol, mode: p.candidate.mode, direction: p.candidate.direction, positionId: p.id };
+  if (p.official.status !== 'CLOSED') return null;
+  const invalidationLoss = p.official.reason === 'STRUCTURE_INVALIDATED' && (p.official.netR ?? 0) < 0 && armFor(p.arm, p.armVersion)?.invalidationIsLoss === true;
+  if (p.official.reason !== 'STOP_LOSS' && !invalidationLoss) return null;
+  return { at: p.official.exitAt!, day, exchange: p.candidate.exchange, symbol: p.candidate.symbol, mode: p.candidate.mode, direction: p.candidate.direction, positionId: p.id, ...(invalidationLoss ? { kind: 'INVALIDATION' as const } : {}) };
 }
