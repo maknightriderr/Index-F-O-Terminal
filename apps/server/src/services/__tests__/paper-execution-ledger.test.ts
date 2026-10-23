@@ -92,4 +92,7 @@ describe('wiring: the official paper prices are untouched; the ledger only obser
     expect(read('src/services/ensure-capture-schema.ts')).toMatch(/'044_paper_execution_ledger\.sql'/);
     expect(read('../../database/init/044_paper_execution_ledger.sql')).toMatch(/CREATE TABLE IF NOT EXISTS paper_execution_observations/);
   });
+  it('an ARBITRATION row keeps its refusal text (the 9 Oct OB1 ENGINE_ERRORs lost theirs)', () => {
+    expect(mb).toMatch(/slotArbitration: \{[\s\S]{0,400}reason: r\.reason \?\? null,/);
+  });
 });

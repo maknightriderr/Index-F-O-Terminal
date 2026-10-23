@@ -3112,6 +3112,9 @@ function recordSlotArbitration(underlying: string, exchange: Exchange, records: 
           role: r.role,
           rank: r.rank,
           preBuildRank: r.preBuildRank,
+          // Kept here because setup_events.rejection_reason is only written for REJECTED / SHADOW rows: an
+          // ARBITRATION row's refusal text (e.g. an ENGINE_ERROR's exception) was otherwise lost (2026-10-23).
+          reason: r.reason ?? null,
           parentId: r.slot.parentId,
           anchorKeys: r.slot.anchorKeys,
           refusalCode: r.refusalCode,
