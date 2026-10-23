@@ -68,11 +68,16 @@ import {
   minutesSinceSessionOpen,
   getSessionWindow,
   optionStatutoryPct,
+  ESTIMATED_ROUND_TRIP_COST_PCT,
+  TRADING_COST_MODEL,
   isMarketOpen,
 } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveSpotToken, resolveNearestFuturesContract, buildOptionChain } from './option-chain.js';
 import { ledgerTradeOf, observeChainLeg, recordLedger, recordMark, type QuoteObservation } from './paper-execution-ledger.js';
+import { EXPERIMENT_ARMS_ENABLED, onIndicatorPoll, toExpQuote } from './experiment-engine.js';
+import type { ExpCandidate } from './experiment-arms.js';
+import { DAILY_RISK_BREAKER_ENABLED } from './risk-circuit-breaker.js';
 import { buildFuturesData } from './futures.js';
 import { getCorporateActionsForSymbol } from './corporate-actions.js';
 import { cached } from '../lib/cache.js';
@@ -133,7 +138,7 @@ import {
   type PositioningBaselines,
 } from './intraday-positioning.js';
 import { classifyRegime, applyFastIntradayRegime, persistedBreakout, type RegimeSource } from './regime-classifier.js';
-import { mintOnce, mintLockKey } from './setup-mint-lock.js';
+import { isOwnMint, mintOnce, mintLockKey } from './setup-mint-lock.js';
 import { IV_PRESSURE_MIN_PCT } from './option-chain.js';
 import {
   closingGuardReason,
@@ -3266,6 +3271,23 @@ async function resolveStickyTradeSetup(
   const momentumFamily = triggers?.families.find((f): f is MomentumFamilyInput => f.family === 'MOMENTUM_BREAK');
   const structureFamily = triggers?.families.find((f): f is StructureFamilyInput => f.family === 'STRUCTURE');
   const lastClosedBar = triggers?.lastClosedBar ?? null;
+  // Isolated paper experiments (EXP-2.0): this read, its chain and a side-effect-free candidate builder go to the
+  // experiment engine — never awaited, never read back. The production slot logic below is unchanged.
+  if (EXPERIMENT_ARMS_ENABLED) {
+    const at = decisionNow();
+    void onIndicatorPoll({
+      at,
+      symbol: underlying,
+      exchange,
+      mode,
+      direction,
+      confidence,
+      chain,
+      confirmMs: (isPositional ? REVERSAL_CONFIRM_SECONDS_POSITIONAL : REVERSAL_CONFIRM_SECONDS) * 1000,
+      lastClosedBar: lastClosedBar ? { close: lastClosedBar.close, closeAt: lastClosedBar.time + BAR_MS_15M } : null,
+      buildCandidate: () => buildIndicatorExperimentCandidate({ provider, underlying, exchange, mode, chain, direction, confidence, entryContext, voteSnapshot, at, today }),
+    });
+  }
   const trigger = momentumFamily?.trigger ? await claimMomentumTrigger(exchange, underlying, mode, momentumFamily.trigger) : null;
   const structureFill = structureFamily ? await claimStructureFill(exchange, underlying, mode, structureFamily, chain.spotPrice, structureFamily.lastClosedBar ?? lastClosedBar) : null;
 
@@ -3552,6 +3574,9 @@ async function resolveStickyTradeSetup(
   const logSlotDecision = (minted: boolean, out: TradeSetup | null) =>
     recordSlotDecision(
       slotDecisionRow({
+        // The durable link to the trade row this evaluation minted (2026-10-23): no time-window matching.
+        signalId: minted ? (out as StoredTradeSetup | null)?.signalId ?? null : null,
+        decisionId: minted ? (out as StoredTradeSetup | null)?.decisionId ?? null : null,
         at: decisionNow(),
         symbol: underlying,
         exchange,
@@ -3591,7 +3616,7 @@ async function resolveStickyTradeSetup(
 
   if (minted) {
     // MINT_LOST (another caller minted this slot first) is that caller's decision, recorded by it.
-    if (slotRecords.some((r) => r.role === 'SELECTED' && r.slotDecision.decision === 'MINTED')) await logSlotDecision(true, null);
+    if (slotRecords.some((r) => r.role === 'SELECTED' && r.slotDecision.decision === 'MINTED')) await logSlotDecision(true, minted);
     return minted;
   }
   const none = noTrade(indicatorSetup ?? { available: false, reason: 'No engine built an eligible setup this check.' });
@@ -3765,37 +3790,7 @@ async function resolveStickyTradeSetup(
     // R:R 2.2+ won 0 of 16 (avg -0.37R) vs +0.17R below 1.9. A capped target
     // that no longer clears the minimum R:R is refused, like any other.
     const roomPoints = entryContext?.roomToTargetPoints ?? null;
-    const targetMoveFor = (c: OptionChain) => {
-      const atmIvPct = computeAtmIv(c);
-      const uncapped = isPositional
-        ? c.expectedMove.points
-        : (() => {
-            if (atmIvPct <= 0) return c.expectedMove.points;
-            const oneDayMove = calculateExpectedMove(c.spotPrice, atmIvPct / 100, 1, underlying).expectedMove;
-            return oneDayMove * Math.sqrt(remainingSessionFraction(exchange));
-          })();
-      const cap = FNO_VALIDATION
-        ? capExpectedMoveByHv(uncapped, atmIvPct > 0 ? atmIvPct : null, entryContext?.hvPct ?? null, FNO_VALIDATION_PARAMS.IV_TARGET_CAP_MULT)
-        : null;
-      const expected = cap ? cap.points : uncapped;
-      const capped = roomPoints != null && roomPoints < expected;
-      return {
-        targetExpectedMovePoints: expected,
-        targetCapped: capped,
-        targetMovePoints: capped ? roomPoints! : expected,
-        ivCap: cap
-          ? {
-              atmIvPct: atmIvPct > 0 ? round2(atmIvPct) : null,
-              hvPct: entryContext?.hvPct != null ? round2(entryContext.hvPct) : null,
-              mult: FNO_VALIDATION_PARAMS.IV_TARGET_CAP_MULT,
-              ivUsedPct: cap.ivUsedPct != null ? round2(cap.ivUsedPct) : null,
-              capped: cap.capped,
-              uncappedMovePoints: round2(uncapped),
-              cappedMovePoints: round2(cap.points),
-            }
-          : null,
-      };
-    };
+    const targetMoveFor = (c: OptionChain) => indicatorTargetMove(c, { isPositional, exchange, underlying, entryContext, roomPoints });
     const primaryMove = targetMoveFor(chain);
     const targetExpectedMovePoints = primaryMove.targetExpectedMovePoints;
     const targetCapped = primaryMove.targetCapped;
@@ -4080,66 +4075,7 @@ async function resolveStickyTradeSetup(
     // builder enforces the cost ceiling and the stop-outside-noise rule, and a
     // failing 0-DTE contract falls back to the next expiry. Flag off =
     // buildTradeSetup on chain.atmStrike exactly as before.
-    const validated = await buildWithFnoValidation({
-      enabled: FNO_VALIDATION,
-      primary: chain,
-      side: direction === 'BEARISH' ? 'PE' : 'CE',
-      params: { deltaMin: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MIN, deltaMax: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MAX, deltaTarget: FNO_VALIDATION_PARAMS.OPTION_DELTA_TARGET },
-      contextFor: (c) => {
-        const move = c === chain ? primaryMove : targetMoveFor(c);
-        // The structural stop's underlying distance: to the level behind price plus the stop buffer (null when unknown).
-        const behind = entryContext?.locationBehindLevel ?? null;
-        const spotRef = entryContext?.locationSpot ?? chain.spotPrice;
-        const atrPts = entryContext?.atrPoints ?? null;
-        const underlyingStopPoints = behind != null && atrPts != null ? Math.abs(spotRef - behind) + TRADING_PARAMS.STRUCTURAL_STOP_BUFFER_ATR * atrPts : null;
-        return { expectedMovePoints: move.targetMovePoints, expectedHoldHours, ivRank, hvPct: entryContext?.hvPct ?? null, ivCap: move.ivCap, underlyingStopPoints };
-      },
-      fetchNextExpiry: (expiry) => buildOptionChain(provider, underlying, exchange, expiry),
-      onError: (stage, err: any) => logger.warn({ error: err?.message ?? String(err), stage, underlying, exchange, mode }, 'F&O validation: next-expiry chain unavailable — no fallback contract'),
-      build: (c, strike, ctx) =>
-        buildTradeSetup(
-          c.strikes,
-          strike,
-          direction,
-          confidence,
-          ctx.expectedMovePoints,
-          slPremiumPct,
-          vix,
-          c.dte,
-          c.lotSize,
-          entryContext?.atrPoints ?? null,
-          // 0.05 is the premium tick on NSE/BSE options and the MCX option
-          // contracts this engine trades; the chain leg does not carry its own.
-          {
-            ivRank,
-            hvPct: entryContext?.hvPct ?? null,
-            tickSize: 0.05,
-            expectedHoldHours,
-            // Validation review, fixes 1 and 6. The switches come from the server's
-            // config (trading-flags.ts) so the analytics package stays pure; with
-            // both off the builder ignores every field below.
-            flags: { structuralStop: TRADING_FLAGS.STRUCTURAL_STOP, richIvRr: TRADING_FLAGS.RICH_IV_RR },
-            spot: entryContext?.locationSpot ?? c.spotPrice,
-            nearestBehindLevel: entryContext?.locationBehindLevel ?? null,
-            structuralStopBufferAtr: TRADING_PARAMS.STRUCTURAL_STOP_BUFFER_ATR,
-            ivVsHv: entryContext?.ivVsHv ?? null,
-            richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
-            // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
-            rrGate: false,
-            // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
-            realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
-            // COST-3.0 (audit 2026-10-18): this exchange's dated statutory + exchange charges, not the flat 0.2%.
-            statutoryPct: optionStatutoryPct(exchange, decisionNow()),
-            // EVIDENCE: the builder's own confidence floor is off too — confidence ranks, it does not refuse.
-            ...(INDICATOR_CONFIDENCE_MODE === 'EVIDENCE' ? { confidenceGate: false } : {}),
-          // An R:R refusal still carries its option levels (shown for a confirmed setup; never traded).
-          plan: true,
-            ...(FNO_VALIDATION
-              ? { fnoValidation: { enabled: true, maxCostPctOfPremium: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM, minOptionStopAtr: FNO_VALIDATION_PARAMS.MIN_OPTION_STOP_ATR } }
-              : {}),
-          }
-        ),
-    });
+    const validated = await buildIndicatorContract({ provider, underlying, exchange, mode, chain, direction, confidence, entryContext, primaryMove, targetMoveFor, expectedHoldHours, ivRank, slPremiumPct, vix });
     const builtRaw = validated.setup;
     // The contract actually traded (or finally refused) — the next expiry's chain after a fallback.
     const usedChain = validated.chain;
@@ -4241,6 +4177,7 @@ async function resolveStickyTradeSetup(
       mintTradeSetup({
         underlying, exchange, mode, key, today, setupTtl, chain: usedChain, fresh, direction, confidence, regime, intelligenceScore,
         voteSnapshot, entryContext, phase1Context, gateDiagnosticsFor, shadowModels,
+        candidateId: indicatorId,
       });
     // Built — not minted yet: the slot arbitration above commits or declines it.
     const at = decisionNow();
@@ -4266,8 +4203,9 @@ async function resolveStickyTradeSetup(
         metrics
       ),
       commit: async () => {
-        const minted = await mintUnderLock({ underlying, exchange, mode, key, today, isPositional, priorDecisionId, mintFresh });
-        return { setup: minted, minted: minted.available };
+        const { setup: minted, ours } = await mintUnderLockOutcome({ underlying, exchange, mode, key, today, isPositional, priorDecisionId, mintFresh });
+        // Only this caller's own mint is MINTED; another caller's EXISTING setup is shown, not counted (2026-10-23).
+        return { setup: minted, minted: ours && minted.available };
       },
       decline: async (reason: string) => {
         logDecision({
@@ -4289,13 +4227,212 @@ async function resolveStickyTradeSetup(
   }
 }
 
+
+
+/**
+ * Isolated paper experiments (EXP-2.0): the Old Indicator's candidate for this poll, built with NO side effect —
+ * no decision log, snapshot, gate diagnostic, slot, mint lock or Redis write. It runs the production chain's own
+ * contract build (buildIndicatorContract / indicatorTargetMove) behind the chain's STATELESS gates: risk-off (when
+ * that breaker is enabled), feed quality, session window, confidence / location / room (inert in EVIDENCE mode, as
+ * in production), positioning conflict and the reliability filter. The baseline's STATEFUL gates (its post-loss
+ * cooldowns, its concurrency) are not applied here: every arm applies its own, from its own losses
+ * (experiment-arms.ts armCooldownCode). Intraday only. Null when refused.
+ */
+export async function buildIndicatorExperimentCandidate(a: {
+  provider: MarketDataProvider;
+  underlying: string;
+  exchange: Exchange;
+  mode: TradingMode;
+  chain: OptionChain;
+  direction: BiasDirection;
+  confidence: number;
+  entryContext: SetupEntryContext | undefined;
+  voteSnapshot: BiasVoteSnapshot | undefined;
+  at: number;
+  today: string;
+}): Promise<ExpCandidate | null> {
+  const { provider, underlying, exchange, mode, chain, direction, confidence, entryContext, voteSnapshot, at, today } = a;
+  if (!CONSENSUS_SETUPS || mode !== 'INTRADAY' || (direction !== 'BULLISH' && direction !== 'BEARISH')) return null;
+  if (DAILY_RISK_BREAKER_ENABLED && (await riskOffReason(exchange, mode))) return null;
+  if (dataQualityBlock(exchange, underlying)) return null;
+  if (sessionGateReason(exchange, mode)) return null;
+  if (setupConfidenceRefusal({ mode: INDICATOR_CONFIDENCE_MODE, confidence, minConfidence: MIN_SETUP_CONFIDENCE })) return null;
+  if (locationGateReason({ enabled: locationGateEnforced(), locationScore: entryContext?.locationScore ?? null, minScore: TRADING_PARAMS.LOCATION_GATE_MIN_SCORE, locationReason: entryContext?.locationReason ?? null })) return null;
+  const roomPoints = entryContext?.roomToTargetPoints ?? null;
+  const targetMoveFor = (c: OptionChain) => indicatorTargetMove(c, { isPositional: false, exchange, underlying, entryContext, roomPoints });
+  const primaryMove = targetMoveFor(chain);
+  const room2 = roomV2({ availableAtr: entryContext?.locationAheadAtr ?? null, targetMovePoints: primaryMove.targetMovePoints, atrPoints: entryContext?.atrPoints ?? null });
+  if (roomGateReason({ enabled: TRADING_FLAGS.ROOM_GATE, sufficientV2: room2.sufficientV2, availableAtr: entryContext?.locationAheadAtr ?? null, requiredAtrV2: room2.requiredAtrV2 })) return null;
+  if (positioningConflictReason(direction, voteSnapshot)) return null;
+  if (await checkReliabilityFilters(underlying, exchange, direction, mode)) return null;
+  const vix = await lookupIndiaVix(provider, exchange);
+  const ivRank = await ivRankFor(underlying, chain.expiry, computeAtmIv(chain)).catch(() => null);
+  const expectedHoldHours = Math.max(0.5, remainingSessionMinutesFrom(exchange, at) / 60);
+  const validated = await buildIndicatorContract({ provider, underlying, exchange, mode, chain, direction, confidence, entryContext, primaryMove, targetMoveFor, expectedHoldHours, ivRank, slPremiumPct: undefined, vix });
+  const setup = validated.setup;
+  const used = validated.chain;
+  if (!setup.available || setup.entry == null || setup.stopLoss == null || setup.target == null || setup.strike == null || !setup.side) return null;
+  if (preMintCheck(setup, used, at)) return null;
+  const quote = observeChainLeg(used, setup.strike, setup.side, used.expiry, at);
+  const lotSize = setup.positionSize?.lotSize ?? used.lotSize ?? null;
+  if (!lotSize || !(lotSize > 0)) return null;
+  return {
+    at,
+    candidateId: `IND:${exchange}:${underlying}:${mode}:${direction}:${today}`,
+    symbol: underlying,
+    exchange: exchange as ExpCandidate['exchange'],
+    mode,
+    direction,
+    confidence,
+    side: setup.side,
+    strike: setup.strike,
+    expiry: used.expiry,
+    token: quote.token,
+    lotSize,
+    entry: setup.entry,
+    stop: setup.stopLoss,
+    target: setup.target,
+    costPct: setup.estimatedCostPct ?? ESTIMATED_ROUND_TRIP_COST_PCT,
+    statutoryPct: optionStatutoryPct(exchange, at),
+    brokeragePerLotInr: 2 * TRADING_COST_MODEL.brokeragePerOrder * (1 + TRADING_COST_MODEL.gstPct / 100),
+    minutesSinceOpen: minutesSinceSessionOpen(exchange, at),
+    behindLevel: entryContext?.locationBehindLevel ?? null,
+    atr: entryContext?.atrPoints ?? null,
+    quote: toExpQuote(quote),
+  };
+}
+
+// ---------------- the Old Indicator's contract build, shared (2026-10-23) ----------------
+// Moved verbatim out of resolveStickyTradeSetup's indicator engine so the production chain and the isolated
+// experiment candidate builder (buildIndicatorExperimentCandidate) run the very same code — never a copy.
+
+/** The move the Old Indicator's target may assume on one chain (see the comment above its call site). */
+function indicatorTargetMove(c: OptionChain, a: { isPositional: boolean; exchange: Exchange; underlying: string; entryContext: SetupEntryContext | undefined; roomPoints: number | null }) {
+  const { isPositional, exchange, underlying, entryContext, roomPoints } = a;
+  const atmIvPct = computeAtmIv(c);
+  const uncapped = isPositional
+    ? c.expectedMove.points
+    : (() => {
+        if (atmIvPct <= 0) return c.expectedMove.points;
+        const oneDayMove = calculateExpectedMove(c.spotPrice, atmIvPct / 100, 1, underlying).expectedMove;
+        return oneDayMove * Math.sqrt(remainingSessionFraction(exchange));
+      })();
+  const cap = FNO_VALIDATION
+    ? capExpectedMoveByHv(uncapped, atmIvPct > 0 ? atmIvPct : null, entryContext?.hvPct ?? null, FNO_VALIDATION_PARAMS.IV_TARGET_CAP_MULT)
+    : null;
+  const expected = cap ? cap.points : uncapped;
+  const capped = roomPoints != null && roomPoints < expected;
+  return {
+    targetExpectedMovePoints: expected,
+    targetCapped: capped,
+    targetMovePoints: capped ? roomPoints! : expected,
+    ivCap: cap
+      ? {
+          atmIvPct: atmIvPct > 0 ? round2(atmIvPct) : null,
+          hvPct: entryContext?.hvPct != null ? round2(entryContext.hvPct) : null,
+          mult: FNO_VALIDATION_PARAMS.IV_TARGET_CAP_MULT,
+          ivUsedPct: cap.ivUsedPct != null ? round2(cap.ivUsedPct) : null,
+          capped: cap.capped,
+          uncappedMovePoints: round2(uncapped),
+          cappedMovePoints: round2(cap.points),
+        }
+      : null,
+  };
+}
+
+interface IndicatorContractArgs {
+  provider: MarketDataProvider;
+  underlying: string;
+  exchange: Exchange;
+  mode: TradingMode;
+  chain: OptionChain;
+  direction: BiasDirection;
+  confidence: number;
+  entryContext: SetupEntryContext | undefined;
+  primaryMove: ReturnType<typeof indicatorTargetMove>;
+  targetMoveFor: (c: OptionChain) => ReturnType<typeof indicatorTargetMove>;
+  expectedHoldHours: number;
+  ivRank: Awaited<ReturnType<typeof ivRankFor>> | null;
+  slPremiumPct: number | undefined;
+  vix: number | null;
+}
+
+/** The Old Indicator's contract: strike by delta band, the builder's stop / target / cost rules, the expiry fallback. */
+function buildIndicatorContract(a: IndicatorContractArgs) {
+  const { provider, underlying, exchange, mode, chain, direction, confidence, entryContext, primaryMove, targetMoveFor, expectedHoldHours, ivRank, slPremiumPct, vix } = a;
+  return buildWithFnoValidation({
+    enabled: FNO_VALIDATION,
+    primary: chain,
+    side: direction === 'BEARISH' ? 'PE' : 'CE',
+    params: { deltaMin: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MIN, deltaMax: FNO_VALIDATION_PARAMS.OPTION_DELTA_BAND_MAX, deltaTarget: FNO_VALIDATION_PARAMS.OPTION_DELTA_TARGET },
+    contextFor: (c) => {
+      const move = c === chain ? primaryMove : targetMoveFor(c);
+      // The structural stop's underlying distance: to the level behind price plus the stop buffer (null when unknown).
+      const behind = entryContext?.locationBehindLevel ?? null;
+      const spotRef = entryContext?.locationSpot ?? chain.spotPrice;
+      const atrPts = entryContext?.atrPoints ?? null;
+      const underlyingStopPoints = behind != null && atrPts != null ? Math.abs(spotRef - behind) + TRADING_PARAMS.STRUCTURAL_STOP_BUFFER_ATR * atrPts : null;
+      return { expectedMovePoints: move.targetMovePoints, expectedHoldHours, ivRank, hvPct: entryContext?.hvPct ?? null, ivCap: move.ivCap, underlyingStopPoints };
+    },
+    fetchNextExpiry: (expiry) => buildOptionChain(provider, underlying, exchange, expiry),
+    onError: (stage, err: any) => logger.warn({ error: err?.message ?? String(err), stage, underlying, exchange, mode }, 'F&O validation: next-expiry chain unavailable — no fallback contract'),
+    build: (c, strike, ctx) =>
+      buildTradeSetup(
+        c.strikes,
+        strike,
+        direction,
+        confidence,
+        ctx.expectedMovePoints,
+        slPremiumPct,
+        vix,
+        c.dte,
+        c.lotSize,
+        entryContext?.atrPoints ?? null,
+        // 0.05 is the premium tick on NSE/BSE options and the MCX option
+        // contracts this engine trades; the chain leg does not carry its own.
+        {
+          ivRank,
+          hvPct: entryContext?.hvPct ?? null,
+          tickSize: 0.05,
+          expectedHoldHours,
+          // Validation review, fixes 1 and 6. The switches come from the server's
+          // config (trading-flags.ts) so the analytics package stays pure; with
+          // both off the builder ignores every field below.
+          flags: { structuralStop: TRADING_FLAGS.STRUCTURAL_STOP, richIvRr: TRADING_FLAGS.RICH_IV_RR },
+          spot: entryContext?.locationSpot ?? c.spotPrice,
+          nearestBehindLevel: entryContext?.locationBehindLevel ?? null,
+          structuralStopBufferAtr: TRADING_PARAMS.STRUCTURAL_STOP_BUFFER_ATR,
+          ivVsHv: entryContext?.ivVsHv ?? null,
+          richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
+          // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
+          rrGate: false,
+          // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
+          realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
+          // COST-3.0 (audit 2026-10-18): this exchange's dated statutory + exchange charges, not the flat 0.2%.
+          statutoryPct: optionStatutoryPct(exchange, decisionNow()),
+          // EVIDENCE: the builder's own confidence floor is off too — confidence ranks, it does not refuse.
+          ...(INDICATOR_CONFIDENCE_MODE === 'EVIDENCE' ? { confidenceGate: false } : {}),
+        // An R:R refusal still carries its option levels (shown for a confirmed setup; never traded).
+        plan: true,
+          ...(FNO_VALIDATION
+            ? { fnoValidation: { enabled: true, maxCostPctOfPremium: FNO_VALIDATION_PARAMS.MAX_COST_PCT_OF_PREMIUM, minOptionStopAtr: FNO_VALIDATION_PARAMS.MIN_OPTION_STOP_ATR } }
+            : {}),
+        }
+      ),
+  });
+}
+
 /**
  * The setup mint lock (BACKGROUND_BIAS): one caller mints, any other returns
  * the setup that caller minted. Split out of resolveStickyTradeSetup unchanged
  * so the momentum-break family mints under the very same lock (same key, so
  * the two families can never double-mint the one shared slot).
  */
-async function mintUnderLock(args: {
+async function mintUnderLock(args: MintUnderLockArgs): Promise<TradeSetup> {
+  return (await mintUnderLockOutcome(args)).setup;
+}
+
+interface MintUnderLockArgs {
   underlying: string;
   exchange: Exchange;
   mode: TradingMode;
@@ -4304,9 +4441,12 @@ async function mintUnderLock(args: {
   isPositional: boolean;
   priorDecisionId: string | null;
   mintFresh: () => Promise<StoredTradeSetup>;
-}): Promise<TradeSetup> {
+}
+
+/** mintUnderLock, also saying whether this caller minted. */
+async function mintUnderLockOutcome(args: MintUnderLockArgs): Promise<{ setup: TradeSetup; ours: boolean }> {
   const { underlying, exchange, mode, key, today, isPositional, priorDecisionId, mintFresh } = args;
-  if (!COVERAGE_LAG_FLAGS.BACKGROUND_BIAS) return mintFresh();
+  if (!COVERAGE_LAG_FLAGS.BACKGROUND_BIAS) return { setup: await mintFresh(), ours: isOwnMint('UNLOCKED') };
 
   const readMintedByOther = async (): Promise<StoredTradeSetup | null> => {
     try {
@@ -4338,13 +4478,16 @@ async function mintUnderLock(args: {
         stage === 'ACQUIRE' ? 'Mint lock: could not take the lock — minting unlocked' : 'Mint lock: release failed — it expires on its TTL'
       ),
   });
-  if (outcome.kind === 'MINTED') return outcome.value;
+  if (outcome.kind === 'MINTED') return { setup: outcome.value, ours: isOwnMint('MINTED') };
   if (outcome.kind === 'EXISTING') {
     logger.info({ underlying, exchange, mode, decisionId: outcome.value.decisionId }, 'Mint lock: another caller minted this setup — returning theirs, not minting again');
-    return outcome.value;
+    return { setup: outcome.value, ours: isOwnMint('EXISTING') };
   }
   logger.info({ underlying, exchange, mode }, 'Mint lock: another caller is still minting this setup — nothing minted by this poll');
-  return { available: false, reason: 'A setup for this symbol is being generated by another evaluation right now — it will show on the next refresh.' };
+  return {
+    setup: { available: false, reason: 'A setup for this symbol is being generated by another evaluation right now — it will show on the next refresh.' },
+    ours: isOwnMint('BUSY'),
+  };
 }
 
 // --- Momentum-break family (flag MOMENTUM_BREAK) ---
@@ -5790,6 +5933,8 @@ async function mintTradeSetup(ctx: {
   momentumBreak?: StoredMomentumBreak;
   /** Structure family only: the lifecycle, carried in the slot for SWEEP_RECLAIMED. */
   structure?: StoredStructureTrade;
+  /** Indicator only (2026-10-23): its slot candidate id, written to the trade row (a durable decision -> trade link). */
+  candidateId?: string;
 }): Promise<StoredTradeSetup> {
   const {
     underlying, exchange, mode, key, today, setupTtl, chain, fresh, direction, confidence, regime, intelligenceScore,
@@ -5802,7 +5947,7 @@ async function mintTradeSetup(ctx: {
     ? { source: ctx.structure.triggerId ?? 'S1', candidateId: ctx.structure.lifecycleId, sourceVersion: ORDER_FLOW_SOURCE_VERSIONS[ctx.structure.triggerId ?? ''] ?? null }
     : ctx.momentumBreak
       ? { source: 'MOMENTUM_BREAK', candidateId: `${ctx.momentumBreak.direction}:${ctx.momentumBreak.barTime}` }
-      : { source: 'INDICATOR', candidateId: null };
+      : { source: 'INDICATOR', candidateId: ctx.candidateId ?? null };
   const signalId = await recordTradeSetupGenerated(underlying, exchange, fresh, direction, confidence, regime, intelligenceScore, mode, voteSnapshot, entryContext, logic, origin);
   // Measurement only (LEDGER-1.0): the quote the entry was decided on, beside the official mid entry.
   if (signalId && fresh.structureType !== 'SPREAD') {

@@ -77,6 +77,9 @@ export interface SlotDecisionRow {
     candidates: SlotDecisionCandidate[];
   };
   versions: { option: string | null; arbitration: string | null; optionSelection: string | null };
+  /** The trade row this evaluation minted, and its decision record (MINTED only; 2026-10-23). */
+  signalId: string | null;
+  decisionId: string | null;
 }
 
 const measured = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
@@ -92,6 +95,8 @@ export function slotDecisionRow(args: {
   minted: boolean;
   noTrade: NoTradeDiagnostics | null;
   versions: SlotDecisionRow['versions'];
+  signalId?: string | null;
+  decisionId?: string | null;
 }): SlotDecisionRow {
   const { records } = args;
   const selected = records.find((r) => r.role === 'SELECTED') ?? null;
@@ -148,16 +153,34 @@ export function slotDecisionRow(args: {
       candidates,
     },
     versions: args.versions,
+    signalId: args.minted ? args.signalId ?? null : null,
+    decisionId: args.minted ? args.decisionId ?? null : null,
   };
 }
+
+/** 045: slot_decisions.signal_id / decision_id — the durable link to the minted trade row (2026-10-23). */
+export const SLOT_LINK_MIGRATION = '045_experiments_and_linkage.sql';
 
 /** Best-effort write: never throws, never blocks the poll. */
 export async function recordSlotDecision(row: SlotDecisionRow): Promise<void> {
   try {
     if (!schemaFileReady(SLOT_DECISIONS_MIGRATION)) return;
+    const linked = schemaFileReady(SLOT_LINK_MIGRATION);
     if (row.outcome !== 'MINTED') {
       const first = await redis.set(`slot_decision_logged:${row.exchange}:${row.symbol}:${row.mode}:${row.decisionBarTime}`, '1', 'EX', 60 * 60 * 24, 'NX');
       if (first !== 'OK') return;
+    }
+    if (linked) {
+      // 045: the minted trade row and its decision record; a signal is linked to at most one MINTED evaluation.
+      await sql`
+      INSERT INTO slot_decisions (time, snapshot_id, symbol, exchange, mode, decision_bar_time, outcome, candidates, fellthrough, pre_mint_failures,
+        selected_source, selected_candidate_id, limiting_stage, limiting_code, diagnostics, option_version, arbitration_version, option_selection_version, signal_id, decision_id)
+      VALUES (${new Date(row.time)}, ${currentSnapshotId()}, ${row.symbol}, ${row.exchange}, ${row.mode}, ${new Date(row.decisionBarTime)}, ${row.outcome}, ${row.candidates},
+        ${row.fellthrough}, ${row.preMintFailures}, ${row.selectedSource}, ${row.selectedCandidateId}, ${row.limitingStage}, ${row.limitingCode},
+        ${sql.json(row.diagnostics as any)}, ${row.versions.option}, ${row.versions.arbitration}, ${row.versions.optionSelection}, ${row.signalId}, ${row.decisionId})
+      ON CONFLICT (signal_id) WHERE signal_id IS NOT NULL DO NOTHING
+    `;
+      return;
     }
     await sql`
       INSERT INTO slot_decisions (time, snapshot_id, symbol, exchange, mode, decision_bar_time, outcome, candidates, fellthrough, pre_mint_failures,

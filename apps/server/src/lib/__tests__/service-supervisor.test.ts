@@ -159,7 +159,10 @@ describe('ServiceSupervisor', () => {
 describe('boot registrations and shutdown order (index.ts)', () => {
   const src = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../index.ts'), 'utf8');
   const EXISTING = [
-    'alertScanner', 'patternScanner', 'institutionalFlowScanner', 'tradeSetupPriceMonitor', 'marketScanner', 'fiiDiiTracker', 'abandonedSetupSweep', 'oiCloseSnapshot', 'cacheWarmer',
+    'alertScanner', 'patternScanner', 'institutionalFlowScanner', 'tradeSetupPriceMonitor',
+    // 2026-10-23: isolated paper experiment arms (EXP-2.0; writes experiment_* only, never read by the baseline).
+    'experimentEngine',
+    'marketScanner', 'fiiDiiTracker', 'abandonedSetupSweep', 'oiCloseSnapshot', 'cacheWarmer',
     'strategyTracker', 'positionalStockScan', 'backgroundBiasEvaluator', 'marketStateCapture', 'missedWinnerAudit', 'setupEventsGrading', 'opportunityCensus',
     // 2026-10-15: the bar archive (research only; writes bar_archive while no exchange trades, never read by a decision).
     'barArchive',
@@ -174,7 +177,7 @@ describe('boot registrations and shutdown order (index.ts)', () => {
   it('registers exactly the 18 original services plus the bar archive, daily review, reconciliation and ops monitor, and three justified COMPONENT extras', () => {
     const timer = [...src.matchAll(/timerService\('(\w+)'/g)].map((m) => m[1]);
     expect(timer).toEqual(EXISTING);
-    expect(new Set(timer).size).toBe(22);
+    expect(new Set(timer).size).toBe(23);
     const components = [...src.matchAll(/name: '(\w+)', critical: (true|false)[^\n]*kind: 'COMPONENT'/g)].map((m) => m[1]);
     expect(components).toEqual(['signalEngine', 'setupLifecycle', 'orderFlowFeed']);
     expect((src.match(/note: 'Extra:/g) ?? []).length).toBe(3);

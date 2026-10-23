@@ -389,7 +389,7 @@ describe('setup mint lock — concurrent callers mint once', () => {
 
   it('market-bias wraps the setup-creating branch in the lock only when BACKGROUND_BIAS is on', () => {
     const src = readFileSync(path.join(REPO_ROOT, 'apps/server/src/services/market-bias.ts'), 'utf-8');
-    expect(src).toContain('if (!COVERAGE_LAG_FLAGS.BACKGROUND_BIAS) return mintFresh();');
+    expect(src).toContain("if (!COVERAGE_LAG_FLAGS.BACKGROUND_BIAS) return { setup: await mintFresh(), ours: isOwnMint('UNLOCKED') };");
     expect(src).toContain('lockKey: mintLockKey(exchange, underlying, mode)');
     expect(mintLockKey('MCX', 'CRUDEOIL', 'INTRADAY')).toBe('trade_setup_mint_lock:MCX:CRUDEOIL:INTRADAY');
     // The Telegram push lives only inside the minting function.

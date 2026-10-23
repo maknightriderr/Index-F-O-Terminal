@@ -131,6 +131,8 @@ export const FILES = [
   '043_oi_storage.sql',
   // Measurement only: the paper execution ledger — observed quotes beside the official paper prices (LEDGER-1.0).
   '044_paper_execution_ledger.sql',
+  // Durable slot-decision -> trade link and the isolated paper experiment tables (EXP-2.0).
+  '045_experiments_and_linkage.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */

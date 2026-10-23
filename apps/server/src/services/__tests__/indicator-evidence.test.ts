@@ -81,7 +81,13 @@ describe('one runtime path: EVIDENCE', () => {
 
   it('the live chain has exactly one confidence decision, through the mode switch, and no inline 75 comparison', () => {
     const src = readFileSync(fileURLToPath(new URL('../market-bias.ts', import.meta.url)), 'utf8');
-    expect(src.match(/setupConfidenceRefusal\(/g)).toHaveLength(1);
+    // The isolated experiment builder (EXP-2.0) applies the same gate through the same mode switch; the live chain keeps exactly one.
+    const expStart = src.indexOf('export async function buildIndicatorExperimentCandidate');
+    const expEnd = src.indexOf("// ---------------- the Old Indicator's contract build, shared");
+    const live = src.slice(0, expStart) + src.slice(expEnd);
+    const exp = src.slice(expStart, expEnd);
+    expect(live.match(/setupConfidenceRefusal\(/g)).toHaveLength(1);
+    expect(exp.match(/setupConfidenceRefusal\(\{ mode: INDICATOR_CONFIDENCE_MODE,/g)).toHaveLength(1);
     expect(src).not.toMatch(/confidence < MIN_SETUP_CONFIDENCE/);
     expect(src).toMatch(/INDICATOR_CONFIDENCE_MODE === 'EVIDENCE' \? \{ confidenceGate: false \}/);
     // The protected constant stays byte-identical for rollback.
