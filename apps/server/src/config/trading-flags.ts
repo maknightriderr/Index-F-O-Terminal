@@ -431,7 +431,10 @@ export const STRUCTURE_5M_LOGIC_VERSION = '2026-09-29.structure.2';
 export const STRATEGY_VERSION = 'STRUCTURE-15M-1.0';
 // FAMILIES-1.0: displacement became trigger-specific (S1's own condition),
 // with the other families evaluated live in SHADOW. LEGACY-1.0 rows predate it.
-export const TRIGGER_VERSION = 'FAMILIES-1.0';
+// FAMILIES-1.1 (2026-10-23): a trigger-family trade (A3, A6, OF1, ...) measures its
+// option stop, target move and entry validity from the live spot the option is bought
+// at, not from the decision bar's close (structureEntrySpot). Rows before it carry 1.0.
+export const TRIGGER_VERSION = 'FAMILIES-1.1';
 // RISK-2.0 (2026-10-05): net R:R is a ranking / display input only — no
 // 1.50R gate anywhere in the live path (structure confirmation, the fill's
 // sequence gate, the family buckets, the option builder, the sticky slot's

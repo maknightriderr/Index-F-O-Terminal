@@ -44,7 +44,21 @@ import {
   toClosedMomentumBars,
   MOMENTUM_BREAK_STRATEGY,
 } from '../momentum-break-live.js';
-import { losingCloseCooldownReason } from '../market-bias.js';
+import { losingCloseCooldownReason, structureEntrySpot } from '../market-bias.js';
+
+describe('FAMILIES-1.1: a trigger-family trade is built from the live spot it is bought at', () => {
+  it('a trigger lifecycle reads the live spot; S1 (no triggerId) keeps its confirming close', () => {
+    expect(structureEntrySpot({ triggerId: 'A3', rejectionFillPrice: 100 }, { spotPrice: 101.5 })).toBe(101.5);
+    expect(structureEntrySpot({ triggerId: 'OF1', rejectionFillPrice: 100 }, { spotPrice: 98 })).toBe(98);
+    expect(structureEntrySpot({ rejectionFillPrice: 100 }, { spotPrice: 101.5 })).toBe(100);
+    expect(structureEntrySpot({ triggerId: 'A3', rejectionFillPrice: 100 }, { spotPrice: 0 })).toBe(100); // no live price: the close
+  });
+  it('the production chain and the replica builder both use it', () => {
+    const mb = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../market-bias.ts'), 'utf8');
+    expect(mb.match(/const spot = structureEntrySpot\(lc, chain\);/g)).toHaveLength(2);
+    expect(mb).not.toMatch(/const spot = lc\.rejectionFillPrice \?\? chain\.spotPrice;/);
+  });
+});
 import {
   LOGIC_VERSION,
   logicStamp,
