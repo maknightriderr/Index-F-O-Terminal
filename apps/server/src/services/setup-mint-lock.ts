@@ -94,3 +94,13 @@ export async function mintOnce<T, E>(opts: MintOnceOptions<T, E>): Promise<MintO
     await sleep(pollMs);
   }
 }
+
+/**
+ * Whether a mint-lock outcome is THIS caller's own mint (2026-10-23). A setup another caller minted (EXISTING) is
+ * returned so the poll can show it, but its slot decision must not say MINTED: 6 of the 7 MINTED slot rows without a
+ * trade row (5-22 Oct) were a concurrent evaluation of the same bar handed the other caller's setup. UNLOCKED = the
+ * lock flag is off, so this caller minted unlocked.
+ */
+export function isOwnMint(kind: 'MINTED' | 'EXISTING' | 'BUSY' | 'UNLOCKED'): boolean {
+  return kind === 'MINTED' || kind === 'UNLOCKED';
+}

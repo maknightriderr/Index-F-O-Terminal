@@ -32,6 +32,8 @@ beforeAll(async () => {
   expect(await apply(db, '002_schema.sql')).toEqual([]);
   for (const f of FILES) {
     if (f === '037_replay_tapes_forward_validation.sql') continue;
+    // 045 alters slot_decisions, which 037 creates: it is applied after 037 at boot, never without it.
+    if (f === '045_experiments_and_linkage.sql') continue;
     const errs = await apply(db, f);
     if (!BEST_EFFORT.has(f)) expect(errs, f).toEqual([]);
   }
@@ -58,6 +60,8 @@ describe('migration 037', () => {
   });
 
   it("every statement the new services issue is valid against the migrated schema", async () => {
+    // 045 (slot_decisions.signal_id / decision_id) follows 037 at boot; slot-decisions.ts writes them once it is applied.
+    expect(await apply(db, '045_experiments_and_linkage.sql')).toEqual([]);
     const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
     let checked = 0;
     for (const f of ['slot-decisions.ts', 'forward-validation.ts', 'signal-engine-metrics.ts']) {
@@ -75,5 +79,20 @@ describe('migration 037', () => {
       }
     }
     expect(checked).toBeGreaterThanOrEqual(9);
+  });
+
+  it('045: one trade row is linked to at most one MINTED slot evaluation (a concurrent duplicate is dropped)', async () => {
+    const ins = (sig: string | null) =>
+      db.query(`INSERT INTO slot_decisions (time, symbol, exchange, mode, outcome, signal_id) VALUES (now(), 'TIINDIA', 'NSE', 'INTRADAY', 'MINTED', ${sig ? `'${sig}'` : 'NULL'})
+        ON CONFLICT (signal_id) WHERE signal_id IS NOT NULL DO NOTHING`);
+    await ins('dddddddd-dddd-4ddd-8ddd-dddddddddddd');
+    await ins('dddddddd-dddd-4ddd-8ddd-dddddddddddd');
+    await ins(null);
+    await ins(null);
+    const n = (await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM slot_decisions WHERE symbol = 'TIINDIA'`)).rows[0].n;
+    expect(n).toBe(3); // one linked row, two unlinked (NO_TRADE-style rows are never unique on signal_id)
+    for (const t of ['experiment_arms', 'experiment_positions', 'experiment_events', 'experiment_decisions']) {
+      expect((await db.query(`SELECT 1 FROM information_schema.tables WHERE table_name = '${t}'`)).rows.length, t).toBe(1);
+    }
   });
 });
