@@ -77,7 +77,7 @@ function save(p: ArmPosition, events: string[], at: number): void {
   void persist(p, events, at).catch((err: any) => logger.warn({ error: err?.message, id: p.id }, 'Experiments: persist failed (paper research only)'));
   const day = istDay(at);
   const l = lossOf(p, day);
-  if (l && events.some((e) => e === 'OFFICIAL_STOP_LOSS' || e === 'OFFICIAL_STRUCTURE_INVALIDATED')) losses.set(p.arm, [...(losses.get(p.arm) ?? []).filter((x) => at - x.at < 36 * 3600_000), l]);
+  if (l && events.some((e) => e === 'OFFICIAL_STOP_LOSS')) losses.set(p.arm, [...(losses.get(p.arm) ?? []).filter((x) => at - x.at < 36 * 3600_000), l]);
   if (!isLive(p)) {
     positions.delete(p.id);
     if (p.candidate.token && subs && ![...positions.values()].some((o) => o.candidate.token === p.candidate.token)) {

@@ -4,7 +4,6 @@ import {
   RETIRED_ARMS,
   armFor,
   armCooldownCode,
-  lossOf,
   armEntryDecision,
   fillBlocker,
   officialNetR,
@@ -171,7 +170,7 @@ describe('exits on later reads', () => {
 describe('EXP-3.0 trigger capture arms (A3R, OF1R)', () => {
   const read = (o: object) => ({ at: T0 + 30 * 60_000, direction: 'BEARISH', confidence: 90, minConfidence: 60, confirmMs: 0, lastClosedBar: null, ...o });
   it('the Indicator arms are unchanged: same versions, bias-reversal exit, no structural exit', () => {
-    expect(ARMS.filter((a) => a.source === 'INDICATOR').map((a) => a.version)).toEqual(['R0-REPLICA-1.0', 'A-TARGET-0.5R-1.0', 'B-NO-LATE-NSE-1.0', 'C-A-AND-B-1.0', 'IND-V2-INVALIDATION-1.1']);
+    expect(ARMS.filter((a) => a.source === 'INDICATOR').map((a) => a.version)).toEqual(['R0-REPLICA-1.0', 'A-TARGET-0.5R-1.0', 'B-NO-LATE-NSE-1.0', 'C-A-AND-B-1.0', 'IND-V2-INVALIDATION-1.0']);
     expect(ARMS.filter((a) => a.source === 'INDICATOR').every((a) => a.biasReversalExit && !a.structureExit)).toBe(true);
     expect(ARMS.filter((a) => a.source !== 'INDICATOR').map((a) => [a.id, a.version, a.kind, a.source])).toEqual([['A3R', 'A3-R0-1.1', 'CONTROL_REPLICA', 'A3'], ['OF1R', 'OF1-R0-1.1', 'CONTROL_REPLICA', 'OF1']]);
     expect(ARMS.filter((a) => a.source === 'INDICATOR').every((a) => !a.triggerReversalExit)).toBe(true); // EXP-2.0 arms as activated
@@ -187,46 +186,6 @@ describe('EXP-3.0 trigger capture arms (A3R, OF1R)', () => {
     expect(onDecisionRead(bear, arm('OF1R'), read({ lastClosedBar: { close: 2421, closeAt: T0 + 15 * 60_000 } }))).toContain('OFFICIAL_SWEEP_RECLAIMED');
     const before = openPosition(arm('A3R'), cand({ sweepExtreme: 2385 }), 's3', T0);
     expect(onDecisionRead(before, arm('A3R'), read({ lastClosedBar: { close: 2300, closeAt: T0 - 60_000 } }))).toEqual([]);
-  });
-});
-
-describe('IND-V2-INVALIDATION-1.1: a losing invalidation exit is the arm\'s loss, as a stop-loss is', () => {
-  const read = (o: object = {}) => ({ at: T0 + 30 * 60_000, direction: 'BULLISH', confidence: 70, minConfidence: 60, confirmMs: 0, lastClosedBar: null, ...o });
-  const invalidated = (version: string) => {
-    const p = openPosition(armFor('V2', version)!, cand(), 'inv-' + version, T0);
-    onQuote(p, q({ ltp: 90, bid: 89.5, ask: 90.5 }, T0 + 20 * 60_000), T0 + 20 * 60_000); // below entry, above the stop
-    onDecisionRead(p, armFor('V2', version)!, read({ lastClosedBar: { close: 2370, closeAt: T0 + 30 * 60_000 } })); // 2370 < 2380 - 2.5
-    return p;
-  };
-  it('1.1: a losing STRUCTURE_INVALIDATED close registers a loss on its symbol and direction', () => {
-    const p = invalidated('IND-V2-INVALIDATION-1.1');
-    expect(p.official).toMatchObject({ status: 'CLOSED', reason: 'STRUCTURE_INVALIDATED' });
-    expect(p.official.netR!).toBeLessThan(0);
-    expect(lossOf(p, '2026-10-26')).toMatchObject({ symbol: 'TCS', direction: 'BULLISH', positionId: p.id });
-  });
-  it('an invalidation loss blocks only the same signal for 60 min: no exchange settle, no day-confidence bar, no direction lock', () => {
-    const l = { ...lossOf(invalidated('IND-V2-INVALIDATION-1.1'), '2026-10-26')!, at: T0 };
-    expect(l.kind).toBe('INVALIDATION');
-    expect(armCooldownCode([l], cand(), T0 + 60_000, '2026-10-26')).toBe('SAME_SYMBOL_SIDE');
-    expect(armCooldownCode([l], cand({ symbol: 'INFY', confidence: 70 }), T0 + 60_000, '2026-10-26')).toBeNull(); // a stop-loss would settle the exchange
-    expect(armCooldownCode([l], cand({ direction: 'BEARISH' }), T0 + 60_000, '2026-10-26')).toBeNull();
-    expect(armCooldownCode([l, { ...l, positionId: 'x' }], cand(), T0 + 61 * 60_000, '2026-10-26')).toBeNull(); // two invalidations never lock the direction
-    const stop = { ...l, kind: undefined };
-    expect(armCooldownCode([stop], cand({ symbol: 'INFY', confidence: 70 }), T0 + 60_000, '2026-10-26')).toBe('POST_LOSS_COOLDOWN'); // stop-losses unchanged
-  });
-  it('1.0 (retired) keeps its rule: no loss, so positions opened under it finish as they began', () => {
-    expect(lossOf(invalidated('IND-V2-INVALIDATION-1.0'), '2026-10-26')).toBeNull();
-  });
-  it('a winning invalidation exit is no loss; stop-loss and other exits are as before', () => {
-    const p = openPosition(arm('V2'), cand(), 'win', T0);
-    onQuote(p, q({ ltp: 108, bid: 107.5, ask: 108.5 }, T0 + 20 * 60_000), T0 + 20 * 60_000);
-    onDecisionRead(p, arm('V2'), read({ lastClosedBar: { close: 2370, closeAt: T0 + 30 * 60_000 } }));
-    expect(p.official.reason).toBe('STRUCTURE_INVALIDATED');
-    expect(lossOf(p, '2026-10-26')).toBeNull();
-    const r0 = openPosition(arm('R0'), cand(), 'r0', T0);
-    onQuote(r0, q({ ltp: 69, bid: 68.5, ask: 69.5 }, T0 + 20 * 60_000), T0 + 20 * 60_000);
-    expect(lossOf(r0, '2026-10-26')).not.toBeNull(); // STOP_LOSS, unchanged
-    expect(ARMS.filter((a) => a.id !== 'V2').every((a) => !a.invalidationIsLoss)).toBe(true);
   });
 });
 
@@ -256,6 +215,6 @@ describe('EXP-3.1: TRIGGER_REVERSAL on the trigger arms (production triggerSlotA
     expect(armFor('A3R', 'A3-R0-1.1')?.triggerReversalExit).toBe(true);
     expect(armFor('R0', 'R0-REPLICA-1.0')?.biasReversalExit).toBe(true);
     expect(armFor('A3R', 'A3-R0-9.9')).toBeNull();
-    expect(RETIRED_ARMS.map((a) => a.version)).toEqual(['IND-V2-INVALIDATION-1.0', 'A3-R0-1.0', 'OF1-R0-1.0']);
+    expect(RETIRED_ARMS.map((a) => a.version)).toEqual(['A3-R0-1.0', 'OF1-R0-1.0']);
   });
 });

@@ -2653,6 +2653,8 @@ interface StoredStructureTrade {
   /** The limit (underlying) and where the live price actually was when it filled. */
   entry: number;
   fillSpot: number;
+  /** FAMILIES-1.1: R to T1 left from fillSpot (the option's geometry); rToT1 stays the setup's own, from its entry. */
+  remainingRToT1?: number | null;
   fillAt: number;
   stop: number;
   t1: { kind: string; price: number };
@@ -4311,6 +4313,7 @@ export async function buildIndicatorExperimentCandidate(a: {
     brokeragePerLotInr: 2 * TRADING_COST_MODEL.brokeragePerOrder * (1 + TRADING_COST_MODEL.gstPct / 100),
     minutesSinceOpen: minutesSinceSessionOpen(exchange, at),
     behindLevel: entryContext?.locationBehindLevel ?? null,
+    behindKind: entryContext?.locationBehindKind ?? null,
     atr: entryContext?.atrPoints ?? null,
     quote: toExpQuote(quote),
   };
@@ -5099,6 +5102,16 @@ type StructureClosedBar = { time: number; close: number; open?: number; high?: n
  * 1.1 R), and its validity check never saw the live price. The bar close stays the
  * setup's own entry (lc.entry).
  */
+/**
+ * Pure: the risk and reward LEFT from the entry spot to the setup's own structural levels (the stop and T1 are never
+ * moved; only the distances are measured from where the option is bought). remainingRToT1 is null without risk.
+ */
+export function remainingGeometry(lc: Pick<LiveLifecycle, 'stop' | 't1'>, spot: number): { stopDistance: number; targetMove: number; remainingRToT1: number | null } {
+  const stopDistance = Math.abs(lc.stop! - spot);
+  const targetMove = Math.abs(lc.t1!.price - spot);
+  return { stopDistance, targetMove, remainingRToT1: stopDistance > 0 ? Math.round((targetMove / stopDistance) * 1000) / 1000 : null };
+}
+
 export function structureEntrySpot(lc: Pick<LiveLifecycle, 'triggerId' | 'rejectionFillPrice'>, chain: Pick<OptionChain, 'spotPrice'>): number {
   if (lc.triggerId && Number.isFinite(chain.spotPrice) && chain.spotPrice > 0) return chain.spotPrice;
   return lc.rejectionFillPrice ?? chain.spotPrice;
@@ -5258,8 +5271,7 @@ async function buildStructureContract(a: {
   at: number;
 }) {
   const { provider, underlying, exchange, chain, lc, spot, side, direction, confidence, optionAtr, fiveMinute, entryContext, at } = a;
-  const stopDistance = Math.abs(lc.stop! - spot);
-  const targetMove = Math.abs(lc.t1!.price - spot);
+  const { stopDistance, targetMove } = remainingGeometry(lc, spot);
   const vix = await lookupIndiaVix(provider, exchange);
   const ivRank = await ivRankFor(underlying, chain.expiry, computeAtmIv(chain)).catch((err: any) => {
     logger.warn({ error: err.message, underlying }, 'Structure: IV rank unavailable — building without it');
@@ -5388,6 +5400,7 @@ async function resolveStructureSetup(ctx: {
     zone: lc.zone,
     entry: lc.entry!,
     fillSpot: spot,
+    remainingRToT1: remainingGeometry(lc, spot).remainingRToT1,
     fillAt: at,
     stop: lc.stop!,
     t1: lc.t1!,
