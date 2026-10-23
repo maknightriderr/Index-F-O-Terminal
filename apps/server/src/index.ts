@@ -48,6 +48,7 @@ import { createNewsRoutes } from './api/news.js';
 import { createCorporateActionsRoutes } from './api/corporate-actions.js';
 import { startInstitutionalFlowScanner } from './services/institutional-flow-scanner.js';
 import { startTradeSetupPriceMonitor } from './services/trade-setup-monitor.js';
+import { startExperimentEngine } from './services/experiment-engine.js';
 import { createMarketScannerRoutes } from './api/market-scanner.js';
 import { createStrategyScannerRoutes } from './api/strategy-scanner.js';
 import { startStrategyTracker } from './services/strategy-tracker.js';
@@ -402,6 +403,8 @@ for (const spec of [
   timerService('patternScanner', () => startPatternScanner(provider), held()),
   timerService('institutionalFlowScanner', () => startInstitutionalFlowScanner(provider), held()),
   timerService('tradeSetupPriceMonitor', () => startTradeSetupPriceMonitor(provider, subscriptionManager), { critical: true, ready: () => recoveryReady }),
+  // Isolated paper experiment arms (EXP-2.0): their own positions on the shared tick feed; never read by the baseline.
+  timerService('experimentEngine', () => startExperimentEngine(subscriptionManager), { ready: () => recoveryReady }),
   timerService('marketScanner', () => startMarketScanner(provider), held()),
   timerService('fiiDiiTracker', () => startFiiDiiTracker()),
   timerService('abandonedSetupSweep', () => startAbandonedSetupSweep()),

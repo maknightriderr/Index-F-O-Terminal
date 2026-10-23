@@ -90,7 +90,13 @@ describe('neither confidence nor location is a universal gate', () => {
   });
   it('the live chain has one location decision, through the mode switch', () => {
     const src = readFileSync(fileURLToPath(new URL('../market-bias.ts', import.meta.url)), 'utf8');
-    expect(src.match(/locationGateReason\(/g)).toHaveLength(1);
+    // The isolated experiment builder (EXP-2.0) applies the same gate through the same mode switch; the live chain keeps exactly one.
+    const expStart = src.indexOf('export async function buildIndicatorExperimentCandidate');
+    const expEnd = src.indexOf("// ---------------- the Old Indicator's contract build, shared");
+    const live = src.slice(0, expStart) + src.slice(expEnd);
+    const exp = src.slice(expStart, expEnd);
+    expect(live.match(/locationGateReason\(/g)).toHaveLength(1);
+    expect(exp.match(/locationGateReason\(\{ enabled: locationGateEnforced\(\),/g)).toHaveLength(1);
     expect(src).toMatch(/locationGateReason\(\{\s*enabled: locationGateEnforced\(\),/);
     expect(src).not.toMatch(/enabled: TRADING_FLAGS\.LOCATION_GATE/);
   });
