@@ -1,13 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const m = vi.hoisted(() => ({ writes: [] as string[] }));
+const m = vi.hoisted(() => ({ writes: [] as string[], loadRows: [] as Array<{ state: any }> }));
 vi.mock('../../lib/db.js', () => {
   const sql: any = (strings: TemplateStringsArray) => {
     m.writes.push(strings.join('?').trim().split(/\s+/).slice(0, 3).join(' '));
-    return Promise.resolve([]);
+    return Promise.resolve(strings.join(' ').includes("WHERE official_status = 'OPEN'") ? m.loadRows : []);
   };
   sql.json = (v: unknown) => v;
   return { sql };
@@ -186,7 +186,7 @@ describe('EXP-3.0: routed trigger candidates feed only their own capture arm, on
     const fn = mb.slice(mb.indexOf('export async function buildTriggerExperimentCandidate'), mb.indexOf('async function buildStructureContract'));
     expect(fn).toMatch(/await buildStructureContract\(/);
     expect(fn).not.toMatch(/losingCloseCooldownReason|concurrencyGateReason|logDecision|recordDecisionSnapshot|recordStructureOutcome|redis\.|mintTradeSetup|setSlotIfSame|structure_claimed/);
-    expect(mb).toMatch(/const \{ validated, targetMove, expectedHoldHours, ivRank \} = await buildStructureContract\(\{ provider, underlying, exchange, chain, lc, spot, side, direction, confidence, optionAtr, fiveMinute, entryContext, at \}\);/);
+    expect(mb).toMatch(/const \{ validated, targetMove, expectedHoldHours, ivRank, spot: selectedSpot, remainingRToT1 \} = await buildStructureContract\(\{ provider, underlying, exchange, chain, lc, spot, side, direction, confidence, optionAtr, fiveMinute, entryContext, at \}\);/);
   });
 });
 
@@ -228,4 +228,66 @@ describe('durable linkage (2026-10-23)', () => {
     expect(read('src/services/slot-decisions.ts')).toMatch(/ON CONFLICT \(signal_id\) WHERE signal_id IS NOT NULL DO NOTHING/);
     expect(read('../../database/init/045_experiments_and_linkage.sql')).toMatch(/CREATE UNIQUE INDEX IF NOT EXISTS uq_slot_decisions_signal ON slot_decisions \(signal_id\) WHERE signal_id IS NOT NULL/);
   }, 30_000); // the cold import of slot-decisions' module graph takes ~2 s alone and exceeded 5 s under full-suite load
+});
+
+describe('rollback drain mode: stop entries, retain all exits', () => {
+  beforeEach(() => { E.__resetExperimentEngine(); E.__startedForTest(); vi.stubEnv('EXPERIMENT_NEW_ENTRIES', 'on'); });
+  afterEach(() => vi.unstubAllEnvs());
+  it('defaults on and accepts a case-insensitive off setting', () => {
+    expect(E.experimentEntriesEnabled()).toBe(true);
+    vi.stubEnv('EXPERIMENT_NEW_ENTRIES', 'OFF');
+    expect(E.experimentEntriesEnabled()).toBe(false);
+  });
+  it.each(['IND-V2-INVALIDATION-1.0', 'IND-V2-INVALIDATION-1.1'])('continues invalidation exits under persisted version %s while paused', async (version) => {
+    await E.onIndicatorPoll(poll({ buildCandidate: async () => candidate({ target: 130 }) }));
+    const v2 = E.__positions().find((p) => p.arm === 'V2')!;
+    v2.armVersion = version;
+    vi.stubEnv('EXPERIMENT_NEW_ENTRIES', 'off');
+    const build = vi.fn(async () => candidate());
+    const later = T0 + 30 * 60_000;
+    await E.onIndicatorPoll(poll({ at: later, chain: chain({ ltp: 90, bid: 89.5, ask: 90.5, timestamp: later, exchangeTimestamp: later - 1000 }),
+      lastClosedBar: { close: 2370, closeAt: later }, buildCandidate: build,
+      triggerCandidates: [{ source: 'A3', candidateId: 'new-trigger', build }],
+    }));
+    expect(v2.official).toMatchObject({ status: 'CLOSED', reason: 'STRUCTURE_INVALIDATED' });
+    expect(build).not.toHaveBeenCalled();
+    expect(E.__positions().some((p) => p.arm === 'A3R')).toBe(false);
+  });
+  it('continues premium target exits and opens no replacement positions while paused', async () => {
+    await E.onIndicatorPoll(poll({ buildCandidate: async () => candidate({ target: 130 }) }));
+    vi.stubEnv('EXPERIMENT_NEW_ENTRIES', 'off');
+    const build = vi.fn(async () => candidate());
+    await E.onIndicatorPoll(poll({ at: T0 + 60000, chain: chain({ ltp: 131, bid: 130.5, ask: 131.5, timestamp: T0 + 60000, exchangeTimestamp: T0 + 59000 }), buildCandidate: build }));
+    expect(E.__positions()).toEqual([]);
+    expect(build).not.toHaveBeenCalled();
+  });
+  it('rechecks the pause after an in-flight candidate finishes building', async () => {
+    await E.onIndicatorPoll(poll({ buildCandidate: async () => { vi.stubEnv('EXPERIMENT_NEW_ENTRIES', 'off'); return candidate(); } }));
+    expect(E.__positions()).toEqual([]);
+  });
+  it.each(['IND-V2-INVALIDATION-1.0', 'IND-V2-INVALIDATION-1.1'])('reloads %s from persisted state and still exits while drained', async (version) => {
+    await E.onIndicatorPoll(poll({ buildCandidate: async () => candidate({ target: 130 }) }));
+    const saved = JSON.parse(JSON.stringify(E.__positions().find((p) => p.arm === 'V2')));
+    saved.armVersion = version;
+    m.loadRows = [{ state: saved }];
+    E.__resetExperimentEngine();
+    vi.stubEnv('EXPERIMENT_NEW_ENTRIES', 'off');
+    // Avoid starting a real background timer; the test drives decision reads explicitly.
+    const timer = vi.spyOn(globalThis, 'setInterval').mockImplementation((() => 0) as any);
+    try {
+      E.startExperimentEngine();
+      await vi.waitFor(() => expect(E.__positions()).toHaveLength(1));
+      const loaded = E.__positions()[0];
+      const later = T0 + 30 * 60_000;
+      await E.onIndicatorPoll(poll({ at: later, lastClosedBar: { close: 2370, closeAt: later },
+        chain: chain({ ltp: 90, bid: 89.5, ask: 90.5, timestamp: later, exchangeTimestamp: later - 1000 }), buildCandidate: async () => null }));
+      expect(loaded.armVersion).toBe(version);
+      expect(loaded.official).toMatchObject({ status: 'CLOSED', reason: 'STRUCTURE_INVALIDATED' });
+    } finally {
+      timer.mockRestore();
+      m.loadRows = [];
+      E.__resetExperimentEngine();
+    }
+  });
+
 });

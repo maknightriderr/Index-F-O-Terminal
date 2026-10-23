@@ -67,6 +67,7 @@
 // ============================================================
 
 import {
+  validNakedLongGeometry,
   entryTimingAt,
   movePotentialAt,
   prepareMomentumSeries,
@@ -497,6 +498,8 @@ export interface SlotDecision {
 /** A setup an engine built through its whole chain but has not minted. */
 export interface DeferredSetup {
   kind: 'DEFERRED';
+  /** Quote snapshot used to price this entry (may be the next expiry). */
+  chain?: OptionChain;
   setup: TradeSetup;
   slot: SlotCandidate;
   /** Mints it; `minted` = this candidate is now the slot's trade (false: another caller minted first). */
@@ -709,14 +712,28 @@ export const PRE_MINT_MAX_QUOTE_AGE_MS = 2 * 60 * 1000;
  * after costs. Net R:R is otherwise a ranking input — this is not a threshold.
  */
 export function preMintCheck(setup: TradeSetup, chain: OptionChain, now: number): { code: string; reason: string } | null {
-  const age = chain.timestamp ? now - chain.timestamp : null;
-  if (age != null && age > PRE_MINT_MAX_QUOTE_AGE_MS) {
+  if ((setup.structureType == null || setup.structureType === 'NAKED_LONG')
+      && !validNakedLongGeometry(setup.entry, setup.stopLoss, setup.target)) {
+    return { code: 'INVALID_TRADE_GEOMETRY', reason: 'Invalid naked-long premium levels or risk above the 45% ceiling at mint time.' };
+  }
+  if (!Number.isSafeInteger(chain.lotSize) || chain.lotSize <= 0) {
+    return { code: 'INVALID_TRADE_GEOMETRY', reason: 'The selected contract has no valid positive integer lot size.' };
+  }
+  if (setup.expiry !== chain.expiry) return { code: 'NO_QUOTE', reason: 'The mint quote is for a different expiry than the selected contract.' };
+  if (!Number.isFinite(chain.timestamp) || !(chain.timestamp > 0) || !Number.isFinite(now)) {
+    return { code: 'STALE_QUOTE', reason: 'The selected chain has no valid quote timestamp.' };
+  }
+  const age = now - chain.timestamp;
+  if (age > PRE_MINT_MAX_QUOTE_AGE_MS) {
     return { code: 'STALE_QUOTE', reason: `The option chain it was priced on is ${Math.round(age / 1000)} s old (limit ${PRE_MINT_MAX_QUOTE_AGE_MS / 1000} s).` };
   }
-  if (setup.strike != null && setup.side && setup.expiry === chain.expiry) {
+  if (!Number.isFinite(setup.strike) || !(setup.strike! > 0) || (setup.side !== 'CE' && setup.side !== 'PE')) {
+    return { code: 'NO_QUOTE', reason: 'The selected contract has no valid strike or option side.' };
+  }
+  {
     const row = chain.strikes.find((s) => s.strike === setup.strike);
     const leg = row ? (setup.side === 'CE' ? row.call : row.put) : null;
-    if (!leg || !(leg.ltp > 0) || !(leg.bid > 0 && leg.ask > leg.bid)) {
+    if (!leg || ![leg.ltp, leg.bid, leg.ask].every(Number.isFinite) || !(leg.ltp > 0) || !(leg.bid > 0 && leg.ask > leg.bid)) {
       return { code: 'NO_QUOTE', reason: `${setup.side} ${setup.strike} has no two-sided quote at mint time.` };
     }
   }

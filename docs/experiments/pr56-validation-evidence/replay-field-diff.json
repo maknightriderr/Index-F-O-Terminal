@@ -1,0 +1,188 @@
+[
+  [
+    ".setupWatch[0].statusRR",
+    0.01,
+    0.112
+  ],
+  [
+    ".setupWatch[0].blockReason",
+    null,
+    "Invalid lot/tick size or requested premium stop outside the 0\u201345% risk limit."
+  ],
+  [
+    ".setupWatch[0].plan",
+    {
+      "side": "PE",
+      "strike": 24950,
+      "expiry": "2026-08-13",
+      "dte": 3,
+      "lotSize": 75,
+      "entryPremium": 121.64,
+      "slPremium": 28.01,
+      "tslPremium": 28.01,
+      "tslRule": "TSL = SL \u20b928.01 until entry; then at +1R (premium \u20b9215.27) SL \u2192 entry \u20b9121.64; at +2R (\u20b9308.90) SL \u2192 \u20b9215.27 (locks +1R).",
+      "t1Premium": 124.89,
+      "t2Premium": null,
+      "underlyingEntry": 24950,
+      "underlyingSl": 25129.1,
+      "underlyingT1": 24930,
+      "underlyingT2": null,
+      "grossRR": 0.11,
+      "netRR": 0.01,
+      "estimatedCostPct": 1.82,
+      "estimated": true,
+      "strikeRanking": [
+        {
+          "strike": 24950,
+          "delta": -0.5227949918584044,
+          "spreadPct": 0.08,
+          "available": true,
+          "code": null,
+          "netRR": 0.01
+        },
+        {
+          "strike": 24900,
+          "delta": -0.38451577529015424,
+          "spreadPct": 0.15,
+          "available": true,
+          "code": null,
+          "netRR": 0.01
+        },
+        {
+          "strike": 25000,
+          "delta": -0.6081379493058687,
+          "spreadPct": 0.06,
+          "available": true,
+          "code": null,
+          "netRR": 0
+        }
+      ]
+    },
+    null
+  ],
+  [
+    ".setupWatch[0].statusText",
+    "Confirmed \u2014 R:R 0.01R",
+    "Confirmed \u2014 R:R 0.11R"
+  ],
+  [
+    ".setupWatch[0].initial.statusRR",
+    0.01,
+    0.112
+  ],
+  [
+    ".setupWatch[0].initial.entryPremium",
+    121.64,
+    null
+  ],
+  [
+    ".setupWatch[0].initial.strike",
+    24950,
+    null
+  ],
+  [
+    ".setupWatch[0].initial.side",
+    "PE",
+    null
+  ],
+  [
+    ".setupWatch[0].initial.netRR",
+    0.01,
+    null
+  ],
+  [
+    ".setupWatch[0].initial.expiry",
+    "2026-08-13",
+    null
+  ],
+  [
+    ".setupWatch[0].optionBuildFailures",
+    0,
+    1
+  ],
+  [
+    ".setupWatch[0].blockCode",
+    null,
+    "INVALID_TRADE_GEOMETRY"
+  ],
+  [
+    ".setupWatch[0].current.statusRR",
+    0.01,
+    0.112
+  ],
+  [
+    ".setupWatch[0].current.entryPremium",
+    121.64,
+    null
+  ],
+  [
+    ".setupWatch[0].current.strike",
+    24950,
+    null
+  ],
+  [
+    ".setupWatch[0].current.side",
+    "PE",
+    null
+  ],
+  [
+    ".setupWatch[0].current.netRR",
+    0.01,
+    null
+  ],
+  [
+    ".setupWatch[0].current.expiry",
+    "2026-08-13",
+    null
+  ],
+  [
+    ".setupWatch[1].plan.strikeRanking[1].spreadPct",
+    0.15,
+    0.06
+  ],
+  [
+    ".setupWatch[1].plan.strikeRanking[1].delta",
+    -0.38451577529015424,
+    -0.6081379493058687
+  ],
+  [
+    ".setupWatch[1].plan.strikeRanking[1].netRR",
+    0.01,
+    0
+  ],
+  [
+    ".setupWatch[1].plan.strikeRanking[1].strike",
+    24900,
+    25000
+  ],
+  [
+    ".setupWatch[1].plan.strikeRanking[2].spreadPct",
+    0.06,
+    0.15
+  ],
+  [
+    ".setupWatch[1].plan.strikeRanking[2].delta",
+    -0.6081379493058687,
+    -0.38451577529015424
+  ],
+  [
+    ".setupWatch[1].plan.strikeRanking[2].netRR",
+    0,
+    null
+  ],
+  [
+    ".setupWatch[1].plan.strikeRanking[2].strike",
+    25000,
+    24900
+  ],
+  [
+    ".setupWatch[1].plan.strikeRanking[2].code",
+    null,
+    "INVALID_TRADE_GEOMETRY"
+  ],
+  [
+    ".setupWatch[1].plan.strikeRanking[2].available",
+    true,
+    false
+  ]
+]

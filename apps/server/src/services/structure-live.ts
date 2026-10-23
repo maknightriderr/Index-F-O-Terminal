@@ -610,6 +610,9 @@ export function rejectionCloseCandidate(state: LiveState, lastClosedBar: ClosedB
  */
 export function structureSequenceRefusal(lc: LiveLifecycle, spot: number): { code: 'STRUCTURE_SEQUENCE'; reason: string } | null {
   if (lc.entry == null || lc.stop == null || lc.t1 == null) return { code: 'STRUCTURE_SEQUENCE', reason: 'The setup has no zone, stop or T1 — the sequence never completed.' };
+  if (![spot, lc.entry, lc.stop, lc.t1.price].every((p) => Number.isFinite(p) && p > 0)) {
+    return { code: 'STRUCTURE_SEQUENCE', reason: 'The entry spot and structural levels must be finite positive prices.' };
+  }
   const bear = lc.direction === 'BEARISH';
   if (bear ? spot >= lc.stop : spot <= lc.stop) return { code: 'STRUCTURE_SEQUENCE', reason: `Price (${spot}) is already through the stop at ${lc.stop}.` };
   if (bear ? spot <= lc.t1.price : spot >= lc.t1.price) return { code: 'STRUCTURE_SEQUENCE', reason: `Price (${spot}) has already reached T1 (${lc.t1.kind} ${lc.t1.price}).` };

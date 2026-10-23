@@ -193,13 +193,18 @@ describe('full replay of the real decision path', () => {
   // 15 points, which pays the PE 9.12 + 0.16 against 9.52 of decay over the 4.2 h hold: UNREALISTIC_TARGET, so F3 (and
   // A2 on the same bar) no longer mint and the indicator's own PE 24950 takes the slot. Diffed field by field: the
   // F3-specific fields (strategy, researchTrigger, structure, stop 72.44 -> the indicator's 78.83, target) only.
-  it('the live decision is identical to main (end-to-end fingerprint, logic stamps aside)', async () => {
+  it('preserves the executed indicator trade and refuses oversized-stop watch contracts (end-to-end fingerprint)', async () => {
     const { stripVolatile } = await import('../full-replay.js');
     const { createHash } = await import('node:crypto');
     const noStamp = JSON.parse(JSON.stringify(live, (k, v) => (k === 'logicVersion' || k === 'logic' ? undefined : v)));
     const fp = createHash('sha256').update(JSON.stringify(stripVolatile(noStamp))).digest('hex').slice(0, 16);
     if (process.env.PRINT_FINGERPRINT) console.log(`FP e2e '${fp}'`);
-    expect(fp).toBe('fc2e1006f19f2159');
+    // OPTION-2.1: diffed against PR #56's fc2e1006f19f2159. Only setupWatch changed:
+    // its first plan required 93.63/121.64 = 76.97% premium risk (now refused), and
+    // another watch row's over-limit OTM contract is rejected/re-ranked. The executed
+    // trade and all other top-level values are unchanged (independent field diff).
+    expect(fp).toBe('ac3a1be6b9935abf');
+    expect(live.setupWatch[0]).toMatchObject({ blockCode: 'INVALID_TRADE_GEOMETRY', plan: null });
     expect(live.tradeSetup).toMatchObject({ available: true, strike: 24950, side: 'PE' });
     expect(live.tradeSetup.researchTrigger).toBeUndefined(); // F3's live-spot target no longer pays its decay
   });
