@@ -127,7 +127,10 @@ const taken = new Set<string>(); // arm|candidateId: a routed candidate recurs o
 // poll. In memory: a restart inside the trigger's bar could see it once more (restarts are outside market hours).
 const seenTriggers = new Set<string>();
 
-function open(arm: ArmDef, c: ExpCandidate, at: number): void {
+function open(arm: ArmDef, c: ExpCandidate, pollAt: number): void {
+  // The poll's clock starts before the candidate's contract build (a median 17 s, up to 98 s on 23 Oct): a position
+  // exists no earlier than its own entry quote, so it is stamped (and its fill judged) at that quote's receipt.
+  const at = Math.max(pollAt, c.quote.receivedAt ?? pollAt);
   const p = openPosition(arm, c, randomUUID(), at);
   positions.set(p.id, p);
   save(p, ['OPENED', p.sim.status === 'NOT_OPENED' ? 'SIM_ENTRY_UNAVAILABLE' : 'SIM_ENTRY_FILLED'], at);

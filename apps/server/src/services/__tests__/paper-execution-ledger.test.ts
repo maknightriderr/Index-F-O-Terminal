@@ -48,11 +48,19 @@ describe('paper execution ledger: simulated quote-based prices are estimates, ne
     expect(r).toMatchObject({
       event: 'EXIT', orderType: 'LIMIT_TARGET', assignedFill: 120, fillPolicy: 'TARGET_LIMIT_MIN_LTP_TARGET', fillPolicyVersion: 'FILL-1.0',
       ltp: 121, bid: 119, ask: 121.5, simFill: null, simQuality: 'LIMIT_NOT_EXECUTABLE', originalStop: 70, currentStop: 100, target: 120,
-      paperQuantity: 175, quoteAgeMs: 2000, ledgerVersion: 'LEDGER-1.0',
+      paperQuantity: 175, quoteAgeMs: 2000, ledgerVersion: 'LEDGER-1.1',
     });
     expect(L.officialFillPolicy('ENTRY', 'ENTRY_MARKETABLE')).toBe('MID_AT_DECISION');
     expect(L.orderTypeOf('TRAILING_STOP')).toBe('STOP_MARKET');
     expect(L.orderTypeOf('SESSION_ENDED')).toBe('MARKET_EXIT');
+  });
+
+  it('LEDGER-1.1: an MCX book is in lots, an NSE / BSE book in units', () => {
+    expect(L.simulateFill(quote({ askQty: 1 }), 'ENTRY', 'ENTRY_MARKETABLE', null, 100, 100).quality).not.toBe('SIZE_INSUFFICIENT'); // GOLD: 1 lot of 100
+    expect(L.simulateFill(quote({ askQty: 1 }), 'ENTRY', 'ENTRY_MARKETABLE', null, 200, 100).quality).toBe('SIZE_INSUFFICIENT'); // 2 lots wanted
+    expect(L.simulateFill(quote({ askQty: 50 }), 'ENTRY', 'ENTRY_MARKETABLE', null, 75)).toMatchObject({ quality: 'SIZE_INSUFFICIENT' }); // NSE: units
+    const trade = { signalId: 'sig-2', symbol: 'GOLD', exchange: 'MCX' as const, mode: 'INTRADAY' as const, entry: 100, initialStop: 70, currentStop: 70, target: 120, quantity: 100, lotSize: 100, riskBudgetInr: 3000, capitalInr: 500000 };
+    expect(L.ledgerRecord({ event: 'ENTRY', trade, quote: quote({ askQty: 2 }), closeReason: null, assignedFill: 100 }).simQuality).not.toBe('SIZE_INSUFFICIENT');
   });
 
   it('a chain leg of another expiry is not this contract: no prices', () => {

@@ -29,6 +29,28 @@ These are the paper experiments (no broker execution).
 - **Below a checkpoint**, a result is reported as inconclusive, with its counts.
 - **Unvalued positions** (open, pending, unresolved or not opened) are counted and never given a return.
 
+## Ledger fixes
+
+These are software fixes; no frozen definition or trading rule changes. Rows written before a fix keep their values. Positions carry `simVersion` (absent = SIM-1.0), and ledger rows carry `ledger_version`, so the two are reported apart.
+
+**SIM-1.1 / LEDGER-1.1 (2026-10-23)**
+
+- **MCX book sizes are in lots.** The frozen rule asks for "size ≥ 1 lot", but 1.0 compared the MCX book (in lots) with the quantity (in units), so all 40 MCX simulated entries on 23 Oct were NOT_OPENED SIZE_INSUFFICIENT.
+  - *Evidence:* every NSE/BSE size (420/420) is a multiple of the lot; every MCX one (80/80) is below one lot.
+  - *Fix:* `book-units.ts` converts MCX sizes to units, in the experiment simulation and in the paper execution ledger alike.
+- **Session-end fills use the last two-sided quote.** The frozen rule says a quote from the final 10 minutes may fill, but 1.0 looked only at the last quote, usually a book-less tick.
+  - *Fix:* 1.1 also tries the last two-sided quote from that window.
+- **Block reasons are kept.** The reasons a pending exit could not fill are counted (`sim.pendingBlocks`) instead of overwritten.
+- **Opens are stamped at their entry quote.** A position is stamped, and its entry fill judged, no earlier than its own entry quote's receipt.
+  - The poll clock starts before the contract build: a median 17 s, up to 98 s, earlier.
+  - That made 3 positions on 23 Oct appear to overlap their slot (MOTILALOFS in R0, A and V2). It also let a bar closing in that gap count as "after entry".
+
+## R0 is a control, not production
+
+R0 replicates the Old Indicator's rules inside the engine. It omits production's TRIGGER_REVERSAL: in production, an opposite claimed S1 fill or momentum trigger closes a held Old Indicator trade.
+
+That omission applies to R0, A, B, C and V2 alike. Arm-vs-R0 is therefore a like-for-like comparison inside the engine, never an exact production comparison.
+
 ## Corrections
 
 - **EXP-3.0's `arbitration_losses`.** The comparison relied on the recorded `arbitrationRole`. That is null for OF1, because order-flow candidates carry no router arbitration. EXP-3.1 replaces it with a join to production's trades on the candidate id.

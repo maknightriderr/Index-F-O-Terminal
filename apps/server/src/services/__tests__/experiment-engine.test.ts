@@ -82,6 +82,14 @@ describe('experiment engine: one candidate stream, independent arm state', () =>
     expect(reopened.every((p) => p.sim.status === 'NOT_OPENED' && p.sim.reason === 'ENTRY_UNAVAILABLE:STALE_QUOTE')).toBe(true);
   });
 
+  it('a position is stamped no earlier than its own entry quote (the poll clock starts before the contract build)', async () => {
+    await E.onIndicatorPoll(poll({ at: T0 - 30_000 })); // the candidate's quote was received at T0, 30 s after the poll began
+    expect(E.__positions().map((p) => p.openedAt)).toEqual(Array(E.__positions().length).fill(T0));
+    E.__resetExperimentEngine();
+    E.__startedForTest();
+    await E.onIndicatorPoll(poll({ at: T0 + 5_000 })); // a quote older than the poll never back-dates it
+    expect(new Set(E.__positions().map((p) => p.openedAt))).toEqual(new Set([T0 + 5_000]));
+  });
   it('a failing candidate builder never throws into the poll', async () => {
     await expect(E.onIndicatorPoll(poll({ buildCandidate: async () => { throw new Error('boom'); } }))).resolves.toBeUndefined();
   });
