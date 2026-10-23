@@ -228,6 +228,9 @@ export interface OptionChainLeg {
   exchangeTimestamp?: number;
   /** When this contract last traded (epoch ms). Absent when the broker did not say. */
   lastTradeTimestamp?: number;
+  /** Top-of-book quantities (measurement only: the paper execution ledger). Absent when the broker did not say. */
+  bidQty?: number;
+  askQty?: number;
 }
 
 export interface OptionChain {

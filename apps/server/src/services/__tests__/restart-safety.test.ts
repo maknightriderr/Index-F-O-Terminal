@@ -97,7 +97,7 @@ describe('wiring', () => {
     const mon = read('src/services/trade-setup-monitor.ts');
     expect(mon).toMatch(/void primeSubscriptions\(provider, subscriptions\);/);
     expect(mon).toMatch(/await runInteractive\(\(\) => sweep\(provider, subscriptions\)\)/);
-    expect(mon).toMatch(/runInteractive\(\(\) => checkLockedSetupPriceLevels\(provider, watch\.exchange, watch\.underlying, watch\.mode, tick\.ltp\)\)/);
+    expect(mon).toMatch(/runInteractive\(\(\) => checkLockedSetupPriceLevels\(provider, watch\.exchange, watch\.underlying, watch\.mode, tick\.ltp, observeTick\(tick, state \?\? null\)\)\)/);
   });
   it('after a boot in session the scanners, decision timers and archive wait; the monitor and DB-only jobs do not', () => {
     for (const n of ['alertScanner', 'patternScanner', 'institutionalFlowScanner', 'marketScanner', 'oiCloseSnapshot', 'cacheWarmer', 'strategyTracker', 'positionalStockScan', 'backgroundBiasEvaluator', 'marketStateCapture', 'missedWinnerAudit', 'setupEventsGrading', 'opportunityCensus', 'barArchive']) {

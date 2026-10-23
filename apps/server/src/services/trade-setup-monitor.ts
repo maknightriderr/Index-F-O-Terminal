@@ -53,6 +53,7 @@ import { onPostExitTick, samplePostExitWatches } from './post-exit-tracker.js';
 import { drainPendingCostRecords } from './trade-costs.js';
 import { runInteractive } from '../lib/request-priority.js';
 import type { Instrument } from '@fno/shared';
+import { observeTick, recordMark } from './paper-execution-ledger.js';
 
 /** How often the lost-trade sweep runs (intraday rows from earlier sessions no slot tracks). */
 const LOST_TRADE_SWEEP_MS = 30 * 60 * 1000;
@@ -152,7 +153,9 @@ export function watchFromSlot(
 ): LockedSetupWatch | null {
   if (!stored?.available || stored.stopLoss == null || stored.target == null) return null;
   const token = tokenForStoredSetup(instruments, underlying, exchange, stored);
-  return token ? { underlying, exchange: exchange as Exchange, mode: mode as TradingMode, token, stopLoss: stored.stopLoss, target: stored.target } : null;
+  return token
+    ? { underlying, exchange: exchange as Exchange, mode: mode as TradingMode, token, stopLoss: stored.stopLoss, target: stored.target, ...(stored.signalId ? { signalId: stored.signalId } : {}) }
+    : null;
 }
 
 /**
@@ -379,6 +382,17 @@ function onTicks(provider: MarketDataProvider, subscriptions: SubscriptionManage
     if (!watch || !(tick.ltp > 0)) continue;
     // Never evaluate a level on a token whose data is stale, in a gap, or not yet gap-checked.
     const state = subscriptions.feedStateOfToken(tick.token);
+    // Measurement only (LEDGER-1.0): this tick as the trade's quote of the minute (with its feed state), whatever it triggers.
+    if (watch.signalId) {
+      try {
+        recordMark(
+          { signalId: watch.signalId, symbol: watch.underlying, exchange: watch.exchange, mode: watch.mode, entry: null, initialStop: null, currentStop: watch.stopLoss, target: watch.target, quantity: null, lotSize: null, riskBudgetInr: null, capitalInr: null },
+          observeTick(tick, state ?? null)
+        );
+      } catch {
+        /* measurement must never disturb the monitor */
+      }
+    }
     if (state != null && state !== 'DATA_FRESH') continue;
     if (tick.ltp > watch.stopLoss && tick.ltp < watch.target) continue;
 
@@ -386,7 +400,7 @@ function onTicks(provider: MarketDataProvider, subscriptions: SubscriptionManage
     if (inFlight.has(id)) continue;
     inFlight.add(id);
 
-    runInteractive(() => checkLockedSetupPriceLevels(provider, watch.exchange, watch.underlying, watch.mode, tick.ltp))
+    runInteractive(() => checkLockedSetupPriceLevels(provider, watch.exchange, watch.underlying, watch.mode, tick.ltp, observeTick(tick, state ?? null)))
       .then((stillOpen) => {
         if (stillOpen) {
           watchesByToken.set(stillOpen.token, stillOpen); // e.g. the stop has since trailed
