@@ -42,6 +42,8 @@
 //             (statutory + brokerage); the spread is in the prices.
 // ============================================================
 
+import { bookUnit } from './book-units.js';
+
 export const EXPERIMENTS_VERSION = 'EXP-3.1';
 export type ArmId = 'R0' | 'A' | 'B' | 'C' | 'V2' | 'A3R' | 'OF1R';
 /** Which candidate stream an arm consumes. */
@@ -181,6 +183,8 @@ export interface ArmPosition {
   id: string;
   arm: ArmId;
   armVersion: string;
+  /** Simulated-ledger version (absent = SIM-1.0: MCX sizes read as units, session end on the last quote only). */
+  simVersion?: string;
   candidate: ExpCandidate;
   openedAt: number;
   initialStop: number;
@@ -188,6 +192,8 @@ export interface ArmPosition {
   target: number;
   quantity: number;
   lastQuote: ExpQuote | null;
+  /** The last two-sided quote (SIM-1.1): what a session-end fill may use when the last quote is a book-less tick. */
+  lastBookQuote?: ExpQuote | null;
   observations: number;
   reversal: { streak: number; since: number | null };
   official: { status: 'OPEN' | 'CLOSED'; exitAt: number | null; exitPrice: number | null; reason: string | null; netR: number | null };
@@ -204,6 +210,8 @@ export interface ArmPosition {
     reason: string | null;
     netR: number | null;
     lastValidBid: number | null;
+    /** SIM-1.1: why each quote seen while EXIT_PENDING could not fill, counted by reason and quote source. */
+    pendingBlocks?: Record<string, number>;
   };
 }
 
@@ -213,7 +221,11 @@ export const TRAIL_BREAKEVEN_AT_R = 1;
 export const TRAIL_LOCK_AT_R = 2;
 
 /** Pure: why a quote cannot support a fill of `quantity` on `side`, or null when it can. */
-export function fillBlocker(q: ExpQuote | null, side: 'BUY' | 'SELL', quantity: number, now: number): string | null {
+/** SIM-1.1 (2026-10-23): MCX book sizes in units (paper-execution-ledger bookUnit); session end reads the last two-sided quote. */
+export const SIM_VERSION = 'SIM-1.1';
+const unitOf = (c: ExpCandidate) => bookUnit(c.exchange, c.lotSize);
+
+export function fillBlocker(q: ExpQuote | null, side: 'BUY' | 'SELL', quantity: number, now: number, unit = 1): string | null {
   if (!q) return 'NO_QUOTE';
   if (q.bid == null || q.ask == null || !(q.bid > 0) || !(q.ask >= q.bid)) return 'ONE_SIDED_OR_NO_QUOTE';
   if (q.feedState != null && q.feedState !== 'DATA_FRESH') return 'FEED_NOT_FRESH';
@@ -222,17 +234,18 @@ export function fillBlocker(q: ExpQuote | null, side: 'BUY' | 'SELL', quantity: 
   } else if (now - q.receivedAt > MAX_RECEIPT_AGE_MS) return 'STALE_QUOTE_AGE_UNKNOWN';
   const top = side === 'BUY' ? q.askQty : q.bidQty;
   if (top == null) return 'SIZE_UNKNOWN';
-  if (top < quantity) return 'SIZE_INSUFFICIENT';
+  if (top * unit < quantity) return 'SIZE_INSUFFICIENT';
   return null;
 }
 
 export function openPosition(arm: ArmDef, c: ExpCandidate, id: string, now: number): ArmPosition {
   const qty = c.lotSize;
-  const block = fillBlocker(c.quote, 'BUY', qty, now);
+  const block = fillBlocker(c.quote, 'BUY', qty, now, unitOf(c));
   return {
     id,
     arm: arm.id,
     armVersion: arm.version,
+    simVersion: SIM_VERSION,
     candidate: c,
     openedAt: now,
     initialStop: c.stop,
@@ -290,9 +303,11 @@ function setPending(p: ArmPosition, at: number, reason: string): void {
 
 function tryFillPending(p: ArmPosition, q: ExpQuote, now: number): void {
   if (p.sim.status !== 'EXIT_PENDING') return;
-  const block = fillBlocker(q, 'SELL', p.quantity, now);
+  const block = fillBlocker(q, 'SELL', p.quantity, now, unitOf(p.candidate));
   if (block) {
     p.sim.exitQuality = block;
+    const k = `${q.source}:${block}`;
+    p.sim.pendingBlocks = { ...(p.sim.pendingBlocks ?? {}), [k]: (p.sim.pendingBlocks?.[k] ?? 0) + 1 };
     return;
   }
   p.sim.status = 'CLOSED';
@@ -316,7 +331,8 @@ export function onQuote(p: ArmPosition, q: ExpQuote, now: number): string[] {
   const ev: string[] = [];
   p.lastQuote = q;
   p.observations += 1;
-  if (q.bid != null && q.bid > 0 && !fillBlocker(q, 'SELL', p.quantity, now)) p.sim.lastValidBid = q.bid;
+  if (q.bid != null && q.bid > 0 && !fillBlocker(q, 'SELL', p.quantity, now, unitOf(p.candidate))) p.sim.lastValidBid = q.bid;
+  if (q.bid != null && q.ask != null) p.lastBookQuote = q; // ticks carry no book: keep the last two-sided quote apart
   const ltp = q.ltp;
   if (ltp != null && ltp > 0 && (p.official.status === 'OPEN' || p.sim.status === 'OPEN' || p.sim.status === 'EXIT_PENDING')) {
     // Trailing (market-bias.ts): +1R -> breakeven, +2R -> entry + 1R; never loosens.
@@ -342,7 +358,7 @@ export function onQuote(p: ArmPosition, q: ExpQuote, now: number): string[] {
   }
   if (p.sim.status === 'OPEN') {
     // Resting limit at the target: a buyer must bid it, with the size.
-    if (q.bid != null && q.bid >= p.target && !fillBlocker(q, 'SELL', p.quantity, now)) {
+    if (q.bid != null && q.bid >= p.target && !fillBlocker(q, 'SELL', p.quantity, now, unitOf(p.candidate))) {
       p.sim.status = 'CLOSED';
       p.sim.exitAt = now;
       p.sim.exitPrice = p.target;
@@ -451,8 +467,11 @@ export function onSessionEnd(p: ArmPosition, closeAt: number): string[] {
   }
   if (p.sim.status === 'OPEN') setPending(p, now, 'SESSION_ENDED');
   if (p.sim.status === 'EXIT_PENDING') {
-    // The session is over: only a quote observed in its final minutes may fill, judged at its own receipt time.
-    if (p.lastQuote && p.lastQuote.receivedAt >= closeAt - SESSION_END_QUOTE_WINDOW_MS) tryFillPending(p, p.lastQuote, p.lastQuote.receivedAt);
+    // The session is over: only a quote observed in its final minutes may fill, judged at its own receipt time. The
+    // last two-sided quote is tried too: a later book-less tick (most of them) must not hide it (SIM-1.1).
+    for (const q of [p.lastQuote, p.lastBookQuote]) {
+      if (p.sim.status === 'EXIT_PENDING' && q && q.receivedAt >= closeAt - SESSION_END_QUOTE_WINDOW_MS && q.receivedAt <= closeAt) tryFillPending(p, q, q.receivedAt);
+    }
     if (p.sim.status === 'EXIT_PENDING') {
       p.sim.status = 'UNRESOLVED';
       p.sim.reason = `UNRESOLVED_AT_SESSION_END:${p.sim.pendingReason}`;

@@ -70,6 +70,8 @@ for p in rows:
     by[p['arm']].append(p)
 nse_sessions = len({sess(p) for p in rows if sess(p)[0] == 'NSE_BSE'})
 print(f"EXP-2.0 isolated arms; definitions sha256 {FROZEN[:12]}; positions {len(rows)}; NSE/BSE exchange-sessions {nse_sessions}")
+print("R0 is an EXPERIMENTAL CONTROL, not production: it omits production's TRIGGER_REVERSAL exit (an opposite claimed S1 fill or")
+print("momentum trigger closes a held Old Indicator trade). Arm-vs-R0 results are like-for-like inside the engine, not a production comparison.")
 if nse_sessions < 20:
     print('INTERIM ONLY: fewer than 20 NSE/BSE exchange-sessions since activation.')
 for a, r in sorted(arms.items()):
@@ -81,3 +83,42 @@ for arm in ['R0', 'A', 'B', 'C', 'V2']:
     label = {'C': ' EXPLORATORY', 'V2': ' HYPOTHESIS'}.get(arm, '')
     note = '' if m.get('official_avg_r') is None else (' -> avg below zero: loss reduction at best' if m['official_avg_r'] < 0 else ' -> avg above zero: check the interval before reading anything into it')
     print(f"\n[{arm}]{label}{note}\n" + json.dumps(m, indent=1))
+
+
+# ---- V2 vs R0: shared entries vs the additional trades V2's earlier exits made possible (2026-10-23 extension) ----
+def v2_decomposition(r0, v2):
+    key = lambda p: (p['candidate']['candidateId'], p['openedAt'])
+    a = {key(p): p for p in r0}; b = {key(p): p for p in v2}
+    closed = lambda p: p['official']['status'] == 'CLOSED' and p['official']['netR'] is not None
+    gross = lambda p: (p['official']['exitPrice'] - p['candidate']['entry']) / (p['candidate']['entry'] - p['initialStop'])
+    shared = [k for k in set(a) & set(b)]
+    both = [k for k in shared if closed(a[k]) and closed(b[k])]
+    print(f"\n[V2 vs R0 decomposition] shared entries {len(shared)} (both closed {len(both)}, not both closed {len(shared) - len(both)})")
+    if both:
+        for name, src in (('R0', a), ('V2', b)):
+            print(f"  shared, {name}: gross {sum(gross(src[k]) for k in both):+.2f}R net {sum(src[k]['official']['netR'] for k in both):+.2f}R cost {sum(gross(src[k]) - src[k]['official']['netR'] for k in both):.2f}R")
+        diff = [k for k in both if a[k]['official']['reason'] != b[k]['official']['reason']]
+        print(f"  shared exits differing: {len(diff)} (V2 better {sum(1 for k in diff if b[k]['official']['netR'] > a[k]['official']['netR'])}, worse {sum(1 for k in diff if b[k]['official']['netR'] < a[k]['official']['netR'])})")
+    for name, extra, base in (('V2-only', [b[k] for k in set(b) - set(a)], v2), ('R0-only', [a[k] for k in set(a) - set(b)], r0)):
+        done = [p for p in extra if closed(p)]
+        rows = []
+        for p in sorted(extra, key=lambda p: p['openedAt']):
+            prev = [q for q in base if q is not p and q['candidate']['symbol'] == p['candidate']['symbol'] and q['candidate']['exchange'] == p['candidate']['exchange']
+                    and q['official'].get('exitAt') and q['official']['exitAt'] <= p['openedAt'] and day(q['openedAt']) == day(p['openedAt'])]
+            last = max(prev, key=lambda q: q['official']['exitAt']) if prev else None
+            same_move = bool(last and last['candidate']['candidateId'] == p['candidate']['candidateId'])  # same symbol, direction and day
+            gap = round((p['openedAt'] - last['official']['exitAt']) / 60000, 1) if last else None
+            rows.append((p, last, same_move, gap))
+        print(f"  {name}: {len(extra)} positions ({len(done)} closed, {len(extra) - len(done)} open); gross {sum(gross(p) for p in done):+.2f}R net {sum(p['official']['netR'] for p in done):+.2f}R cost {sum(gross(p) - p['official']['netR'] for p in done):.2f}R")
+        if rows:
+            sm = [r for r in rows if r[2]]
+            print(f"    re-entering the same move (same symbol+direction+day as the arm's previous exit): {len(sm)}; net {sum(r[0]['official']['netR'] for r in sm if closed(r[0])):+.2f}R")
+            gaps = sorted(r[3] for r in rows if r[3] is not None)
+            if gaps: print(f"    minutes since the arm's previous exit on the symbol: median {gaps[len(gaps) // 2]}, min {gaps[0]}, max {gaps[-1]}")
+            for p, last, sm_, gap in rows:
+                print(f"    {p['id'][:8]} {p['candidate']['symbol']:<11} {p['candidate']['direction']:<8} {'SAME_MOVE' if sm_ else 'NEW_MOVE ':<9} gap {gap!s:>6}m  prev {last['official']['reason'] if last else '-':<22} {p['official'].get('reason')!s:<22} net {p['official']['netR'] if closed(p) else 'open'}")
+    sessions = lambda ps: max(1, len({sess(p) for p in ps}))
+    print(f"  frequency: R0 {len(r0)} positions / {sessions(r0)} exchange-sessions; V2 {len(v2)} / {sessions(v2)}")
+
+
+v2_decomposition(by.get('R0', []), by.get('V2', []))

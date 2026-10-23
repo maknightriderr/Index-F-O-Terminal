@@ -30,9 +30,13 @@ import type { Exchange, OptionChain, TradingMode } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 import { schemaFileReady } from './ensure-capture-schema.js';
+import { bookUnit } from './book-units.js';
 
 export const LEDGER_MIGRATION = '044_paper_execution_ledger.sql';
-export const LEDGER_VERSION = 'LEDGER-1.0';
+// 1.1 (2026-10-23): MCX top-of-book sizes are compared in units (book lots x lot size); 1.0 compared lots with units.
+export const LEDGER_VERSION = 'LEDGER-1.1';
+
+
 /** The official policy as implemented today (documentation of existing behaviour, not a change). */
 export const OFFICIAL_FILL_POLICY_VERSION = 'FILL-1.0';
 /** An exchange quote older than this is STALE: no simulated price. */
@@ -136,14 +140,14 @@ export interface SimulatedFill {
   quality: QuoteQuality;
 }
 
-function bookQuality(o: QuoteObservation, side: 'BUY' | 'SELL', quantity: number | null): QuoteQuality | null {
+function bookQuality(o: QuoteObservation, side: 'BUY' | 'SELL', quantity: number | null, unit = 1): QuoteQuality | null {
   if (o.bid == null && o.ask == null) return 'NO_QUOTE';
   if (o.bid == null || o.ask == null || o.ask < o.bid) return 'ONE_SIDED';
   const age = quoteAgeMs(o);
   if (age != null && age > MAX_QUOTE_AGE_MS) return 'STALE';
   if (o.feedState != null && o.feedState !== 'DATA_FRESH') return 'STALE';
   const top = side === 'BUY' ? o.askQty : o.bidQty;
-  if (quantity != null && quantity > 0 && top != null && top < quantity) return 'SIZE_INSUFFICIENT';
+  if (quantity != null && quantity > 0 && top != null && top * unit < quantity) return 'SIZE_INSUFFICIENT';
   return null;
 }
 
@@ -152,10 +156,10 @@ function bookQuality(o: QuoteObservation, side: 'BUY' | 'SELL', quantity: number
  * (sell at the bid; a target limit only when the bid reached the target).
  * The price is withheld whenever the book cannot support it.
  */
-export function simulateFill(o: QuoteObservation, event: LedgerEvent, orderType: OrderType, target: number | null, quantity: number | null): SimulatedFill {
+export function simulateFill(o: QuoteObservation, event: LedgerEvent, orderType: OrderType, target: number | null, quantity: number | null, unit = 1): SimulatedFill {
   if (event === 'MARK') return { price: null, basis: 'NONE', quality: 'NOT_APPLICABLE' };
   const side = event === 'ENTRY' ? 'BUY' : 'SELL';
-  const bad = bookQuality(o, side, quantity);
+  const bad = bookQuality(o, side, quantity, unit);
   if (bad === 'NO_QUOTE' || bad === 'ONE_SIDED' || bad === 'STALE') return { price: null, basis: 'NONE', quality: bad };
   // Size: insufficient top-of-book quantity keeps the estimate but labels it; unknown size is labelled too.
   const sized: QuoteQuality = bad ?? (quantity != null && (side === 'BUY' ? o.askQty : o.bidQty) == null ? 'SIZE_UNKNOWN' : 'OK');
@@ -196,7 +200,7 @@ export interface LedgerRow {
 /** Pure: the row as written (exported for tests). */
 export function ledgerRecord(r: LedgerRow) {
   const orderType: OrderType = r.event === 'ENTRY' ? 'ENTRY_MARKETABLE' : r.event === 'EXIT' ? orderTypeOf(r.closeReason ?? '') : 'NONE';
-  const sim = simulateFill(r.quote, r.event, orderType, r.trade.target, r.trade.quantity);
+  const sim = simulateFill(r.quote, r.event, orderType, r.trade.target, r.trade.quantity, bookUnit(r.trade.exchange, r.trade.lotSize));
   return {
     signalId: r.trade.signalId,
     event: r.event,

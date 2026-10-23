@@ -99,6 +99,28 @@ describe('the official target closes on LTP; the simulated target cannot fill â€
     // simulated R: (120 - 100.5 ask - fees) / 30; official R: (20% - 2.5%) / 30%
     expect(p.sim.netR!).toBeCloseTo((120 - 100.5 - (100 * 0.15) / 100 - 47.2 / 175) / 30, 6);
   });
+  it('SIM-1.1: an MCX book is in lots (1 lot of 100 on the ask fills a 100-unit buy); NSE stays in units', () => {
+    const gold = cand({ exchange: 'MCX', symbol: 'GOLD', lotSize: 100, quote: q({ askQty: 1, bidQty: 2 }) });
+    const p = openPosition(arm('R0'), gold, 'mcx1', T0);
+    expect(p.sim).toMatchObject({ status: 'OPEN', entryPrice: 100.5, entryQuality: 'OK' });
+    expect(p.simVersion).toBe('SIM-1.1');
+    expect(fillBlocker(q({ askQty: 1 }), 'BUY', 200, T0, 100)).toBe('SIZE_INSUFFICIENT'); // two lots wanted, one offered
+    expect(fillBlocker(q({ askQty: 100 }), 'BUY', 175, T0)).toBe('SIZE_INSUFFICIENT'); // NSE units, unchanged
+  });
+  it('SIM-1.1: a session-end exit may fill on the last two-sided quote of the final 10 minutes when a book-less tick came after it', () => {
+    const close = T0 + 5 * 3600_000;
+    const p = openPosition(arm('R0'), cand(), 'p6', T0);
+    onQuote(p, q({ ltp: 101, bid: 100.6, ask: 101.4 }, close - 3 * 60_000), close - 3 * 60_000); // chain, inside the window
+    onQuote(p, q({ ltp: 101.2, bid: null, ask: null, bidQty: null, askQty: null, source: 'TICK' }, close - 60_000), close - 60_000); // tick, no book
+    expect(onSessionEnd(p, close)).toEqual(['OFFICIAL_SESSION_ENDED', 'SIM_EXIT_FILLED']);
+    expect(p.official).toMatchObject({ exitPrice: 101.2, reason: 'SESSION_ENDED' }); // official still reads the last LTP
+    expect(p.sim).toMatchObject({ status: 'CLOSED', exitPrice: 100.6, exitAt: close - 3 * 60_000, reason: 'SESSION_ENDED' });
+    const old = openPosition(arm('R0'), cand(), 'p7', T0);
+    onQuote(old, q({ ltp: 101, bid: 100.6, ask: 101.4 }, close - 20 * 60_000), close - 20 * 60_000); // outside the window
+    onQuote(old, q({ ltp: 101.2, bid: null, ask: null, bidQty: null, askQty: null, source: 'TICK' }, close - 60_000), close - 60_000);
+    expect(onSessionEnd(old, close)).toEqual(['OFFICIAL_SESSION_ENDED', 'SIM_UNRESOLVED']);
+    expect(old.sim.pendingBlocks).toEqual({ 'TICK:ONE_SIDED_OR_NO_QUOTE': 1 }); // why it never filled stays visible (the chain quote was outside the window)
+  });
   it('at the session end an unfilled exit is UNRESOLVED, never a fill from an old quote', () => {
     const close = T0 + 5 * 3600_000;
     const p = openPosition(arm('R0'), cand(), 'p4', T0);
