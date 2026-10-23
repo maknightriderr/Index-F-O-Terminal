@@ -3291,6 +3291,15 @@ async function resolveStickyTradeSetup(
       triggerCandidates: (triggers?.families.find((f): f is MultipathFamilyInput => f.family === 'MULTIPATH')?.candidates ?? [])
         .filter((rc) => rc.candidate.triggerId === 'A3' || rc.candidate.triggerId === 'OF1')
         .map((rc) => ({ source: rc.candidate.triggerId as 'A3' | 'OF1', candidateId: rc.lifecycleId, build: () => buildTriggerExperimentCandidate({ provider, underlying, exchange, mode, chain, rc, entryContext, at }) })),
+      // EXP-3.1: the fresh triggers the claims just below act on (TRIGGER_REVERSAL), decided side-effect free with the
+      // same code; ids are the claims' own keys, so the engine counts each once, as the claim does.
+      freshTriggers: [
+        ...(momentumFamily?.trigger ? [{ id: `MB:${exchange}:${underlying}:${mode}:${momentumFamily.trigger.barTime}`, direction: momentumFamily.trigger.direction }] : []),
+        ...(() => {
+          const fill = structureFamily ? structureFillDecision(structureFamily, chain.spotPrice, structureFamily.lastClosedBar ?? lastClosedBar).fill : null;
+          return fill && (fill.direction === 'BULLISH' || fill.direction === 'BEARISH') ? [{ id: `S:${fill.id}`, direction: fill.direction }] : [];
+        })(),
+      ],
     });
   }
   const trigger = momentumFamily?.trigger ? await claimMomentumTrigger(exchange, underlying, mode, momentumFamily.trigger) : null;
@@ -5076,15 +5085,17 @@ async function recordStructureOutcome(
  * "waiting for rejection candle" text clears. TOUCH (default): unchanged —
  * fillCandidate reacts to the live spot between bar closes.
  */
-async function claimStructureFill(
-  exchange: Exchange,
-  underlying: string,
-  mode: TradingMode,
+type StructureClosedBar = { time: number; close: number; open?: number; high?: number; low?: number } | null;
+
+/**
+ * Pure: the structure fill this poll would claim (the candidate selection of claimStructureFill, without its claim or
+ * its refusal record). Shared by claimStructureFill and the experiment engine's TRIGGER_REVERSAL mirror.
+ */
+function structureFillDecision(
   family: StructureFamilyInput,
   spot: number,
-  closedBar: { time: number; close: number; open?: number; high?: number; low?: number } | null
-): Promise<LiveLifecycle | null> {
-  let candidate: LiveLifecycle | null;
+  closedBar: StructureClosedBar
+): { fill: LiveLifecycle | null; refused: { lc: LiveLifecycle; reason: string; at: number } | null } {
   if (STRUCTURE_ENTRY_MODE === 'REJECTION_CLOSE') {
     const timeframe = family.state.timeframe ?? '15m';
     const outcome =
@@ -5096,12 +5107,25 @@ async function claimStructureFill(
         outcome.kind === 'INVALIDATED'
           ? 'Closed beyond the sweep extreme before a rejection close (REJECTION_CLOSE).'
           : 'T1 reached before a rejection close (REJECTION_CLOSE) — MISSED.';
-      await recordStructureOutcome(family.state, outcome.lc, { outcome: 'REFUSED', code: 'STRUCTURE_SEQUENCE', reason, at: closedBar!.time }, null);
-      return null;
+      return { fill: null, refused: { lc: outcome.lc, reason, at: closedBar!.time } };
     }
-    candidate = outcome ? { ...outcome.lc, rejectionFillPrice: outcome.entry, rejectionPattern: outcome.pattern } : null;
-  } else {
-    candidate = fillCandidate(family.state, spot, closedBar?.time ?? null);
+    return { fill: outcome ? { ...outcome.lc, rejectionFillPrice: outcome.entry, rejectionPattern: outcome.pattern } : null, refused: null };
+  }
+  return { fill: fillCandidate(family.state, spot, closedBar?.time ?? null), refused: null };
+}
+
+async function claimStructureFill(
+  exchange: Exchange,
+  underlying: string,
+  mode: TradingMode,
+  family: StructureFamilyInput,
+  spot: number,
+  closedBar: StructureClosedBar
+): Promise<LiveLifecycle | null> {
+  const { fill: candidate, refused } = structureFillDecision(family, spot, closedBar);
+  if (refused) {
+    await recordStructureOutcome(family.state, refused.lc, { outcome: 'REFUSED', code: 'STRUCTURE_SEQUENCE', reason: refused.reason, at: refused.at }, null);
+    return null;
   }
   if (!candidate) return null;
   try {

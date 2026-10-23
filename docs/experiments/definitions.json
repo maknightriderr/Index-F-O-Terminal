@@ -1,0 +1,37 @@
+{
+  "name": "old-indicator-intraday-filters",
+  "version": "EXP-1.0",
+  "frozen_at": "2026-10-23T03:30:00+05:30",
+  "activation": "2026-10-26T09:00:00+05:30",
+  "study_type": "BASELINE_TRADE_FILTERING_STUDY",
+  "study_type_note": "Arms are fixed filters applied to the unchanged baseline's own paper trades. They do NOT have independent slots, cooldowns or parent-move state, so a filtered-out trade's slot is not re-used by another candidate. Results are descriptive of baseline trades, not strategy-level performance.",
+  "population": {
+    "strategy": "INDICATOR",
+    "mode": "INTRADAY",
+    "official": "closed, not voided, minted in session, net R computable (backtesting.ts definitions)",
+    "entry_time_from": "activation",
+    "never_applies_to": ["POSITIONAL trades", "every other strategy"]
+  },
+  "fields": {
+    "planned_target_r": "(target - entry) / (entry - original stop), option premium, recorded at mint (signals.inputs)",
+    "minutes_since_open": "signals.inputs.context.minutesSinceOpen, recorded at mint",
+    "session_group": "NSE_BSE for exchange NSE or BSE, MCX for MCX"
+  },
+  "arms": {
+    "BASELINE": "all population trades",
+    "A": "planned_target_r >= 0.5",
+    "B": "NOT (session_group == NSE_BSE AND minutes_since_open >= 240)",
+    "C": "A AND B  (EXPLORATORY: both thresholds were chosen after viewing 5-22 Oct data)"
+  },
+  "unchanged": ["targets", "stops", "trailing", "exits", "costs (COST-3.0 official)", "strike selection", "arbitration", "position sizing", "the baseline itself"],
+  "reporting": {
+    "official": "net R under the official costs, per arm and for the skipped complement",
+    "quote_ledger": "reported separately: simulated ask entry / bid exit from paper_execution_observations, fees only (statutory + brokerage, no spread), trades without OK quotes counted as unavailable",
+    "metrics": ["closed trades", "exchange-sessions with trades", "unique dates", "net R total", "avg net R with 90% exchange-session cluster bootstrap", "kept minus skipped avg R with 90% CI", "max chronological drawdown R", "trades per eligible exchange-session", "largest winner share of gross profit", "net R excluding the largest winner", "quote coverage"],
+    "verdict_rules": [
+      "An arm whose avg net R is below zero is LOSS REDUCTION at best, never a profitable strategy.",
+      "No promotion because a number of sessions has elapsed; a change to live behaviour needs a separate decision with the evidence.",
+      "Minimum before any reading: 20 NSE_BSE exchange-sessions after activation; report earlier readings as interim only."
+    ]
+  }
+}

@@ -26,6 +26,7 @@ import {
   ARMS,
   EXPERIMENTS_VERSION,
   armEntryDecision,
+  armFor,
   isLive,
   lossOf,
   onDecisionRead,
@@ -85,7 +86,10 @@ function save(p: ArmPosition, events: string[], at: number): void {
   }
 }
 
-function recordDecision(arm: ArmDef, c: ExpCandidate, take: boolean, code: string | null, at: number): void {
+/** A decision on a candidate; a trigger candidate never built (slot held, builder refused) carries only its identity. */
+type DecidedCandidate = Pick<ExpCandidate, 'candidateId' | 'symbol' | 'exchange' | 'mode'> & Partial<ExpCandidate>;
+
+function recordDecision(arm: ArmDef, c: DecidedCandidate, take: boolean, code: string | null, at: number): void {
   if (!ready()) return;
   const k = `${arm.id}|${c.candidateId}|${code}`;
   if (!take && decided.has(k)) return;
@@ -113,10 +117,15 @@ export interface IndicatorPoll {
   buildCandidate: () => Promise<ExpCandidate | null>;
   /** EXP-3.0: this poll's routed paper-stage trigger candidates (A3 / OF1), each with a side-effect-free builder. */
   triggerCandidates?: Array<{ source: 'A3' | 'OF1'; candidateId: string; build: () => Promise<ExpCandidate | null> }>;
+  /** EXP-3.1: the fresh triggers production's claims act on this poll (TRIGGER_REVERSAL), keyed by the claim's own id. */
+  freshTriggers?: Array<{ id: string; direction: 'BULLISH' | 'BEARISH' }>;
 }
 
 const armsOf = (source: ArmDef['source']) => ARMS.filter((a) => a.source === source);
 const taken = new Set<string>(); // arm|candidateId: a routed candidate recurs on every poll of its bar; one position per arm
+// Fresh-trigger ids already seen: production claims each once (Redis NX), so it reverses a held trade only on its first
+// poll. In memory: a restart inside the trigger's bar could see it once more (restarts are outside market hours).
+const seenTriggers = new Set<string>();
 
 function open(arm: ArmDef, c: ExpCandidate, at: number): void {
   const p = openPosition(arm, c, randomUUID(), at);
@@ -131,25 +140,38 @@ function open(arm: ArmDef, c: ExpCandidate, at: number): void {
 export async function onIndicatorPoll(poll: IndicatorPoll): Promise<void> {
   if (!EXPERIMENT_ARMS_ENABLED || !started || !ready()) return;
   try {
+    const freshTriggers = (poll.freshTriggers ?? []).filter((t) => !seenTriggers.has(t.id));
+    for (const t of freshTriggers) seenTriggers.add(t.id);
+    if (seenTriggers.size > 20_000) seenTriggers.clear();
     // 1. Existing positions on this symbol+mode: the poll's own chain quote, then its bias read.
     for (const p of [...positions.values()]) {
       if (p.candidate.symbol !== poll.symbol || p.candidate.exchange !== poll.exchange || p.candidate.mode !== poll.mode) continue;
-      const arm = ARMS.find((a) => a.id === p.arm)!;
+      const arm = armFor(p.arm, p.armVersion); // a position finishes under the version it was opened with
+      if (!arm) continue;
       const q = observeChainLeg(poll.chain, p.candidate.strike, p.candidate.side, p.candidate.expiry, poll.at);
       const ev = q.ltp != null || q.bid != null ? onQuote(p, toExpQuote(q), poll.at) : [];
-      ev.push(...onDecisionRead(p, arm, { at: poll.at, direction: poll.direction, confidence: poll.confidence, minConfidence: MIN_CONFIDENCE, confirmMs: poll.confirmMs, lastClosedBar: poll.lastClosedBar }));
+      ev.push(...onDecisionRead(p, arm, { at: poll.at, direction: poll.direction, confidence: poll.confidence, minConfidence: MIN_CONFIDENCE, confirmMs: poll.confirmMs, lastClosedBar: poll.lastClosedBar, freshTriggers }));
       save(p, ev, poll.at);
     }
     // 2. New candidates, only when some arm could take one (free slot) — never otherwise built.
     if (poll.mode !== 'INTRADAY') return;
     const slotHeld = (arm: ArmDef) => [...positions.values()].some((p) => p.arm === arm.id && p.official.status === 'OPEN' && p.candidate.symbol === poll.symbol && p.candidate.exchange === poll.exchange && p.candidate.mode === poll.mode);
     const day = istDay(poll.at);
-    // EXP-3.0 trigger arms: each routed candidate of their trigger, once per arm.
+    // EXP-3.0 trigger arms: each routed candidate of their trigger, once per arm. Every one is recorded, including those
+    // never built because the arm's slot is held (ARM_SLOT_HELD) or the stateless gates / contract build refused it (NOT_BUILT).
     for (const tc of poll.triggerCandidates ?? []) {
       const arms = armsOf(tc.source).filter((a) => !taken.has(`${a.id}|${tc.candidateId}`));
-      if (arms.length === 0 || arms.every(slotHeld)) continue;
+      if (arms.length === 0) continue;
+      const id = { candidateId: tc.candidateId, symbol: poll.symbol, exchange: poll.exchange as ExpCandidate['exchange'], mode: poll.mode };
+      if (arms.every(slotHeld)) {
+        for (const arm of arms) recordDecision(arm, id, false, 'ARM_SLOT_HELD', poll.at);
+        continue;
+      }
       const c = await tc.build();
-      if (!c) continue;
+      if (!c) {
+        for (const arm of arms) recordDecision(arm, id, false, 'NOT_BUILT', poll.at);
+        continue;
+      }
       for (const arm of arms) {
         const d = armEntryDecision(arm, c, slotHeld(arm), losses.get(arm.id) ?? [], poll.at, day);
         recordDecision(arm, c, d.take, d.code, poll.at);
@@ -256,6 +278,7 @@ export function __resetExperimentEngine(): void {
   losses.clear();
   decided.clear();
   taken.clear();
+  seenTriggers.clear();
   started = false;
   subs = null;
 }

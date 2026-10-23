@@ -1,0 +1,61 @@
+{
+  "name": "old-indicator-isolated-arms",
+  "version": "EXP-2.0",
+  "frozen_at": "2026-10-23T12:00:00+05:30",
+  "activation": "Not fixed in advance: each arm version's real activation instant is written by production to experiment_arms.activated_at the first time the engine starts after deploy. Only positions opened at or after that instant exist.",
+  "status_at_freeze": "BUILT, NOT MERGED, NOT ACTIVE (branch feat/experiment-arms)",
+  "code": {
+    "core": "apps/server/src/services/experiment-arms.ts",
+    "engine": "apps/server/src/services/experiment-engine.ts",
+    "candidate_builder": "apps/server/src/services/market-bias.ts buildIndicatorExperimentCandidate (runs buildIndicatorContract / indicatorTargetMove, the production chain's own code)",
+    "migration": "database/init/045_experiments_and_linkage.sql",
+    "kill_switch": "EXPERIMENT_ARMS=off"
+  },
+  "scope": {
+    "strategy": "Old Indicator",
+    "mode": "INTRADAY only",
+    "never": ["positional trades", "other strategies", "broker execution", "the production baseline's state"]
+  },
+  "candidate_stream": "One Old Indicator candidate per production poll of a symbol+mode with a BULLISH/BEARISH read, built side-effect free behind the production chain's stateless gates, whether or not the production slot is free. Built only when at least one arm's slot for that symbol+mode is free.",
+  "independent_state_per_arm": {
+    "slot": "one open official position per symbol+mode",
+    "cooldowns": "the baseline's rules applied to the arm's OWN official stop-outs: 15 min settle per exchange+mode, confidence >= 80 for the rest of the day after a loss, 60 min same symbol+direction cooldown, 2 same-direction losses per day lock",
+    "parent": "as the baseline: no parent block for the Old Indicator beyond the slot; candidate id IND:EXCH:SYMBOL:MODE:DIRECTION:DATE recorded",
+    "exits": "own position state: target, stop with trailing (+1R breakeven, +2R entry+1R), bias reversal (2 confident opposite reads across the confirm window), session end; V2 adds the invalidation exit"
+  },
+  "arms": {
+    "R0": {"version": "R0-REPLICA-1.0", "kind": "CONTROL_REPLICA", "rule": "baseline rules inside the engine"},
+    "A": {"version": "A-TARGET-0.5R-1.0", "kind": "FILTER_CONTROL", "rule": "R0 + planned_target_r >= 0.5"},
+    "B": {"version": "B-NO-LATE-NSE-1.0", "kind": "FILTER_CONTROL", "rule": "R0 + not (NSE/BSE and minutes_since_open >= 240)"},
+    "C": {"version": "C-A-AND-B-1.0", "kind": "FILTER_CONTROL", "exploratory": true, "rule": "A and B"},
+    "V2": {
+      "version": "IND-V2-INVALIDATION-1.0",
+      "kind": "HYPOTHESIS",
+      "observed_failure": "30% premium base stop sets the final stop in 575/615 intraday trades (median 2.81 underlying ATR) while the structural level behind price is a median 0.79 ATR away; structure can only widen the stop. Trades whose underlying crossed that level (217/615, sampled MAE) lost -89.4R; 40 later reached target; median option MFE +0.10R.",
+      "rule": "exit at market when a 15-minute bar that closed after entry closes below behindLevel - 0.25*ATR_at_entry (calls) or above behindLevel + 0.25*ATR_at_entry (puts); behindLevel and ATR as recorded at entry",
+      "unchanged": ["entry", "contract", "initial stop (so R and cost-in-R equal R0)", "target", "trailing", "all other exits"],
+      "downside": "cuts trades that recover (40/217 historically); a closing-bar rule exits later and worse than the level",
+      "historically_testable": false,
+      "why_not_testable": "no underlying or option price path at the crossing instant was recorded"
+    }
+  },
+  "ledgers": {
+    "official": "FILL-1.0: entry at the decision mid; target at min(LTP, target) once LTP reaches it; other exits at the observed LTP; official cost model (estimatedCostPct) in R exactly as backtesting.ts",
+    "simulated": {
+      "entry": "ask",
+      "target": "resting limit filled at the target only when the BID reaches it",
+      "market_exits": "bid (stop triggers on LTP, then fills at the bid)",
+      "quote_requirements": "two-sided; exchange age <= 60 s (receipt <= 15 s when the exchange time is unknown); feed state DATA_FRESH for ticks; top-of-book quantity >= the position quantity (1 lot); unknown or insufficient size = no fill",
+      "unfillable": "entry -> NOT_OPENED; exit -> EXIT_PENDING, keeps observing, fills at the first valid bid; at the session end only a quote from the final 10 minutes may fill, else UNRESOLVED with the last valid bid kept",
+      "costs": "fees only (statutory + brokerage); spread is in the prices; a latency/slippage allowance is a separately reported sensitivity",
+      "label": "quote-based simulation, not measured execution"
+    }
+  },
+  "sizing": "1 lot per position; results per lot and in R; no portfolio rupee P&L",
+  "comparison": {
+    "primary": "each arm minus R0 over identical periods (same engine, same candidate stream), per exchange-session, 90% exchange-session bootstrap",
+    "secondary": "R0 versus the production baseline over the same period (engine replication fidelity)",
+    "metrics": ["closed / open / unresolved / NOT_OPENED counts", "official net R and avg", "simulated net R and avg on simulated-closed trades", "max drawdown R", "trades per exchange-session", "largest winner share of gross profit", "net R excluding the largest winner", "quote coverage"],
+    "rules": ["negative average = loss reduction at best", "no automatic promotion; no promotion because sessions elapsed", "minimum before any reading: 20 NSE/BSE exchange-sessions after activation"]
+  }
+}

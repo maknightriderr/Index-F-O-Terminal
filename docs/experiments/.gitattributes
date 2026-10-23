@@ -1,0 +1,3 @@
+# Frozen experiment files are hash-checked: store them byte-exact (no line-ending conversion).
+*.json -text
+*.sha256 -text

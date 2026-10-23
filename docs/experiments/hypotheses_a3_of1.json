@@ -1,0 +1,41 @@
+{
+  "version": "A3-OF1-HYP-1.0",
+  "frozen_at": "2026-10-23T15:00:00+05:30",
+  "status": "PRE-REGISTERED, NOT IMPLEMENTED AS RULES. Evaluated forward only, on the EXP-3.0 capture arms (A3R, OF1R) and on the system's own forward grading (setup_events, of1_candidates), from the arms' recorded activation instant.",
+  "evaluation_start": "experiment_arms.activated_at of A3-R0-1.0 / OF1-R0-1.0 (recorded by production at first start after deploy)",
+  "hypotheses": {
+    "A3-H1": {
+      "statement": "A3 candidates whose underlying R to T1 is >= 1.5 (the router's TRADE bucket) earn less than those under 1.5, after option costs.",
+      "evidence_so_far": "331 graded candidates 1-22 Oct: TRADE bucket -0.099R (target hit 12%, stop 53%), LOW_RR +0.065R gross underlying; but neither bucket is stable across halves (TRADE 0.000 / -0.186; LOW_RR +0.174 / -0.014) and median cost is 0.15-0.19R. Option trades: >=1.5R 9 trades, 0 targets, -2.89R net; <1.5R 16 trades +0.30R net.",
+      "threshold": "1.5R (the trigger registry's own pre-existing LOW_RR boundary; not chosen from data)",
+      "test": "A3R arm closed positions: avg official net R (and simulated) of rToT1 >= 1.5 vs < 1.5, 90% exchange-session bootstrap of the difference",
+      "minimum": "20 NSE/BSE exchange-sessions after activation",
+      "if_supported": "a separate proposal; no automatic rule change"
+    },
+    "OF1-H1": {
+      "statement": "OF1 candidates whose flow evidence includes DELTA earn less than those without it.",
+      "evidence_so_far": "188 graded candidates on 2 sessions (20-21 Oct): DELTA found -0.209R (both days negative), not found +0.059R; inferred delta in the trade direction -0.072R vs against -0.082R (no directional information). Two sessions only: not evidence enough for a rule.",
+      "test": "of1_candidates graded after activation (all candidates, traded or not) and OF1R arm positions: avg R with vs without DELTA in evidence.found, 90% exchange-session bootstrap",
+      "minimum": "10 MCX and 10 NSE exchange-sessions after activation",
+      "if_supported": "OF1-V2 proposal: DELTA no longer counts toward the 2-of-5 flow confirmation"
+    },
+    "OF1-H2_REJECTED": {
+      "statement": "Waiting one 15m bar for acceptance beyond the OF1 level improves OF1.",
+      "result": "NOT SUPPORTED on 182 candidates with archived bars (20-21 Oct; grader reproduces 154/154 recorded outcomes): original -0.072R/trade, acceptance V2 -0.125R/trade in original-risk units (97 kept); risk-valid subset -0.203 vs -0.219. It skips 42 candidates whose target was reached during the waiting bar. Not implemented.",
+      "script": "of1_acceptance.py"
+    },
+    "OF1-H3": {
+      "statement": "OF1 works differently on NSE index futures than on MCX commodity futures.",
+      "evidence_so_far": "Trades: NSE 6 (+3.32R net: 1fa7dbf4, cbf62eb7, 618f9b1e, 4640ee4f, 4e1966fd winners; 3ab86a36 loser) vs MCX 18 (-8.16R). Candidates: NSE 17 (+0.616R) on 1 session vs MCX 171 (-0.144R) on 2 sessions. NSE has 1-2 sessions of flow data (20 Oct was an NSE holiday): far too few.",
+      "test": "OF1R positions and of1_candidates by exchange after activation, 90% exchange-session bootstrap",
+      "minimum": "10 NSE and 10 MCX exchange-sessions after activation",
+      "if_supported": "a separate proposal (e.g. OF1 on NSE only); no automatic change"
+    }
+  },
+  "missing_information": [
+    "Option-level outcomes of A3 / OF1 candidates that never took a production slot (arbitration losses, a held slot): captured from now by the A3R / OF1R arms (official + simulated ledgers).",
+    "Sessions: OF1 has 2-3 graded sessions (flow data only since 20 Oct); A3 has 29 sessions of underlying grading but 25 option trades.",
+    "Inferred-delta quality: the share of each bar's volume the quote/tick rule could not classify (order_flow_bars.unclassified_volume) is recorded but not yet related to candidate outcomes; exact aggressor side is unavailable from the Dhan feed.",
+    "Order-book quotes on ticks (best five) for simulated fills: ticks carry none (see the profitability diagnosis, gap 9)."
+  ]
+}
