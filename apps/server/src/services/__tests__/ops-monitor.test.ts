@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const mem = vi.hoisted(() => ({ kv: new Map<string, string>(), alerts: [] as string[], watched: [] as any[], computed: new Map<string, number>(), mismatches: 0 }));
+const mem = vi.hoisted(() => ({ kv: new Map<string, string>(), alerts: [] as string[], watched: [] as any[], computed: new Map<string, number>(), mismatches: 0, flow: { status: 'NOT_CONFIGURED', lastPacketAt: null as number | null, lastError: null as string | null }, dhanConfigured: false }));
 vi.mock('../../lib/redis.js', () => ({
   redis: {
     get: async (k: string) => mem.kv.get(k) ?? null,
@@ -30,6 +30,8 @@ vi.mock('../telegram.js', () => ({ notifyOperationalAlert: async (m: string) => 
 vi.mock('../market-bias.js', () => ({ lastBiasComputedAt: (ex: string, s: string, m: string) => mem.computed.get(`${ex}:${s}:${m}`) }));
 vi.mock('../trade-setup-monitor.js', () => ({ watchedSetups: () => mem.watched }));
 vi.mock('../record-reconciliation.js', () => ({ readReconciliationReport: async () => ({ mismatches: Array.from({ length: mem.mismatches }) }) }));
+vi.mock('../dhan-feed.js', () => ({ orderFlowFeedStatus: () => mem.flow }));
+vi.mock('../dhan-session.js', () => ({ dhanConfigured: () => mem.dhanConfigured }));
 
 const O = await import('../ops-monitor.js');
 type Inputs = import('../ops-monitor.js').OpsInputs;
@@ -89,6 +91,37 @@ describe('evaluateOpsChecks (pure): one seeded failure each', () => {
   });
 });
 
+describe('ORDER_FLOW_FEED (2026-10-25): the Dhan order-flow feed down while a market it covers is open', () => {
+  const flow = (o: object = {}) => ({ configured: true, status: 'CONNECTED', lastPacketAt: NOW - 10_000, lastError: null, exchanges: ['NSE', 'MCX'] as any, ...o });
+  it('connected and receiving packets: nothing', () => expect(checks(base({ orderFlow: flow() }))).toEqual([]));
+  it('token rejected / data plan inactive / disconnected in session: one DEGRADES finding naming the cause and the effect', () => {
+    for (const [status, text] of [['TOKEN_REJECTED', /rejected the access token/], ['DATA_PLAN_INACTIVE', /plan INACTIVE/], ['DISCONNECTED', /disconnected.*Last error: socket closed/]] as const) {
+      const f = O.evaluateOpsChecks(base({ orderFlow: flow({ status, lastError: 'socket closed' }) }));
+      expect(f.map((x) => [x.key, x.severity])).toEqual([['ORDER_FLOW_FEED', 'DEGRADES']]);
+      expect(f[0].detail).toMatch(text);
+      expect(f[0].detail).toMatch(/OF1 cannot produce a candidate/);
+    }
+  });
+  it('connected but silent for more than 5 minutes (or never a packet) counts as down', () => {
+    expect(O.evaluateOpsChecks(base({ orderFlow: flow({ lastPacketAt: NOW - 6 * 60_000 }) }))[0].detail).toMatch(/no packet for 6 minutes/);
+    expect(O.evaluateOpsChecks(base({ orderFlow: flow({ lastPacketAt: null }) }))[0].detail).toMatch(/since it connected/);
+    expect(checks(base({ orderFlow: flow({ lastPacketAt: NOW - 4 * 60_000 }) }))).toEqual([]);
+  });
+  it('never in a closed market, never in the first 5 minutes of a session, never when Dhan is not configured', () => {
+    expect(checks(base({ inSession: () => false, slots: [], orderFlow: flow({ status: 'TOKEN_REJECTED' }) }))).toEqual([]);
+    expect(checks(base({ minutesSinceOpen: () => 3, orderFlow: flow({ status: 'DISCONNECTED' }) }))).toEqual([]);
+    expect(checks(base({ orderFlow: flow({ configured: false, status: 'NOT_CONFIGURED' }) }))).toEqual([]);
+  });
+  it('only the exchanges the flow symbols trade on count: an MCX-only evening names MCX', () => {
+    const f = O.evaluateOpsChecks(base({ inSession: (ex) => ex === 'MCX', slots: [], orderFlow: flow({ status: 'TOKEN_REJECTED' }) }));
+    expect(f[0].detail).toMatch(/\(MCX\)/);
+    expect(checks(base({ inSession: (ex) => ex === 'MCX', slots: [], orderFlow: flow({ status: 'TOKEN_REJECTED', exchanges: ['NSE'] }) }))).toEqual([]);
+  });
+  it('a reconnect inside 5 minutes never pages (grace period)', () => {
+    expect(O.GRACE_MS.ORDER_FLOW_FEED).toBe(5 * 60_000);
+  });
+});
+
 describe('stepIncidents (pure): grace periods', () => {
   it('a finding becomes an incident only after its grace period, and resolves when it is gone', () => {
     const st = new Map();
@@ -137,6 +170,23 @@ describe('runOpsChecks (IO shell): alerts once per incident, then a resolved not
     expect(mem.alerts[1]).toMatch(/^✅ Resolved after 4 min: /);
   });
 
+  it('the order-flow feed rejected in session: after 5 minutes one Telegram alert, one resolved note on recovery', async () => {
+    mem.dhanConfigured = true;
+    mem.flow = { status: 'TOKEN_REJECTED', lastPacketAt: null, lastError: null };
+    const sub: any = { getStatus: () => ({ connected: true, feed: { upstreamDown: false } }), feedStateOfToken: () => 'DATA_FRESH' };
+    const t0 = Date.UTC(2026, 9, 26, 4, 0); // Mon 26 Oct 09:30 IST
+    await O.runOpsChecks(sub, t0);
+    expect(mem.alerts.filter((a) => /order-flow|access token/.test(a))).toHaveLength(0); // inside the grace period
+    await O.runOpsChecks(sub, t0 + 6 * 60_000);
+    expect(mem.alerts.filter((a) => /rejected the access token/.test(a))).toHaveLength(1);
+    await O.runOpsChecks(sub, t0 + 7 * 60_000);
+    expect(mem.alerts.filter((a) => /rejected the access token/.test(a))).toHaveLength(1); // once per incident
+    mem.flow = { status: 'CONNECTED', lastPacketAt: t0 + 8 * 60_000, lastError: null };
+    await O.runOpsChecks(sub, t0 + 8 * 60_000);
+    expect(mem.alerts.filter((a) => /Resolved.*rejected the access token/.test(a))).toHaveLength(1);
+    mem.dhanConfigured = false;
+    mem.flow = { status: 'NOT_CONFIGURED', lastPacketAt: null, lastError: null };
+  });
   it('a WARN (record mismatch) reports but never pages', async () => {
     for (const s of ['NIFTY', 'BANKNIFTY', 'FINNIFTY']) mem.computed.set(`NSE:${s}:INTRADAY`, NOW);
     for (const s of ['SENSEX:BSE', 'CRUDEOIL:MCX', 'GOLD:MCX']) mem.computed.set(`${s.split(':')[1]}:${s.split(':')[0]}:INTRADAY`, NOW);
