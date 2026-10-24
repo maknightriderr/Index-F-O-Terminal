@@ -15,6 +15,12 @@
 //   OPEN_PAST_EXPIRY an open trade whose option has expired
 //   RECORD_MISMATCH a trade row that disagrees with its plan (record-
 //                   reconciliation.ts; it alerts itself, so this only reports)
+//   ORDER_FLOW_FEED the Dhan order-flow feed not CONNECTED (token rejected,
+//                   data plan inactive, disconnected) or connected but silent
+//                   for 5+ minutes while a market it covers is open: footprints
+//                   are not recorded and OF1 cannot produce a candidate. Added
+//                   2026-10-25: 22 Oct was lost all day (TOKEN_REJECTED) with no
+//                   alert, and 78% of footprint bars 9-23 Oct were UNAVAILABLE.
 //
 // A check failing for its grace period opens an INCIDENT: /api/health turns
 // DEGRADED (a WARN reports without degrading), and Telegram gets ONE alert.
@@ -33,8 +39,11 @@ import { lastBiasComputedAt } from './market-bias.js';
 import { watchedSetups } from './trade-setup-monitor.js';
 import { readReconciliationReport } from './record-reconciliation.js';
 import { BACKGROUND_BIAS_SYMBOLS, COVERAGE_LAG_FLAGS } from '../config/trading-flags.js';
+import { ORDER_FLOW_SYMBOLS } from '../config/order-flow-flags.js';
+import { orderFlowFeedStatus } from './dhan-feed.js';
+import { dhanConfigured } from './dhan-session.js';
 
-export type OpsCheckId = 'FEED_COVERAGE' | 'FEED_DOWN' | 'FEED_GAP' | 'ENGINE_STALE' | 'OPEN_PAST_EXPIRY' | 'RECORD_MISMATCH';
+export type OpsCheckId = 'FEED_COVERAGE' | 'FEED_DOWN' | 'FEED_GAP' | 'ENGINE_STALE' | 'OPEN_PAST_EXPIRY' | 'RECORD_MISMATCH' | 'ORDER_FLOW_FEED';
 export type OpsSeverity = 'DEGRADES' | 'WARN';
 
 export interface OpsFinding {
@@ -53,7 +62,24 @@ export const GRACE_MS: Record<OpsCheckId, number> = {
   ENGINE_STALE: 0, // the threshold is already 15 minutes
   OPEN_PAST_EXPIRY: 45 * 60_000, // the lost-trade sweep closes these every 30 minutes
   RECORD_MISMATCH: 0,
+  ORDER_FLOW_FEED: 5 * 60_000, // a reconnect or the daily token / data-plan check must not page
 };
+
+/** Connected, but no packet for this long in session, counts as down. */
+export const ORDER_FLOW_SILENT_MS = 5 * 60_000;
+/** The feed connects at the session open; give it this long before judging. */
+const ORDER_FLOW_SESSION_WARMUP_MIN = 5;
+const NSE_FLOW_SYMBOLS = new Set(['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY']);
+
+/** The order-flow feed as the ops check sees it (dhan-feed.ts orderFlowFeedStatus, dhan-session.ts dhanConfigured). */
+export interface OrderFlowFeedInput {
+  configured: boolean;
+  status: string;
+  lastPacketAt: number | null;
+  lastError: string | null;
+  /** The exchanges the order-flow symbols trade on. */
+  exchanges: readonly Exchange[];
+}
 
 export const ENGINE_STALE_MS = 15 * 60_000;
 /** An exchange must have been open this long (and the process up this long) before a missing computation counts. */
@@ -85,6 +111,8 @@ export interface OpsInputs {
   /** Open rows in PostgreSQL whose option has expired (checked every 15 min), or null when unknown. */
   pastExpiryRows: number | null;
   reconciliationMismatches: number | null;
+  /** Absent = not checked (e.g. older callers / tests). */
+  orderFlow?: OrderFlowFeedInput | null;
 }
 
 const isoDate = /^\d{4}-\d{2}-\d{2}$/;
@@ -138,6 +166,27 @@ export function evaluateOpsChecks(i: OpsInputs): OpsFinding[] {
   const pastExpiry = Math.max(expiredSlots.length, i.pastExpiryRows ?? 0);
   if (pastExpiry > 0) {
     out.push({ key: 'OPEN_PAST_EXPIRY', check: 'OPEN_PAST_EXPIRY', severity: 'DEGRADES', detail: `${pastExpiry} open trade(s) hold an option that has already expired.` });
+  }
+
+  const of = i.orderFlow;
+  if (of?.configured) {
+    const open = of.exchanges.filter((ex) => i.inSession(ex) && (i.minutesSinceOpen(ex) ?? 0) >= ORDER_FLOW_SESSION_WARMUP_MIN);
+    if (open.length > 0) {
+      const where = open.join(' + ');
+      const effect = 'order-flow footprints are not being recorded and OF1 cannot produce a candidate';
+      const why: Record<string, string> = {
+        TOKEN_REJECTED: `Dhan rejected the access token in session (${where}): ${effect}. With DHAN_PIN + DHAN_TOTP_SECRET the session renews itself; otherwise paste a new DHAN_ACCESS_TOKEN.`,
+        DATA_PLAN_INACTIVE: `Dhan reports the market-data plan INACTIVE in session (${where}): ${effect}. Renew the Dhan Data API subscription.`,
+        DISCONNECTED: `The Dhan order-flow feed is disconnected in session (${where}): ${effect}.${of.lastError ? ` Last error: ${of.lastError}.` : ''}`,
+      };
+      const silentFor = of.lastPacketAt == null ? null : i.now - of.lastPacketAt;
+      if (of.status !== 'CONNECTED') {
+        out.push({ key: 'ORDER_FLOW_FEED', check: 'ORDER_FLOW_FEED', severity: 'DEGRADES', detail: why[of.status] ?? `The Dhan order-flow feed is ${of.status} in session (${where}): ${effect}.` });
+      } else if (silentFor == null || silentFor > ORDER_FLOW_SILENT_MS) {
+        out.push({ key: 'ORDER_FLOW_FEED', check: 'ORDER_FLOW_FEED', severity: 'DEGRADES',
+          detail: `The Dhan order-flow feed is connected but has sent no packet ${silentFor == null ? 'since it connected' : `for ${Math.round(silentFor / 60_000)} minutes`} in session (${where}): ${effect}.` });
+      }
+    }
   }
 
   if ((i.reconciliationMismatches ?? 0) > 0) {
@@ -225,6 +274,14 @@ async function countPastExpiryRows(today: string): Promise<number> {
   return Number(r?.n ?? 0);
 }
 
+function orderFlowInput(): OrderFlowFeedInput {
+  const s = orderFlowFeedStatus();
+  const exchanges: Exchange[] = [];
+  if (ORDER_FLOW_SYMBOLS.some((x) => NSE_FLOW_SYMBOLS.has(x))) exchanges.push('NSE');
+  if (ORDER_FLOW_SYMBOLS.some((x) => !NSE_FLOW_SYMBOLS.has(x))) exchanges.push('MCX');
+  return { configured: dhanConfigured(), status: s.status, lastPacketAt: s.lastPacketAt, lastError: s.lastError, exchanges };
+}
+
 export async function runOpsChecks(subscriptions: SubscriptionManager, now = Date.now()): Promise<OpsTransition> {
   const today = new Date(now).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
   if (now - pastExpiryCheckedAt >= PAST_EXPIRY_EVERY_MS) {
@@ -249,6 +306,7 @@ export async function runOpsChecks(subscriptions: SubscriptionManager, now = Dat
     computedAt: lastBiasComputedAt,
     pastExpiryRows,
     reconciliationMismatches: report ? report.mismatches.length : null,
+    orderFlow: orderFlowInput(),
   });
   const t = stepIncidents(state, findings, now);
   lastRunAt = now;
