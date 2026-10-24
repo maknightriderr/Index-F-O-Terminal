@@ -50,6 +50,7 @@ describe('OB1: the OB-2.0 signal as an ordinary trigger candidate', () => {
     expect(rc.candidate).toMatchObject({ triggerId: 'OB1', direction: sig.block.type, decisionIndex: i, entry: Math.round(cut[i].close * 100) / 100, eventIds: [] });
     expect(rc.parentId).toBe(`OB1:NSE:NIFTY:${cut[sig.block.blockIndex].time}:${sig.block.type}`);
     expect(rc.anchorKeys).toEqual([rc.parentId]);
+    expect(rc.entryEvidence).toMatchObject({ source: 'OB1', sourceVersion: 'OB-2.0', direction: sig.block.type, decisionTime: cut[i].time, blockTop: sig.block.top, blockBottom: sig.block.bottom, close: cut[i].close });
     expect(rc.lifecycleId).toBe(`NSE:NIFTY:MP:OB1:${sig.block.type}:${cut[i].time}`);
   });
 
@@ -99,6 +100,7 @@ describe('OF1: each OF1 candidate as an ordinary trigger candidate', () => {
     expect(of1[0].stage).toBe('PAPER_RESEARCH');
     expect(of1[0].candidate).toMatchObject({ direction: 'BULLISH', entry: 100.5, anchorPrice: 95 });
     expect(of1[0].candidate.stop).toBeLessThan(94.5);
+    expect(of1[0].entryEvidence).toMatchObject({ source: 'OF1', sourceVersion: 'OF1-1.2', direction: 'BULLISH', decisionTime: t, alignment: 'ALIGNED', found: A.evaluateOf1(bars, bars.length - 1, fps, undefined, true)[0].evidence });
     expect(of1[0].parentId).toBe('OF1:NSE:NIFTY:2026-10-07:BULLISH:PDL:95');
   });
   it('no order-flow data → no OF1 candidate', () => {

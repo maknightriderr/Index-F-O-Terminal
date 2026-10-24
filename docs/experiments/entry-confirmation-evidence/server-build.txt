@@ -1,0 +1,33 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+Attention:
+Turborepo now collects completely anonymous telemetry regarding usage.
+This information is used to shape the Turborepo roadmap and prioritize features.
+You can learn more, including how to opt-out if you'd not like to participate in this anonymous program, by visiting the following URL:
+https://turborepo.dev/docs/telemetry
+
+• turbo 2.10.9
+
+   • Packages in scope: @fno/analytics, @fno/server, @fno/shared
+   • Running build in 3 packages
+   • Remote caching disabled
+
+@fno/shared:build: cache hit, replaying logs 87079a7c2c139c70
+@fno/shared:build:
+@fno/shared:build: > @fno/shared@0.1.0 build
+@fno/shared:build: > tsc
+@fno/shared:build:
+@fno/analytics:build: cache miss, executing 5b69900158107568
+@fno/analytics:build:
+@fno/analytics:build: > @fno/analytics@0.1.0 build
+@fno/analytics:build: > tsc
+@fno/analytics:build:
+@fno/server:build: cache miss, executing 11be9164273e96dc
+@fno/server:build:
+@fno/server:build: > @fno/server@0.1.0 build
+@fno/server:build: > tsc
+@fno/server:build:
+
+ Tasks:    3 successful, 3 total
+Cached:    1 cached, 3 total
+  Time:    11.601s

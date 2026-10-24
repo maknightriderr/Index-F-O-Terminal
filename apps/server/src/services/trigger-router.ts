@@ -41,6 +41,7 @@
 // alter the structure engine, the consensus engine, or a held trade.
 // ============================================================
 
+import type { EntryEvidence } from './entry-confirmation-rules.js';
 import {
   prepareMomentumSeries,
   buildSeriesContext,
@@ -112,6 +113,8 @@ export interface RiskValidation {
 }
 
 export interface RoutedCandidate {
+  /** Observation only; production arbitration ignores this evidence. */
+  entryEvidence?: EntryEvidence;
   candidate: TriggerCandidate;
   stage: LiveTriggerStage;
   risk: RiskValidation;

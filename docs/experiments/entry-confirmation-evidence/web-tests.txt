@@ -1,0 +1,37 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> @fno/web@0.1.0 test
+> vitest run
+
+
+ RUN  v3.2.7 /workspace/scratch/c1db35db8761/fno-review/apps/web
+
+ ✓ src/lib/__tests__/format.test.ts (10 tests) 66ms
+ ✓ src/lib/__tests__/health-model.test.ts (12 tests) 117ms
+ ✓ src/components/signal-diagnostics/entry-confirmation-panel.test.tsx (3 tests) 494ms
+ ✓ src/components/auth/__tests__/login-gate.test.tsx (7 tests) 659ms
+   ✓ sign-in gate > shows only the password form until signed in; nothing behind the gate mounts  305ms
+ ✓ src/components/evidence/__tests__/evidence-page.test.tsx (3 tests) 1010ms
+   ✓ Evidence page > shows the Old Indicator as a protected benchmark, never a demotion candidate  888ms
+ ✓ src/components/assistant/__tests__/assistant.test.tsx (7 tests) 1190ms
+   ✓ floating AI assistant > opens from the bottom-right button, closes with Escape, and gives focus back to the button  484ms
+ ✓ src/lib/__tests__/freshness.test.ts (7 tests) 79ms
+ ✓ src/components/ui/__tests__/ui-primitives.test.tsx (13 tests) 2035ms
+   ✓ DataState > error offers retry  302ms
+   ✓ DataTable > pages long lists and shows the denominator  728ms
+   ✓ DataTable > has no accessibility violations (structure, names, roles)  403ms
+ ✓ src/lib/__tests__/paper-trade-view.test.ts (11 tests) 76ms
+ ✓ src/components/signal-diagnostics/order-flow-panel.test.tsx (2 tests) 509ms
+   ✓ OF1 alignment and version disclosure > shows unavailable alignment separately from a connected feed and labels the new cohort  397ms
+ ✓ src/lib/__tests__/views.test.ts (14 tests) 103ms
+ ✓ src/lib/__tests__/nav-url-theme.test.ts (13 tests) 49ms
+ ✓ src/lib/__tests__/display-integrity-source.test.ts (2 tests) 168ms
+ ✓ src/lib/__tests__/session.test.ts (4 tests) 47ms
+ ✓ src/lib/__tests__/read-only-source.test.ts (2 tests) 32ms
+ ✓ src/lib/__tests__/topbar-dropdown.test.ts (2 tests) 29ms
+ ✓ src/lib/__tests__/quote-time.test.ts (2 tests) 11ms
+
+ Test Files  17 passed (17)
+      Tests  114 passed (114)
+   Start at  16:36:53
+   Duration  11.92s (transform 3.03s, setup 10.25s, collect 5.40s, tests 6.68s, environment 25.17s, prepare 4.54s)

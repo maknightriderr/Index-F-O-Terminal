@@ -11,6 +11,7 @@
 // is profitable — small samples are flagged as samples.
 // ============================================================
 
+import { EntryConfirmationPanel, type EntryConfirmationReport } from './entry-confirmation-panel';
 import React, { useEffect, useMemo, useState } from 'react';
 import { api, type DiagnosticsFilter } from '@/lib/api';
 import { Section, MetricGrid, MetricTile } from '@/components/ui/card';
@@ -21,6 +22,7 @@ import { formatNumber, MISSING } from '@/lib/format';
 
 /** Mirrors apps/server/src/services/order-flow-metrics.ts orderFlowReport(). */
 export interface OrderFlowReport {
+  entryExperiments?: EntryConfirmationReport;
   note: string;
   settings: { orderBlockMode: string; of1Enabled: boolean; of1Trading: boolean; orderFlowSymbols: string[] };
   feed: { status: string; deltaMode: string; deltaModeReason: string; instruments: Record<string, { tradingSymbol: string }>; packets: number; trades: number; lastPacketAt: number | null; lastError: string | null };
@@ -115,6 +117,8 @@ export function OrderFlowPanel({ filter }: { filter: DiagnosticsFilter }) {
       <p className="text-sm text-[var(--text-secondary)]">
         Order blocks (OB1): {data.settings.orderBlockMode === 'PAPER' ? 'paper trading' : data.settings.orderBlockMode.toLowerCase()}. Order flow (OF1): {data.settings.of1Enabled ? (data.settings.of1Trading ? 'paper trading' : 'recording only') : 'off'}. Paper only: no broker orders. Their trades are under Backtesting → By Source. This panel shows what the detectors recorded; it is not evidence that either is profitable.
       </p>
+
+      {data.entryExperiments && <EntryConfirmationPanel data={data.entryExperiments} />}
 
       <Section title="Order blocks (OB-2.0) versus the indicator's legacy vote" subtitle="The repaired detector runs beside the old vote and changes no decision.">
         <MetricGrid>
