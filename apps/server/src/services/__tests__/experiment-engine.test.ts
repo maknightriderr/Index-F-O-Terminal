@@ -16,6 +16,9 @@ vi.mock('../../lib/logger.js', () => ({ logger: { info() {}, warn() {}, error() 
 vi.mock('../ensure-capture-schema.js', () => ({ schemaFileReady: () => true }));
 
 const E = await import('../experiment-engine.js');
+// Freeze the existing experiment cohorts in this regression suite; new arms have their own integration tests.
+beforeEach(() => vi.stubEnv('ENTRY_CONFIRMATION_EXPERIMENTS', 'off'));
+afterEach(() => vi.unstubAllEnvs());
 const SERVER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const read = (f: string) => readFileSync(path.join(SERVER, f), 'utf8');
 
@@ -178,7 +181,7 @@ describe('EXP-3.0: routed trigger candidates feed only their own capture arm, on
   it('a candidate production never selects still reaches its arm (the arm does not read production arbitration)', () => {
     const mb = read('src/services/market-bias.ts');
     const hook = mb.slice(mb.indexOf('triggerCandidates: (triggers?.families'), mb.indexOf('triggerCandidates: (triggers?.families') + 600);
-    expect(hook).toMatch(/\.filter\(\(rc\) => rc\.candidate\.triggerId === 'A3' \|\| rc\.candidate\.triggerId === 'OF1'\)/);
+    expect(hook).toMatch(/\.filter\(\(rc\) => rc\.candidate\.triggerId === 'A3' \|\| rc\.candidate\.triggerId === 'OF1' \|\| rc\.candidate\.triggerId === 'OB1'\)/);
     expect(hook).not.toMatch(/arbitration|SELECTED|structure_claimed/);
   });
   it('the trigger candidate builder runs the production contract build and has no side effect', () => {

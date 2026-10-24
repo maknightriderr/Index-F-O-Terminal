@@ -42,12 +42,13 @@
 //             (statutory + brokerage); the spread is in the prices.
 // ============================================================
 
+import { entryCandidateRule, type EntryEvidence } from './entry-confirmation-rules.js';
 import { bookUnit } from './book-units.js';
 
-export const EXPERIMENTS_VERSION = 'EXP-3.1';
-export type ArmId = 'R0' | 'A' | 'B' | 'C' | 'V2' | 'A3R' | 'OF1R';
+export const EXPERIMENTS_VERSION = 'EXP-4.0';
+export type ArmId = 'R0' | 'A' | 'B' | 'C' | 'V2' | 'A3R' | 'OF1R' | 'OB1C' | 'OB1J' | 'OF1C' | 'OF1G';
 /** Which candidate stream an arm consumes. */
-export type ArmSource = 'INDICATOR' | 'A3' | 'OF1';
+export type ArmSource = 'INDICATOR' | 'A3' | 'OF1' | 'OB1';
 export type ArmKind = 'CONTROL_REPLICA' | 'FILTER_CONTROL' | 'HYPOTHESIS';
 
 export interface ExpQuote {
@@ -63,6 +64,8 @@ export interface ExpQuote {
 }
 
 export interface ExpCandidate {
+  /** Research-only evidence; never used by the production slot. */
+  entryEvidence?: EntryEvidence;
   at: number;
   candidateId: string;
   symbol: string;
@@ -142,6 +145,12 @@ export const ARMS: readonly ArmDef[] = Object.freeze([
   // EXP-3.1 (2026-10-23): 1.1 adds production's TRIGGER_REVERSAL exit, which 1.0 omitted (an unintended difference).
   { id: 'A3R', version: 'A3-R0-1.1', kind: 'CONTROL_REPLICA', exploratory: false, invalidationExit: false, source: 'A3', biasReversalExit: false, structureExit: true, triggerReversalExit: true, description: 'A3 as routed by production (all paper-stage candidates), with its own slot, cooldowns and exits, including TRIGGER_REVERSAL.', entryRule: () => null },
   { id: 'OF1R', version: 'OF1-R0-1.1', kind: 'CONTROL_REPLICA', exploratory: false, invalidationExit: false, source: 'OF1', biasReversalExit: false, structureExit: true, triggerReversalExit: true, description: 'OF1 as routed by production (all paper-stage candidates), with its own slot, cooldowns and exits, including TRIGGER_REVERSAL.', entryRule: () => null },
+
+  // Same candidate, option build, costs and exits; independent research slots. Never auto-promoted.
+  { id: 'OB1C', version: 'OB1C-ENTRY-1.0', kind: 'CONTROL_REPLICA', exploratory: true, invalidationExit: false, source: 'OB1', biasReversalExit: false, structureExit: true, triggerReversalExit: true, description: 'OB1 first-touch control, same-bar experiment cohort.', entryRule: (c) => entryCandidateRule('OB1C', c) },
+  { id: 'OB1J', version: 'OB1J-ENTRY-1.0', kind: 'HYPOTHESIS', exploratory: true, invalidationExit: false, source: 'OB1', biasReversalExit: false, structureExit: true, triggerReversalExit: true, description: 'OB1 control + retest close strictly beyond the near block edge in the trade direction; no later-bar wait.', entryRule: (c) => entryCandidateRule('OB1J', c) },
+  { id: 'OF1C', version: 'OF1C-ENTRY-1.0', kind: 'CONTROL_REPLICA', exploratory: true, invalidationExit: false, source: 'OF1', biasReversalExit: false, structureExit: true, triggerReversalExit: true, description: 'Aligned OF1-1.2 control, separate from pre-alignment OF1R history.', entryRule: (c) => entryCandidateRule('OF1C', c) },
+  { id: 'OF1G', version: 'OF1G-ENTRY-1.0', kind: 'HYPOTHESIS', exploratory: true, invalidationExit: false, source: 'OF1', biasReversalExit: false, structureExit: true, triggerReversalExit: true, description: 'Aligned OF1 control + at least one pressure (delta/imbalance) and one response (absorption/POC/acceptance) measure; groups are not independent.', entryRule: (c) => entryCandidateRule('OF1G', c) },
 ]);
 
 /**

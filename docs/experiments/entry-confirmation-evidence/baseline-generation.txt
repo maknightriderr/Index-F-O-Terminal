@@ -1,0 +1,15 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> @fno/server@0.1.0 test
+> vitest run src/services/__tests__/entry-confirmation-parity.test.ts
+
+
+ RUN  v3.2.7 /workspace/scratch/c1db35db8761/fno-review/apps/server
+
+ ✓ src/services/__tests__/entry-confirmation-parity.test.ts (1 test) 20791ms
+   ✓ production candidate, geometry, parent, stage, risk and cost outputs match the deployed baseline  20790ms
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  16:36:15
+   Duration  21.78s (transform 417ms, setup 0ms, collect 581ms, tests 20.79s, environment 0ms, prepare 79ms)

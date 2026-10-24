@@ -98,3 +98,9 @@ That omission applies to R0, A, B, C and V2 alike. Arm-vs-R0 is therefore a like
   - none reached target;
   - net −2.90R;
   - **7 lost and 2 won, both at session end:** KPITTECH `f234cd97` +1.27R and NAM-INDIA `e0174aef` +0.10R.
+
+## Entry confirmation experiments (ENTRY-CONFIRM-1.0)
+
+[Definitions, validation, limitations and rollback](entry-confirmation-experiments.md).
+OB1 first-touch versus same-bar rejection; OF1 aligned control versus pressure-plus-response evidence.
+Current production entry rules are unchanged. The Order Flow panel reports the four research arms separately.

@@ -176,7 +176,7 @@ describe('EXP-3.0 trigger capture arms (A3R, OF1R)', () => {
   it('the Indicator arms are unchanged: same versions, bias-reversal exit, no structural exit', () => {
     expect(ARMS.filter((a) => a.source === 'INDICATOR').map((a) => a.version)).toEqual(['R0-REPLICA-1.0', 'A-TARGET-0.5R-1.0', 'B-NO-LATE-NSE-1.0', 'C-A-AND-B-1.0', 'IND-V2-INVALIDATION-1.1']);
     expect(ARMS.filter((a) => a.source === 'INDICATOR').every((a) => a.biasReversalExit && !a.structureExit)).toBe(true);
-    expect(ARMS.filter((a) => a.source !== 'INDICATOR').map((a) => [a.id, a.version, a.kind, a.source])).toEqual([['A3R', 'A3-R0-1.1', 'CONTROL_REPLICA', 'A3'], ['OF1R', 'OF1-R0-1.1', 'CONTROL_REPLICA', 'OF1']]);
+    expect(ARMS.filter((a) => ['A3R', 'OF1R'].includes(a.id)).map((a) => [a.id, a.version, a.kind, a.source])).toEqual([['A3R', 'A3-R0-1.1', 'CONTROL_REPLICA', 'A3'], ['OF1R', 'OF1-R0-1.1', 'CONTROL_REPLICA', 'OF1']]);
     expect(ARMS.filter((a) => a.source === 'INDICATOR').every((a) => !a.triggerReversalExit)).toBe(true); // EXP-2.0 arms as activated
   });
   it('SWEEP_RECLAIMED: a bar closing after entry back beyond the sweep extreme exits a trigger arm; a bias read never does', () => {

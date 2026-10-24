@@ -1,0 +1,43 @@
+{
+  "name": "OB1 / OF1 entry confirmation experiments",
+  "version": "ENTRY-CONFIRM-1.0",
+  "engine": "EXP-4.0",
+  "base_commit": "b1282311809c5f1234e0fa35820bb77031b559a3",
+  "status_at_freeze": "BUILT, NOT MERGED OR ACTIVE",
+  "activation": "experiment_arms.activated_at, recorded at first engine start with the dedicated switch on",
+  "production_rules_changed": false,
+  "exploratory": true,
+  "automatic_promotion": false,
+  "candidate_universe": "Current enabled OB1/OF1 intraday 15m paper-stage routed candidates, after router session/geometry/cost checks; observed before research slot/cooldown/contract-build checks. Not all raw detector signals.",
+  "arms": {
+    "OB1C": {
+      "version": "OB1C-ENTRY-1.0",
+      "source_version": "OB-2.0",
+      "rule": "First-touch control; no additional rejection filter"
+    },
+    "OB1J": {
+      "version": "OB1J-ENTRY-1.0",
+      "source_version": "OB-2.0",
+      "rule": "Same retest candle must close strictly above block top for bullish, strictly below block bottom for bearish; equality fails"
+    },
+    "OF1C": {
+      "version": "OF1C-ENTRY-1.0",
+      "source_version": "OF1-1.2",
+      "rule": "Aligned OF1 control; cohort separate from old OF1R records"
+    },
+    "OF1G": {
+      "version": "OF1G-ENTRY-1.0",
+      "source_version": "OF1-1.2",
+      "rule": "At least one of DELTA/IMBALANCE and one of ABSORPTION/directional POC movement/ACCEPTANCE; groups remain correlated"
+    }
+  },
+  "execution": "One shared option build per source candidate for eligible arms; same entry, contract, one-lot quantity, costs, target, stop, trailing and trigger-family exit rules. Independent slots and cooldowns. No broker orders.",
+  "entry_timing": "Same closed decision bar only. No wait for subsequent confirmation bars. Record observed entry timestamp minus decision candle close; no hypothetical delayed fill.",
+  "ledgers": {
+    "official": "Mid entry; production target/exit policy; estimated round-trip costs deducted",
+    "simulated": "Fresh executable ask/bid and depth required, fees deducted, unresolved and unavailable fills excluded from closed return averages"
+  },
+  "primary_comparison": "Closed net R, trade count and realised closed-trade drawdown; show both ledgers separately. Also match filtered candidates to control outcomes: missed winners, avoided losers, pending, no control position.",
+  "coverage": "Report all observed candidates, filter pass/fail, missing evidence, positions and missing outcome coverage. OF1 breakdown by evidence combination. Old versions excluded, preserved in storage.",
+  "rollback": "ENTRY_CONFIRMATION_EXPERIMENTS=off stops only new experiment entries/observations; open research positions still exit. Drain both ledgers before reverting to a binary without the four new arm readers."
+}

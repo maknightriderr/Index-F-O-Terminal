@@ -12,6 +12,7 @@
 // never reads them. Flag EXPERIMENT_ARMS (default on) switches it all off.
 // ============================================================
 
+import { entryConfirmationEnabled, entryRuleCode, isEntryArm, type EntryEvidence } from './entry-confirmation-rules.js';
 import { randomUUID } from 'node:crypto';
 import { FO_SEGMENT, isMarketOpen, minutesSinceSessionOpen } from '@fno/shared';
 import { MIN_CONFIDENCE } from '@fno/analytics';
@@ -50,6 +51,9 @@ export const experimentEntriesEnabled = () => (process.env.EXPERIMENT_NEW_ENTRIE
 const CLIENT_ID = 'experiment-engine';
 const TICK_MS = 60_000;
 
+const entryWrites = new Map<string, Promise<void>>();
+const observations = new Set<string>();
+const observing = new Set<string>();
 const positions = new Map<string, ArmPosition>();
 const losses = new Map<string, ArmLoss[]>(); // arm -> its own official stop-outs (cooldown state)
 const decided = new Set<string>(); // de-dupe SKIP rows: arm|candidate|code
@@ -79,7 +83,14 @@ async function persist(p: ArmPosition, events: string[], at: number): Promise<vo
 
 function save(p: ArmPosition, events: string[], at: number): void {
   if (events.length === 0 && p.observations % 10 !== 0) return; // a quote that changed nothing is persisted every 10th time
-  void persist(p, events, at).catch((err: any) => logger.warn({ error: err?.message, id: p.id }, 'Experiments: persist failed (paper research only)'));
+  const failure = (err: any) => logger.warn({ error: err?.message, id: p.id }, 'Experiments: persist failed (paper research only)');
+  if (isEntryArm(p.arm)) {
+    // Snapshot + ordered writes: a slow OPEN write must not overwrite a later CLOSED state.
+    const snapshot = structuredClone(p);
+    const pending = (entryWrites.get(p.id) ?? Promise.resolve()).then(() => persist(snapshot, events, at)).catch(failure);
+    entryWrites.set(p.id, pending);
+    void pending.then(() => { if (entryWrites.get(p.id) === pending) entryWrites.delete(p.id); });
+  } else void persist(p, events, at).catch(failure);
   const day = istDay(at);
   const l = lossOf(p, day);
   if (l && events.some((e) => e === 'OFFICIAL_STOP_LOSS')) losses.set(p.arm, [...(losses.get(p.arm) ?? []).filter((x) => at - x.at < 36 * 3600_000), l]);
@@ -105,9 +116,30 @@ function recordDecision(arm: ArmDef, c: DecidedCandidate, take: boolean, code: s
   void sql`
     INSERT INTO experiment_decisions (at, arm, arm_version, candidate_id, symbol, exchange, mode, decision, code, detail)
     VALUES (${new Date(at)}, ${arm.id}, ${arm.version}, ${c.candidateId}, ${c.symbol}, ${c.exchange}, ${c.mode}, ${take ? 'TAKE' : 'SKIP'}, ${code},
-      ${sql.json({ entry: c.entry, stop: c.stop, target: c.target, strike: c.strike, side: c.side, expiry: c.expiry, minutesSinceOpen: c.minutesSinceOpen } as any)})
+      ${sql.json({ entry: c.entry, stop: c.stop, target: c.target, strike: c.strike, side: c.side, expiry: c.expiry, minutesSinceOpen: c.minutesSinceOpen, entryEvidence: c.entryEvidence } as any)})
     ON CONFLICT DO NOTHING
   `.catch((err: any) => logger.warn({ error: err?.message }, 'Experiments: decision record failed'));
+}
+
+/** Record the filter BEFORE slot/cooldown/build gates, so rejected winners cannot disappear from the denominator. */
+async function observeEntryRule(arm: ArmDef, tc: NonNullable<IndicatorPoll['triggerCandidates']>[number], poll: IndicatorPoll): Promise<void> {
+  if (!isEntryArm(arm.id)) return;
+  const key = `${arm.id}|${arm.version}|${tc.candidateId}`;
+  if (observations.has(key) || observing.has(key)) return;
+  observing.add(key);
+  const e = tc.entryEvidence;
+  const code = e && (e.source !== tc.source || e.decisionTime + 900_000 > poll.at) ? 'ENTRY_EVIDENCE_UNAVAILABLE' : entryRuleCode(arm.id, e) ?? 'RULE_PASS';
+  try {
+    await sql`
+      INSERT INTO experiment_decisions (at, arm, arm_version, candidate_id, symbol, exchange, mode, decision, code, detail)
+      VALUES (${new Date(poll.at)}, ${arm.id}, ${arm.version}, ${tc.candidateId}, ${poll.symbol}, ${poll.exchange}, ${poll.mode}, 'OBSERVE', ${code},
+        ${sql.json({ entryEvidence: tc.entryEvidence ?? null, source: tc.source } as any)}) ON CONFLICT DO NOTHING
+    `;
+    observations.add(key);
+    if (observations.size > 20_000) observations.clear();
+  } catch (err: any) {
+    logger.warn({ error: err?.message }, 'Entry confirmation: observation failed; next poll will retry');
+  } finally { observing.delete(key); }
 }
 
 export interface IndicatorPoll {
@@ -123,12 +155,12 @@ export interface IndicatorPoll {
   /** market-bias's side-effect-free Old Indicator candidate builder (null when it refuses). */
   buildCandidate: () => Promise<ExpCandidate | null>;
   /** EXP-3.0: this poll's routed paper-stage trigger candidates (A3 / OF1), each with a side-effect-free builder. */
-  triggerCandidates?: Array<{ source: 'A3' | 'OF1'; candidateId: string; build: () => Promise<ExpCandidate | null> }>;
+  triggerCandidates?: Array<{ source: 'A3' | 'OF1' | 'OB1'; candidateId: string; entryEvidence?: EntryEvidence; build: () => Promise<ExpCandidate | null> }>;
   /** EXP-3.1: the fresh triggers production's claims act on this poll (TRIGGER_REVERSAL), keyed by the claim's own id. */
   freshTriggers?: Array<{ id: string; direction: 'BULLISH' | 'BEARISH' }>;
 }
 
-const armsOf = (source: ArmDef['source']) => ARMS.filter((a) => a.source === source);
+const armsOf = (source: ArmDef['source']) => ARMS.filter((a) => a.source === source && (!isEntryArm(a.id) || entryConfirmationEnabled()));
 const taken = new Set<string>(); // arm|candidateId: a routed candidate recurs on every poll of its bar; one position per arm
 // Fresh-trigger ids already seen: production claims each once (Redis NX), so it reverses a held trade only on its first
 // poll. In memory: a restart inside the trigger's bar could see it once more (restarts are outside market hours).
@@ -177,7 +209,9 @@ export async function onIndicatorPoll(poll: IndicatorPoll): Promise<void> {
     // EXP-3.0 trigger arms: each routed candidate of their trigger, once per arm. Every one is recorded, including those
     // never built because the arm's slot is held (ARM_SLOT_HELD) or the stateless gates / contract build refused it (NOT_BUILT).
     for (const tc of poll.triggerCandidates ?? []) {
-      const arms = armsOf(tc.source).filter((a) => !taken.has(`${a.id}|${tc.candidateId}`));
+      const sourceArms = armsOf(tc.source);
+      if (sourceArms.some((arm) => isEntryArm(arm.id))) await Promise.all(sourceArms.map((arm) => observeEntryRule(arm, tc, poll)));
+      const arms = sourceArms.filter((a) => !taken.has(`${a.id}|${tc.candidateId}`));
       if (arms.length === 0) continue;
       const id = { candidateId: tc.candidateId, symbol: poll.symbol, exchange: poll.exchange as ExpCandidate['exchange'], mode: poll.mode };
       if (arms.every(slotHeld)) {
@@ -191,6 +225,8 @@ export async function onIndicatorPoll(poll: IndicatorPoll): Promise<void> {
         continue;
       }
       for (const arm of arms) {
+        // Another overlapping poll may have built the same candidate while we awaited the builder.
+        if (taken.has(`${arm.id}|${tc.candidateId}`) || (isEntryArm(arm.id) && !entryConfirmationEnabled())) continue;
         const d = armEntryDecision(arm, c, slotHeld(arm), losses.get(arm.id) ?? [], poll.at, day);
         recordDecision(arm, c, d.take, d.code, poll.at);
         if (!d.take) continue;
@@ -259,7 +295,7 @@ async function load(): Promise<void> {
     const inv = invalidatedSetupOf(r.state, istDay(r.state.official.exitAt ?? r.state.openedAt));
     if (inv && inv.day === istDay(Date.now())) invalidated.set(r.state.arm, [...(invalidated.get(r.state.arm) ?? []), inv]);
   }
-  for (const arm of ARMS) {
+  for (const arm of ARMS.filter((a) => !isEntryArm(a.id) || entryConfirmationEnabled())) {
     await sql`
       INSERT INTO experiment_arms (arm, version, kind, exploratory, definition, commit)
       VALUES (${arm.id}, ${arm.version}, ${arm.kind}, ${arm.exploratory}, ${sql.json({ description: arm.description, invalidationExit: arm.invalidationExit, engine: EXPERIMENTS_VERSION } as any)}, ${process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) ?? null})
@@ -297,6 +333,9 @@ export function startExperimentEngine(subscriptions?: SubscriptionManager): void
 /** Tests only. */
 export function __resetExperimentEngine(): void {
   positions.clear();
+  observations.clear();
+  observing.clear();
+  entryWrites.clear();
   losses.clear();
   decided.clear();
   taken.clear();

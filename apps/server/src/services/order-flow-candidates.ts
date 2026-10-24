@@ -23,6 +23,7 @@
 // SHADOW otherwise. Paper only — nothing here can reach a broker.
 // ============================================================
 
+import { ENTRY_CONFIRMATION_VERSION } from './entry-confirmation-rules.js';
 import {
   buildCandidate,
   buildSeriesContext,
@@ -96,7 +97,7 @@ export function orderFlowPaperCandidates(a: OrderFlowPaperArgs): RoutedCandidate
       const blockTime = bars[b.blockIndex].time;
       const hit = { direction: dir, anchor: event(`ORDER_BLOCK:${dir}:${blockTime}`, b.blockIndex, level, blockTime, dir), events: [], stopRef: dir === 'BULLISH' ? b.bottom : b.top };
       const c = buildCandidate(ctx, log, def('OB1', 'ORDER_BLOCK'), hit as any, i);
-      if (c) out.push(route(c, 'PAPER_RESEARCH', `OB1:${a.exchange}:${a.underlying}:${blockTime}:${dir}`));
+      if (c) out.push({ ...route(c, 'PAPER_RESEARCH', `OB1:${a.exchange}:${a.underlying}:${blockTime}:${dir}`), entryEvidence: { version: ENTRY_CONFIRMATION_VERSION, source: 'OB1', sourceVersion: 'OB-2.0', direction: dir, decisionTime: bars[i].time, blockTop: b.top, blockBottom: b.bottom, close: bars[i].close } });
     }
   }
 
@@ -106,7 +107,7 @@ export function orderFlowPaperCandidates(a: OrderFlowPaperArgs): RoutedCandidate
       const stopRef = o.direction === 'BULLISH' ? Math.min(bar.low, o.location.price) : Math.max(bar.high, o.location.price);
       const hit = { direction: o.direction, anchor: event(`OF1:${o.location.kind}:${o.direction}:${bar.time}`, i, o.location.price, bar.time, o.direction), events: [], stopRef };
       const c = buildCandidate(ctx, log, def('OF1', 'ORDER_FLOW'), hit as any, i);
-      if (c) out.push(route(c, 'PAPER_RESEARCH', `OF1:${a.exchange}:${a.underlying}:${series.sessionDates[s]}:${o.direction}:${o.location.kind}:${Math.round(o.location.price * 100) / 100}`));
+      if (c) out.push({ ...route(c, 'PAPER_RESEARCH', `OF1:${a.exchange}:${a.underlying}:${series.sessionDates[s]}:${o.direction}:${o.location.kind}:${Math.round(o.location.price * 100) / 100}`), entryEvidence: { version: ENTRY_CONFIRMATION_VERSION, source: 'OF1', sourceVersion: o.version, direction: o.direction, decisionTime: bar.time, found: [...o.evidence], alignment: 'ALIGNED', flowBasis: o.flowBasis } });
     }
   }
   return out;

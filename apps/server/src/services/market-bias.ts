@@ -3292,8 +3292,8 @@ async function resolveStickyTradeSetup(
       // EXP-3.0: this poll's routed paper-stage A3 / OF1 candidates (the same ones production arbitrates), each with a
       // side-effect-free builder — whether or not production later selects them or its slot is free.
       triggerCandidates: (triggers?.families.find((f): f is MultipathFamilyInput => f.family === 'MULTIPATH')?.candidates ?? [])
-        .filter((rc) => rc.candidate.triggerId === 'A3' || rc.candidate.triggerId === 'OF1')
-        .map((rc) => ({ source: rc.candidate.triggerId as 'A3' | 'OF1', candidateId: rc.lifecycleId, build: () => buildTriggerExperimentCandidate({ provider, underlying, exchange, mode, chain, rc, entryContext, at }) })),
+        .filter((rc) => rc.candidate.triggerId === 'A3' || rc.candidate.triggerId === 'OF1' || rc.candidate.triggerId === 'OB1')
+        .map((rc) => ({ source: rc.candidate.triggerId as 'A3' | 'OF1' | 'OB1', candidateId: rc.lifecycleId, entryEvidence: rc.entryEvidence, build: () => buildTriggerExperimentCandidate({ provider, underlying, exchange, mode, chain, rc, entryContext, at }) })),
       // EXP-3.1: the fresh triggers the claims just below act on (TRIGGER_REVERSAL), decided side-effect free with the
       // same code; ids are the claims' own keys, so the engine counts each once, as the claim does.
       freshTriggers: [
@@ -5256,6 +5256,7 @@ export async function buildTriggerExperimentCandidate(a: {
     rToT1: rc.candidate.rToT1,
     bucket: rc.candidate.bucket,
     arbitrationRole: rc.arbitration?.role ?? null,
+    entryEvidence: rc.entryEvidence,
   };
 }
 

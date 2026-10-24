@@ -2,6 +2,7 @@
 // ORDER BLOCK / ORDER FLOW / OF1 — shadow measurement report (read-only)
 // ============================================================
 
+import { entryConfirmationReport } from './entry-confirmation-report.js';
 import { ORDER_BLOCK_REACTION_VERSION, OF1_VERSION } from '@fno/analytics';
 import { orderFlowAlignmentStatus } from './order-flow-alignment.js';
 import { sql } from '../lib/db.js';
@@ -71,6 +72,7 @@ export async function orderFlowReport(q: DiagnosticsQuery) {
   const o = of1[0] ?? {};
   const sh = shadow[0] ?? { decisions: '0', legacy_signals: '0', v2_signals: '0', changed: '0' };
   return {
+    entryExperiments: await entryConfirmationReport(q),
     settings: { orderBlockMode: ORDER_BLOCK_MODE, of1Enabled: OF1_ENABLED, of1Trading: OF1_TRADING, orderFlowSymbols: ORDER_FLOW_SYMBOLS },
     feed: orderFlowFeedStatus(),
     alignment: orderFlowAlignmentStatus(),
