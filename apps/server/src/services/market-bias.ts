@@ -155,7 +155,8 @@ import {
 import { INDICATOR_CONFIDENCE_MODE, locationGateEnforced } from '../config/trading-flags.js';
 import type { ExposureSnapshot } from './exposure-tracker.js';
 import { stopOvershootPct } from './stop-overshoot.js';
-import type { NoTradeCode, TradeDecision } from '@fno/shared';
+import type { NoTradeCode, OrderBlockRef, TradeDecision } from '@fno/shared';
+import { describeOrderBlock } from '@fno/shared';
 import { decisionBarCloseAt, getLatestSessionWindow, type FuturesChainResponse } from '@fno/shared';
 import { assessTradeHealth, emptyExcursion, updateExcursion, mfeInAtr, deadTradeMarker, type TradeExcursion, type TradeHealthAssessment } from './trade-health.js';
 import { notifyTradeSetupClosed } from './trade-setup-close-notifier.js';
@@ -2672,6 +2673,8 @@ interface StoredStructureTrade {
   timeframe?: '5m';
   /** Present only for a trigger-family paper trade (A2, B1, …): the trigger that decided it. */
   triggerId?: string;
+  /** OB1 only: the 15-minute order block the trade is based on (record / display). */
+  orderBlock?: OrderBlockRef;
 }
 
 /** Staleness of a re-surfaced sticky setup, as shown on the response. Measured only — see signal-freshness.ts. */
@@ -5426,6 +5429,7 @@ async function resolveStructureSetup(ctx: {
     rejectionPattern: lc.rejectionPattern ?? null,
     ...(fiveMinute ? { timeframe: '5m' as const } : {}),
     ...(lc.triggerId ? { triggerId: lc.triggerId } : {}),
+    ...(lc.orderBlock ? { orderBlock: lc.orderBlock } : {}),
   };
   const structureContext: SetupEntryContext | undefined = entryContext
     ? {
@@ -5519,7 +5523,7 @@ async function resolveStructureSetup(ctx: {
   // Pre-build rank inputs (net R:R is NOT_MEASURED until the option leg is built).
   const baseSlot: SlotCandidate = ctx.slot ?? structureSlotCandidate(lc, spot, null, ctx.link, ctx.metrics);
   const describe = lc.triggerId
-    ? `Trigger ${lc.triggerId} ${direction} (trigger-family router, paper research): decided at the 15m close ${lc.entry}; stop ${lc.stop} (invalidation beyond ${lc.sweepExtreme}), T1 ${lc.t1?.kind} ${lc.t1?.price} (${lc.rToT1}R)${lc.t2 ? `, T2 ${lc.t2.price}` : ''}. No displacement required by this trigger.`
+    ? `${lc.orderBlock ? `${describeOrderBlock(lc.orderBlock)} ` : ''}Trigger ${lc.triggerId} ${direction} (trigger-family router, paper research): decided at the 15m close ${lc.entry}; stop ${lc.stop} (invalidation beyond ${lc.sweepExtreme}), T1 ${lc.t1?.kind} ${lc.t1?.price} (${lc.rToT1}R)${lc.t2 ? `, T2 ${lc.t2.price}` : ''}. No displacement required by this trigger.`
     : `Structure ${direction}${fiveMinute ? ' (5m entry, 15m pools)' : ''}:${lc.pool.kind.replace(/_/g, ' ').toLowerCase()} ${lc.pool.price} swept (extreme ${lc.sweepExtreme}), displacement ${lc.displacementBodyAtr ?? '—'} ATR; ` +
     `limit ${lc.entry} (${lc.zone?.kind === 'FVG' ? 'fair-value gap' : 'displacement 50%'}) filled at ${spot}; underlying stop ${lc.stop}, T1 ${lc.t1?.kind} ${lc.t1?.price} (${lc.rToT1}R)` +
     `${lc.t2 ? `, T2 ${lc.t2.price} (shown only — the whole position closes at T1)` : ''}; score ${lc.score ?? '—'}/100 (describes, never gates).` +
@@ -5598,6 +5602,7 @@ async function resolveStructureSetup(ctx: {
     strategy: STRUCTURE_STRATEGY,
     // A trigger-family trade is labelled as paper research everywhere, never as S1.
     ...(lc.triggerId ? { researchTrigger: lc.triggerId } : {}),
+    ...(lc.orderBlock ? { orderBlock: lc.orderBlock } : {}),
     expiry: usedChain.expiry,
     dte: usedChain.dte,
     reason: `${describe} ${builtRaw.reason}`,

@@ -68,7 +68,7 @@ import {
   parentIdFor,
   levelKeyOf,
 } from '@fno/analytics';
-import { getSessionWindow, optionStatutoryPct, type Exchange, type OptionChain, type TradingMode } from '@fno/shared';
+import { getSessionWindow, optionStatutoryPct, type Exchange, type OptionChain, type OrderBlockRef, type TradingMode } from '@fno/shared';
 import { redis } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
 import {
@@ -115,6 +115,8 @@ export interface RiskValidation {
 export interface RoutedCandidate {
   /** Observation only; production arbitration ignores this evidence. */
   entryEvidence?: EntryEvidence;
+  /** OB1 only: the 15-minute order block (display / record; never read by a decision). */
+  orderBlock?: OrderBlockRef;
   candidate: TriggerCandidate;
   stage: LiveTriggerStage;
   risk: RiskValidation;
@@ -383,6 +385,7 @@ export function lifecycleFromCandidate(rc: RoutedCandidate): LiveLifecycle {
     rejectionFillPrice: c.entry,
     live: null,
     triggerId: c.triggerId,
+    ...(rc.orderBlock ? { orderBlock: rc.orderBlock } : {}),
   };
 }
 

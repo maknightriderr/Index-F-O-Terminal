@@ -28,7 +28,8 @@ it('production candidate, geometry, parent, stage, risk and cost outputs match t
         const footprints = alignFootprintsToReference(cut, raw, cut, { instrument: 'TEST_FUT', expiry: '2026-10-27' }, symbol === 'CRUDEOIL' ? 'FUTURES' : 'SPOT', last.time + 900_000);
         const output = evaluate({ underlying: symbol, exchange: symbol === 'CRUDEOIL' ? 'MCX' : 'NSE', bars: cut, chain: null, footprints, ob1: true, of1: true });
         // The ONLY additive field is research evidence; every production-consumed field must match byte-for-byte.
-        const canonical = output.map(({ entryEvidence: _observation, ...production }) => production);
+        // entryEvidence (PR #59) and orderBlock (2026-10-25) are observation / display fields no decision reads.
+        const canonical = output.map(({ entryEvidence: _observation, orderBlock: _display, ...production }) => production);
         cases.push({ symbol, prefix: i + 1, flow: side, candidates: output.length, hash: createHash('sha256').update(JSON.stringify(canonical)).digest('hex') });
       }
     }

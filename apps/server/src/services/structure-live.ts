@@ -40,7 +40,7 @@ import {
   type StructureVariant,
 } from '@fno/analytics';
 import { STRUCTURE_PARAMS } from '../config/trading-flags.js';
-import type { Exchange, StructureBlock, StructureCandleScoreView, StructureLifecycleView, StructurePatternsView, StructurePoolView, StructureTimeframe, TradingMode } from '@fno/shared';
+import type { Exchange, OrderBlockRef, StructureBlock, StructureCandleScoreView, StructureLifecycleView, StructurePatternsView, StructurePoolView, StructureTimeframe, TradingMode } from '@fno/shared';
 import type { GateDiagnostic } from './gate-diagnostics.js';
 import type { SetupCostMeasurement } from './setup-cost.js';
 
@@ -275,6 +275,8 @@ export interface LiveLifecycle {
   rejectionPattern?: { shape: string; label: string };
   /** Set only on a trigger-router candidate minted through this chain (a PAPER-stage family); absent = S1, the structure engine's own setup. */
   triggerId?: string;
+  /** OB1 only: the 15-minute order block the candidate is based on (display / record). */
+  orderBlock?: OrderBlockRef;
   /** The live outcome at the fill. */
   live: { outcome: 'MINTED' | 'REFUSED'; reason: string | null; code: string | null; at: number; decisionId?: string | null; signalId?: string | null } | null;
 }

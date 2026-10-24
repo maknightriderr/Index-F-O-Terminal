@@ -4,6 +4,7 @@
 
 import { TRADING_HOURS, EXCHANGE_HOLIDAYS, MCX_EVENING_SESSION_OPEN, MCX_US_DST_CLOSE, MCX_US_STANDARD_TIME_CLOSE } from '../constants/index.js';
 import type { Exchange, ExchangeHoliday, OptionType } from '../types/index.js';
+import type { OrderBlockRef } from '../types/index.js';
 
 /**
  * Format a number as Indian Rupee currency.
@@ -405,4 +406,14 @@ export function throttle<T extends (...args: unknown[]) => void>(
       fn(...args);
     }
   };
+}
+
+const istHm = (t: number) => new Date(t).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
+const istDayMonth = (t: number) => new Date(t).toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short' });
+
+/** An OB1 trade's order block in words: timeframe, side, zone, when it formed and when it was first touched (IST). */
+export function describeOrderBlock(b: OrderBlockRef): string {
+  const sameDay = istDayMonth(b.formedAt) === istDayMonth(b.touchedAt);
+  const formed = sameDay ? istHm(b.formedAt) : `${istDayMonth(b.formedAt)} ${istHm(b.formedAt)}`;
+  return `${b.timeframe} ${b.type.toLowerCase()} order block ${b.bottom}-${b.top} (block candle ${formed}, displacement ${istHm(b.displacementAt)}), first touched by the ${istHm(b.touchedAt)} bar.`;
 }

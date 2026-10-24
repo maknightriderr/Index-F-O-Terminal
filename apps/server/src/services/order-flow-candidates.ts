@@ -97,7 +97,11 @@ export function orderFlowPaperCandidates(a: OrderFlowPaperArgs): RoutedCandidate
       const blockTime = bars[b.blockIndex].time;
       const hit = { direction: dir, anchor: event(`ORDER_BLOCK:${dir}:${blockTime}`, b.blockIndex, level, blockTime, dir), events: [], stopRef: dir === 'BULLISH' ? b.bottom : b.top };
       const c = buildCandidate(ctx, log, def('OB1', 'ORDER_BLOCK'), hit as any, i);
-      if (c) out.push({ ...route(c, 'PAPER_RESEARCH', `OB1:${a.exchange}:${a.underlying}:${blockTime}:${dir}`), entryEvidence: { version: ENTRY_CONFIRMATION_VERSION, source: 'OB1', sourceVersion: 'OB-2.0', direction: dir, decisionTime: bars[i].time, blockTop: b.top, blockBottom: b.bottom, close: bars[i].close } });
+      if (c) out.push({
+        ...route(c, 'PAPER_RESEARCH', `OB1:${a.exchange}:${a.underlying}:${blockTime}:${dir}`),
+        entryEvidence: { version: ENTRY_CONFIRMATION_VERSION, source: 'OB1', sourceVersion: 'OB-2.0', direction: dir, decisionTime: bars[i].time, blockTop: b.top, blockBottom: b.bottom, close: bars[i].close },
+        orderBlock: { timeframe: '15m', type: dir, top: b.top, bottom: b.bottom, formedAt: blockTime, displacementAt: bars[b.displacementIndex].time, touchedAt: bars[i].time },
+      });
     }
   }
 

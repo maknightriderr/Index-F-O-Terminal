@@ -457,6 +457,11 @@ export interface TradeSetup {
    * 'STRUCTURE') but is NOT S1 — every display labels it "Paper research · <id>".
    */
   researchTrigger?: string | null;
+  /**
+   * OB1 trades only (display, 2026-10-25): the order block the trade is based on. Blocks are detected on closed
+   * 15-minute bars only; times are epoch ms (block candle, displacement candle, the first-touch decision bar).
+   */
+  orderBlock?: OrderBlockRef | null;
   legs?: SpreadLeg[];
   /** Cost to enter: positive = debit paid, negative = credit received. */
   netPremium?: number;
@@ -2199,4 +2204,18 @@ export interface StructureBlock {
   watch: { BULLISH: StructurePoolView | null; BEARISH: StructurePoolView | null };
   /** Today's lifecycles, newest first. */
   lifecycles: StructureLifecycleView[];
+}
+
+/** The order block an OB1 trade is based on (OB-2.0; detected on closed 15-minute bars). */
+export interface OrderBlockRef {
+  timeframe: '15m';
+  type: 'BULLISH' | 'BEARISH';
+  top: number;
+  bottom: number;
+  /** Open time of the block (opposing) candle. */
+  formedAt: number;
+  /** Open time of the displacement candle. */
+  displacementAt: number;
+  /** Open time of the bar that first touched the block (the decision bar). */
+  touchedAt: number;
 }

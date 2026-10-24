@@ -54,6 +54,30 @@ describe('OB1: the OB-2.0 signal as an ordinary trigger candidate', () => {
     expect(rc.lifecycleId).toBe(`NSE:NIFTY:MP:OB1:${sig.block.type}:${cut[i].time}`);
   });
 
+  it('2026-10-25: it names its order block: 15-minute timeframe, zone, block / displacement / first-touch bars', async () => {
+    expect(rc.orderBlock).toEqual({ timeframe: '15m', type: sig.block.type, top: sig.block.top, bottom: sig.block.bottom, formedAt: cut[sig.block.blockIndex].time, displacementAt: cut[sig.block.displacementIndex].time, touchedAt: cut[i].time });
+    const { lifecycleFromCandidate } = await import('../trigger-router.js');
+    expect(lifecycleFromCandidate(rc).orderBlock).toEqual(rc.orderBlock); // carried to the trade record and the setup
+    const { describeOrderBlock } = await import('@fno/shared');
+    const text = describeOrderBlock(rc.orderBlock!);
+    expect(text).toMatch(new RegExp(`^15m ${sig.block.type.toLowerCase()} order block ${sig.block.bottom}-${sig.block.top} \\(block candle `));
+    expect(text).toMatch(/first touched by the \d{2}:\d{2} bar\.$/);
+  });
+  it('the IST wording: same day shows times only, an older block shows its date', async () => {
+    const { describeOrderBlock } = await import('@fno/shared');
+    const at = (s: string) => Date.parse(`${s}+05:30`);
+    expect(describeOrderBlock({ timeframe: '15m', type: 'BULLISH', top: 55649.8, bottom: 55531.65, formedAt: at('2026-10-16T09:45:00'), displacementAt: at('2026-10-16T10:00:00'), touchedAt: at('2026-10-16T10:45:00') }))
+      .toBe('15m bullish order block 55531.65-55649.8 (block candle 09:45, displacement 10:00), first touched by the 10:45 bar.');
+    expect(describeOrderBlock({ timeframe: '15m', type: 'BEARISH', top: 1451, bottom: 1438.8, formedAt: at('2026-10-22T14:30:00'), displacementAt: at('2026-10-22T14:45:00'), touchedAt: at('2026-10-23T10:15:00') }))
+      .toBe('15m bearish order block 1438.8-1451 (block candle 22 Oct 14:30, displacement 14:45), first touched by the 10:15 bar.');
+  });
+  it('the trade explanation and the Telegram alert carry it (source wiring)', () => {
+    const mb = readFileSync(path.join(HERE, '../market-bias.ts'), 'utf8');
+    expect(mb).toMatch(/\$\{lc\.orderBlock \? `\$\{describeOrderBlock\(lc\.orderBlock\)\} ` : ''\}Trigger \$\{lc\.triggerId\}/);
+    expect(mb).toMatch(/\.\.\.\(lc\.orderBlock \? \{ orderBlock: lc\.orderBlock \} : \{\}\),\n?\s*expiry: usedChain\.expiry/);
+    const tg = readFileSync(path.join(HERE, '../telegram.ts'), 'utf8');
+    expect(tg).toMatch(/if \(setup\.orderBlock\) lines\.push\(e\(`Order block: \$\{describeOrderBlock\(setup\.orderBlock\)\}`\)\);/);
+  });
   it('stop, T1 / T2, R:R bucket, timing and move potential come from the event engine\'s own buildCandidate', () => {
     const log = A.runSessionEvents(ctx, series.sessionStarts.length - 1);
     const stopRef = sig.block.type === 'BULLISH' ? sig.block.bottom : sig.block.top;
