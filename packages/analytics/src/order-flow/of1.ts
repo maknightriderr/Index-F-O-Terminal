@@ -1,9 +1,10 @@
 // ============================================================
-// OF1 — Order Flow Confirmation (pre-registered OF1-1.0; OF1-1.1 from 2026-10-23)
+// OF1 — Order Flow Confirmation (OF1-1.2: explicit price alignment)
 // ============================================================
 // LOCATION + ORDER FLOW + PRICE RESPONSE, judged at the close of a decision
 // bar i on bars ≤ i only. Independent of every other family: it needs no
-// other trigger first. Shadow / measurement only until promoted.
+// other trigger first. Paper and shadow require co-referenced prices;
+// NSE alignment uses a disclosed closed-bar basis estimate (alignment.ts).
 //
 // Bullish (bearish mirrors):
 //   LOCATION   a SUPPORT level known before bar i — previous-session low /
@@ -46,7 +47,7 @@ import { detectFairValueGaps } from '../fvg/index.js';
 import { findSwingPoints } from '../patterns/index.js';
 import { absorption, valueArea, volumeShareBeyond, type DeltaMode, type FootprintBar } from './index.js';
 
-export const OF1_VERSION = 'OF1-1.1';
+export const OF1_VERSION = 'OF1-1.2';
 
 export const OF1_RULES = Object.freeze({
   locationTolAtr: 0.25,
@@ -102,6 +103,7 @@ export interface Of1Candidate {
   imbalances: number;
   absorption: boolean | null;
   priceConfirmation: string;
+  priceAlignment?: FootprintBar['priceAlignment'];
 }
 
 const istDate = (t: number) => new Date(t).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
@@ -149,11 +151,14 @@ const EVIDENCE_ORDER: readonly Of1Evidence[] = ['ABSORPTION', 'IMBALANCE', 'DELT
  * OF1 at closed bar i, both directions; null when neither qualifies. Reads
  * bars ≤ i and footprints of bars ≤ i only.
  */
-export function evaluateOf1(bars: readonly Of1Bar[], i: number, footprints: ReadonlyMap<number, FootprintBar>, locations: readonly Of1Location[] = of1Locations(bars, i, footprints)): Of1Candidate[] {
+export function evaluateOf1(bars: readonly Of1Bar[], i: number, footprints: ReadonlyMap<number, FootprintBar>, locations: readonly Of1Location[] = of1Locations(bars, i, footprints), requirePriceAlignment = false): Of1Candidate[] {
   const R = OF1_RULES;
   const a = atrAsOf(bars.slice(0, i + 1))[i];
   const fp = footprints.get(bars[i].time);
   if (a == null || !(a > 0) || !fp || fp.deltaMode === 'UNAVAILABLE') return [];
+  // Production paper and shadow callers require the recorded alignment proof.
+  // Pure callers may supply already co-referenced synthetic/research inputs.
+  if (requirePriceAlignment && (fp.priceAlignment?.status !== 'ALIGNED' || fp.priceAlignment.barTime !== bars[i].time)) return [];
   const bar = bars[i];
   const prevFp = i > 0 ? footprints.get(bars[i - 1].time) ?? null : null;
   const out: Of1Candidate[] = [];
@@ -209,6 +214,7 @@ export function evaluateOf1(bars: readonly Of1Bar[], i: number, footprints: Read
       measurable,
       levelInteraction: tradedThrough ? 'TRADED_THROUGH' : 'NEAR_TEST',
       flowBasis: 'INFERRED',
+      priceAlignment: fp.priceAlignment,
       deltaMode: fp.deltaMode,
       delta: fp.delta,
       deltaPct: fp.deltaPct,

@@ -1,24 +1,27 @@
 // ============================================================
-// OF1 LIVE — Order Flow Confirmation, SHADOW ONLY (2026-10-09)
+// OF1 SHADOW WRITER — aligned evidence beside the paper candidate path
 // ============================================================
 // Once per closed 15m bar for the order-flow symbols (NIFTY, BANKNIFTY), OF1
 // (packages/analytics order-flow/of1.ts) is evaluated on the closed bars and
 // the Dhan footprints, independently of every other family. Each candidate is
 // recorded with its location, order-flow evidence and delta mode, the option
 // plan the existing option builder would make for it (read-only), its cost,
-// and whether it would trade if live. It never reaches the paper-trade slot:
-// OF1_TRADING is false and there is no code path from here to a mint.
+// and whether the hypothetical plan would trade. This writer never mints;
+// order-flow-candidates.ts separately routes OF1 paper candidates through
+// the existing slot, using the same aligned footprint input.
 // The candidate that actually won the slot and the hypothetical outcome
 // (MFE / MAE) are filled in after the session (forward-validation.ts).
 // ============================================================
 
 import { buildTradeSetup, evaluateOf1, OF1_VERSION, type Of1Bar, type Of1Candidate } from '@fno/analytics';
-import { optionStatutoryPct, type OptionChain } from '@fno/shared';
+import { optionStatutoryPct, type OptionChain, type Exchange } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { redis } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
 import { schemaFileReady } from './ensure-capture-schema.js';
-import { footprintsFor, ORDER_FLOW_MIGRATION } from './order-flow-store.js';
+import { ORDER_FLOW_MIGRATION } from './order-flow-store.js';
+import { alignedFootprintsFor } from './order-flow-alignment.js';
+import type { MarketDataProvider } from '../providers/interface.js';
 import { OF1_ENABLED, ORDER_FLOW_SYMBOLS } from '../config/order-flow-flags.js';
 
 /** Pure: the hypothetical option plan and whether OF1 would trade if it were live. */
@@ -59,8 +62,9 @@ export function of1TradeVerdict(
 }
 
 export async function recordOf1Shadow(a: {
+  provider: MarketDataProvider;
   underlying: string;
-  exchange: string;
+  exchange: Exchange;
   mode: string;
   bars: readonly Of1Bar[];
   chain: OptionChain | null;
@@ -74,9 +78,8 @@ export async function recordOf1Shadow(a: {
   if (first !== 'OK') return 0;
   try {
     // Today's and the previous session's bars carry the footprints OF1 reads.
-    const recent = a.bars.slice(-60).map((b) => b.time);
-    const fps = await footprintsFor(a.underlying, recent);
-    const candidates = evaluateOf1(a.bars, i, fps);
+    const fps = await alignedFootprintsFor(a.provider, a.underlying, a.exchange, a.bars);
+    const candidates = evaluateOf1(a.bars, i, fps, undefined, true);
     for (const c of candidates) {
       const v = of1TradeVerdict(c, a.chain, a.gates, a.sessionHours);
       await sql`
@@ -84,7 +87,7 @@ export async function recordOf1Shadow(a: {
           expected_move, delta_mode, delta, delta_pct, poc, vah, val, imbalances, absorption, evidence, price_confirmation, option_plan, cost_pct, would_trade_if_live, would_not_trade_reason)
         VALUES (${a.underlying}, ${a.exchange}, ${a.mode}, ${new Date(decisionBar)}, ${c.direction}, ${OF1_VERSION}, ${c.subtype}, ${c.location.kind}, ${c.location.price}, ${c.atr}, ${c.entry}, ${c.stop},
           ${c.target?.price ?? null}, ${c.target?.kind ?? null}, ${v.expectedMove}, ${c.deltaMode}, ${c.delta}, ${c.deltaPct}, ${c.poc}, ${c.vah}, ${c.val}, ${c.imbalances}, ${c.absorption},
-          ${sql.json({ found: c.evidence, measurable: c.measurable, levelInteraction: c.levelInteraction, flowBasis: c.flowBasis } as any)}, ${c.priceConfirmation}, ${v.plan ? sql.json(v.plan as any) : null}, ${v.costPct}, ${v.wouldTrade}, ${v.reasons.length ? v.reasons.join('; ') : null})
+          ${sql.json({ found: c.evidence, measurable: c.measurable, levelInteraction: c.levelInteraction, flowBasis: c.flowBasis, priceAlignment: c.priceAlignment } as any)}, ${c.priceConfirmation}, ${v.plan ? sql.json(v.plan as any) : null}, ${v.costPct}, ${v.wouldTrade}, ${v.reasons.length ? v.reasons.join('; ') : null})
         ON CONFLICT (symbol, exchange, mode, decision_bar_time, direction) DO NOTHING
       `;
     }

@@ -275,6 +275,8 @@ export function testActiveOrderBlockLegacy(blocks: OrderBlock[], currentPrice: n
 // newest block first touched ON that bar and not mitigated by its close.
 
 export const ORDER_BLOCK_VERSION = 'OB-2.0';
+/** Measurement version only; OB1 detection and entry rules remain OB-2.0. */
+export const ORDER_BLOCK_REACTION_VERSION = 'OB-2.1';
 
 export const ORDER_BLOCK_RULES = Object.freeze({
   atrPeriod: 14,
@@ -389,11 +391,15 @@ function lifecycle(
     const worst = after.length ? (bull ? ref - Math.min(...after.map((x) => x.low)) : Math.max(...after.map((x) => x.high)) - ref) : 0;
     const inAtr = (v: number) => Math.round((Math.max(0, v) / base.atr) * 1000) / 1000;
     const mitigatedInWindow = mitigatedIndex != null && mitigatedIndex <= firstTouchIndex + ORDER_BLOCK_RULES.reactionBars;
+    // Mitigation occurs at the CLOSE. A 1-ATR high/low on that candle is
+    // before the failure, but a recovery on a later candle cannot count.
+    const beforeFailure = mitigatedIndex == null ? after : after.slice(0, Math.max(0, mitigatedIndex - firstTouchIndex));
+    const heldBeforeFailure = beforeFailure.some((b) => (bull ? b.high - ref : ref - b.low) >= base.atr);
     reaction = {
       barsMeasured: after.length,
       mfeAtr: inAtr(best),
       maeAtr: inAtr(worst),
-      held: best >= base.atr ? true : mitigatedInWindow || after.length >= ORDER_BLOCK_RULES.reactionBars ? false : null,
+      held: heldBeforeFailure ? true : mitigatedInWindow || after.length >= ORDER_BLOCK_RULES.reactionBars ? false : null,
     };
   }
   return { ...base, state, firstTouchIndex, mitigatedIndex, reaction };

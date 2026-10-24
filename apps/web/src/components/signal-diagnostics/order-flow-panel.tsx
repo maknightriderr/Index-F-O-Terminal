@@ -25,13 +25,16 @@ export interface OrderFlowReport {
   settings: { orderBlockMode: string; of1Enabled: boolean; of1Trading: boolean; orderFlowSymbols: string[] };
   feed: { status: string; deltaMode: string; deltaModeReason: string; instruments: Record<string, { tradingSymbol: string }>; packets: number; trades: number; lastPacketAt: number | null; lastError: string | null };
   flowBars: Array<{ deltaMode: string; unavailableReason: string | null; bars: number }>;
+  alignment?: Record<string, { barTime: number; alignment?: { status: 'ALIGNED' | 'UNAVAILABLE'; reference?: string; basis?: number; method?: string; reason?: string } }>;
   of1: {
+    version?: string;
     candidates: number; bullish: number; bearish: number; exact: number; inferred: number; wouldTradeIfLive: number;
     graded: number; targets: number; stops: number; openAtClose: number; avgR: number | null; avgMfeR: number | null; avgMaeR: number | null; existingTradedSameBar: number;
     bySubtype: Array<{ subtype: string; n: number; avgR: number | null }>;
     existingWinners: Array<{ source: string; n: number }>;
   };
   orderBlocks: {
+    reactionVersion?: string;
     byState: Array<{ state: string; n: number; held: number; failed: number; avgMfeAtr: number | null; avgMaeAtr: number | null }>;
     /** Every touched block at its first touch (absent on older deployments). */
     allTouched?: { n: number; held: number; failed: number; avgMfeAtr: number | null; avgMaeAtr: number | null } | null;
@@ -121,6 +124,7 @@ export function OrderFlowPanel({ filter }: { filter: DiagnosticsFilter }) {
           <MetricTile label="Would change the indicator" value={ob.wouldChangeIndicatorDirection} sub="if OB-2.0 replaced the old vote (it does not)" />
         </MetricGrid>
         <div className="mt-4">
+          {ob.reactionVersion && <p className="mb-2 text-xs text-[var(--text-secondary)]">Reaction measurements: {ob.reactionVersion}. A recovery after the block failed does not count as held. MFE/MAE still describe the full observation window.</p>}
           <DataTable columns={blockCols} rows={blockRows} rowKey={(r) => r.state} ariaLabel="Order blocks by lifecycle state" pageSize={10} emptyTitle="No order blocks recorded yet" />
           {ob.allTouchedNote && <p className="mt-2 text-xs text-[var(--text-secondary)]">All touched: {ob.allTouchedNote}</p>}
           <p className="mt-2 text-xs text-[var(--text-secondary)]">This report aggregates blocks by lifecycle state. Each block&apos;s direction, high/low zone, creation time and version are recorded with it but are not exposed per block here.</p>
@@ -166,6 +170,14 @@ export function OrderFlowPanel({ filter }: { filter: DiagnosticsFilter }) {
       </Section>
 
       <Section title="OF1: order-flow confirmation candidates" subtitle="Candidates are graded on their own stop and target; each count shows its sample size.">
+        {of1.version && <p className="mb-3 text-sm text-[var(--text-secondary)]">Showing {of1.version} only; previous-version records are preserved. NSE levels stay on spot: futures prices use an estimated matching closed-candle basis. MCX uses the same futures contract. Missing alignment means no OF1 candidate.</p>}
+        {data.alignment && Object.entries(data.alignment).map(([symbol, item]) => (
+          <p key={symbol} className="mb-2 text-xs text-[var(--text-secondary)]">
+            {symbol} · last evaluated bar {new Date(item.barTime).toLocaleString('en-GB', { timeZone: 'Asia/Kolkata', dateStyle: 'short', timeStyle: 'short' })} IST · {item.alignment?.status === 'ALIGNED'
+              ? `${item.alignment.reference} reference · basis ${formatNumber(item.alignment.basis ?? null)} · ${item.alignment.method === 'SAME_CONTRACT' ? 'same contract' : 'estimated at candle close'}`
+              : `UNAVAILABLE: ${item.alignment?.reason?.replace(/_/g, ' ').toLowerCase() ?? 'alignment not recorded'}`}
+          </p>
+        ))}
         <MetricGrid>
           <MetricTile label="Candidates" value={of1.candidates} sub={`${of1.bullish} bullish · ${of1.bearish} bearish`} title={sampleNote(of1.candidates)} />
           <MetricTile label="Would trade if live" value={of1.wouldTradeIfLive} />

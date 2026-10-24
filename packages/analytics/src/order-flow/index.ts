@@ -45,7 +45,15 @@ export interface FootprintLevel {
   unclassified: number;
 }
 
+export type FootprintPriceAlignment =
+  | { status: 'ALIGNED'; reference: 'SPOT' | 'FUTURES'; method: 'BAR_CLOSE_BASIS_ESTIMATE' | 'SAME_CONTRACT'; basis: number; barTime: number; instrument: string; expiry: string; referenceClose: number; futuresClose: number }
+  | { status: 'UNAVAILABLE'; reason: string };
+
 export interface FootprintBar {
+  /** Exact broker contract, preserved through database reloads. */
+  sourceInstrument?: string | null;
+  /** Assigned by the explicit price-reference alignment boundary. */
+  priceAlignment?: FootprintPriceAlignment;
   barTime: number;
   barMs: number;
   deltaMode: DeltaMode;

@@ -5,7 +5,7 @@
 // and the footprint of every closed bar (order-flow/index.ts), persisted to
 // order_flow_bars. A closed bar with no usable trades is recorded
 // UNAVAILABLE with its reason — never as zero volume / zero delta.
-// Nothing in the decision path reads this; OF1 (shadow) does.
+// OF1 paper and shadow read this through the explicit price-alignment boundary.
 // ============================================================
 
 import { buildFootprint, unavailableFootprint, ORDER_FLOW_VERSION, type DeltaMode, type FlowTrade, type FootprintBar } from '@fno/analytics';
@@ -44,6 +44,12 @@ export const flowBarStart = (t: number) => Math.floor(t / FLOW_BAR_MS) * FLOW_BA
 export function registerFlowSymbol(symbol: string, args: { exchange: string; instrument: string | null; source: string; mode: Exclude<DeltaMode, 'UNAVAILABLE'>; startedAt: number }): void {
   const f = flows.get(symbol);
   if (f) {
+    if (f.instrument !== args.instrument) {
+      // Drop the mixed partial bar instead of attributing old-contract trades
+      // to the new contract. Closed footprints retain their own identity.
+      f.trades = [];
+      f.lastClosed = flowBarStart(args.startedAt);
+    }
     f.instrument = args.instrument;
     f.source = args.source;
     f.mode = args.mode;
@@ -74,6 +80,7 @@ export async function closeFlowBars(now: number, connected: boolean = feedConnec
       const fp = f.trades.some((t) => t.time >= bar && t.time < bar + FLOW_BAR_MS)
         ? buildFootprint(f.trades, bar, FLOW_BAR_MS, ORDER_FLOW_PRICE_STEP[symbol] ?? 5, f.mode)
         : unavailableFootprint(bar, FLOW_BAR_MS);
+      fp.sourceInstrument = f.instrument;
       f.footprints.set(bar, fp);
       await persistFootprint(symbol, f, fp, fp.deltaMode === 'UNAVAILABLE' ? unavailableReason ?? (connected ? 'NO_TRADES' : 'FEED_DOWN') : null);
       written++;
@@ -117,7 +124,7 @@ export function footprintsFor(symbol: string, barTimes: readonly number[]): Prom
     }
     if (missing.length && schemaFileReady(ORDER_FLOW_MIGRATION)) {
       const rows = await sql<any[]>`
-        SELECT bar_time, bar_ms, delta_mode, trades, volume, buy_volume, sell_volume, unclassified_volume, delta, delta_pct, poc, vah, val, buy_imbalances, sell_imbalances, levels
+        SELECT instrument, bar_time, bar_ms, delta_mode, trades, volume, buy_volume, sell_volume, unclassified_volume, delta, delta_pct, poc, vah, val, buy_imbalances, sell_imbalances, levels
         FROM order_flow_bars WHERE symbol = ${symbol} AND bar_time >= ${new Date(Math.min(...missing))} AND bar_time <= ${new Date(Math.max(...missing))}
       `;
       for (const r of rows) {
@@ -125,6 +132,7 @@ export function footprintsFor(symbol: string, barTimes: readonly number[]): Prom
         if (!missing.includes(t)) continue;
         const levels = (r.levels ?? []) as FootprintBar['levels'];
         out.set(t, {
+          sourceInstrument: r.instrument ?? null,
           barTime: t, barMs: Number(r.bar_ms), deltaMode: r.delta_mode, trades: Number(r.trades), volume: num(r.volume), buyVolume: num(r.buy_volume), sellVolume: num(r.sell_volume),
           unclassifiedVolume: num(r.unclassified_volume), delta: num(r.delta), deltaPct: num(r.delta_pct), levels, poc: num(r.poc), vah: num(r.vah), val: num(r.val),
           buyImbalances: Number(r.buy_imbalances ?? 0), sellImbalances: Number(r.sell_imbalances ?? 0),

@@ -1,0 +1,189 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> @fno/server@0.1.0 test
+> vitest run
+
+
+ RUN  v3.2.7 /workspace/scratch/c1db35db8761/fno-review/apps/server
+
+ ✓ src/services/__tests__/migration-037.test.ts (4 tests) 5608ms
+ ✓ src/services/__tests__/migration-035.test.ts (3 tests) 5793ms
+ ✓ src/services/__tests__/migration-034.test.ts (5 tests) 5995ms
+ ✓ src/services/__tests__/migration-038.test.ts (2 tests) 6073ms
+ ✓ src/services/__tests__/migration-036.test.ts (5 tests) 6054ms
+ ✓ src/backtest/__tests__/structure-5m-backtest.test.ts (9 tests) 675ms
+   ✓ STRUCTURE_5M strategy > setups read from the session-end replay equal a replay at the confirming 5m bar  377ms
+ ✓ src/services/__tests__/full-replay.test.ts (6 tests) 7722ms
+ ✓ src/backtest/__tests__/momentum-harness-refactor.test.ts (2 tests | 1 skipped) 962ms
+   ✓ momentum harness — unchanged by the refactor > synthetic replay, every variant, matches the pre-refactor snapshot  960ms
+ ✓ src/services/__tests__/measurement-integration.test.ts (10 tests) 5301ms
+ ✓ src/providers/dhan/__tests__/quotes.test.ts (6 tests) 1521ms
+   ✓ Dhan quotes: merged calls and fallback > a rejected token: nothing from Dhan (Angel One serves all of it) and the session is told  1502ms
+ ✓ src/services/__tests__/diagnostic-fixes.test.ts (16 tests) 693ms
+   ✓ H3: anomalous session-close bar > no false flags on 12 normal sessions of broker history (NIFTY, BANKNIFTY); MCX is out of scope (a genuine late CRUDEOIL move is left alone)  484ms
+ ✓ src/api/__tests__/ai-assistant-boundary.test.ts (9 tests) 1525ms
+   ✓ AI assistant import boundary (eslint no-restricted-imports) > the assistant files lint clean under the boundary rule  1477ms
+ ✓ src/backtest/__tests__/structure-rejection-close-backtest.test.ts (4 tests) 667ms
+ ✓ src/services/__tests__/experiment-engine.test.ts (29 tests) 440ms
+ ✓ src/services/__tests__/order-block-v2.test.ts (17 tests) 241ms
+ ❯ src/services/__tests__/decision-record.test.ts (18 tests | 1 failed) 533ms
+   ✓ SignalDecisionSnapshot > is frozen and holds inputs only (no candidates, events or arbitration) 57ms
+   × SignalDecisionSnapshot > carries every version field the spec lists 23ms
+     → expected '2026-09-29.structure.1+indicator-evid…' to match /\+rr-display-only\.1\+parent-identity…/
+   ✓ SignalDecisionSnapshot > ANALYTICS_VERSION mirrors the @fno/analytics package version 0ms
+   ✓ SignalDecisionSnapshot > has a deterministic, UUID-shaped id 43ms
+   ✓ SignalDecisionSnapshot > survives the stored form (compressed chain) unchanged 19ms
+   ✓ data quality at T > (d) ageMs recomputes from asOf + decisionBarTime, before and after storage, and the status follows 22ms
+   ✓ data quality at T > OK / FUTURE_INPUT / STALE_INPUT / MISSING 37ms
+   ✓ data quality at T > a FUTURE_INPUT chain is never used silently: the record and the candidates that read it are degraded 60ms
+   ✓ DecisionRecord > holds the derived decision: events, candidates, parents, trigger-event links, metrics, option candidates, arbitration, final status 17ms
+   ✓ DecisionRecord > is deterministic: same snapshot → byte-identical canonical record 32ms
+   ✓ DecisionRecord > a parent move already traded today is refused before ranking 45ms
+   ✓ DecisionRecord > the live router, run on the snapshot's inputs, hands the slot exactly the record's candidates 32ms
+   ✓ replay(snapshotId) — offline > (a) replay of the stored snapshot equals the stored decision under canonicalization 45ms
+   ✓ replay(snapshotId) — offline > (b) any difference outside the declared list fails; the declared list is exactly the generated timestamp 40ms
+   ✓ replay(snapshotId) — offline > (c) replay reads nothing but the snapshot: any Redis / SQL / network / clock access fails it 28ms
+   ✓ replay(snapshotId) — offline > refuses to replay under a configuration other than the recorded one — never substitutes 9ms
+   ✓ replay(snapshotId) — offline > a missing chain stays missing in replay (no option candidates, never fetched) 17ms
+   ✓ decision bar T on the exchange session calendar > is the newest 15m bar closed by the poll, counted from the session open 4ms
+ ✓ src/services/__tests__/session-close-boundary.test.ts (13 tests) 439ms
+ ✓ src/services/__tests__/order-flow-of1.test.ts (23 tests) 129ms
+ ✓ src/backtest/__tests__/structure-backtest.test.ts (2 tests) 463ms
+   ✓ structure strategy > setups read from the session-end replay equal a replay at the confirming bar  309ms
+ ✓ src/services/__tests__/trade-setup-golden.test.ts (316 tests) 205ms
+ ✓ src/services/__tests__/structure-engine-mtf.test.ts (15 tests) 208ms
+ ✓ src/services/__tests__/validation-review.test.ts (37 tests) 174ms
+ ✓ src/services/__tests__/restart-safety.test.ts (10 tests) 233ms
+ ✓ src/services/__tests__/coverage-lag.test.ts (46 tests) 151ms
+ ✓ src/services/__tests__/momentum-break.test.ts (32 tests) 160ms
+ ✓ src/services/__tests__/read-only-views.test.ts (21 tests) 150ms
+ ✓ src/services/__tests__/confirmed-setup-watch.test.ts (28 tests) 128ms
+ ✓ src/services/__tests__/measurement-gaps.test.ts (45 tests) 171ms
+ ✓ src/lib/__tests__/api-auth.test.ts (13 tests) 187ms
+[2026-10-24 09:37:31.408 +0530] [31mERROR[39m: [36mRedis error[39m
+    [35mservice[39m: "fno-terminal"
+    error: ""
+ ✓ src/services/__tests__/research-paper-trading.test.ts (35 tests) 163ms
+ ✓ src/services/__tests__/fno-validation.test.ts (23 tests) 88ms
+ ✓ src/services/__tests__/audit-fixes-2026-10-15.test.ts (39 tests) 137ms
+ ✓ src/services/__tests__/structure-engine.test.ts (20 tests) 113ms
+ ✓ src/research/__tests__/trigger-router-live.test.ts (4 tests) 117ms
+[2026-10-24 09:37:31.861 +0530] [31mERROR[39m: [36mRedis error[39m
+    [35mservice[39m: "fno-terminal"
+    error: ""
+ ✓ src/services/__tests__/structure-5m-live.test.ts (20 tests) 124ms
+ ✓ src/services/__tests__/order-flow-contract-store.test.ts (4 tests) 60ms
+[2026-10-24 09:37:32.531 +0530] [31mERROR[39m: [36mRedis error[39m
+    [35mservice[39m: "fno-terminal"
+    error: ""
+ ✓ src/services/__tests__/structure-live.test.ts (21 tests) 78ms
+ ✓ src/services/__tests__/pr56-validation-gaps.test.ts (99 tests) 87ms
+ ✓ src/services/__tests__/momentum-break-pipeline.test.ts (28 tests) 57ms
+ ✓ src/services/__tests__/decision-diagnostics.test.ts (3 tests) 77ms
+ ✓ src/research/__tests__/event-engine.test.ts (20 tests | 2 skipped) 99ms
+ ✓ src/lib/__tests__/feed-freshness.test.ts (17 tests) 61ms
+ ✓ src/lib/__tests__/broker-call-stats.test.ts (4 tests) 44ms
+ ✓ src/services/__tests__/signal-engine-fallback.test.ts (13 tests) 64ms
+ ✓ src/backtest/__tests__/limit-fills.test.ts (9 tests) 64ms
+ ✓ src/services/__tests__/ai-explain-review.test.ts (11 tests) 41ms
+ ✓ src/services/__tests__/order-flow-paper.test.ts (9 tests) 32ms
+ ✓ src/services/__tests__/forward-validation.test.ts (17 tests) 49ms
+ ✓ src/services/__tests__/realistic-payoff.test.ts (10 tests) 43ms
+ ✓ src/services/__tests__/ob-of-alignment-regression.test.ts (25 tests) 16ms
+ ✓ src/lib/__tests__/service-supervisor.test.ts (14 tests) 37ms
+ ✓ src/services/__tests__/lost-trades.test.ts (9 tests) 29ms
+ ✓ src/services/__tests__/indicator-evidence.test.ts (13 tests) 59ms
+ ✓ src/services/__tests__/replay-tapes.test.ts (7 tests) 37ms
+[2026-10-24 09:37:34.221 +0530] [31mERROR[39m: [36mRedis error[39m
+    [35mservice[39m: "fno-terminal"
+    error: ""
+ ✓ src/services/__tests__/opportunity-census-coverage.test.ts (9 tests) 48ms
+ ✓ src/services/__tests__/location-evidence.test.ts (14 tests) 48ms
+ ✓ src/services/__tests__/ops-monitor.test.ts (13 tests) 43ms
+ ✓ src/services/__tests__/liquidity-map-parity.test.ts (2 tests) 49ms
+ ✓ src/services/__tests__/order-flow-alignment-integration.test.ts (7 tests) 16ms
+ ✓ src/services/__tests__/setup-explanation.test.ts (8 tests) 51ms
+ ✓ src/services/__tests__/phase3.test.ts (17 tests) 41ms
+ ✓ src/services/__tests__/explosive-option-move.test.ts (8 tests) 47ms
+ ✓ src/services/__tests__/rejection-close-live.test.ts (11 tests) 48ms
+[2026-10-24 09:37:35.071 +0530] [31mERROR[39m: [36mRedis error[39m
+    [35mservice[39m: "fno-terminal"
+    error: ""
+ ✓ src/research/__tests__/trigger-families.test.ts (13 tests) 40ms
+ ✓ src/services/__tests__/profitability-measurement.test.ts (11 tests) 37ms
+[2026-10-24 09:37:35.424 +0530] [31mERROR[39m: [36mRedis error[39m
+    [35mservice[39m: "fno-terminal"
+    error: ""
+ ✓ src/services/__tests__/cost-3.test.ts (6 tests) 30ms
+ ✓ src/services/__tests__/structure-candle-labels.test.ts (7 tests) 40ms
+ ✓ src/services/__tests__/structure-preview.test.ts (7 tests) 34ms
+ ✓ src/research/__tests__/arbitration.test.ts (11 tests) 20ms
+ ✓ src/services/__tests__/momentum-arbitration.test.ts (7 tests) 21ms
+ ✓ src/services/__tests__/phase2-shadow.test.ts (29 tests) 33ms
+ ✓ src/services/__tests__/parent-identity.test.ts (8 tests) 19ms
+ ✓ src/services/__tests__/experiment-rollback.test.ts (11 tests) 8ms
+ ✓ src/services/__tests__/no-trade-diagnostics.test.ts (4 tests) 22ms
+ ✓ src/services/__tests__/experiment-arms.test.ts (25 tests) 26ms
+ ✓ src/services/__tests__/setup-cost.test.ts (11 tests) 16ms
+ ✓ src/services/__tests__/oi-storage.test.ts (9 tests) 75ms
+ ✓ src/services/__tests__/exchange-time.test.ts (10 tests) 49ms
+ ✓ src/services/__tests__/gate-diagnostics.test.ts (6 tests) 20ms
+ ✓ src/services/__tests__/option-candidates.test.ts (9 tests) 53ms
+ ✓ src/services/__tests__/exit-reason.test.ts (10 tests) 17ms
+ ✓ src/services/__tests__/validation-review-stats.test.ts (7 tests) 15ms
+ ✓ src/services/__tests__/dhan-session.test.ts (7 tests) 17ms
+ ✓ src/lib/__tests__/llm.test.ts (8 tests) 32ms
+ ✓ src/services/__tests__/paper-execution-ledger.test.ts (13 tests) 8ms
+ ✓ src/services/__tests__/labels-and-chains.test.ts (9 tests) 15ms
+ ✓ src/services/__tests__/closed-candle-pattern.test.ts (4 tests) 7ms
+ ✓ src/services/__tests__/record-reconciliation.test.ts (6 tests) 16ms
+ ✓ src/services/__tests__/signal-freshness.test.ts (8 tests) 20ms
+ ✓ src/services/__tests__/diagnostics-metrics.test.ts (10 tests) 54ms
+ ✓ src/services/__tests__/setup-events.test.ts (8 tests) 6ms
+ ✓ src/services/__tests__/strategy-label.test.ts (13 tests) 13ms
+ ✓ src/backtest/__tests__/fetch-history.test.ts (6 tests) 8ms
+ ✓ src/lib/__tests__/memory-telemetry.test.ts (5 tests) 13ms
+ ✓ src/services/__tests__/paper-trades-window.test.ts (6 tests) 11ms
+ ✓ src/research/__tests__/percent-moves.test.ts (4 tests) 10ms
+ ✓ src/services/__tests__/lot-size.test.ts (4 tests) 7ms
+ ✓ src/services/__tests__/arbitration-netr.test.ts (3 tests) 13ms
+ ✓ src/services/__tests__/rejection-close.test.ts (8 tests) 11ms
+ ✓ src/api/__tests__/get-routes-read-only.test.ts (3 tests) 12ms
+ ✓ src/services/__tests__/opening-classifier.test.ts (7 tests) 6ms
+ ✓ src/services/__tests__/rec-2.test.ts (1 test) 4ms
+ ✓ src/services/__tests__/snapshot-context.test.ts (2 tests) 13ms
+ ✓ src/services/__tests__/strategy-regression-fingerprint.test.ts (21 tests) 342ms
+   ✓ strategy regression fingerprint: A2–F3, A4 stage, S1, router, slot ranking, option builder, gates > the fixture exercises the families (not an empty fingerprint)  308ms
+ ↓ src/research/__tests__/research-no-lookahead.test.ts (1 test | 1 skipped)
+ ↓ src/research/__tests__/sweep-close-lookahead.test.ts (1 test | 1 skipped)
+ ✓ src/services/__tests__/ob-of-measurement-versions.test.ts (2 tests) 4375ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/services/__tests__/decision-record.test.ts > SignalDecisionSnapshot > carries every version field the spec lists
+AssertionError: expected '2026-09-29.structure.1+indicator-evid…' to match /\+rr-display-only\.1\+parent-identity…/
+
+- Expected:
+/\+rr-display-only\.1\+parent-identity\.1\+demote-a4\.1\+ob1-paper\.1\+of1-paper\.1$/
+
++ Received:
+"2026-09-29.structure.1+indicator-evidence.1+location-evidence.1+rr-display-only.1+parent-identity.1+demote-a4.1+ob1-paper.1+of1-paper.2"
+
+ ❯ src/services/__tests__/decision-record.test.ts:169:35
+
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 104 passed | 2 skipped (107)
+      Tests  1 failed | 1664 passed | 5 skipped (1670)
+   Start at  09:37:19
+   Duration  22.70s (transform 8.51s, setup 0ms, collect 39.67s, tests 60.35s, environment 48ms, prepare 12.18s)
+
+npm error Lifecycle script `test` failed with error:
+npm error code 1
+npm error path /workspace/scratch/c1db35db8761/fno-review/apps/server
+npm error workspace @fno/server@0.1.0
+npm error location /workspace/scratch/c1db35db8761/fno-review/apps/server
+npm error command failed
+npm error command sh -c vitest run

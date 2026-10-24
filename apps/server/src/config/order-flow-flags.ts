@@ -64,8 +64,9 @@ export const OF1_TRADING_REQUESTED: boolean = parseFlag(process.env.OF1_TRADING,
 export const OB1_TRADING: boolean = ORDER_BLOCK_MODE === 'PAPER';
 
 /** Paper-trading candidate sources added 2026-10-09 and the version each trades under. */
-// OF1-1.1 (2026-10-23): ACCEPTANCE counts only when the bar traded at / through the level (of1.ts).
-export const ORDER_FLOW_SOURCE_VERSIONS: Readonly<Record<string, string>> = Object.freeze({ OB1: 'OB-2.0', OF1: 'OF1-1.1' });
+// OF1-1.2: paper/shadow require verified price-reference alignment;
+// OF1-1.1 traded-through-only ACCEPTANCE remains in force.
+export const ORDER_FLOW_SOURCE_VERSIONS: Readonly<Record<string, string>> = Object.freeze({ OB1: 'OB-2.0', OF1: 'OF1-1.2' });
 
 /**
  * Live logic-stamp suffix while OB1 / OF1 may take the paper slot: the
@@ -73,7 +74,7 @@ export const ORDER_FLOW_SOURCE_VERSIONS: Readonly<Record<string, string>> = Obje
  * with them on are never pooled with trades minted before.
  */
 export function orderFlowLogicSuffix(ob1: boolean = OB1_TRADING, of1: boolean = OF1_TRADING): string {
-  return `${ob1 ? '+ob1-paper.1' : ''}${of1 ? '+of1-paper.1' : ''}`;
+  return `${ob1 ? '+ob1-paper.1' : ''}${of1 ? '+of1-paper.2' : ''}`;
 }
 
 export const ORDER_FLOW_DEFAULT_SYMBOLS = ['NIFTY', 'BANKNIFTY', 'CRUDEOIL', 'GOLD', 'SILVER', 'NATURALGAS'] as const;
