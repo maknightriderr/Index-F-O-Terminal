@@ -83,7 +83,7 @@ describe('OF1: location + order flow + price response', () => {
     const fps = new Map([[bars[I].time, buyFlow(bars[I].time)]]);
     const [c, ...rest] = A.evaluateOf1(bars, I, fps);
     expect(rest).toHaveLength(0);
-    expect(c).toMatchObject({ version: 'OF1-1.1', direction: 'BULLISH', decisionIndex: I, subtype: 'PDL_IMBALANCE', location: { kind: 'PDL', price: 95 }, entry: 100.5, deltaMode: 'INFERRED', levelInteraction: 'TRADED_THROUGH', flowBasis: 'INFERRED' });
+    expect(c).toMatchObject({ version: 'OF1-1.2', direction: 'BULLISH', decisionIndex: I, subtype: 'PDL_IMBALANCE', location: { kind: 'PDL', price: 95 }, entry: 100.5, deltaMode: 'INFERRED', levelInteraction: 'TRADED_THROUGH', flowBasis: 'INFERRED' });
     expect(c.priceConfirmation).toMatch(/^reclaimed PDL 95: traded through it/);
     expect(c.evidence).toEqual(expect.arrayContaining(['DELTA', 'IMBALANCE', 'ACCEPTANCE']));
     expect(c.measurable).not.toContain('POC_UP'); // no previous footprint → not measurable, not counted
@@ -152,7 +152,7 @@ describe('OF1: paper trading switch and hypothesis', () => {
   });
   it('OF1 paper-trades by default (OF1_TRADING=false rolls back to shadow); NSE and MCX symbols are supported, others refused', () => {
     expect(flags.OF1_TRADING).toBe(true);
-    expect(flags.orderFlowLogicSuffix(true, true)).toBe('+ob1-paper.1+of1-paper.1');
+    expect(flags.orderFlowLogicSuffix(true, true)).toBe('+ob1-paper.1+of1-paper.2');
     expect(flags.orderFlowLogicSuffix(false, false)).toBe('');
     expect(flags.parseOrderFlowSymbols('NIFTY,CRUDEOIL,banknifty,RELIANCE')).toEqual({ symbols: ['NIFTY', 'CRUDEOIL', 'BANKNIFTY'], rejected: ['RELIANCE'] });
     expect(flags.parseOrderFlowSymbols(undefined).symbols).toEqual(['NIFTY', 'BANKNIFTY', 'CRUDEOIL', 'GOLD', 'SILVER', 'NATURALGAS']);

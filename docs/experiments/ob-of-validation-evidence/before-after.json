@@ -1,0 +1,65 @@
+{
+  "baseSha": "804c0c7a11e683db15f5360a4933eb8b04e406f0",
+  "sourceSha256": {
+    "packages/analytics/src/market-structure/index.ts": "249c36c8e39b9d55d359e17cc872c1ccb707800713ce7bee7f49c813c6e831b5",
+    "packages/analytics/src/order-flow/of1.ts": "3aa4cc69c4e837c8f698fa5c1d0e3db08d4d518faae4c2fe8ea7c891f50e9569",
+    "packages/analytics/src/order-flow/alignment.ts": "55d35683990cda94cf108a2251fa1d2b263743dcba48afc024c718eaa667f1a9"
+  },
+  "obCases": [
+    {
+      "direction": "BULLISH",
+      "beforeHeld": true,
+      "afterHeld": false,
+      "failedBar": 24
+    },
+    {
+      "direction": "BEARISH",
+      "beforeHeld": true,
+      "afterHeld": false,
+      "failedBar": 24
+    }
+  ],
+  "ofCases": [
+    {
+      "direction": "BULLISH",
+      "basis": 20,
+      "beforeEvidence": [
+        "DELTA",
+        "ACCEPTANCE"
+      ],
+      "afterCandidates": 0,
+      "correctedAcceptance": 0.4
+    },
+    {
+      "direction": "BEARISH",
+      "basis": -20,
+      "beforeEvidence": [
+        "DELTA",
+        "ACCEPTANCE"
+      ],
+      "afterCandidates": 0,
+      "correctedAcceptance": 0.4
+    }
+  ],
+  "frozen": [
+    {
+      "symbol": "NIFTY",
+      "checkedPrefixes": 90,
+      "signals": 7,
+      "changedSignals": 0
+    },
+    {
+      "symbol": "BANKNIFTY",
+      "checkedPrefixes": 90,
+      "signals": 6,
+      "changedSignals": 0
+    },
+    {
+      "symbol": "CRUDEOIL",
+      "checkedPrefixes": 126,
+      "signals": 7,
+      "changedSignals": 0
+    }
+  ],
+  "limitations": "Synthetic OF examples and frozen real OHLC comparisons; not a historical OF trading replay, production validation or profitability study."
+}

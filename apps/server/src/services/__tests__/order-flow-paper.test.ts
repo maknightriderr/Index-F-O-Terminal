@@ -90,7 +90,8 @@ describe('OF1: each OF1 candidate as an ordinary trigger candidate', () => {
   const bars = of1Bars();
   const t = bars[bars.length - 1].time;
   const fp = A.buildFootprint([95, 96, 97, 98, 99, 100].flatMap((p, k) => [{ time: t + 10 + k, price: p, qty: 300, side: 'BUY' as const }, { time: t + 20 + k, price: p, qty: 50, side: 'SELL' as const }]), t, M15, 1, 'INFERRED');
-  const fps = new Map([[t, fp]]);
+  fp.sourceInstrument = 'TEST_FUT';
+  const fps = A.alignFootprintsToReference(bars, new Map([[t, fp]]), bars, { instrument: 'TEST_FUT', expiry: '2026-10-27' }, 'SPOT', t + M15);
   it('routed with the stop beyond the bar / level and its own parent', () => {
     const out = orderFlowPaperCandidates({ underlying: 'NIFTY', exchange: 'NSE', bars, chain: null, footprints: fps, ob1: false, of1: true });
     const of1 = out.filter((r) => r.candidate.triggerId === 'OF1');
@@ -114,7 +115,7 @@ describe('wiring and tagging', () => {
     expect(mb).toMatch(/const orderBlocks = detectOrderBlocksLegacy\(c15\.highs, c15\.lows, c15\.closes\);/);
   });
   it('each trade carries its source and version; the backtest splits them out', () => {
-    expect(flags.ORDER_FLOW_SOURCE_VERSIONS).toEqual({ OB1: 'OB-2.0', OF1: 'OF1-1.1' });
+    expect(flags.ORDER_FLOW_SOURCE_VERSIONS).toEqual({ OB1: 'OB-2.0', OF1: 'OF1-1.2' });
     expect(mb).toMatch(/sourceVersion: ORDER_FLOW_SOURCE_VERSIONS\[ctx\.structure\.triggerId \?\? ''\] \?\? null/);
     expect(sourceOfSetup({ strategy: 'STRUCTURE', source: 'OB1' })).toBe('OB1');
     expect(sourceOfSetup({ strategy: 'STRUCTURE', logicVersion: 'x+paper-research.OF1' })).toBe('OF1');

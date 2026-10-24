@@ -123,7 +123,7 @@ import { recordTradeCosts } from './trade-costs.js';
 import { recordTradeMark } from './trade-marks.js';
 import { registerPostExitWatch } from './post-exit-tracker.js';
 import { recordCloseBarAnomaly } from './bar-anomaly.js';
-import { footprintsFor } from './order-flow-store.js';
+import { alignedFootprintsFor } from './order-flow-alignment.js';
 import { ORDER_FLOW_SOURCE_VERSIONS, ORDER_FLOW_SYMBOLS } from '../config/order-flow-flags.js';
 import { assessLocation, assessRoom, type StructuralLevel } from './location-quality.js';
 import { TRADING_FLAGS, TRADING_PARAMS, COVERAGE_LAG_FLAGS, COVERAGE_LAG_PARAMS, liveLogicStamp, paperResearchStamp, FNO_VALIDATION, FNO_VALIDATION_PARAMS, type LogicStamp } from '../config/trading-flags.js';
@@ -2175,7 +2175,7 @@ async function computeMarketBias(
   if (!isPositional && structureState && routed && routed.evaluated > 0 && closedNow.length > 0 && (ofSources.ob1 || ofSources.of1)) {
     try {
       const of1Here = ofSources.of1 && ORDER_FLOW_SYMBOLS.includes(underlying);
-      const footprints = of1Here ? await footprintsFor(underlying, closedNow.slice(-60).map((b) => b.time)) : new Map();
+      const footprints = of1Here ? await alignedFootprintsFor(provider, underlying, exchange, closedNow) : new Map();
       // The router's own slot filter (newest bar, paper stage, risk.wouldTrade — a target, a valid stop,
       // the session window, the cost cap), exactly as the trigger families' candidates get it.
       orderFlowPaper = paperCandidatesForSlot(orderFlowPaperCandidates({ underlying, exchange, bars: closedNow, chain, footprints, ob1: ofSources.ob1, of1: of1Here }), closedNow.length - 1);
@@ -2306,6 +2306,7 @@ async function computeMarketBias(
         directionWithV2: directionWithOrderBlockVote({ chartVotes, positioningVotes, legacyVote: orderBlockVote, v2Vote: obSignal?.vote ?? 0, cap: CLUSTER_MAX_WEIGHT }),
       });
       await recordOf1Shadow({
+        provider,
         underlying,
         exchange,
         mode,

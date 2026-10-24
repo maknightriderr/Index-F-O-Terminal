@@ -101,7 +101,7 @@ export function orderFlowPaperCandidates(a: OrderFlowPaperArgs): RoutedCandidate
   }
 
   if (a.of1 && a.footprints.size > 0) {
-    for (const o of evaluateOf1(bars, i, a.footprints)) {
+    for (const o of evaluateOf1(bars, i, a.footprints, undefined, true)) {
       const bar = bars[i];
       const stopRef = o.direction === 'BULLISH' ? Math.min(bar.low, o.location.price) : Math.max(bar.high, o.location.price);
       const hit = { direction: o.direction, anchor: event(`OF1:${o.location.kind}:${o.direction}:${bar.time}`, i, o.location.price, bar.time, o.direction), events: [], stopRef };

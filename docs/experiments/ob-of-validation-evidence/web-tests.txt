@@ -1,0 +1,35 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> @fno/web@0.1.0 test
+> vitest run
+
+
+ RUN  v3.2.7 /workspace/scratch/c1db35db8761/fno-review/apps/web
+
+ ✓ src/lib/__tests__/paper-trade-view.test.ts (11 tests) 117ms
+ ✓ src/lib/__tests__/health-model.test.ts (12 tests) 147ms
+ ✓ src/lib/__tests__/nav-url-theme.test.ts (13 tests) 72ms
+ ✓ src/lib/__tests__/views.test.ts (14 tests) 83ms
+ ✓ src/components/auth/__tests__/login-gate.test.tsx (7 tests) 970ms
+   ✓ sign-in gate > shows only the password form until signed in; nothing behind the gate mounts  430ms
+ ✓ src/components/assistant/__tests__/assistant.test.tsx (7 tests) 953ms
+   ✓ floating AI assistant > opens from the bottom-right button, closes with Escape, and gives focus back to the button  388ms
+ ✓ src/components/ui/__tests__/ui-primitives.test.tsx (13 tests) 1889ms
+   ✓ DataTable > pages long lists and shows the denominator  510ms
+   ✓ DataTable > has no accessibility violations (structure, names, roles)  438ms
+ ✓ src/components/evidence/__tests__/evidence-page.test.tsx (3 tests) 796ms
+   ✓ Evidence page > shows the Old Indicator as a protected benchmark, never a demotion candidate  658ms
+ ✓ src/lib/__tests__/session.test.ts (4 tests) 51ms
+ ✓ src/lib/__tests__/format.test.ts (10 tests) 172ms
+ ✓ src/components/signal-diagnostics/order-flow-panel.test.tsx (2 tests) 479ms
+   ✓ OF1 alignment and version disclosure > shows unavailable alignment separately from a connected feed and labels the new cohort  362ms
+ ✓ src/lib/__tests__/freshness.test.ts (7 tests) 131ms
+ ✓ src/lib/__tests__/quote-time.test.ts (2 tests) 7ms
+ ✓ src/lib/__tests__/read-only-source.test.ts (2 tests) 30ms
+ ✓ src/lib/__tests__/display-integrity-source.test.ts (2 tests) 61ms
+ ✓ src/lib/__tests__/topbar-dropdown.test.ts (2 tests) 24ms
+
+ Test Files  16 passed (16)
+      Tests  111 passed (111)
+   Start at  09:40:25
+   Duration  10.47s (transform 3.18s, setup 8.03s, collect 5.24s, tests 5.98s, environment 28.99s, prepare 5.74s)

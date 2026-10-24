@@ -2,6 +2,8 @@
 // ORDER BLOCK / ORDER FLOW / OF1 — shadow measurement report (read-only)
 // ============================================================
 
+import { ORDER_BLOCK_REACTION_VERSION, OF1_VERSION } from '@fno/analytics';
+import { orderFlowAlignmentStatus } from './order-flow-alignment.js';
 import { sql } from '../lib/db.js';
 import type { DiagnosticsQuery } from './signal-diagnostics.js';
 import { orderFlowFeedStatus } from './dhan-feed.js';
@@ -33,22 +35,22 @@ export async function orderFlowReport(q: DiagnosticsQuery) {
       AVG(outcome_r) AS avg_r, AVG(mfe_r) AS avg_mfe_r, AVG(mae_r) AS avg_mae_r,
       COUNT(*) FILTER (WHERE graded_at IS NOT NULL AND existing_source_that_won IS NOT NULL)::text AS existing_traded_same_bar
     FROM of1_candidates
-    WHERE (${since}::timestamptz IS NULL OR decision_bar_time >= ${since}) AND (${until}::timestamptz IS NULL OR decision_bar_time < ${until}) AND (${inst}::text IS NULL OR symbol = ${inst})
+    WHERE strategy_version = ${OF1_VERSION} AND (${since}::timestamptz IS NULL OR decision_bar_time >= ${since}) AND (${until}::timestamptz IS NULL OR decision_bar_time < ${until}) AND (${inst}::text IS NULL OR symbol = ${inst})
   `;
   const subtypes = await sql<{ subtype: string; n: string; avg_r: string | null }[]>`
     SELECT subtype, COUNT(*)::text AS n, AVG(outcome_r) AS avg_r FROM of1_candidates
-    WHERE (${since}::timestamptz IS NULL OR decision_bar_time >= ${since}) AND (${until}::timestamptz IS NULL OR decision_bar_time < ${until}) AND (${inst}::text IS NULL OR symbol = ${inst})
+    WHERE strategy_version = ${OF1_VERSION} AND (${since}::timestamptz IS NULL OR decision_bar_time >= ${since}) AND (${until}::timestamptz IS NULL OR decision_bar_time < ${until}) AND (${inst}::text IS NULL OR symbol = ${inst})
     GROUP BY 1 ORDER BY 2 DESC LIMIT 20
   `;
   const winners = await sql<{ source: string; n: string }[]>`
     SELECT existing_source_that_won AS source, COUNT(*)::text AS n FROM of1_candidates
-    WHERE existing_source_that_won IS NOT NULL AND (${since}::timestamptz IS NULL OR decision_bar_time >= ${since}) AND (${until}::timestamptz IS NULL OR decision_bar_time < ${until}) AND (${inst}::text IS NULL OR symbol = ${inst})
+    WHERE strategy_version = ${OF1_VERSION} AND existing_source_that_won IS NOT NULL AND (${since}::timestamptz IS NULL OR decision_bar_time >= ${since}) AND (${until}::timestamptz IS NULL OR decision_bar_time < ${until}) AND (${inst}::text IS NULL OR symbol = ${inst})
     GROUP BY 1 ORDER BY 2 DESC
   `;
   const blocks = await sql<{ state: string; n: string; held: string; failed: string; avg_mfe: string | null; avg_mae: string | null }[]>`
     SELECT state, COUNT(*)::text AS n, COUNT(*) FILTER (WHERE held)::text AS held, COUNT(*) FILTER (WHERE held = false)::text AS failed, AVG(mfe_atr) AS avg_mfe, AVG(mae_atr) AS avg_mae
     FROM order_blocks
-    WHERE (${since}::timestamptz IS NULL OR block_time >= ${since}) AND (${until}::timestamptz IS NULL OR block_time < ${until}) AND (${inst}::text IS NULL OR symbol = ${inst})
+    WHERE version = ${ORDER_BLOCK_REACTION_VERSION} AND (${since}::timestamptz IS NULL OR block_time >= ${since}) AND (${until}::timestamptz IS NULL OR block_time < ${until}) AND (${inst}::text IS NULL OR symbol = ${inst})
     GROUP BY 1 ORDER BY 1
   `;
   // Every block that was ever touched, judged at its first touch (2026-10-15). The per-state rows above are conditioned
@@ -57,7 +59,7 @@ export async function orderFlowReport(q: DiagnosticsQuery) {
   const touched = await sql<{ n: string; held: string; failed: string; avg_mfe: string | null; avg_mae: string | null }[]>`
     SELECT COUNT(*)::text AS n, COUNT(*) FILTER (WHERE held)::text AS held, COUNT(*) FILTER (WHERE held = false)::text AS failed, AVG(mfe_atr) AS avg_mfe, AVG(mae_atr) AS avg_mae
     FROM order_blocks
-    WHERE state IN ('FIRST_TOUCH', 'MITIGATED')
+    WHERE version = ${ORDER_BLOCK_REACTION_VERSION} AND state IN ('FIRST_TOUCH', 'MITIGATED')
       AND (${since}::timestamptz IS NULL OR block_time >= ${since}) AND (${until}::timestamptz IS NULL OR block_time < ${until}) AND (${inst}::text IS NULL OR symbol = ${inst})
   `;
   const shadow = await sql<{ decisions: string; legacy_signals: string; v2_signals: string; changed: string }[]>`
@@ -71,8 +73,10 @@ export async function orderFlowReport(q: DiagnosticsQuery) {
   return {
     settings: { orderBlockMode: ORDER_BLOCK_MODE, of1Enabled: OF1_ENABLED, of1Trading: OF1_TRADING, orderFlowSymbols: ORDER_FLOW_SYMBOLS },
     feed: orderFlowFeedStatus(),
+    alignment: orderFlowAlignmentStatus(),
     flowBars: flow.map((r) => ({ deltaMode: r.delta_mode, unavailableReason: r.unavailable_reason, bars: n(r.bars) })),
     of1: {
+      version: OF1_VERSION,
       candidates: n(o.candidates), bullish: n(o.bullish), bearish: n(o.bearish), exact: n(o.exact), inferred: n(o.inferred), wouldTradeIfLive: n(o.would_trade),
       graded: n(o.graded), targets: n(o.targets), stops: n(o.stops), openAtClose: n(o.open_at_close), avgR: avg(o.avg_r), avgMfeR: avg(o.avg_mfe_r), avgMaeR: avg(o.avg_mae_r),
       existingTradedSameBar: n(o.existing_traded_same_bar),
@@ -80,11 +84,12 @@ export async function orderFlowReport(q: DiagnosticsQuery) {
       existingWinners: winners.map((r) => ({ source: r.source, n: n(r.n) })),
     },
     orderBlocks: {
+      reactionVersion: ORDER_BLOCK_REACTION_VERSION,
       byState: blocks.map((r) => ({ state: r.state, n: n(r.n), held: n(r.held), failed: n(r.failed), avgMfeAtr: avg(r.avg_mfe), avgMaeAtr: avg(r.avg_mae) })),
       allTouched: touched[0]
         ? { n: n(touched[0].n), held: n(touched[0].held), failed: n(touched[0].failed), avgMfeAtr: avg(touched[0].avg_mfe), avgMaeAtr: avg(touched[0].avg_mae) }
         : null,
-      allTouchedNote: 'Every block ever touched, at its first touch. Read this, not the FIRST_TOUCH row alone: a block still in FIRST_TOUCH is one that has not failed yet.',
+      allTouchedNote: 'Current reaction version only; old measurements are preserved separately. Every block ever touched, at its first touch. Read this, not the FIRST_TOUCH row alone: a block still in FIRST_TOUCH is one that has not failed yet.',
       decisions: n(sh.decisions), legacySignals: n(sh.legacy_signals), v2Signals: n(sh.v2_signals), wouldChangeIndicatorDirection: n(sh.changed),
     },
   };

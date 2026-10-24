@@ -11,7 +11,7 @@
 // Reads closed bars only; old trades are never touched.
 // ============================================================
 
-import { detectOrderBlocks, ORDER_BLOCK_VERSION, type OhlcBar, type OrderBlockSignal, type OrderBlockV2 } from '@fno/analytics';
+import { detectOrderBlocks, ORDER_BLOCK_VERSION, ORDER_BLOCK_REACTION_VERSION, type OhlcBar, type OrderBlockSignal, type OrderBlockV2 } from '@fno/analytics';
 import { sql } from '../lib/db.js';
 import { redis } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
@@ -74,19 +74,19 @@ export async function recordOrderBlockShadow(a: {
       ON CONFLICT (symbol, exchange, mode, decision_bar_time) DO NOTHING
     `;
     for (const b of detectOrderBlocks(a.bars)) {
-      const key = blockKey(a.underlying, a.exchange, b, a.bars);
+      const key = `${ORDER_BLOCK_REACTION_VERSION}:${blockKey(a.underlying, a.exchange, b, a.bars)}`;
       const sig = `${b.state}|${b.firstTouchIndex}|${b.mitigatedIndex}|${b.reaction?.barsMeasured ?? -1}|${b.reaction?.held ?? 'x'}`;
       if (lastWritten.get(key) === sig) continue;
-      lastWritten.set(key, sig);
       const t = (i: number | null) => (i == null ? null : new Date(a.bars[i].time));
       await sql`
         INSERT INTO order_blocks (symbol, exchange, version, block_type, block_time, displacement_time, block_high, block_low, atr, displacement_atr, state, first_touch_time, mitigated_time, reaction_bars, mfe_atr, mae_atr, held)
-        VALUES (${a.underlying}, ${a.exchange}, ${ORDER_BLOCK_VERSION}, ${b.type}, ${t(b.blockIndex)}, ${t(b.displacementIndex)}, ${b.top}, ${b.bottom}, ${b.atr}, ${b.displacementAtr}, ${b.state},
+        VALUES (${a.underlying}, ${a.exchange}, ${ORDER_BLOCK_REACTION_VERSION}, ${b.type}, ${t(b.blockIndex)}, ${t(b.displacementIndex)}, ${b.top}, ${b.bottom}, ${b.atr}, ${b.displacementAtr}, ${b.state},
           ${t(b.firstTouchIndex)}, ${t(b.mitigatedIndex)}, ${b.reaction?.barsMeasured ?? null}, ${b.reaction?.mfeAtr ?? null}, ${b.reaction?.maeAtr ?? null}, ${b.reaction?.held ?? null})
         ON CONFLICT (symbol, exchange, version, block_time, block_type) DO UPDATE SET
           state = EXCLUDED.state, first_touch_time = EXCLUDED.first_touch_time, mitigated_time = EXCLUDED.mitigated_time, reaction_bars = EXCLUDED.reaction_bars,
           mfe_atr = EXCLUDED.mfe_atr, mae_atr = EXCLUDED.mae_atr, held = EXCLUDED.held, updated_at = NOW()
       `;
+      lastWritten.set(key, sig);
     }
     if (lastWritten.size > 20_000) lastWritten.clear();
   } catch (err: any) {
