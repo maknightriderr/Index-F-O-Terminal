@@ -1,0 +1,32 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> @fno/web@0.1.0 test
+> vitest run
+
+
+ RUN  v3.2.7 /workspace/scratch/c1db35db8761/fno-review/apps/web
+
+ ✓ src/lib/__tests__/display-integrity-source.test.ts (2 tests) 73ms
+ ✓ src/components/auth/__tests__/login-gate.test.tsx (7 tests) 226ms
+ ✓ src/components/signal-diagnostics/order-flow-panel.test.tsx (2 tests) 146ms
+ ✓ src/components/evidence/__tests__/evidence-page.test.tsx (3 tests) 401ms
+   ✓ Evidence page > shows the Old Indicator as a protected benchmark, never a demotion candidate  382ms
+ ✓ src/components/assistant/__tests__/assistant.test.tsx (7 tests) 326ms
+ ✓ src/components/ui/__tests__/ui-primitives.test.tsx (13 tests) 544ms
+ ✓ src/lib/__tests__/health-model.test.ts (12 tests) 25ms
+ ✓ src/lib/__tests__/paper-trade-view.test.ts (11 tests) 27ms
+ ✓ src/lib/__tests__/views.test.ts (14 tests) 35ms
+ ✓ src/lib/__tests__/format.test.ts (10 tests) 28ms
+ ✓ src/components/dashboard/sections/__tests__/trading-desk.test.tsx (8 tests) 373ms
+ ✓ src/components/signal-diagnostics/entry-confirmation-panel.test.tsx (3 tests) 147ms
+ ✓ src/lib/__tests__/freshness.test.ts (7 tests) 20ms
+ ✓ src/lib/__tests__/nav-url-theme.test.ts (13 tests) 13ms
+ ✓ src/lib/__tests__/read-only-source.test.ts (2 tests) 6ms
+ ✓ src/lib/__tests__/session.test.ts (4 tests) 8ms
+ ✓ src/lib/__tests__/topbar-dropdown.test.ts (2 tests) 4ms
+ ✓ src/lib/__tests__/quote-time.test.ts (2 tests) 3ms
+
+ Test Files  18 passed (18)
+      Tests  122 passed (122)
+   Start at  12:21:08
+   Duration  2.97s (transform 1.35s, setup 2.50s, collect 2.08s, tests 2.40s, environment 7.23s, prepare 1.33s)

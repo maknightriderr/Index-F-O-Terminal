@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { formatIndianNumber } from '@fno/shared';
+import { isMarketOpen, formatIndianNumber } from '@fno/shared';
 import type { MarketQuote } from '@fno/shared';
 import { useMarketStore } from '@/stores';
 import { useAllIndices } from '@/lib/use-all-indices';
@@ -29,7 +29,7 @@ function Cell({ label, children, detail }: { label: string; children: React.Reac
   );
 }
 
-function IndexCell({ symbol, quote, observedAt, now, sessionOpen }: { symbol: string; quote: MarketQuote | null; observedAt: number | null; now: number; sessionOpen: boolean | null }) {
+function IndexCell({ symbol, quote, observedAt, now, sessionOpen, compact = false }: { compact?: boolean; symbol: string; quote: MarketQuote | null; observedAt: number | null; now: number; sessionOpen: boolean | null }) {
   // The exchange's own time (audit 2026-10-18, UI-1): after the close the last close, not when the server re-fetched it.
   const seenAt = quote ? quoteObservedAt(quote) : observedAt;
   const f = classifyFreshness({ observedAt: seenAt, now, sessionOpen, transportConnected: null, freshWithinMs: FRESH_WITHIN_MS.quote });
@@ -52,13 +52,13 @@ function IndexCell({ symbol, quote, observedAt, now, sessionOpen }: { symbol: st
         <span className="text-xl font-semibold tabular-nums text-[var(--text-primary)]">{formatIndianNumber(quote.ltp, 2)}</span>
         <span className={`text-sm font-medium tabular-nums ${up ? 'text-[var(--status-ok)]' : 'text-[var(--status-bad)]'}`}>{formatArrowPercent(quote.changePercent)}</span>
       </div>
-      <div className="text-xs tabular-nums text-[var(--text-secondary)]">
+      {!compact && <div className="text-xs tabular-nums text-[var(--text-secondary)]">
         Day {formatNumber(quote.low, 2)} – {formatNumber(quote.high, 2)}
-      </div>
+      </div>}
       <div className="flex flex-wrap items-center gap-1">
-        <FreshnessBadge state={f.state} detail={f.detail} />
+        {compact ? <span className="text-xs text-[var(--text-secondary)]" title={f.detail}>{f.label}</span> : <FreshnessBadge state={f.state} detail={f.detail} />}
         <span className="text-xs text-[var(--text-secondary)]">
-          {sessionOpen === false ? 'Last close ' : ''}
+          {!compact && sessionOpen === false ? 'Last close ' : ''}
           {formatIstDateTime(seenAt, now)}
         </span>
       </div>
@@ -66,7 +66,7 @@ function IndexCell({ symbol, quote, observedAt, now, sessionOpen }: { symbol: st
   );
 }
 
-export function StatusBar() {
+export function StatusBar({ compact = false }: { compact?: boolean }) {
   const feed = useFeedSummary();
   const { indices, observedAt } = useLiveIndices();
   const { indices: allIndices } = useAllIndices();
@@ -81,6 +81,21 @@ export function StatusBar() {
   const dhan = row('order-flow');
   const sock = row('browser-socket');
   const nse = feed.sessions.find((s) => s.exchange === 'NSE')?.open ?? null;
+
+  if (compact) return (
+    <section className="desk-panel" aria-label="Market and feed status">
+      <div className="desk-tickers">
+        <IndexCell compact symbol="NIFTY" quote={nifty} observedAt={observedAt} now={feed.now} sessionOpen={nse} />
+        <IndexCell compact symbol="BANKNIFTY" quote={bank} observedAt={observedAt} now={feed.now} sessionOpen={nse} />
+        <IndexCell compact symbol="CRUDEOIL" quote={allIndices.find((i) => i.symbol === 'CRUDEOIL') ?? null} observedAt={null} now={feed.now} sessionOpen={isMarketOpen('MCX', feed.now)} />
+        <IndexCell compact symbol="INDIA VIX" quote={vix} observedAt={vix?.timestamp ?? null} now={feed.now} sessionOpen={nse} />
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border-primary)] px-4 py-2 text-xs text-[var(--text-secondary)]">
+        <div className="flex flex-wrap items-center gap-3"><span>Feed health</span><HealthBadge status={h.overall} detail={h.headline} />{dhan && <span className="flex items-center gap-1">Order flow <HealthBadge status={dhan.status} detail={dhan.detail} /></span>}</div>
+        <button type="button" onClick={() => setActiveTab('system-health')} className="desk-link">Sessions &amp; feed details →</button>
+      </div>
+    </section>
+  );
 
   return (
     <Card as="section" aria-label="Market and feed status" className="!p-3">

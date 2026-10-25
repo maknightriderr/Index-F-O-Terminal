@@ -48,7 +48,7 @@ export function Sidebar() {
 
   const itemClass = (active: boolean) =>
     `relative flex w-full items-center rounded-lg px-2.5 py-2 text-sm transition-colors ${
-      active ? 'bg-[var(--accent-indigo)]/15 text-[var(--text-primary)] font-semibold' : 'text-[var(--text-secondary)] hover:bg-[var(--surface-card-alt)] hover:text-[var(--text-primary)]'
+      active ? 'bg-[var(--desk-accent)]/10 text-[var(--text-primary)] font-semibold' : 'text-[var(--text-secondary)] hover:bg-[var(--surface-card-alt)] hover:text-[var(--text-primary)]'
     }`;
 
   return (
@@ -56,17 +56,17 @@ export function Sidebar() {
       aria-label="Primary"
       // Always the narrow icon rail on a phone: an expanded 224 px sidebar on a ~390 px screen leaves too little for the
       // dense screens it navigates to. Every item keeps its name in aria-label and a tooltip.
-      className={`relative z-[2] flex h-full w-14 shrink-0 flex-col border-r border-[var(--border-primary)] bg-[var(--bg-secondary)] ${sidebarOpen ? 'md:w-56' : 'md:w-14'}`}
+      className={`relative z-[2] flex h-full w-14 shrink-0 flex-col border-r border-[var(--border-primary)] bg-[var(--bg-secondary)] ${sidebarOpen ? 'md:w-48' : 'md:w-14'}`}
     >
       <button
         type="button"
         onClick={toggleSidebar}
         aria-label={sidebarOpen ? 'Collapse the sidebar' : 'Expand the sidebar'}
         aria-expanded={sidebarOpen}
-        className="flex h-12 items-center border-b border-[var(--border-primary)] px-3 text-left hover:bg-[var(--surface-card-alt)]"
+        className="flex h-16 items-center border-b border-[var(--border-primary)] px-3 text-left hover:bg-[var(--surface-card-alt)]"
       >
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-emerald-400 to-cyan-500 text-xs font-bold text-black">F&O</span>
-        {sidebarOpen && <span className="ml-2.5 hidden truncate text-sm font-semibold tracking-tight md:inline">Terminal</span>}
+        {sidebarOpen && <span className="ml-2.5 hidden truncate text-sm font-semibold tracking-tight md:inline">TERMINAL</span>}
       </button>
 
       <div className="border-b border-[var(--border-primary)] px-2 py-2">
@@ -95,9 +95,9 @@ export function Sidebar() {
                 const active = activeTab === item.id;
                 return (
                   <button key={item.id} type="button" onClick={() => setActiveTab(item.id)} aria-current={active ? 'page' : undefined} aria-label={item.label} title={`${item.label}: ${item.description}`} className={itemClass(active)}>
-                    {active && <span aria-hidden="true" className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full bg-[var(--accent-green)]" />}
+                    {active && <span aria-hidden="true" className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full bg-[var(--desk-accent)]" />}
                     <span className="flex w-7 shrink-0 items-center justify-center">
-                      <Icon d={ICONS[item.icon] ?? ICONS.dashboard} className={active ? 'text-[var(--accent-green)]' : ''} />
+                      <Icon d={ICONS[item.icon] ?? ICONS.dashboard} className={active ? 'text-[var(--desk-accent)]' : ''} />
                     </span>
                     {sidebarOpen && <span className="ml-1 hidden truncate md:inline">{item.label}</span>}
                   </button>
@@ -109,7 +109,7 @@ export function Sidebar() {
                   return (
                     <button key={t.id} type="button" onClick={() => switchToTab(t.id)} aria-current={active ? 'page' : undefined} aria-label={`Asset workspace ${t.symbol}`} title={`Asset workspace: ${t.symbol} (${t.exchange})`} className={itemClass(active)}>
                       <span className="flex w-7 shrink-0 items-center justify-center">
-                        <Icon d={ICONS.asset} className={active ? 'text-[var(--accent-green)]' : ''} />
+                        <Icon d={ICONS.asset} className={active ? 'text-[var(--desk-accent)]' : ''} />
                       </span>
                       {sidebarOpen && (
                         <span className="ml-1 hidden truncate md:inline">

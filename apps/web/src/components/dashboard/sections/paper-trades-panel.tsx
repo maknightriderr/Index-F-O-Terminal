@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { isMarketOpen } from '@fno/shared';
 import type { Exchange, PaperTradeView } from '@fno/shared';
 import { useAssetTabsStore, useMarketStore } from '@/stores';
@@ -10,6 +10,8 @@ import { classifyFreshness, FRESH_WITHIN_MS } from '@/lib/freshness';
 import { contractLabel } from '@/lib/paper-trade-view';
 import { formatAge, formatHold, formatIstDateTime, formatNumber, formatR, formatRupees, MISSING } from '@/lib/format';
 import { Section } from '@/components/ui/card';
+import { DataTable } from '@/components/ui/data-table';
+import { SegmentedControl } from '@/components/ui/controls';
 import { ActionButton } from '@/components/ui/controls';
 import { DataState } from '@/components/ui/data-state';
 import { FreshnessBadge, TradeStateBadge } from '@/components/ui/status-badge';
@@ -90,7 +92,8 @@ function TradeRow({ t, now, apiReachable }: { t: PaperTradeView; now: number; ap
   );
 }
 
-export function PaperTradesPanel() {
+export function PaperTradesPanel({ compact = false }: { compact?: boolean }) {
+  const [view, setView] = useState('open');
   const { data, loading, error, reload } = usePaperTrades(300);
   const feed = useFeedSummary();
   const setActiveTab = useMarketStore((s) => s.setActiveTab);
@@ -103,6 +106,26 @@ export function PaperTradesPanel() {
     const c = trades.filter((t) => t.state !== 'OPEN' && t.exitAt != null && todayIst(t.exitAt) === today).sort((a, b) => (b.exitAt ?? 0) - (a.exitAt ?? 0));
     return { open: o, closedToday: c, counts: data?.counts };
   }, [data, now]);
+
+  if (compact) {
+    const rows = view === 'open' ? open : view === 'closed' ? closedToday : [...open, ...closedToday];
+    return <Section title="Paper trades" subtitle="Simulated · net R after estimated costs" actions={<ActionButton onClick={() => setActiveTab('paper-trades')}>Full ledger →</ActionButton>}>
+      <DataState loading={loading} error={error} hasData={!!data} onRetry={reload} errorTitle="Could not load paper trades" skeletonRows={3}>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <SegmentedControl label="Paper trade state" value={view} onChange={setView} options={[{ id: 'open', label: `Open (${open.length})` }, { id: 'closed', label: `Closed today (${closedToday.length})` }, { id: 'all', label: `All (${open.length + closedToday.length})` }]} />
+          {counts && counts.openUntracked > 0 && <span className="text-xs text-[var(--status-warn)]">{counts.openUntracked} open trades not tracked</span>}
+        </div>
+        <DataTable rows={rows} rowKey={(t) => t.id} pageSize={5} ariaLabel="Desk paper trades" emptyTitle="No paper trades in this view" emptyHint="Trades appear when the engine records them. Try another tab or open the full ledger." columns={[
+          { id: 'instrument', header: 'Instrument', cell: (t) => <div><span className="font-semibold">{contractLabel(t)}</span><span className="mt-1 block text-xs text-[var(--text-secondary)]">{t.exchange} · {t.direction === 'BULLISH' ? '▲ Bullish' : '▼ Bearish'}</span></div> },
+          { id: 'strategy', header: 'Strategy', cell: (t) => <span className="text-xs">{t.strategyLabel}</span> },
+          { id: 'entry', header: 'Entry', numeric: true, cell: (t) => formatNumber(t.entry) },
+          { id: 'last', header: 'Last / exit', numeric: true, cell: (t) => <div>{formatNumber(t.state === 'OPEN' ? t.live?.premium : t.exitPrice)}{t.state === 'OPEN' && <div className="mt-1"><FreshnessBadge state={t.live?.observedAt ? classifyFreshness({ observedAt: t.live.observedAt, now, sessionOpen: isMarketOpen(t.exchange as Exchange, now), transportConnected: feed.apiReachable, freshWithinMs: FRESH_WITHIN_MS.tradeMark }).state : 'UNAVAILABLE'} /></div>}</div> },
+          { id: 'net', header: 'Net R', numeric: true, cell: (t) => { const r = t.state === 'OPEN' ? t.live?.unrealisedNetR : t.netR; return <div><span className={r == null ? '' : r < 0 ? 'font-semibold text-[var(--status-bad)]' : 'font-semibold text-[var(--status-ok)]'}>{formatR(r)}</span>{t.state === 'OPEN' && <span className="block text-xs text-[var(--text-secondary)]">unrealised</span>}</div>; } },
+          { id: 'status', header: 'Status', cell: (t) => <TradeStateBadge state={t.state} status={t.status} /> },
+        ]} renderDetail={(t) => <ul><TradeRow t={t} now={now} apiReachable={feed.apiReachable} /></ul>} />
+      </DataState>
+    </Section>;
+  }
 
   return (
     <Section

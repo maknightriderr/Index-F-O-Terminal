@@ -1,0 +1,14 @@
+DARK ACCESSIBILITY []
+PAGE ERRORS []
+LAYOUT {
+  width: 1376,
+  scroll: 1376,
+  areas: '"watch chart spotlight" "trades trades spotlight"'
+}
+LIGHT toggle PASS
+ACCESSIBILITY []
+PERSISTED light PASS
+SYSTEM theme follows OS PASS
+MCX spot disabled PASS
+MOBILE no page overflow PASS { width: 334, scroll: 334 }
+WRITES []

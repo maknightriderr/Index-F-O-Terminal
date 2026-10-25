@@ -3,16 +3,15 @@
 import React from 'react';
 import { useMarketStore, useUISettingsStore } from '@/stores';
 import type { ThemeName } from '@/stores';
-import { formatIndianNumber } from '@fno/shared';
-import { useLiveIndices } from '@/lib/use-live-indices';
+import { pageMeta } from '@/lib/nav';
 import { useFeedSummary } from '@/lib/use-feed-summary';
-import { formatArrowPercent, formatIstDateTime } from '@/lib/format';
+import { formatIstDateTime } from '@/lib/format';
 import { FreshnessBadge } from '@/components/ui/status-badge';
 import { AlertBell } from './alert-bell';
 import { SignOutButton } from '@/components/auth/sign-out-button';
 
 // ============================================================
-// TOP BAR — the two headline indices, one honest data-freshness pill, alerts, theme, clock
+// TOP BAR — workspace title, paper mode, freshness, alerts, theme and clock
 // ============================================================
 // The pill is derived from the newest quote's own timestamp and the exchange session (lib/freshness.ts), never from
 // whether a socket is open. Outside the session it reads "MARKET CLOSED" with the last observation time — a closed
@@ -20,22 +19,19 @@ import { SignOutButton } from '@/components/auth/sign-out-button';
 // ============================================================
 
 export function TopBar() {
-  const { setActiveTab } = useMarketStore();
-  const { indices } = useLiveIndices();
+  const { activeTab, setActiveTab } = useMarketStore();
   const feed = useFeedSummary();
-  const nifty = indices.find((i) => i.symbol === 'NIFTY') ?? null;
-  const bankNifty = indices.find((i) => i.symbol === 'BANKNIFTY') ?? null;
+  const title = activeTab === 'dashboard' ? 'Trading desk' : pageMeta(activeTab)?.label ?? 'Asset workspace';
 
   const clock = new Date(feed.now).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
   return (
-    <header className="relative z-10 flex h-12 shrink-0 items-center gap-2 border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 md:gap-4 md:px-4">
-      <div className="flex min-w-0 items-center gap-3">
-        <IndexChip symbol="NIFTY" quote={nifty} />
-        <div className="hidden md:block">
-          <IndexChip symbol="BANKNIFTY" quote={bankNifty} />
-        </div>
+    <header className="relative z-10 flex h-16 shrink-0 items-center gap-2 border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 md:gap-4 md:px-4">
+      <div className="min-w-0">
+        <p className="truncate text-base font-semibold tracking-tight md:text-xl">{title}</p>
+        <p className="hidden text-xs text-[var(--text-secondary)] lg:block">Market context. Clear decisions.</p>
       </div>
+      <span className="rounded border border-[var(--desk-accent)]/40 bg-[var(--desk-accent)]/10 px-2 py-1 text-xs font-semibold tracking-wider text-[var(--desk-accent)]">PAPER</span>
 
       <div className="flex-1" />
 
@@ -65,9 +61,9 @@ export function TopBar() {
 // --- Theme Switcher ---
 
 const THEME_OPTIONS: Array<{ value: ThemeName; icon: string; label: string }> = [
-  { value: 'dark', icon: '🌙', label: 'Dark' },
-  { value: 'light', icon: '☀️', label: 'Light' },
-  { value: 'system', icon: '🖥️', label: 'System' },
+  { value: 'dark', icon: '◐', label: 'Dark' },
+  { value: 'light', icon: '☼', label: 'Light' },
+  { value: 'system', icon: '▣', label: 'System' },
 ];
 
 const NEXT_THEME: Record<ThemeName, ThemeName> = { dark: 'light', light: 'system', system: 'dark' };
@@ -108,23 +104,6 @@ function ThemeRadios({ theme, setTheme }: { theme: ThemeName; setTheme: (t: Them
           <span aria-hidden="true">{opt.icon}</span>
         </button>
       ))}
-    </div>
-  );
-}
-
-// --- Index chip: the arrow carries the sign, so the percent has none ("▲ 1.30%", not "▲ +1.30%") ---
-
-function IndexChip({ symbol, quote }: { symbol: string; quote: { ltp: number; change: number; changePercent: number } | null }) {
-  if (!quote) return <span className="text-sm font-semibold text-[var(--text-secondary)]">{symbol} —</span>;
-  const up = quote.change >= 0;
-  return (
-    <div className="flex items-center gap-2 text-sm" aria-label={`${symbol} ${formatIndianNumber(quote.ltp, 2)}, ${up ? 'up' : 'down'} ${Math.abs(quote.changePercent).toFixed(2)} percent`}>
-      <span className="font-semibold tracking-wide text-[var(--text-secondary)]">{symbol}</span>
-      <span className="font-bold tabular-nums text-[var(--text-primary)]">{formatIndianNumber(quote.ltp, 2)}</span>
-      <span className={`hidden rounded px-1.5 py-0.5 text-xs font-medium tabular-nums min-[420px]:inline ${up ? 'bg-[var(--status-ok)]/10 text-[var(--status-ok)]' : 'bg-[var(--status-bad)]/10 text-[var(--status-bad)]'}`}>
-        {formatArrowPercent(quote.changePercent)}
-      </span>
-      <span aria-hidden="true" className={`min-[420px]:hidden ${up ? 'text-[var(--status-ok)]' : 'text-[var(--status-bad)]'}`}>{up ? '▲' : '▼'}</span>
     </div>
   );
 }
