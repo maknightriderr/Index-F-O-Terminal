@@ -46,6 +46,26 @@ export function Sidebar() {
   const assetTabs = useAssetTabsStore((s) => s.tabs);
   const switchToTab = useAssetTabsStore((s) => s.switchToTab);
 
+  if (activeTab === 'dashboard') {
+    const primary = ['dashboard', 'indices', 'best-setups', 'paper-trades', 'signal-diagnostics', 'system-health'];
+    const shortLabel: Record<string, string> = { dashboard: 'Dashboard', indices: 'Markets', 'best-setups': 'Setups', 'paper-trades': 'Paper trades', 'signal-diagnostics': 'Research', 'system-health': 'Health' };
+    const items = NAV_GROUPS.flatMap(g => g.items);
+    return <aside aria-label="Primary" className="desk-rail relative z-20 flex h-full w-14 shrink-0 flex-col border-r border-[var(--border-primary)] bg-[var(--bg-secondary)] md:w-24">
+      <div className="flex h-16 shrink-0 items-center justify-center border-b border-[var(--border-primary)]"><span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--desk-accent)] font-bold text-[var(--desk-accent-ink)]">F&O</span></div>
+      <nav aria-label="Pages" className="min-h-0 flex-1 space-y-2 overflow-y-auto px-1.5 py-3">
+        {primary.map(id => { const item = items.find(i => i.id === id)!; return <button key={id} type="button" aria-current={id === activeTab ? 'page' : undefined} aria-label={item.label} title={item.description} onClick={() => setActiveTab(id)} className={`flex min-h-12 w-full flex-col items-center justify-center gap-2 rounded-lg px-1 py-3 text-xs md:min-h-20 ${id === activeTab ? 'border-l-2 border-[var(--desk-accent)] bg-[var(--desk-accent)]/10 text-[var(--desk-accent)]' : 'text-[var(--text-secondary)] hover:bg-[var(--surface-card-alt)]'}`}><Icon d={ICONS[item.icon] ?? ICONS.dashboard} /><span className="hidden md:block">{shortLabel[id]}</span></button>; })}
+        <details className="relative">
+          <summary className="flex min-h-12 cursor-pointer list-none flex-col items-center justify-center gap-2 rounded-lg py-3 text-xs text-[var(--text-secondary)] md:min-h-20" aria-label="All pages"><span aria-hidden="true" className="text-xl">⋯</span><span className="hidden md:block">All pages</span></summary>
+          <nav aria-label="All terminal pages" className="fixed bottom-4 left-14 top-20 ml-2 w-64 overflow-y-auto md:left-24 rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-3 shadow-xl">
+            {NAV_GROUPS.map(g => <div key={g.id}><p className="desk-eyebrow px-2 py-2">{g.title}</p>{g.items.map(i => <button key={i.id} type="button" onClick={() => setActiveTab(i.id)} className="block min-h-9 w-full rounded px-2 text-left text-sm hover:bg-[var(--surface-card-alt)]">{i.label}</button>)}</div>)}
+            {assetTabs.map(t => <button key={t.id} type="button" onClick={() => switchToTab(t.id)} className="block min-h-9 w-full px-2 text-left text-sm">{t.symbol} workspace</button>)}
+          </nav>
+        </details>
+      </nav>
+      <div className="flex justify-center border-t border-[var(--border-primary)] py-3"><AddAssetButton compact /></div>
+    </aside>;
+  }
+
   const itemClass = (active: boolean) =>
     `relative flex w-full items-center rounded-lg px-2.5 py-2 text-sm transition-colors ${
       active ? 'bg-[var(--desk-accent)]/10 text-[var(--text-primary)] font-semibold' : 'text-[var(--text-secondary)] hover:bg-[var(--surface-card-alt)] hover:text-[var(--text-primary)]'

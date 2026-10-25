@@ -1,0 +1,18 @@
+OB and FVG detected from closed fixture candles PASS
+DARK ACCESSIBILITY []
+PAGE ERRORS []
+LAYOUT {
+  width: 1484,
+  scroll: 1484,
+  areas: '"watch chart spotlight" "trades trades spotlight"'
+}
+LIGHT toggle PASS
+ACCESSIBILITY []
+LAPTOP three-column layout PASS
+ALL PAGES navigation reachable PASS
+PERSISTED light PASS
+SYSTEM theme follows OS PASS
+MCX spot disabled PASS
+MOBILE no page overflow PASS { width: 334, scroll: 334 }
+FAILED HISTORY clears previous chart zones PASS
+WRITES []

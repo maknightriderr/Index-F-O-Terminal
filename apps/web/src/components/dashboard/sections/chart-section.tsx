@@ -14,9 +14,9 @@ import { StatusBadge } from '@/components/ui/status-badge';
 // ============================================================
 // SECTION E — MAIN CHART WITH A LEGEND
 // ============================================================
-// Overlays are toggled per group, each with a legend entry. A group whose data is not recorded is listed as NOT AVAILABLE
-// with the reason (order-block zones and order-flow delta / POC / VAH / VAL are not exposed to the chart), never drawn
-// from a guess. Order-flow data would be INFERRED aggressor side, not exchange delta, and is labelled so.
+// Engine snapshot levels are separate from InstrumentChart's closed-candle OB/FVG analysis.
+// Missing engine levels remain unavailable; chart zones do not imply a recorded strategy signal.
+// Order-flow data would be INFERRED aggressor side, not exchange delta, and is labelled so.
 // ============================================================
 
 export interface InstrumentOption {
@@ -77,7 +77,7 @@ export function ChartSection({
     });
   };
   const price = quote?.ltp ?? (typeof state.bias.inputs.spotPrice === 'number' ? (state.bias.inputs.spotPrice as number) : null);
-  const unavailable = groups.filter((g) => !g.available);
+  const unavailable = groups.filter((g) => !g.available && g.group !== 'ORDER_BLOCK');
 
   return (
     <Section
@@ -94,9 +94,9 @@ export function ChartSection({
     >
       <InstrumentChart symbol={instrument.symbol} exchange={instrument.exchange} hasSpot={instrument.hasSpot} overlayLines={overlayLines} />
 
-      <div className="mt-3 border-t border-[var(--border-primary)] pt-3">
+      <div className="mt-2 border-t border-[var(--border-primary)] pt-3">
         <div role="group" aria-label="Chart overlays" className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-medium text-[var(--text-secondary)]">Overlays:</span>
+          <span className="text-sm font-medium text-[var(--text-secondary)]">Engine levels:</span>
           {groups
             .filter((g) => g.available)
             .map((g) => {
@@ -115,17 +115,17 @@ export function ChartSection({
                 </button>
               );
             })}
-          {groups.every((g) => !g.available) && <span className="text-sm text-[var(--text-secondary)]">No overlay data recorded for {instrument.label}.</span>}
+          {groups.every((g) => !g.available) && <span className="text-sm text-[var(--text-secondary)]">No engine levels recorded for {instrument.label}.</span>}
         </div>
         {unavailable.length > 0 && (
           <details className="mt-2 text-sm text-[var(--text-secondary)]">
-            <summary className="cursor-pointer">Not available on this chart ({unavailable.length})</summary>
+            <summary className="cursor-pointer">Unavailable engine levels ({unavailable.length})</summary>
             <ul className="mt-2 space-y-1.5">
               {unavailable.map((g) => (
                 <li key={g.group} className="flex flex-wrap items-start gap-2">
                   <StatusBadge tone="off" label="NOT AVAILABLE" />
                   <span>
-                    <strong className="text-[var(--text-primary)]">{g.label}</strong>: {g.reason}
+                    <strong className="text-[var(--text-primary)]">{g.group === 'STRUCTURE_ZONE' ? 'Engine structure levels' : g.label}</strong>: {g.reason}
                   </span>
                 </li>
               ))}

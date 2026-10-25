@@ -1,5 +1,7 @@
 # Trading desk UI — 25 October 2026
 
+Follow-up: [dashboard proportions and candle zones correction](../zone-overlays/README.md) supersedes the original OB/FVG display limitation and laptop breakpoint described below.
+
 Implements the approved graphite/teal desktop concept and a corresponding light theme, based on main `02946c1da2ec0702d89bcf7320857699e9680b03` (includes the order-flow feed alert fix).
 
 ## Delivered
