@@ -13,24 +13,20 @@ import { useChartPatterns } from '@/lib/use-chart-patterns';
 import { useFeedSummary } from '@/lib/use-feed-summary';
 import { useHealth } from '@/lib/use-health';
 import { ChartPatternsPanel } from '@/components/common/chart-patterns-panel';
-import { PageBody, PageHeader, Section } from '@/components/ui/card';
+import { Section } from '@/components/ui/card';
 import { WatchlistPanel } from './watchlist-panel';
 import { StatusBar } from './sections/status-bar';
 import { RegimeSummary } from './sections/regime-summary';
 import { PaperTradesPanel } from './sections/paper-trades-panel';
-import { BestSetupsPanel } from './sections/best-setups-panel';
+import { DeskWatchlist, SetupSpotlight, StrategyResearch } from './sections/trading-desk';
 import { ChartSection, INSTRUMENTS } from './sections/chart-section';
 import { FiiDiiPanel, OptionsPanel, TopMoversPanel, RiskSentimentPanel, FnoScreenerPanel } from './sections/secondary';
 
 // ============================================================
-// DASHBOARD — action first
+// DASHBOARD — chart-centred trading desk
 // ============================================================
-//   A  Market and feed status       how current is the data, per feed and exchange session
-//   B  Market regime                what the engine last concluded, from where, and when
-//   C  My paper trades              simulated trades open now and closed today
-//   D  Best current setups          recorded candidates and whether they can trade
-//   E  Main chart                   with a legend of the overlays the recorded data supports
-//   F  Secondary market information FII/DII, options OI, movers, risk, screener — collapsible
+// Quotes and feed health above a watchlist / chart / setup spotlight workspace.
+// Paper trades sit below; regime and secondary research remain available further down.
 // Everything reads recorded data only: opening or refreshing this page never runs the engine, a scan or a write.
 // ============================================================
 
@@ -74,10 +70,15 @@ export function Dashboard() {
   const orderFlowStatus = healthData?.orderFlow?.status ?? null;
 
   return (
-    <PageBody>
-      <PageHeader title="Dashboard" subtitle="Is the data current, what is the market doing, what are my paper trades doing, and which setups are worth a look." />
-
-      <StatusBar />
+    <div className="trading-desk space-y-3">
+      <h1 className="sr-only">Trading desk dashboard</h1>
+      <StatusBar compact />
+      <div className="desk-grid">
+        <DeskWatchlist instrumentIdx={instrumentIdx} onInstrument={setInstrumentIdx} quotes={[...allIndices, ...indices]} now={feed.now} />
+        <div className="desk-chart"><ChartSection compact instrumentIdx={instrumentIdx} onInstrument={setInstrumentIdx} quote={quote} state={state} orderFlowStatus={orderFlowStatus} /></div>
+        <div className="desk-spotlight space-y-3"><SetupSpotlight symbol={instrument.symbol} exchange={instrument.exchange} /><StrategyResearch /></div>
+        <div className="desk-trades"><PaperTradesPanel compact /></div>
+      </div>
 
       <RegimeSummary
         label={instrument.label}
@@ -90,14 +91,7 @@ export function Dashboard() {
         now={feed.now}
       />
 
-      <div className="grid grid-cols-1 gap-5 2xl:grid-cols-2">
-        <PaperTradesPanel />
-        <BestSetupsPanel />
-      </div>
-
-      <ChartSection instrumentIdx={instrumentIdx} onInstrument={setInstrumentIdx} quote={quote} state={state} orderFlowStatus={orderFlowStatus} />
-
-      <Section title="More market information" subtitle="Secondary context. Each block can be collapsed.">
+      <Section title="More market information" subtitle="Institutional flows, options, movers and your saved watchlist." collapsible defaultOpen={false}>
         <div className="space-y-5">
           <FiiDiiPanel today={fiiDii} history={fiiDiiHistory} />
           <OptionsPanel label={instrument.label} summary={optionSummary} availableExpiries={availableExpiries} currentExpiry={currentExpiry} onExpiryChange={setSelectedExpiry} />
@@ -112,6 +106,7 @@ export function Dashboard() {
           <ChartPatternsPanel patterns={patterns} loading={patternsLoading} />
         </div>
       </Section>
-    </PageBody>
+    <footer className="desk-bottom"><span>F&O Terminal · Paper trading workspace</span><span>Recorded data · Estimated costs · Times in IST</span></footer>
+    </div>
   );
 }

@@ -51,12 +51,14 @@ export function ChartSection({
   quote,
   state,
   orderFlowStatus,
+  compact = false,
 }: {
   instrumentIdx: number;
   onInstrument: (i: number) => void;
   quote: MarketQuote | null;
   state: BiasState;
   orderFlowStatus: string | null;
+  compact?: boolean;
 }) {
   const instrument = INSTRUMENTS[instrumentIdx];
   const { lines, groups } = useMemo(() => buildChartOverlays({ inputs: state.bias.inputs, structure: state.structure, setupWatch: state.setupWatch, orderFlowStatus }), [state.bias.inputs, state.structure, state.setupWatch, orderFlowStatus]);
@@ -82,13 +84,13 @@ export function ChartSection({
       title={`${instrument.label} chart`}
       subtitle={
         <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span className="font-semibold tabular-nums text-[var(--text-primary)]">{price != null ? formatIndianNumber(price, 2) : MISSING}</span>
+          <span className="text-2xl font-semibold tabular-nums tracking-tight text-[var(--text-primary)]">{price != null ? formatIndianNumber(price, 2) : MISSING}</span>
           {quote && <span className={quote.change >= 0 ? 'text-[var(--status-ok)]' : 'text-[var(--status-bad)]'}>{formatArrowPercent(quote.changePercent)}</span>}
           <span>Vol {quote && quote.volume > 0 ? formatCompact(quote.volume) : MISSING}</span>
           <span>VWAP {typeof state.bias.inputs.vwap === 'number' ? formatNumber(state.bias.inputs.vwap as number, 0) : MISSING}</span>
         </span>
       }
-      actions={<SegmentedControl label="Instrument" value={String(instrumentIdx)} onChange={(v) => onInstrument(Number(v))} options={INSTRUMENTS.map((inst, i) => ({ id: String(i), label: inst.label }))} />}
+      actions={compact ? <label className="text-xs text-[var(--text-secondary)]">Instrument<select aria-label="Chart instrument" value={instrumentIdx} onChange={(e) => onInstrument(Number(e.target.value))} className="ml-2 min-h-8 rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] px-2 text-sm text-[var(--text-primary)]">{INSTRUMENTS.map((inst, i) => <option key={inst.symbol} value={i}>{inst.label}</option>)}</select></label> : <SegmentedControl label="Instrument" value={String(instrumentIdx)} onChange={(v) => onInstrument(Number(v))} options={INSTRUMENTS.map((inst, i) => ({ id: String(i), label: inst.label }))} />}
     >
       <InstrumentChart symbol={instrument.symbol} exchange={instrument.exchange} hasSpot={instrument.hasSpot} overlayLines={overlayLines} />
 

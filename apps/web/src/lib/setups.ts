@@ -49,11 +49,11 @@ export type StageMap = Record<string, string>;
 
 /** The family a structure lifecycle belongs to: routed triggers carry it in their id (…:MP:A3:…), everything else is S1. */
 export function familyOfLifecycle(id: string): string {
-  const m = /:MP:([A-Z][0-9]):/.exec(id);
+  const m = /:MP:((?:OB|OF|[A-Z])[0-9]):/.exec(id);
   return m ? m[1] : 'S1';
 }
 
-const FAMILY_LABEL = (family: string): string => (family === 'S1' ? 'Structure S1' : family === 'INDICATOR' ? 'Indicator Engine' : /^[A-F][0-9]$/.test(family) ? `Trigger ${family}` : family);
+const FAMILY_LABEL = (family: string): string => (family === 'OB1' ? 'Order Block OB1' : family === 'OF1' ? 'Order Flow OF1' : family === 'S1' ? 'Structure S1' : family === 'INDICATOR' ? 'Indicator Engine' : /^[A-F][0-9]$/.test(family) ? `Trigger ${family}` : family);
 
 /** Pure: a family's stage, as the registry reports it (INDICATOR is the live consensus engine). */
 function stageOf(family: string, stages: StageMap): string | null {

@@ -130,7 +130,7 @@ const TIMEFRAME_CONFIG: Record<Timeframe, { interval: CandleInterval; days: numb
 // --negative tokens in globals.css) — lightweight-charts takes JS color
 // values, not CSS custom properties, so these are kept in sync by hand.
 const CHART_COLORS = {
-  dark: { text: '#9ca3af', grid: 'rgba(255,255,255,0.06)', up: '#34d399', down: '#f87171', border: 'rgba(255,255,255,0.08)', support: '#34d399', resistance: '#f87171' },
+  dark: { text: '#9ca3af', grid: 'rgba(255,255,255,0.06)', up: '#26dfcc', down: '#f87171', border: 'rgba(255,255,255,0.08)', support: '#34d399', resistance: '#f87171' },
   light: { text: '#475569', grid: 'rgba(15,23,42,0.06)', up: '#059669', down: '#dc2626', border: 'rgba(15,23,42,0.1)', support: '#059669', resistance: '#dc2626' },
 };
 
@@ -174,10 +174,20 @@ export function InstrumentChart({
   overlayLines?: ChartOverlayLine[];
 }) {
   const theme = useUISettingsStore((s) => s.theme);
-  const resolvedTheme = resolveTheme(theme);
+  const [systemTheme, setSystemTheme] = useState<'dark' | 'light'>(() => resolveTheme('system'));
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-color-scheme: light)');
+    const update = () => setSystemTheme(media.matches ? 'light' : 'dark');
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+  const resolvedTheme = theme === 'system' ? systemTheme : theme;
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const volumeRef = useRef<ISeriesApi<'Histogram'> | null>(null);
+  const [hasVolume, setHasVolume] = useState(false);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const patternSeriesRef = useRef<ISeriesApi<'Line'>[]>([]);
   const candleTimesRef = useRef<UTCTimestamp[]>([]);
@@ -250,7 +260,7 @@ export function InstrumentChart({
     const chart = createChart(containerRef.current, {
       layout: { background: { type: ColorType.Solid, color: 'transparent' }, textColor: c.text },
       grid: { vertLines: { color: c.grid }, horzLines: { color: c.grid } },
-      rightPriceScale: { borderColor: c.border },
+      rightPriceScale: { borderColor: c.border, scaleMargins: { top: 0.08, bottom: 0.22 } },
       timeScale: { borderColor: c.border, timeVisible: true, secondsVisible: false },
       autoSize: true,
     });
@@ -261,6 +271,9 @@ export function InstrumentChart({
       wickUpColor: c.up,
       wickDownColor: c.down,
     });
+    const volume = chart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: 'volume', lastValueVisible: false, priceLineVisible: false });
+    volume.priceScale().applyOptions({ scaleMargins: { top: 0.84, bottom: 0 }, visible: false });
+    volumeRef.current = volume;
     chartRef.current = chart;
     seriesRef.current = series;
     setChartReady(true);
@@ -269,6 +282,7 @@ export function InstrumentChart({
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
+      volumeRef.current = null;
       priceLinesRef.current = [];
       patternSeriesRef.current = [];
       setChartReady(false);
@@ -283,7 +297,7 @@ export function InstrumentChart({
     chartRef.current.applyOptions({
       layout: { textColor: c.text },
       grid: { vertLines: { color: c.grid }, horzLines: { color: c.grid } },
-      rightPriceScale: { borderColor: c.border },
+      rightPriceScale: { borderColor: c.border, scaleMargins: { top: 0.08, bottom: 0.22 } },
       timeScale: { borderColor: c.border },
     });
     seriesRef.current.applyOptions({ upColor: c.up, downColor: c.down, wickUpColor: c.up, wickDownColor: c.down });
@@ -338,6 +352,11 @@ export function InstrumentChart({
           close: c.close,
         }));
         seriesRef.current.setData(data);
+        // Only actual reported candle volume; missing/invalid values are gaps.
+        const volumeColors = CHART_COLORS[resolvedTheme];
+        const volumeData = candles.flatMap((c, i) => typeof c.volume === 'number' && Number.isFinite(c.volume) && c.volume >= 0 ? [{ time: data[i].time, value: c.volume, color: `${c.close >= c.open ? volumeColors.up : volumeColors.down}66` }] : []);
+        volumeRef.current?.setData(volumeData);
+        setHasVolume(volumeData.some((bar) => bar.value > 0));
         if (!isRefresh) chartRef.current?.timeScale().fitContent();
         candleTimesRef.current = data.map((d) => d.time);
         lastBarRef.current = data.length > 0 ? { ...data[data.length - 1] } : null;
@@ -388,6 +407,8 @@ export function InstrumentChart({
       .catch(() => {
         if (cancelled) return;
         seriesRef.current?.setData([]);
+        volumeRef.current?.setData([]);
+        setHasVolume(false);
         setHasData(false);
         setDetectedPattern(null);
         setLoading(false);
@@ -471,9 +492,10 @@ export function InstrumentChart({
             <button
               key={tf}
               onClick={() => setTimeframe(tf)}
+              aria-pressed={timeframe === tf}
               className={`px-2.5 py-1 text-xs font-semibold rounded-md whitespace-nowrap transition-colors ${
                 timeframe === tf
-                  ? 'bg-indigo-500/15 text-indigo-500 light:text-indigo-700'
+                  ? 'bg-[var(--desk-accent)]/10 text-[var(--desk-accent)]'
                   : 'text-gray-400 light:text-slate-600 hover:bg-gray-800/40 light:hover:bg-slate-100'
               }`}
             >
@@ -488,7 +510,7 @@ export function InstrumentChart({
             disabled={!hasSpot}
             title={hasSpot ? undefined : 'No spot instrument for this symbol — futures/options only'}
             className={`px-2.5 py-1 text-xs font-semibold rounded-md transition-colors ${
-              mode === 'SPOT' ? 'bg-indigo-500/20 text-indigo-500 light:text-indigo-700' : hasSpot ? 'text-gray-400 light:text-slate-600' : 'text-gray-700 light:text-slate-300 cursor-not-allowed'
+              mode === 'SPOT' ? 'bg-[var(--desk-accent)]/10 text-[var(--desk-accent)]' : hasSpot ? 'text-gray-400 light:text-slate-600' : 'text-gray-700 light:text-slate-300 cursor-not-allowed'
             }`}
           >
             Spot
@@ -496,7 +518,7 @@ export function InstrumentChart({
           <button
             onClick={() => setMode('FUTURES')}
             className={`px-2.5 py-1 text-xs font-semibold rounded-md transition-colors ${
-              mode === 'FUTURES' ? 'bg-indigo-500/20 text-indigo-500 light:text-indigo-700' : 'text-gray-400 light:text-slate-600'
+              mode === 'FUTURES' ? 'bg-[var(--desk-accent)]/10 text-[var(--desk-accent)]' : 'text-gray-400 light:text-slate-600'
             }`}
           >
             Futures
@@ -504,7 +526,8 @@ export function InstrumentChart({
         </div>
       </div>
 
-      <div ref={containerRef} className="relative h-[300px] w-full md:h-[380px]">
+      <p className="mb-2 text-xs text-[var(--text-secondary)]">{hasVolume ? 'Volume · recorded candles (refreshes with history)' : 'Volume unavailable for this instrument / range'}</p>
+      <div ref={containerRef} className="relative h-[300px] w-full md:h-[360px]">
         {(loading || !hasData) && (
           <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-400 light:text-slate-600 pointer-events-none">
             {loading ? 'Loading chart…' : 'No chart data for this range'}

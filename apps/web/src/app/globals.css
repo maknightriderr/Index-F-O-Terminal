@@ -18,10 +18,10 @@
 
 :root {
   /* Terminal Color Palette (dark — default) */
-  --bg-primary: #0a0a0f;
-  --bg-secondary: #0d0d14;
-  --bg-tertiary: #12121a;
-  --bg-elevated: #1a1a24;
+  --bg-primary: #090f17;
+  --bg-secondary: #0c1520;
+  --bg-tertiary: #101c29;
+  --bg-elevated: #192a3a;
 
   --border-primary: rgba(255, 255, 255, 0.06);
   --border-secondary: rgba(255, 255, 255, 0.08);
@@ -32,10 +32,10 @@
      #4b5563 (2.47:1) — the latter failed even the 3:1 non-text minimum,
      and both were routinely used at 10-11px where WCAG allows no
      large-text exemption at all. */
-  --text-primary: #e5e7eb;
-  --text-secondary: #9ca3af;
+  --text-primary: #edf3fc;
+  --text-secondary: #a7b6cb;
   --text-muted: #9ca3af;
-  --text-dimmed: #7d8695;
+  --text-dimmed: #93a3b8;
 
   --accent-green: #34d399;
   --accent-red: #f87171;
@@ -65,17 +65,25 @@
   --focus-ring: #a5b4fc;
 
   /* Surfaces and spacing used by the shared primitives */
-  --surface-card: #12121a;
+  --surface-card: #101c29;
   --surface-card-alt: rgba(255, 255, 255, 0.025);
   --surface-row-alt: rgba(255, 255, 255, 0.025);
-  --surface-sticky: #0f0f17;
+  --surface-sticky: #0e1925;
   --space-card: 1rem;
   --space-section: 1.25rem;
-  --radius-card: 0.75rem;
+  --radius-card: 0.625rem;
+  --desk-accent: #26dfcc;
+  --desk-accent-ink: #052c29;
+  --desk-shadow: 0 8px 28px -18px #000;
+  color-scheme: dark;
 }
 
 [data-theme="light"] {
-  --bg-primary: #f8fafc;
+  --desk-accent: #086f66;
+  --desk-accent-ink: #ffffff;
+  --desk-shadow: 0 5px 24px -16px #50657a;
+  color-scheme: light;
+  --bg-primary: #eef3f7;
   --bg-secondary: #ffffff;
   --bg-tertiary: #ffffff;
   --bg-elevated: #f1f5f9;
@@ -1059,3 +1067,47 @@ html, body {
   background: rgba(15, 23, 42, 0.06);
 }
 
+
+/* Trading desk: the same hierarchy in graphite and daylight. */
+.trading-desk { max-width: 1920px; margin: auto; padding: 16px; }
+.desk-grid { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); align-items: start; }
+.desk-grid > * { min-width: 0; }
+.desk-watchlist { grid-area: watch; }
+.desk-chart { grid-area: chart; }
+.desk-spotlight { grid-area: spotlight; }
+.desk-trades { grid-area: trades; }
+.desk-grid { grid-template-areas: "watch" "chart" "spotlight" "trades"; }
+.desk-panel { border: 1px solid var(--border-secondary); border-radius: var(--radius-card); background: var(--surface-card); box-shadow: var(--desk-shadow); }
+.desk-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--border-primary); }
+.desk-eyebrow { color: var(--text-secondary); font-size: 12px; letter-spacing: .09em; text-transform: uppercase; }
+.desk-primary { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; border-radius: 6px; padding: 8px 14px; background: var(--desk-accent); color: var(--desk-accent-ink); font-weight: 650; font-size: 14px; }
+.desk-link { color: var(--desk-accent); font-size: 13px; font-weight: 600; }
+.desk-watch-rows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.desk-watch-row { border-bottom: 1px solid var(--border-primary); padding: 16px 12px; text-align: left; min-width: 0; border-left: 3px solid transparent; }
+.desk-watch-row[aria-pressed="true"] { background: color-mix(in srgb, var(--desk-accent) 9%, transparent); border-left-color: var(--desk-accent); }
+.desk-watch-row:hover { background: var(--surface-card-alt); }
+.desk-tickers { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
+.desk-tickers > div { border: 0; border-right: 1px solid var(--border-primary); border-radius: 0; background: none; padding: 12px 16px; }
+.desk-tickers > div:last-child { border-right: 0; }
+.desk-chart > section { box-shadow: var(--desk-shadow); }
+.desk-chart > section > div:first-child { border-bottom: 1px solid var(--border-primary); margin-bottom: 12px; }
+.desk-trades > section { box-shadow: var(--desk-shadow); }
+.desk-bottom { display: flex; gap: 16px; flex-wrap: wrap; justify-content: space-between; padding: 12px 2px; font-size: 12px; color: var(--text-secondary); }
+@media (min-width: 768px) { .desk-tickers { grid-template-columns: repeat(4,minmax(0,1fr)); } .desk-watch-rows { grid-template-columns: repeat(3,minmax(0,1fr)); } }
+@media (min-width: 1200px) {
+  .desk-grid { grid-template-columns: minmax(0,1fr) 320px; grid-template-areas: "watch watch" "chart spotlight" "trades spotlight"; }
+  .desk-watch-rows { grid-template-columns: repeat(6,minmax(0,1fr)); }
+}
+@media (min-width: 1500px) {
+  .desk-grid { grid-template-columns: 220px minmax(0,1fr) 340px; grid-template-areas: "watch chart spotlight" "trades trades spotlight"; }
+  .desk-watch-rows { grid-template-columns: minmax(0,1fr); }
+  .desk-watch-row { padding-block: 10px; }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; animation-iteration-count: 1 !important; } }
+
+@media (max-width: 767px) {
+  .trading-desk { padding: 10px; }
+  .desk-tickers, .desk-watch-rows { display: flex; overflow-x: auto; scroll-snap-type: x proximity; }
+  .desk-tickers > div { flex: 0 0 235px; scroll-snap-align: start; }
+  .desk-watch-row { flex: 0 0 170px; scroll-snap-align: start; }
+}
