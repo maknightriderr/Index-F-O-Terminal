@@ -26,6 +26,7 @@ import { createMarketWebSocketServer } from './ws/server.js';
 import { AngelOneProvider } from './providers/angel-one/index.js';
 import { createAuthRoutes } from './api/auth.js';
 import { createSessionRoutes } from './api/session.js';
+import { createOfitTokenShareRoutes, ofitShareSecretFrom, OFIT_SHARE_PATH } from './api/ofit-token-share.js';
 import { apiAuthConfigFrom, authMode, requireSession } from './lib/api-auth.js';
 import { createInstrumentRoutes } from './api/instruments.js';
 import { createMarketDataRoutes } from './api/market.js';
@@ -126,6 +127,9 @@ app.use((req, _res, next) => {
 const apiAuth = apiAuthConfigFrom(process.env, config.jwt.secret);
 app.use('/api', requireSession(apiAuth));
 app.use('/api/session', createSessionRoutes(apiAuth));
+// OFIT (separate analysis-only project) borrows the Dhan token this terminal holds, so only one app logs in to Dhan.
+// Outside /api: it has its own machine secret, and is off (404) unless OFIT_SHARED_SECRET is set (api/ofit-token-share.ts).
+app.use(OFIT_SHARE_PATH, createOfitTokenShareRoutes(ofitShareSecretFrom(process.env)));
 
 // --- API Routes ---
 
