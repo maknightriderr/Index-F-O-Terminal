@@ -1111,3 +1111,14 @@ html, body {
   .desk-tickers > div { flex: 0 0 235px; scroll-snap-align: start; }
   .desk-watch-row { flex: 0 0 170px; scroll-snap-align: start; }
 }
+
+/* Match the approved desk proportions at laptop widths, not only at 1500px+. */
+@media (min-width: 1280px) {
+  .trading-desk { padding: 10px; }
+  .desk-grid { gap: 10px; grid-template-columns: 200px minmax(0, 1fr) 300px; grid-template-areas: "watch chart spotlight" "trades trades spotlight"; }
+  .desk-watch-rows { grid-template-columns: minmax(0, 1fr); }
+  .desk-watch-row { padding: 12px 10px; }
+  .desk-panel-heading { padding: 12px 14px; }
+}
+@media (min-width: 1536px) { .desk-grid { grid-template-columns: 240px minmax(0, 1fr) 340px; } }
+.desk-rail details[open] > summary { color: var(--desk-accent); background: var(--surface-card-alt); }

@@ -9,6 +9,8 @@ import { detectPattern, detectCandlestickPattern } from '@fno/analytics';
 import type { DetectedPattern } from '@fno/analytics';
 import { CM_SEGMENT, FO_SEGMENT, KNOWN_INDEX_TOKENS, isMarketOpen } from '@fno/shared';
 import type { CandleInterval, Exchange } from '@fno/shared';
+import { buildChartZones, selectChartZones, type ChartZone } from '@/lib/chart-zones';
+import { ChartZonePrimitive } from '@/lib/chart-zone-primitive';
 import type { ChartOverlayLine, OverlayTone } from '@/lib/chart-overlays';
 
 // Only genuine reversal shapes get marked. detectCandlestickPattern scores
@@ -186,6 +188,11 @@ export function InstrumentChart({
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const zonesPrimitive = useRef<ChartZonePrimitive | null>(null);
+  const [zoneData, setZoneData] = useState<{ identity: string; zones: ChartZone[]; reason: string | null }>({ identity: '', zones: [], reason: null });
+  const [showOb, setShowOb] = useState(true);
+  const [showFvg, setShowFvg] = useState(true);
+  const [showZoneHistory, setShowZoneHistory] = useState(false);
   const volumeRef = useRef<ISeriesApi<'Histogram'> | null>(null);
   const [hasVolume, setHasVolume] = useState(false);
   const priceLinesRef = useRef<IPriceLine[]>([]);
@@ -200,7 +207,7 @@ export function InstrumentChart({
   const [resolvedToken, setResolvedToken] = useState<string | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
   const [reversalCount, setReversalCount] = useState(0);
-  const [timeframe, setTimeframe] = useState<Timeframe>('1D');
+  const [timeframe, setTimeframe] = useState<Timeframe>('15m');
   const [mode, setMode] = useState<ChartMode>(hasSpot ? 'SPOT' : 'FUTURES');
   const [loading, setLoading] = useState(true);
   const [hasData, setHasData] = useState(false);
@@ -274,6 +281,9 @@ export function InstrumentChart({
     const volume = chart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: 'volume', lastValueVisible: false, priceLineVisible: false });
     volume.priceScale().applyOptions({ scaleMargins: { top: 0.84, bottom: 0 }, visible: false });
     volumeRef.current = volume;
+    const zonePrimitive = new ChartZonePrimitive();
+    series.attachPrimitive(zonePrimitive);
+    zonesPrimitive.current = zonePrimitive;
     chartRef.current = chart;
     seriesRef.current = series;
     setChartReady(true);
@@ -283,6 +293,7 @@ export function InstrumentChart({
       chartRef.current = null;
       seriesRef.current = null;
       volumeRef.current = null;
+      zonesPrimitive.current = null;
       priceLinesRef.current = [];
       patternSeriesRef.current = [];
       setChartReady(false);
@@ -352,6 +363,8 @@ export function InstrumentChart({
           close: c.close,
         }));
         seriesRef.current.setData(data);
+        const intervalSeconds = ({ ONE_MINUTE: 60, THREE_MINUTE: 180, FIVE_MINUTE: 300, FIFTEEN_MINUTE: 900, THIRTY_MINUTE: 1800, ONE_HOUR: 3600, ONE_DAY: 86400 } as Record<string, number>)[interval];
+        setZoneData({ identity, ...buildChartZones(data, intervalSeconds, Date.now() / 1000) });
         // Only actual reported candle volume; missing/invalid values are gaps.
         const volumeColors = CHART_COLORS[resolvedTheme];
         const volumeData = candles.flatMap((c, i) => typeof c.volume === 'number' && Number.isFinite(c.volume) && c.volume >= 0 ? [{ time: data[i].time, value: c.volume, color: `${c.close >= c.open ? volumeColors.up : volumeColors.down}66` }] : []);
@@ -410,6 +423,7 @@ export function InstrumentChart({
         volumeRef.current?.setData([]);
         setHasVolume(false);
         setHasData(false);
+        setZoneData({ identity, zones: [], reason: 'Candle history unavailable.' });
         setDetectedPattern(null);
         setLoading(false);
       });
@@ -418,6 +432,11 @@ export function InstrumentChart({
       cancelled = true;
     };
   }, [symbol, exchange, timeframe, mode, refreshTick, resolvedTheme]);
+
+  const chartIdentity = `${symbol}|${exchange}|${timeframe}|${mode}`;
+  const matchingZones = zoneData.identity === chartIdentity ? zoneData.zones : [];
+  const visibleZones = React.useMemo(() => selectChartZones(zoneData.identity === chartIdentity ? zoneData.zones : [], showOb, showFvg, showZoneHistory), [zoneData, chartIdentity, showOb, showFvg, showZoneHistory]);
+  useEffect(() => { zonesPrimitive.current?.setZones(visibleZones, resolvedTheme === 'light'); }, [visibleZones, resolvedTheme, chartReady]);
 
   // Auto-drawn support/resistance — the same OI-wall levels already
   // surfaced elsewhere in the app (Market Bias's supportLevels/
@@ -437,6 +456,8 @@ export function InstrumentChart({
       );
     };
 
+    // Snapshot overlays are spot-based for NSE/BSE; do not put them on a futures price scale.
+    if (hasSpot && mode === 'FUTURES') return;
     if (overlayLines) {
       const oc = OVERLAY_COLORS[resolvedTheme];
       overlayLines.forEach((l) => addLine(l.price, oc[l.tone], l.label, l.dash));
@@ -444,7 +465,7 @@ export function InstrumentChart({
     }
     supportLevels.slice(0, 2).forEach((lvl, i) => addLine(lvl.strike, c.support, i === 0 ? 'Support' : `Support ${i + 1}`));
     resistanceLevels.slice(0, 2).forEach((lvl, i) => addLine(lvl.strike, c.resistance, i === 0 ? 'Resistance' : `Resistance ${i + 1}`));
-  }, [chartReady, supportLevels, resistanceLevels, overlayLines, resolvedTheme]);
+  }, [chartReady, supportLevels, resistanceLevels, overlayLines, resolvedTheme, hasSpot, mode]);
 
   // Draw whatever pattern was just detected on THIS timeframe's candles —
   // each line is a real 2-point trendline segment (lightweight-charts v4
@@ -526,6 +547,10 @@ export function InstrumentChart({
         </div>
       </div>
 
+      <div role="group" aria-label="Candle zones" className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+        <span className="text-[var(--text-secondary)]">Chart zones</span>
+        {([{ label: `Order blocks (${matchingZones.filter(z => z.kind === 'OB' && z.active).length})`, on: showOb, toggle: () => setShowOb(!showOb) }, { label: `FVG (${matchingZones.filter(z => z.kind === 'FVG' && z.active).length})`, on: showFvg, toggle: () => setShowFvg(!showFvg) }, { label: 'Ended zones', on: showZoneHistory, toggle: () => setShowZoneHistory(!showZoneHistory) }]).map(control => <button key={control.label} type="button" aria-pressed={control.on} onClick={control.toggle} className={`min-h-8 rounded border px-2 ${control.on ? 'border-[var(--desk-accent)]/50 bg-[var(--desk-accent)]/10 text-[var(--desk-accent)]' : 'border-[var(--border-secondary)] text-[var(--text-secondary)]'}`}>{control.label}</button>)}
+      </div>
       <p className="mb-2 text-xs text-[var(--text-secondary)]">{hasVolume ? 'Volume · recorded candles (refreshes with history)' : 'Volume unavailable for this instrument / range'}</p>
       <div ref={containerRef} className="relative h-[300px] w-full md:h-[360px]">
         {(loading || !hasData) && (
@@ -575,6 +600,11 @@ export function InstrumentChart({
           </div>
         )}
       </div>
+      <details className="mt-2 text-xs text-[var(--text-secondary)]">
+        <summary className="cursor-pointer">Zone details · {timeframe} {mode.toLowerCase()} · {visibleZones.length} shown</summary>
+        <p className="mt-2">Chart analysis from loaded closed candles using OB-2.0 and touch-based FVG rules. These are chart zones, not confirmed trade entries. Up to six of each type are shown; forming candles are excluded.</p>
+        {zoneData.identity !== chartIdentity ? <p>Loading zones for this chart…</p> : zoneData.reason ? <p>{zoneData.reason}</p> : visibleZones.length === 0 ? <p>No zones match these controls in the loaded history.</p> : <ul className="mt-2 space-y-1">{visibleZones.map(z => <li key={z.id}>{z.kind} · {z.direction.toLowerCase()} · {z.bottom.toFixed(2)}–{z.top.toFixed(2)} · {z.state.toLowerCase().replace('_', ' ')}</li>)}</ul>}
+      </details>
     </div>
   );
 }
