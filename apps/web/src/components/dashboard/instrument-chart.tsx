@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createChart, ColorType, LineStyle, type IChartApi, type ISeriesApi, type IPriceLine, type UTCTimestamp } from 'lightweight-charts';
 import { useUISettingsStore } from '@/stores';
+import { equityChartToken } from '@/lib/fno-radar';
 import { api } from '@/lib/api';
 import { useMarketTicks } from '@/lib/ws';
 import { detectPattern, detectCandlestickPattern } from '@fno/analytics';
@@ -334,7 +335,10 @@ export function InstrumentChart({
     if (!isRefresh) setLoading(true);
 
     const resolveToken = async (): Promise<string | null> => {
-      if (mode === 'SPOT') return KNOWN_INDEX_TOKENS[symbol] ?? null;
+      if (mode === 'SPOT') {
+        if (KNOWN_INDEX_TOKENS[symbol]) return KNOWN_INDEX_TOKENS[symbol];
+        return equityChartToken(await api.searchInstruments(symbol, exchange, 'CM'), symbol, exchange);
+      }
       try {
         const futures = await api.getFutures(symbol, exchange);
         return futures.contracts.find((c) => c.expiryLabel === 'current')?.token ?? null;
@@ -351,7 +355,7 @@ export function InstrumentChart({
       .then((token) => {
         if (cancelled || !token) throw new Error('no token');
         setResolvedToken(token);
-        return api.getHistoricalData(token, formatForApi(from), formatForApi(to), exchange, interval);
+        return api.getHistoricalData(token, formatForApi(from), formatForApi(to), exchange, interval, mode === 'FUTURES' ? 'FO' : 'CM');
       })
       .then((candles: any[]) => {
         if (cancelled || !seriesRef.current) return;

@@ -52,7 +52,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'dashboard', label: 'Dashboard', description: 'Market status, paper trades, best setups and the main chart.', icon: 'dashboard' },
       { id: 'indices', label: 'Indices', description: 'NSE, BSE and MCX index levels.', icon: 'indices' },
-      { id: 'fno-explorer', label: 'F&O Explorer', description: 'The F&O universe: price and OI, OI build-up, and IV and Greeks views.', icon: 'fno-stocks' },
+      { id: 'fno-explorer', label: 'F&O Explorer', description: 'Market Radar breadth and top bullish/bearish candidates; F&O price, OI, IV and Greeks.', icon: 'fno-stocks' },
       { id: 'corporate-actions', label: 'Corporate Actions', description: 'Dividends, splits, bonuses and other corporate actions.', icon: 'corporate-actions' },
     ],
   },

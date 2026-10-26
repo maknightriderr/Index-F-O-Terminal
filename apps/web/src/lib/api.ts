@@ -162,9 +162,10 @@ class ApiClient {
     return this.get<{ authenticated: boolean; provider: string }>('/api/auth/status');
   }
 
-  async searchInstruments(query: string, exchange?: string) {
+  async searchInstruments(query: string, exchange?: string, segment?: string) {
     const params = new URLSearchParams({ q: query });
     if (exchange) params.set('exchange', exchange);
+    if (segment) params.set('segment', segment);
     return this.get<any[]>(`/api/instruments?${params}`);
   }
 
@@ -269,9 +270,9 @@ class ApiClient {
     return this.get<TradeSetupRecord[]>(`/api/backtesting/trade-setups?limit=${limit}`);
   }
 
-  async getHistoricalData(token: string, from: string, to: string, exchange = 'NSE', interval = 'ONE_DAY') {
+  async getHistoricalData(token: string, from: string, to: string, exchange = 'NSE', interval = 'ONE_DAY', segment?: 'CM' | 'FO') {
     return this.get<any[]>(
-      `/api/market/historical/${token}?exchange=${exchange}&interval=${interval}&from=${from}&to=${to}`
+      `/api/market/historical/${token}?exchange=${exchange}&interval=${interval}&from=${from}&to=${to}${segment ? `&segment=${segment}` : ''}`
     );
   }
 

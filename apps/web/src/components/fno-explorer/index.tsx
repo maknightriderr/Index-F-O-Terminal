@@ -1,5 +1,6 @@
 'use client';
 
+import { FnoRadar } from './radar';
 import React, { useMemo, useState } from 'react';
 import { isMarketOpen, formatIndianNumber, formatCompact, LIQUID_SPREAD_MAX_PCT } from '@fno/shared';
 import type { FnoScannerRow } from '@fno/shared';
@@ -189,7 +190,7 @@ export function FnoExplorerPage() {
     <PageBody>
       <PageHeader
         title="F&O Explorer"
-        subtitle="Every NSE stock with F&O contracts, in three views of the same scan: price and OI, OI build-up, and IV and Greeks."
+        subtitle="Market Radar breadth and directional watchlists, with price/OI, OI build-up and IV/Greeks views of the same recorded scan."
         actions={
           <span className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
             <FreshnessBadge state={freshness.state} detail={freshness.detail} />
@@ -200,6 +201,8 @@ export function FnoExplorerPage() {
         <SegmentedControl<ExplorerView> label="Explorer view" value={view} onChange={setView} options={EXPLORER_VIEWS.map((v) => ({ id: v.id, label: v.label, title: v.description }))} />
         <p className="mt-2 text-sm text-[var(--text-secondary)]">{viewMeta.description}</p>
       </PageHeader>
+
+      <FnoRadar rows={rows} now={now} asOf={asOf} error={error} />
 
       <DataState
         loading={loading}
