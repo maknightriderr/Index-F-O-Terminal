@@ -1,0 +1,3 @@
+dark radar lists, stock click, cash chart OB/FVG, responsive layout and radar accessibility PASS
+light radar lists, stock click, cash chart OB/FVG, responsive layout and radar accessibility PASS
+No browser errors or API writes

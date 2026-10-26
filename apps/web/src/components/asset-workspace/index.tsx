@@ -1,5 +1,8 @@
 'use client';
 
+import { InstrumentChart } from '@/components/dashboard/instrument-chart';
+import { OptionsRisk } from './options-risk';
+import { Section } from '@/components/ui/card';
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { useMarketStore } from '@/stores';
 import { api, ApiError } from '@/lib/api';
@@ -263,6 +266,11 @@ export function AssetWorkspace() {
         <div className="text-sm text-gray-400 light:text-slate-600 py-16 text-center">Loading workspace…</div>
       )}
 
+
+      <Section title={`${selectedSymbol} price structure`} subtitle="Chart analysis from closed candles · OB/FVG zones are not entry recommendations">
+        <InstrumentChart key={`${selectedExchange}:${selectedSymbol}`} symbol={selectedSymbol} exchange={selectedExchange as Exchange} hasSpot={selectedExchange !== 'MCX'} />
+      </Section>
+      {chain && chain.symbol === selectedSymbol ? <OptionsRisk key={`${selectedExchange}:${selectedSymbol}:${chain.expiry}`} chain={chain} /> : <Section title="IV & option risk" subtitle="Unavailable until this stock’s option chain is loaded"><p className="text-sm text-[var(--text-secondary)]">Contract IV, Greeks, spread and IV-drop scenarios need a valid option-chain snapshot.</p></Section>}
 
       {/* Market Intelligence */}
       <div>

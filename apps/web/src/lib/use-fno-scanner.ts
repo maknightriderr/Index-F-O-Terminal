@@ -41,8 +41,8 @@ export function useFnoScanner(exchange = 'NSE'): {
           setMeta(m ?? null);
           setError(null);
           setLoading(false);
+          setRows(data ?? []);
           if (data && data.length > 0) {
-            setRows(data);
             for (const r of data) recordPrice(r.symbol, r.price);
           }
         })
