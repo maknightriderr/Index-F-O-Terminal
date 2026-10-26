@@ -13,6 +13,12 @@ const M15 = 15 * 60_000;
 const status = new Map<string, { barTime: number; alignment: FootprintBar['priceAlignment'] }>();
 export const orderFlowAlignmentStatus = () => Object.fromEntries(status);
 
+/** "YYYY-MM-DD" from a date or a date-time expiry; null when it is neither. */
+function expiryDate(expiry: string | null | undefined): string | null {
+  const m = /^(\d{4}-\d{2}-\d{2})(?:[ T]|$)/.exec(expiry?.trim() ?? '');
+  return m ? m[1] : null;
+}
+
 function brokerDate(t: number): string {
   return new Date(t + 330 * 60_000).toISOString().slice(0, 16).replace('T', ' ');
 }
@@ -34,9 +40,12 @@ export function alignedFootprintsFor(provider: MarketDataProvider, symbol: strin
       const future = await resolveNearestFuturesContract(provider, symbol, exchange);
       // Broker tokens/display symbols differ. Join exchange + underlying +
       // expiry, then require the exact Dhan contract on each raw footprint.
+      // Expiries compare as IST dates: Dhan's scrip master carries a time
+      // ("2026-10-27 14:30:00"), Angel's instrument a date ("2026-10-27").
+      const feedExpiry = expiryDate(feed?.expiry);
       const verified = feed && future && feed.exchange === exchange && future.exchange === exchange
-        && future.underlying?.toUpperCase() === symbol.toUpperCase() && future.expiry === feed.expiry;
-      const contract = verified ? { instrument: feed.tradingSymbol, expiry: feed.expiry } : null;
+        && future.underlying?.toUpperCase() === symbol.toUpperCase() && feedExpiry != null && expiryDate(future.expiry) === feedExpiry;
+      const contract = verified ? { instrument: feed.tradingSymbol, expiry: feedExpiry } : null;
       let futuresBars: Of1Bar[] = [];
       if (contract && exchange !== 'MCX' && raw.size > 0) {
         // Dedicated key: cannot truncate the longer history of other engines.
