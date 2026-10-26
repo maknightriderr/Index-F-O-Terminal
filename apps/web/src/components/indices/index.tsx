@@ -1,5 +1,7 @@
 'use client';
 
+import { PageHeader } from '@/components/ui/card';
+
 import React, { useMemo, useState } from 'react';
 import { useAllIndices } from '@/lib/use-all-indices';
 import { getPriceHistory } from '@/lib/price-history-store';
@@ -89,27 +91,20 @@ export function IndicesPage() {
   }, [filtered]);
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-gray-100 light:text-slate-900">Indices</h1>
-          <p className="text-sm text-gray-400 light:text-slate-600 mt-1">
-            Every broad-market and sectoral index this terminal tracks, across NSE, BSE, and MCX's commodity benchmark indices.
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
+    <div className="terminal-page mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
+      <PageHeader title={"Indices"} subtitle={<>Every broad-market and sectoral index this terminal tracks, across NSE, BSE, and MCX's commodity benchmark indices.</>} actions={<><div className="flex items-center gap-3">
           <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-xs text-gray-400 light:text-slate-600">
             <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
             {isLive ? `${filtered.length} of ${indices.length}` : loading ? 'Loading…' : 'Unreachable'}
           </span>
           <input
+            aria-label="Filter indices"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Filter index…"
             className="bg-gray-900/70 light:bg-slate-50 border border-gray-700/60 light:border-slate-200 rounded-lg px-3 py-1.5 text-xs text-gray-200 light:text-slate-800 placeholder-gray-600 light:placeholder-slate-400 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/20 transition-colors w-40"
           />
-        </div>
-      </div>
+        </div></>} />
 
       <div className="flex items-center flex-wrap gap-4">
         <FilterPills label="Exchange" options={EXCHANGE_OPTIONS} value={exchangeFilter} onChange={setExchangeFilter} />

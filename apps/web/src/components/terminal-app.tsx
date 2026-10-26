@@ -12,7 +12,6 @@ import { BestSetupsPage } from '@/components/best-setups';
 import { MeasurementPage } from '@/components/measurement';
 import { EvidencePage } from '@/components/evidence';
 import { SystemHealthPage } from '@/components/system-health';
-import { PerformanceNav } from '@/components/performance/performance-nav';
 import { UnbuiltPage } from '@/components/common/unbuilt-page';
 import { AlertsPage } from '@/components/alerts';
 import { StrategyScannerPage } from '@/components/strategy-scanner';
@@ -60,21 +59,18 @@ export function TerminalApp() {
       case 'backtesting':
         return (
           <>
-            <PerformanceNav />
             <BacktestingPage />
           </>
         );
       case 'loss-attribution':
         return (
           <>
-            <PerformanceNav />
             <LossAttributionPage />
           </>
         );
       case 'signal-diagnostics':
         return (
           <>
-            <PerformanceNav />
             <SignalDiagnosticsPage />
           </>
         );

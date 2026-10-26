@@ -2,7 +2,7 @@
 
 import React, { useMemo, useState } from 'react';
 import { isMarketOpen } from '@fno/shared';
-import { PageBody, PageHeader, Section } from '@/components/ui/card';
+import { PageBody, PageHeader, Section, MetricGrid, MetricTile } from '@/components/ui/card';
 import { ActionButton, Disclosure, FilterBar, SearchField, SegmentedControl, SelectField } from '@/components/ui/controls';
 import { DataState } from '@/components/ui/data-state';
 import { FreshnessBadge, type DecisionState } from '@/components/ui/status-badge';
@@ -59,6 +59,12 @@ export function BestSetupsPage() {
         staleNote={freshness.state === 'MARKET_CLOSED' ? `${freshness.detail} These are the last recorded candidates, not live opportunities.` : freshness.state === 'STALE' ? freshness.detail : undefined}
         skeletonRows={6}
       >
+        <MetricGrid>
+          <MetricTile label="Paper-eligible" value={counts.LIVE_PAPER_ELIGIBLE} sub="Candidates, not open trades" tone="ok" />
+          <MetricTile label="Shadow research" value={counts.SHADOW_ONLY} sub="Measured without trade eligibility" />
+          <MetricTile label="Rejected" value={counts.REJECTED} sub="Recorded decision refusals" tone="warn" />
+          <MetricTile label="Unavailable" value={counts.UNAVAILABLE} sub="Stage not available or retired" />
+        </MetricGrid>
         <Section
           title="Candidates"
           subtitle={`${counts.LIVE_PAPER_ELIGIBLE} live paper-eligible · ${counts.SHADOW_ONLY} shadow only · ${counts.REJECTED} rejected · ${counts.UNAVAILABLE} unavailable`}

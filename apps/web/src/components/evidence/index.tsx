@@ -6,7 +6,6 @@ import { ActionButton, SimulatedNotice } from '@/components/ui/controls';
 import { DataTable, type Column } from '@/components/ui/data-table';
 import { DataState } from '@/components/ui/data-state';
 import { StatusBadge, type Tone } from '@/components/ui/status-badge';
-import { PerformanceNav } from '@/components/performance/performance-nav';
 import {
   useEvidenceReport,
   type ScorecardEntry,
@@ -241,7 +240,6 @@ function PortfolioRisk() {
 export function EvidencePage() {
   return (
     <>
-      <PerformanceNav />
       <PageBody>
         <PageHeader
           title="Evidence"

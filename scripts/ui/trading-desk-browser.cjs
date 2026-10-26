@@ -5,9 +5,10 @@ const fs=require('node:fs');
 const output=process.env.DESK_QA_OUTPUT || '/tmp/fno-desk-qa';
 fs.mkdirSync(output,{recursive:true});
 const assert=require('node:assert/strict');
+let browser;
 (async()=>{
 const binary=process.env.DESK_CHROMIUM_MODULE ? (await import(process.env.DESK_CHROMIUM_MODULE)).default : null;
-const browser=await chromium.launch({executablePath:process.env.DESK_CHROMIUM_EXECUTABLE || undefined, args:binary?.args, headless:true});
+browser=await chromium.launch({executablePath:process.env.DESK_CHROMIUM_EXECUTABLE || undefined, args:binary?.args, headless:true});
 const context=await browser.newContext({viewport:{width:1600,height:1280},deviceScaleFactor:1,locale:"en-IN"});
 const page=await context.newPage();const errors=[];const writes=[];
 let failHistory=false;
@@ -30,6 +31,7 @@ else if(path.includes('/historical/')) {
 else if(path==='/api/structure/watchlist')data={enabled:true,day:'2026-10-23',rows:[{id:'fixture:NIFTY:MP:OB1:1',symbol:'NIFTY',exchange:'NSE',direction:'BULLISH',entry:24560,stop:24520,t1:{price:24640},rToT1:2,stage:'CONFIRMED',stageAt:seen,score:80,timeframe:'15m',pool:null,zone:null,preview:null}]};
 else if(path==='/api/diagnostics/triggers')data={stages:{S1:'PAPER_RESEARCH',OB1:'PAPER_RESEARCH',OF1:'PAPER_RESEARCH'}};
 else if(path==='/api/market-scanner')data=null;
+else if(path==='/api/diagnostics/measurement')data={schemaReady:true,versions:{strategy:'UI-FIXTURE'},reliability:{measurementsReliableFrom:'2026-10-12T00:00:00Z',tradesSinceReliable:12,eligibleSinceReliable:10,withCostRecord:10},populations:{historicalRows:20,measurementReliableRows:12,netR:'UI TEST FIXTURE: costs estimated'},byCohort:[],reliableSample:{byCohort:[],byFamily:[],byInstrument:[]},costs:{n:10,basis:'ESTIMATED_MODEL',spreadFromQuote:8,spreadFallbackAssumed:2,medianTotalPct:2,medianCostR:.1,medianCostPctOfPlannedGrossProfit:5,reconcilesWithSetupCost:{matches:10,checked:10}}};
 else if(path==='/api/paper-trades')data={trades:[trade('NIFTY','CE',186.5,205.5,.53),trade('BANKNIFTY','PE',402,395.8,-.31)],counts:{total:2,open:2,openUntracked:0,closed:0,excludedFromPerformance:2,recorded:2,truncated:false}};
 else if(path.includes('/bias-snapshot/'))data=null;
 else if(path.includes('/futures/'))data={contracts:[{token:'fixture',expiryLabel:'current'}]};
@@ -40,7 +42,8 @@ return route.fulfill({contentType:'application/json',headers:{'access-control-al
 });
 await page.goto(process.env.DESK_QA_URL || 'http://localhost:3000',{waitUntil:'networkidle'});
 await page.getByRole('heading',{name:'Setup spotlight',exact:true}).waitFor();
-await page.evaluate(()=>{const label=document.createElement('div');label.textContent='UI TEST FIXTURE · SAMPLE DATA';label.style.cssText='position:fixed;bottom:0;left:0;z-index:9999;padding:5px 12px;background:#0c1520;color:#fff;font:12px sans-serif';document.body.append(label)});
+await page.evaluate(()=>{const label=document.createElement('div');label.id='ui-fixture-label';label.textContent='UI TEST FIXTURE · SAMPLE DATA';label.style.cssText='position:fixed;bottom:0;left:0;z-index:9999;padding:5px 12px;background:#0c1520;color:#fff;font:12px sans-serif';document.body.append(label)});
+if(process.env.DESK_WORKSPACES_ONLY === '1') { await require('./terminal-workspaces-browser.cjs')(page,output);assert.equal(errors.length,0,JSON.stringify(errors));assert.equal(writes.length,0);console.log('PAGE ERRORS',errors,'WRITES',writes);await browser.close();return; }
 await page.getByRole('button', {name:'15m',exact:true}).click();
 await page.waitForTimeout(600);
 await page.getByRole('button',{name:/Order blocks \([1-9]/}).waitFor();
@@ -69,7 +72,7 @@ assert.equal(await page.locator('.desk-grid').evaluate(el=>getComputedStyle(el).
 console.log('LAPTOP three-column layout PASS');
 await page.getByLabel('All pages',{exact:true}).click();
 assert.equal(await page.getByRole('navigation',{name:'All terminal pages',exact:true}).isVisible(),true);
-await page.getByLabel('All pages',{exact:true}).click();
+await page.getByRole('button',{name:'Close page directory',exact:true}).click();
 console.log('ALL PAGES navigation reachable PASS');
 await page.screenshot({path:path.join(output,'laptop-light.png'),fullPage:true});
 await page.setViewportSize({width:1600,height:1280});
@@ -100,8 +103,9 @@ await page.getByRole('button',{name:'FVG (0)',exact:true}).waitFor();
 await page.getByText(/Zone details ·/).click();
 await page.getByText('Candle history unavailable.',{exact:true}).waitFor();
 console.log('FAILED HISTORY clears previous chart zones PASS');
+if(process.env.DESK_ALL_WORKSPACES === '1') { failHistory=false; await require('./terminal-workspaces-browser.cjs')(page,output); }
 console.log('WRITES',writes);
 assert.equal(errors.length,0);assert.equal(writes.length,0);
 await browser.close();
 if(errors.length||writes.length)process.exitCode=1;
-})().catch(e=>{console.error(e);process.exitCode=1});
+})().catch(async e=>{console.error(e);await browser?.close();process.exitCode=1});

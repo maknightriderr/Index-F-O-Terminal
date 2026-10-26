@@ -185,9 +185,9 @@ export function AssetWorkspace() {
   const marketOpen = isMarketOpen(selectedExchange as Exchange);
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6 animate-fade-in">
+    <div className="terminal-page mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6 animate-fade-in">
       {/* Asset Header */}
-      <div className="relative overflow-hidden flex items-center justify-between flex-wrap gap-3 px-5 py-4 rounded-2xl bg-gradient-to-br from-[#161624] via-[#12121c] to-[#0d0d14] light:from-white light:via-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 shadow-[0_12px_40px_-18px_rgba(0,0,0,0.8)] light:shadow-[0_4px_20px_-10px_rgba(0,0,0,0.12)]">
+      <div className="terminal-asset-header relative overflow-hidden flex items-center justify-between flex-wrap gap-3 px-5 py-4 rounded-2xl bg-gradient-to-br from-[#161624] via-[#12121c] to-[#0d0d14] light:from-white light:via-white light:to-slate-50 border border-gray-800/60 light:border-slate-200 shadow-[0_12px_40px_-18px_rgba(0,0,0,0.8)] light:shadow-[0_4px_20px_-10px_rgba(0,0,0,0.12)]">
         <div className="absolute inset-0 bg-gradient-to-r from-emerald-500/[0.04] via-transparent to-cyan-500/[0.04] pointer-events-none" />
         <div className="relative flex items-baseline gap-5">
           <div>

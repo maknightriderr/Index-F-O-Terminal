@@ -1,5 +1,7 @@
 'use client';
 
+import { PageHeader } from '@/components/ui/card';
+
 // ============================================================
 // SYSTEM LEARNING / SELF-AUDIT
 // ============================================================
@@ -173,17 +175,10 @@ export function SystemLearningPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
-      <div className="flex items-start justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-gray-100 light:text-slate-900">🧠 System Learning</h1>
-          <p className="text-xs text-gray-400 light:text-slate-600 mt-0.5 max-w-3xl">
-            What went wrong, why, whether it has happened before, and whether the protection put in place actually worked.
+    <div className="terminal-page mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
+      <PageHeader title={"System Learning"} subtitle={<>What went wrong, why, whether it has happened before, and whether the protection put in place actually worked.
             This engine records and proposes — it does not change trading logic. Anything in the trading path stops at a
-            proposal awaiting human approval.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+            proposal awaiting human approval.</>} actions={<><div className="flex items-center gap-2">
           {!isLive && <Pill tone="bad">backend unreachable</Pill>}
           <button
             type="button"
@@ -192,8 +187,7 @@ export function SystemLearningPage() {
           >
             Refresh
           </button>
-        </div>
-      </div>
+        </div></>} />
 
       {error && (
         <div className="border border-red-500/40 light:border-red-300 bg-red-500/10 light:bg-red-50 rounded-lg p-3 text-xs text-red-300 light:text-red-700">

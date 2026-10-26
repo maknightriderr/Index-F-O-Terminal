@@ -1,21 +1,7 @@
 'use client';
 
 import React from 'react';
-import { useMarketStore } from '@/stores';
-import { PERFORMANCE_PAGES, pageMeta, type PageId } from '@/lib/nav';
-import { TabStrip, Disclosure } from '@/components/ui/controls';
-
-/** The tab strip every Performance page carries, so Backtesting, Loss Attribution, Signal Diagnostics and Measurement read as one area. */
-export function PerformanceNav() {
-  const activeTab = useMarketStore((s) => s.activeTab);
-  const setActiveTab = useMarketStore((s) => s.setActiveTab);
-  const tabs = PERFORMANCE_PAGES.map((id) => ({ id, label: pageMeta(id)?.label ?? id, title: pageMeta(id)?.description }));
-  return (
-    <nav aria-label="Performance area" className="px-4 pt-4 md:px-6">
-      <TabStrip<PageId> value={(PERFORMANCE_PAGES.includes(activeTab as PageId) ? activeTab : 'backtesting') as PageId} tabs={tabs} onChange={(id) => setActiveTab(id)} label="Performance views" />
-    </nav>
-  );
-}
+import { Disclosure } from '@/components/ui/controls';
 
 /**
  * What each figure means. Several of them describe the SAME trades with different denominators or different sources, and

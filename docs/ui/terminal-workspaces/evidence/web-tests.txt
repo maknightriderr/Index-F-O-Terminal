@@ -1,0 +1,40 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> @fno/web@0.1.0 test
+> vitest run
+
+
+ RUN  v3.2.7 /workspace/scratch/c1db35db8761/fno-review/apps/web
+
+ ✓ src/components/layout/__tests__/terminal-navigation.test.tsx (4 tests) 515ms
+   ✓ terminal-wide navigation > searches every existing page and navigates without creating assets or trades  338ms
+ ✓ src/components/signal-diagnostics/order-flow-panel.test.tsx (2 tests) 293ms
+ ✓ src/components/auth/__tests__/login-gate.test.tsx (7 tests) 841ms
+   ✓ sign-in gate > shows only the password form until signed in; nothing behind the gate mounts  365ms
+ ✓ src/components/evidence/__tests__/evidence-page.test.tsx (3 tests) 1248ms
+   ✓ Evidence page > shows the Old Indicator as a protected benchmark, never a demotion candidate  1143ms
+ ✓ src/components/assistant/__tests__/assistant.test.tsx (7 tests) 1098ms
+   ✓ floating AI assistant > opens from the bottom-right button, closes with Escape, and gives focus back to the button  413ms
+ ✓ src/components/ui/__tests__/ui-primitives.test.tsx (13 tests) 1072ms
+   ✓ DataTable > pages long lists and shows the denominator  311ms
+ ✓ src/components/signal-diagnostics/entry-confirmation-panel.test.tsx (3 tests) 301ms
+ ✓ src/lib/__tests__/health-model.test.ts (12 tests) 77ms
+ ✓ src/lib/__tests__/display-integrity-source.test.ts (2 tests) 31ms
+ ✓ src/lib/__tests__/chart-zones.test.ts (8 tests) 25ms
+ ✓ src/components/dashboard/sections/__tests__/trading-desk.test.tsx (8 tests) 681ms
+   ✓ search keeps original instrument indexes and selection routes to the correct chart  309ms
+ ✓ src/lib/__tests__/paper-trade-view.test.ts (11 tests) 82ms
+ ✓ src/lib/__tests__/views.test.ts (14 tests) 84ms
+ ✓ src/lib/__tests__/format.test.ts (10 tests) 72ms
+ ✓ src/lib/__tests__/freshness.test.ts (7 tests) 73ms
+ ✓ src/lib/__tests__/quote-time.test.ts (2 tests) 9ms
+ ✓ src/lib/__tests__/read-only-source.test.ts (2 tests) 20ms
+ ✓ src/lib/__tests__/nav-url-theme.test.ts (13 tests) 51ms
+ ✓ src/lib/__tests__/topbar-dropdown.test.ts (2 tests) 6ms
+ ✓ src/lib/__tests__/session.test.ts (4 tests) 10ms
+
+ Test Files  20 passed (20)
+      Tests  134 passed (134)
+   Start at  07:51:31
+   Duration  8.56s (transform 3.94s, setup 7.36s, collect 7.69s, tests 6.59s, environment 19.89s, prepare 4.16s)
+

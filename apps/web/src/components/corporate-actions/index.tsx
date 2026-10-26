@@ -1,5 +1,7 @@
 'use client';
 
+import { PageHeader } from '@/components/ui/card';
+
 import React, { useMemo, useState } from 'react';
 import { useUpcomingCorporateActions } from '@/lib/use-corporate-actions';
 import { useAssetTabsStore } from '@/stores';
@@ -47,27 +49,20 @@ export function CorporateActionsPage() {
   }, [actions, query, typeFilter]);
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-gray-100 light:text-slate-900">Corporate Actions</h1>
-          <p className="text-sm text-gray-400 light:text-slate-600 mt-1">
-            Upcoming dividends, bonuses, splits, rights issues, and buybacks across NSE — ex-date today or later, nearest first. Sourced from NSE's own corporate-filings data.
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
+    <div className="terminal-page mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
+      <PageHeader title={"Corporate Actions"} subtitle={<>Upcoming dividends, bonuses, splits, rights issues, and buybacks across NSE — ex-date today or later, nearest first. Sourced from NSE's own corporate-filings data.</>} actions={<><div className="flex items-center gap-3">
           <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-xs text-gray-400 light:text-slate-600">
             <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
             {isLive ? `${filtered.length} of ${actions.length}` : loading ? 'Loading…' : 'Unreachable'}
           </span>
           <input
+            aria-label="Filter corporate actions"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Filter symbol/company…"
             className="bg-gray-900/70 light:bg-slate-50 border border-gray-700/60 light:border-slate-200 rounded-lg px-3 py-1.5 text-xs text-gray-200 light:text-slate-800 placeholder-gray-600 light:placeholder-slate-400 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/20 transition-colors w-48"
           />
-        </div>
-      </div>
+        </div></>} />
 
       <FilterPills label="Type" options={TYPE_OPTIONS} value={typeFilter} onChange={setTypeFilter} />
 

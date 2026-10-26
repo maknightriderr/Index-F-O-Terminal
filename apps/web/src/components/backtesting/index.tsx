@@ -1,5 +1,7 @@
 'use client';
 
+import { PageHeader } from '@/components/ui/card';
+
 import React, { useState } from 'react';
 import { DEFAULT_RISK_CONFIG, ESTIMATED_ROUND_TRIP_COST_PCT, TRADE_LOGIC_UPDATED_AT, formatExpiryDate, formatIndianNumber, engineBadge, researchTriggerOf } from '@fno/shared';
 import type { WinRateBucket, TradeSetupRecord, RiskMetrics, ExpiredCloseBreakdown, IndependentBetsSummary, LogicVersionBucket, StrategyBucket } from '@fno/shared';
@@ -68,15 +70,8 @@ export function BacktestingPage() {
     outcomeTab === 'ALL' ? history : outcomeTab === 'OPEN' ? history.filter((r) => !r.outcome) : history.filter((r) => !!r.outcome);
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-gray-100 light:text-slate-900">Backtesting</h1>
-          <p className="text-sm text-gray-400 light:text-slate-600 mt-1">
-            Win-rate analysis of every PAPER TRADE setup the system has generated, recorded live as it happened. Every outcome here is a SIMULATED OUTCOME against the setup&apos;s own stop/target — no order was placed, so no figure on this page is realised account P&amp;L. Coverage grows with what gets viewed/scanned; there&apos;s no way to backfill history.
-          </p>
-        </div>
-        <div className="flex items-center gap-3 flex-wrap">
+    <div className="terminal-page mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
+      <PageHeader title={"Backtesting"} subtitle={<>Win-rate analysis of every PAPER TRADE setup the system has generated, recorded live as it happened. Every outcome here is a SIMULATED OUTCOME against the setup&apos;s own stop/target — no order was placed, so no figure on this page is realised account P&amp;L. Coverage grows with what gets viewed/scanned; there&apos;s no way to backfill history.</>} actions={<><div className="flex items-center gap-3 flex-wrap">
           <div className="flex items-center gap-0.5 bg-gray-800/60 light:bg-slate-200/60 rounded-lg p-0.5" role="group" aria-label="Filter by selection logic">
             {(Object.keys(SCOPE_FILTER_LABELS) as ScopeFilter[]).map((s) => (
               <button
@@ -139,8 +134,7 @@ export function BacktestingPage() {
             <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
             {isLive ? 'Live' : loading ? 'Loading…' : 'Unreachable'}
           </span>
-        </div>
-      </div>
+        </div></>} />
       {analytics && (analytics.intradayCount > 0 && analytics.positionalCount > 0) && modeFilter === 'ALL' && (
         <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl px-4 py-2 text-blue-400 light:text-blue-700 text-xs">
           ℹ️ Showing Intraday ({analytics.intradayCount}) and Positional ({analytics.positionalCount}) combined — they have different SL sizing and hold times. Use the filter above to separate them.
