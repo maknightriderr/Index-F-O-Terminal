@@ -1,5 +1,7 @@
 'use client';
 
+import { PageHeader } from '@/components/ui/card';
+
 // ============================================================
 // SIGNAL DIAGNOSTICS
 // ============================================================
@@ -879,36 +881,20 @@ export function SignalDiagnosticsPage() {
   const { loading, error, summary, rejections, census, grades, leakage, performance, opportunity, versions, majorMoves, triggers, triggerStages, displacementRequiredBy, shadow, refresh } = data;
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-gray-100 light:text-slate-900">Signal Diagnostics</h1>
-          <p className="text-sm text-gray-400 light:text-slate-600 mt-1">
-            Are we missing good trades because of our architecture? Read-only, simulated paper-trade outcomes only. Instruments are shown separately; INDEX and MCX are never pooled.
-          </p>
-        </div>
-        <button onClick={refresh} className="text-xs px-3 py-1.5 rounded border border-gray-700 light:border-slate-300 text-gray-300 light:text-slate-700 hover:bg-gray-800/60 light:hover:bg-slate-100">
+    <div className="terminal-page mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
+      <PageHeader title={"Signal Diagnostics"} subtitle={<>Are we missing good trades because of our architecture? Read-only, simulated paper-trade outcomes only. Instruments are shown separately; INDEX and MCX are never pooled.</>} actions={<><button onClick={refresh} className="text-xs px-3 py-1.5 rounded border border-gray-700 light:border-slate-300 text-gray-300 light:text-slate-700 hover:bg-gray-800/60 light:hover:bg-slate-100">
           Refresh
-        </button>
-      </div>
+        </button></>} />
 
       <FilterBar {...filters} versions={versions} onChange={(patch) => setFilters((f) => ({ ...f, ...patch }))} />
 
-      <div className="flex gap-1 border-b border-gray-800/60 light:border-slate-200 overflow-x-auto">
-        {(Object.keys(VIEW_LABELS) as View[]).map((v) => (
-          <button
-            key={v}
-            onClick={() => setView(v)}
-            className={`px-3 py-2 text-xs font-medium border-b-2 -mb-px whitespace-nowrap ${
-              view === v ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-500 light:text-slate-500 hover:text-gray-300 light:hover:text-slate-700'
-            }`}
-          >
-            {VIEW_LABELS[v]}
-          </button>
-        ))}
-      </div>
-
-      {error && <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded px-3 py-2">{error}</div>}
+      <div className="terminal-research-grid">
+        <nav aria-label="Diagnostic views" className="terminal-research-nav">
+          <p className="desk-eyebrow">Research lenses</p>
+          {(Object.keys(VIEW_LABELS) as View[]).map(v => <button key={v} type="button" aria-pressed={view === v} onClick={() => setView(v)}>{VIEW_LABELS[v]}</button>)}
+        </nav>
+        <div className="terminal-research-content">
+      {error && <div role="alert" className="text-xs text-[var(--status-bad)] bg-red-500/10 border border-red-500/30 rounded px-3 py-2">{error}</div>}
       {loading && summary.length === 0 && !error && <p className="text-xs text-gray-500 light:text-slate-500 italic py-4">Loading…</p>}
 
       {view === 'opportunity' && <OpportunityView opportunity={opportunity} />}
@@ -922,6 +908,8 @@ export function SignalDiagnosticsPage() {
       {view === 'health' && <HealthView leakage={leakage} census={census} />}
       {view === 'moves' && <MajorMovesView rows={majorMoves} />}
       {view === 'registry' && <RegistryView triggers={triggers} stages={triggerStages} displacementRequiredBy={displacementRequiredBy} shadow={shadow} />}
+        </div>
+      </div>
     </div>
   );
 }

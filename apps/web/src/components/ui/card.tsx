@@ -12,7 +12,7 @@ import React, { useId, useState } from 'react';
 
 export function Card({ children, className = '', as: Tag = 'div', ...rest }: { children: React.ReactNode; className?: string; as?: 'div' | 'section' | 'article' } & React.HTMLAttributes<HTMLElement>) {
   return (
-    <Tag className={`rounded-[var(--radius-card)] border border-[var(--border-secondary)] bg-[var(--surface-card)] p-4 ${className}`} {...(rest as object)}>
+    <Tag className={`terminal-card rounded-[var(--radius-card)] border border-[var(--border-secondary)] bg-[var(--surface-card)] p-4 ${className}`} {...(rest as object)}>
       {children}
     </Tag>
   );
@@ -41,8 +41,8 @@ export function Section({
   const [open, setOpen] = useState(defaultOpen);
   const bodyId = useId();
   return (
-    <section id={id} aria-labelledby={`${bodyId}-h`} className={`rounded-[var(--radius-card)] border border-[var(--border-secondary)] bg-[var(--surface-card)] ${className}`}>
-      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 px-4 pt-4 pb-3">
+    <section id={id} aria-labelledby={`${bodyId}-h`} className={`terminal-section rounded-[var(--radius-card)] border border-[var(--border-secondary)] bg-[var(--surface-card)] ${className}`}>
+      <div className="terminal-section-heading flex flex-wrap items-start justify-between gap-x-4 gap-y-2 px-4 pt-4 pb-3">
         <div className="min-w-0">
           <h2 id={`${bodyId}-h`} className="text-base font-semibold text-[var(--text-primary)]">
             {collapsible ? (
@@ -70,9 +70,10 @@ export function Section({
 /** The top of every page: title, one-line purpose, actions and an optional tab strip beneath. */
 export function PageHeader({ title, subtitle, actions, children }: { title: string; subtitle?: React.ReactNode; actions?: React.ReactNode; children?: React.ReactNode }) {
   return (
-    <header className="mb-4">
+    <header className="terminal-page-header">
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
         <div className="min-w-0">
+          <p className="terminal-page-eyebrow">F&O Terminal <span aria-hidden="true">/</span> Workspace</p>
           <h1 className="text-xl font-semibold tracking-tight text-[var(--text-primary)]">{title}</h1>
           {subtitle && <p className="mt-1 max-w-3xl text-sm text-[var(--text-secondary)]">{subtitle}</p>}
         </div>
@@ -87,7 +88,7 @@ export function PageHeader({ title, subtitle, actions, children }: { title: stri
 export function MetricTile({ label, value, sub, tone, title }: { label: string; value: React.ReactNode; sub?: React.ReactNode; tone?: 'ok' | 'bad' | 'warn' | 'neutral'; title?: string }) {
   const color = tone === 'ok' ? 'text-[var(--status-ok)]' : tone === 'bad' ? 'text-[var(--status-bad)]' : tone === 'warn' ? 'text-[var(--status-warn)]' : 'text-[var(--text-primary)]';
   return (
-    <div className="min-w-0 rounded-lg border border-[var(--border-primary)] bg-[var(--surface-card-alt)] px-3 py-2.5" title={title}>
+    <div className="terminal-metric min-w-0 rounded-lg border border-[var(--border-primary)] bg-[var(--surface-card-alt)] px-3 py-2.5" data-tone={tone ?? 'neutral'} title={title}>
       <div className="text-xs font-medium uppercase tracking-wide text-[var(--text-secondary)]">{label}</div>
       <div className={`mt-1 text-xl font-semibold tabular-nums leading-7 ${color}`}>{value}</div>
       {sub && <div className="mt-0.5 text-xs text-[var(--text-secondary)]">{sub}</div>}
@@ -98,7 +99,7 @@ export function MetricTile({ label, value, sub, tone, title }: { label: string; 
 /** A responsive grid for metric tiles. */
 export function MetricGrid({ children, min = 150 }: { children: React.ReactNode; min?: number }) {
   return (
-    <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(auto-fit, minmax(${min}px, 1fr))` }}>
+    <div className="terminal-metric-grid grid gap-3" style={{ gridTemplateColumns: `var(--metric-columns, repeat(auto-fit, minmax(min(${min}px, 100%), 1fr)))` }}>
       {children}
     </div>
   );
@@ -106,5 +107,5 @@ export function MetricGrid({ children, min = 150 }: { children: React.ReactNode;
 
 /** The standard padded page body. */
 export function PageBody({ children }: { children: React.ReactNode }) {
-  return <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">{children}</div>;
+  return <div className="terminal-page mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">{children}</div>;
 }

@@ -6,7 +6,7 @@ import { ActionButton, SimulatedNotice } from '@/components/ui/controls';
 import { DataTable, type Column } from '@/components/ui/data-table';
 import { DataState, EmptyState, ErrorNotice } from '@/components/ui/data-state';
 import { StatusBadge } from '@/components/ui/status-badge';
-import { PerformanceNav, MetricDefinitions } from '@/components/performance/performance-nav';
+import { MetricDefinitions } from '@/components/performance/performance-nav';
 import { useMeasurement, type MeasurementReport, type Tally } from '@/lib/use-measurement';
 import { displayTally, reliabilityLines, SMALL_SAMPLE_BELOW } from '@/lib/measurement-view';
 import { MISSING } from '@/lib/format';
@@ -92,7 +92,6 @@ export function MeasurementPage() {
 
   return (
     <>
-      <PerformanceNav />
       <PageBody>
         <PageHeader
           title="Measurement"

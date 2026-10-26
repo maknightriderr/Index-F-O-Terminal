@@ -1,5 +1,7 @@
 'use client';
 
+import { PageHeader } from '@/components/ui/card';
+
 // ============================================================
 // LOSS ATTRIBUTION
 // ============================================================
@@ -264,16 +266,9 @@ export function LossAttributionPage() {
   }, [report]);
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
-      <div className="flex items-start justify-between flex-wrap gap-3">
-        <div className="max-w-3xl">
-          <h1 className="text-xl font-semibold tracking-tight text-gray-100 light:text-slate-900">Loss Attribution</h1>
-          <p className="text-sm text-gray-400 light:text-slate-600 mt-1">
-            Where the losing PAPER TRADES come from. Every figure is a SIMULATED OUTCOME — no order was placed and nothing here is account P&amp;L.
-            Read-only: this page filters and gates nothing. Sample size is stated per group; ADEQUATE means enough rows to read, not statistical significance.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
+    <div className="terminal-page mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
+      <PageHeader title={"Loss Attribution"} subtitle={<>Where the losing PAPER TRADES come from. Every figure is a SIMULATED OUTCOME — no order was placed and nothing here is account P&amp;L.
+            Read-only: this page filters and gates nothing. Sample size is stated per group; ADEQUATE means enough rows to read, not statistical significance.</>} actions={<><div className="flex items-center gap-2 flex-wrap">
           <div className="flex items-center gap-0.5 bg-gray-800/60 light:bg-slate-200/60 rounded-lg p-0.5" role="group" aria-label="Population">
             {(Object.keys(SCOPE_LABELS) as LossAttributionScope[]).map((s) => (
               <button
@@ -306,8 +301,7 @@ export function LossAttributionPage() {
           <button type="button" onClick={refresh} className="px-2.5 py-1 text-xs rounded-md border border-gray-700 light:border-slate-300 text-gray-300 light:text-slate-700 hover:bg-gray-800/40 light:hover:bg-slate-100">
             Refresh
           </button>
-        </div>
-      </div>
+        </div></>} />
 
       {!isLive && !loading && (
         <div className="border border-red-500/40 bg-red-500/10 text-red-300 light:text-red-700 rounded-lg px-3 py-2 text-xs">

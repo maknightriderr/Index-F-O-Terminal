@@ -1,9 +1,10 @@
 'use client';
 
 import React from 'react';
-import { useMarketStore, useUISettingsStore, useAssetTabsStore } from '@/stores';
+import { useMarketStore } from '@/stores';
 import { AddAssetButton } from '@/components/common/add-asset-button';
-import { NAV_GROUPS } from '@/lib/nav';
+import { NAV_GROUPS, resolveTab } from '@/lib/nav';
+import { useTerminalNavigation } from './terminal-navigation';
 
 // ============================================================
 // SIDEBAR ICONS — Inline SVG (Lucide-style, 18×18 stroked); no icon dependency.
@@ -41,115 +42,30 @@ const ICONS: Record<string, string> = {
 };
 
 export function Sidebar() {
-  const { sidebarOpen, toggleSidebar } = useUISettingsStore();
-  const { activeTab, setActiveTab } = useMarketStore();
-  const assetTabs = useAssetTabsStore((s) => s.tabs);
-  const switchToTab = useAssetTabsStore((s) => s.switchToTab);
-
-  if (activeTab === 'dashboard') {
-    const primary = ['dashboard', 'indices', 'best-setups', 'paper-trades', 'signal-diagnostics', 'system-health'];
-    const shortLabel: Record<string, string> = { dashboard: 'Dashboard', indices: 'Markets', 'best-setups': 'Setups', 'paper-trades': 'Paper trades', 'signal-diagnostics': 'Research', 'system-health': 'Health' };
-    const items = NAV_GROUPS.flatMap(g => g.items);
-    return <aside aria-label="Primary" className="desk-rail relative z-20 flex h-full w-14 shrink-0 flex-col border-r border-[var(--border-primary)] bg-[var(--bg-secondary)] md:w-24">
-      <div className="flex h-16 shrink-0 items-center justify-center border-b border-[var(--border-primary)]"><span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--desk-accent)] font-bold text-[var(--desk-accent-ink)]">F&O</span></div>
-      <nav aria-label="Pages" className="min-h-0 flex-1 space-y-2 overflow-y-auto px-1.5 py-3">
-        {primary.map(id => { const item = items.find(i => i.id === id)!; return <button key={id} type="button" aria-current={id === activeTab ? 'page' : undefined} aria-label={item.label} title={item.description} onClick={() => setActiveTab(id)} className={`flex min-h-12 w-full flex-col items-center justify-center gap-2 rounded-lg px-1 py-3 text-xs md:min-h-20 ${id === activeTab ? 'border-l-2 border-[var(--desk-accent)] bg-[var(--desk-accent)]/10 text-[var(--desk-accent)]' : 'text-[var(--text-secondary)] hover:bg-[var(--surface-card-alt)]'}`}><Icon d={ICONS[item.icon] ?? ICONS.dashboard} /><span className="hidden md:block">{shortLabel[id]}</span></button>; })}
-        <details className="relative">
-          <summary className="flex min-h-12 cursor-pointer list-none flex-col items-center justify-center gap-2 rounded-lg py-3 text-xs text-[var(--text-secondary)] md:min-h-20" aria-label="All pages"><span aria-hidden="true" className="text-xl">⋯</span><span className="hidden md:block">All pages</span></summary>
-          <nav aria-label="All terminal pages" className="fixed bottom-4 left-14 top-20 ml-2 w-64 overflow-y-auto md:left-24 rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-3 shadow-xl">
-            {NAV_GROUPS.map(g => <div key={g.id}><p className="desk-eyebrow px-2 py-2">{g.title}</p>{g.items.map(i => <button key={i.id} type="button" onClick={() => setActiveTab(i.id)} className="block min-h-9 w-full rounded px-2 text-left text-sm hover:bg-[var(--surface-card-alt)]">{i.label}</button>)}</div>)}
-            {assetTabs.map(t => <button key={t.id} type="button" onClick={() => switchToTab(t.id)} className="block min-h-9 w-full px-2 text-left text-sm">{t.symbol} workspace</button>)}
-          </nav>
-        </details>
-      </nav>
-      <div className="flex justify-center border-t border-[var(--border-primary)] py-3"><AddAssetButton compact /></div>
-    </aside>;
-  }
-
-  const itemClass = (active: boolean) =>
-    `relative flex w-full items-center rounded-lg px-2.5 py-2 text-sm transition-colors ${
-      active ? 'bg-[var(--desk-accent)]/10 text-[var(--text-primary)] font-semibold' : 'text-[var(--text-secondary)] hover:bg-[var(--surface-card-alt)] hover:text-[var(--text-primary)]'
-    }`;
-
-  return (
-    <aside
-      aria-label="Primary"
-      // Always the narrow icon rail on a phone: an expanded 224 px sidebar on a ~390 px screen leaves too little for the
-      // dense screens it navigates to. Every item keeps its name in aria-label and a tooltip.
-      className={`relative z-[2] flex h-full w-14 shrink-0 flex-col border-r border-[var(--border-primary)] bg-[var(--bg-secondary)] ${sidebarOpen ? 'md:w-48' : 'md:w-14'}`}
-    >
-      <button
-        type="button"
-        onClick={toggleSidebar}
-        aria-label={sidebarOpen ? 'Collapse the sidebar' : 'Expand the sidebar'}
-        aria-expanded={sidebarOpen}
-        className="flex h-16 items-center border-b border-[var(--border-primary)] px-3 text-left hover:bg-[var(--surface-card-alt)]"
-      >
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-emerald-400 to-cyan-500 text-xs font-bold text-black">F&O</span>
-        {sidebarOpen && <span className="ml-2.5 hidden truncate text-sm font-semibold tracking-tight md:inline">TERMINAL</span>}
-      </button>
-
-      <div className="border-b border-[var(--border-primary)] px-2 py-2">
-        <div className="md:hidden">
-          <AddAssetButton compact />
-        </div>
-        <div className="hidden md:block">
-          <AddAssetButton compact={!sidebarOpen} />
-        </div>
-      </div>
-
-      <nav aria-label="Pages" className="flex-1 space-y-1 overflow-y-auto px-1.5 py-2">
-        {NAV_GROUPS.map((group) => (
-          <div key={group.id} role="group" aria-labelledby={`nav-${group.id}`}>
-            {sidebarOpen ? (
-              <div id={`nav-${group.id}`} className="hidden px-2.5 pb-1 pt-3 text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)] md:block">
-                {group.title}
-              </div>
-            ) : (
-              <div id={`nav-${group.id}`} className="sr-only">
-                {group.title}
-              </div>
-            )}
-            <div className="space-y-0.5">
-              {group.items.map((item) => {
-                const active = activeTab === item.id;
-                return (
-                  <button key={item.id} type="button" onClick={() => setActiveTab(item.id)} aria-current={active ? 'page' : undefined} aria-label={item.label} title={`${item.label}: ${item.description}`} className={itemClass(active)}>
-                    {active && <span aria-hidden="true" className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full bg-[var(--desk-accent)]" />}
-                    <span className="flex w-7 shrink-0 items-center justify-center">
-                      <Icon d={ICONS[item.icon] ?? ICONS.dashboard} className={active ? 'text-[var(--desk-accent)]' : ''} />
-                    </span>
-                    {sidebarOpen && <span className="ml-1 hidden truncate md:inline">{item.label}</span>}
-                  </button>
-                );
-              })}
-              {group.id === 'trade-desk' &&
-                assetTabs.map((t) => {
-                  const active = activeTab === t.id;
-                  return (
-                    <button key={t.id} type="button" onClick={() => switchToTab(t.id)} aria-current={active ? 'page' : undefined} aria-label={`Asset workspace ${t.symbol}`} title={`Asset workspace: ${t.symbol} (${t.exchange})`} className={itemClass(active)}>
-                      <span className="flex w-7 shrink-0 items-center justify-center">
-                        <Icon d={ICONS.asset} className={active ? 'text-[var(--desk-accent)]' : ''} />
-                      </span>
-                      {sidebarOpen && (
-                        <span className="ml-1 hidden truncate md:inline">
-                          {t.symbol} <span className="text-xs text-[var(--text-dimmed)]">workspace</span>
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-            </div>
-          </div>
-        ))}
-      </nav>
-
-      <div className="border-t border-[var(--border-primary)] px-3 py-2.5 text-xs text-[var(--text-secondary)]">
-        {sidebarOpen ? <span className="hidden md:inline">F&amp;O Terminal v0.1 · paper trading only</span> : null}
-        <span className={sidebarOpen ? 'md:hidden' : ''} aria-hidden="true">
-          v0.1
-        </span>
-      </div>
-    </aside>
-  );
+  const storedTab = useMarketStore(s => s.activeTab);
+  const activeTab = resolveTab(storedTab).tab;
+  const setActiveTab = useMarketStore(s => s.setActiveTab);
+  const openDirectory = useTerminalNavigation();
+  const primary = [
+    { id: 'dashboard', label: 'Dashboard', pages: ['dashboard'] },
+    { id: 'indices', label: 'Markets', pages: ['indices', 'fno-explorer', 'corporate-actions', 'institutional-flow'] },
+    { id: 'best-setups', label: 'Setups', pages: ['best-setups', 'market-scanner', 'strategy-scanner'] },
+    { id: 'paper-trades', label: 'Paper trades', pages: ['paper-trades'] },
+    { id: 'measurement', label: 'Performance', pages: ['measurement', 'backtesting', 'loss-attribution', 'evidence'] },
+    { id: 'signal-diagnostics', label: 'Research', pages: ['signal-diagnostics'] },
+    { id: 'system-health', label: 'System', pages: ['system-health', 'alerts', 'system-learning'] },
+  ];
+  const items = NAV_GROUPS.flatMap(g => g.items);
+  return <aside aria-label="Primary" className="desk-rail terminal-rail">
+    <button type="button" aria-label="Go to dashboard" onClick={() => setActiveTab('dashboard')} className="terminal-brand"><span>F&O</span></button>
+    <nav aria-label="Pages" className="terminal-rail-pages">
+      {primary.map(link => {
+        const item = items.find(i => i.id === link.id)!;
+        const selected = link.pages.includes(activeTab);
+        return <button key={link.id} type="button" aria-current={selected ? (activeTab === link.id ? 'page' : 'true') : undefined} aria-label={item.label} title={`${link.label}: ${item.description}`} onClick={() => setActiveTab(link.id)} className="terminal-rail-item"><Icon d={ICONS[item.icon] ?? ICONS.dashboard} /><span>{link.label}</span></button>;
+      })}
+      <button type="button" onClick={openDirectory} aria-label="All pages" title="All pages · Ctrl / ⌘ K" className="terminal-rail-item"><Icon d="M4 4h5v5H4z M15 4h5v5h-5z M4 15h5v5H4z M15 15h5v5h-5z" /><span>All pages</span></button>
+    </nav>
+    <div className="terminal-rail-footer"><AddAssetButton compact /></div>
+  </aside>;
 }

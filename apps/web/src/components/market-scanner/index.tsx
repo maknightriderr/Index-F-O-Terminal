@@ -1,5 +1,7 @@
 'use client';
 
+import { PageHeader } from '@/components/ui/card';
+
 import React, { useState } from 'react';
 import { useMarketScanner } from '@/lib/use-market-scanner';
 import { useAssetTabsStore } from '@/stores';
@@ -47,22 +49,14 @@ export function MarketScannerPage() {
   const freshness = classifyFreshness({ observedAt: scannedAt, now, sessionOpen: isMarketOpen('NSE', now), transportConnected: error ? false : null, freshWithinMs: FRESH_WITHIN_MS.scan });
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-gray-100 light:text-slate-900">Structure Scanner</h1>
-          <p className="text-sm text-gray-400 light:text-slate-600 mt-1">
-            The market scan (the Market Scanner): NIFTY trend → strongest/weakest sector → top liquid F&amp;O stocks, scored 0-100 across 8 categories, plus the structure engine's developing setups. For stock-by-stock option-buying leans see Option-Buying Leans; for one ranked list see Best Setups.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
+    <div className="terminal-page mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
+      <PageHeader title={"Structure Scanner"} subtitle={<>The market scan (the Market Scanner): NIFTY trend → strongest/weakest sector → top liquid F&amp;O stocks, scored 0-100 across 8 categories, plus the structure engine's developing setups. For stock-by-stock option-buying leans see Option-Buying Leans; for one ranked list see Best Setups.</>} actions={<><div className="flex flex-wrap items-center gap-2">
           <FreshnessBadge state={freshness.state} detail={freshness.detail} />
           <span className="text-xs text-gray-400 light:text-slate-600">{scannedAt ? `Scan recorded ${formatIstDateTime(scannedAt, now)}${meta?.source === 'LAST_KNOWN' ? ' (last known)' : ''}` : ''}</span>
           <ActionButton onClick={() => void runScan()} disabled={running || !isMarketOpen('NSE', now)} title={isMarketOpen('NSE', now) ? 'Runs the market scan now. It records the same decision rows as the background scan (every 5 minutes while NSE is open), so it only happens when you press this; opening this page never runs a scan.' : 'NSE is closed: a scan only runs in session, so there is nothing to run now. The last recorded scan stays on screen.'}>
             {running ? 'Running scan…' : 'Run scan now'}
           </ActionButton>
-        </div>
-      </div>
+        </div></>} />
 
       {error && !data && (
         <div role="alert" className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2.5 text-amber-400 light:text-amber-700 text-sm font-medium">

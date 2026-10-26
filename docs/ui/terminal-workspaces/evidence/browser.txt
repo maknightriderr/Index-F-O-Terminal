@@ -1,0 +1,36 @@
+OB and FVG detected from closed fixture candles PASS
+DARK ACCESSIBILITY []
+PAGE ERRORS []
+LAYOUT {
+  width: 1484,
+  scroll: 1484,
+  areas: '"watch chart spotlight" "trades trades spotlight"'
+}
+LIGHT toggle PASS
+ACCESSIBILITY []
+LAPTOP three-column layout PASS
+ALL PAGES navigation reachable PASS
+PERSISTED light PASS
+SYSTEM theme follows OS PASS
+MCX spot disabled PASS
+MOBILE no page overflow PASS { width: 334, scroll: 334 }
+FAILED HISTORY clears previous chart zones PASS
+DIRECTORY keyboard search, empty state and Escape PASS
+WORKSPACE ACCESSIBILITY F&O Explorer dark []
+WORKSPACE ACCESSIBILITY Paper Trades dark []
+WORKSPACE ACCESSIBILITY Best Setups dark []
+WORKSPACE ACCESSIBILITY Signal Diagnostics dark []
+WORKSPACE ACCESSIBILITY Measurement dark []
+WORKSPACE ACCESSIBILITY System Health dark []
+ALL 16 WORKSPACES dark: page navigation, header, context tabs, desktop/mobile overflow PASS
+WORKSPACE ACCESSIBILITY F&O Explorer light []
+WORKSPACE ACCESSIBILITY Paper Trades light []
+WORKSPACE ACCESSIBILITY Best Setups light []
+WORKSPACE ACCESSIBILITY Signal Diagnostics light []
+WORKSPACE ACCESSIBILITY Measurement light []
+WORKSPACE ACCESSIBILITY System Health light []
+ALL 16 WORKSPACES light: page navigation, header, context tabs, desktop/mobile overflow PASS
+RESEARCH every diagnostic view switch PASS
+PAPER filters/reset and expandable trade details PASS
+WORKSPACE tabs and browser back preserve routes PASS
+WRITES []

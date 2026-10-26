@@ -11,12 +11,12 @@ import React from 'react';
 
 const btnBase = 'inline-flex min-h-8 items-center justify-center whitespace-nowrap rounded-md border px-3 py-1 text-sm font-medium transition-colors';
 const btnOff = 'border-[var(--border-secondary)] text-[var(--text-secondary)] hover:bg-[var(--surface-card-alt)] hover:text-[var(--text-primary)]';
-const btnOn = 'border-[var(--accent-indigo)] bg-[var(--accent-indigo)]/15 text-[var(--text-primary)]';
+const btnOn = 'border-[var(--desk-accent)]/50 bg-[var(--desk-accent)]/10 text-[var(--desk-accent)]';
 
 /** One of several mutually exclusive choices (a radio group that looks like buttons). */
 export function SegmentedControl<T extends string>({ value, options, onChange, label }: { value: T; options: ReadonlyArray<{ id: T; label: string; title?: string }>; onChange: (v: T) => void; label: string }) {
   return (
-    <div role="radiogroup" aria-label={label} className="inline-flex flex-wrap gap-1">
+    <div role="radiogroup" aria-label={label} className="terminal-segmented inline-flex flex-wrap gap-1">
       {options.map((o) => (
         <button key={o.id} type="button" role="radio" aria-checked={value === o.id} title={o.title} onClick={() => onChange(o.id)} className={`${btnBase} ${value === o.id ? btnOn : btnOff}`}>
           {o.label}
@@ -69,7 +69,7 @@ export function SearchField({ value, onChange, placeholder = 'Search', label = '
 /** A wrapping row of filters; never clips on a narrow screen. */
 export function FilterBar({ children, label = 'Filters' }: { children: React.ReactNode; label?: string }) {
   return (
-    <div role="group" aria-label={label} className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+    <div role="group" aria-label={label} className="terminal-filter-bar mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
       {children}
     </div>
   );
@@ -82,7 +82,7 @@ export function ActionButton({ children, onClick, disabled, title, variant = 'de
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className={`${btnBase} disabled:opacity-50 ${variant === 'primary' ? 'border-[var(--accent-indigo)] bg-[var(--accent-indigo)]/20 text-[var(--text-primary)]' : btnOff}`}
+      className={`${btnBase} disabled:opacity-50 ${variant === 'primary' ? 'border-[var(--desk-accent)] bg-[var(--desk-accent)] text-[var(--desk-accent-ink)]' : btnOff}`}
     >
       {children}
     </button>

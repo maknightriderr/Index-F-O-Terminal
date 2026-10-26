@@ -3,6 +3,7 @@
 import React from 'react';
 import { useMarketStore, useUISettingsStore } from '@/stores';
 import type { ThemeName } from '@/stores';
+import { useTerminalNavigation } from './terminal-navigation';
 import { pageMeta } from '@/lib/nav';
 import { useFeedSummary } from '@/lib/use-feed-summary';
 import { formatIstDateTime } from '@/lib/format';
@@ -21,6 +22,7 @@ import { SignOutButton } from '@/components/auth/sign-out-button';
 export function TopBar() {
   const { activeTab, setActiveTab } = useMarketStore();
   const feed = useFeedSummary();
+  const openDirectory = useTerminalNavigation();
   const title = activeTab === 'dashboard' ? 'Trading desk' : pageMeta(activeTab)?.label ?? 'Asset workspace';
 
   const clock = new Date(feed.now).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -29,7 +31,7 @@ export function TopBar() {
     <header className="relative z-10 flex h-16 shrink-0 items-center gap-2 border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 md:gap-4 md:px-4">
       <div className="min-w-0">
         <p className="truncate text-base font-semibold tracking-tight md:text-xl">{title}</p>
-        <p className="hidden text-xs text-[var(--text-secondary)] lg:block">Market context. Clear decisions.</p>
+        <p className="hidden text-xs text-[var(--text-secondary)] lg:block">F&O TERMINAL · Research & paper trading</p>
       </div>
       <span className="rounded border border-[var(--desk-accent)]/40 bg-[var(--desk-accent)]/10 px-2 py-1 text-xs font-semibold tracking-wider text-[var(--desk-accent)]">PAPER</span>
 
@@ -45,6 +47,7 @@ export function TopBar() {
         <FreshnessBadge state={feed.quotes.state} label={feed.quotes.state === 'MARKET_CLOSED' ? `NSE CLOSED · last ${formatIstDateTime(feed.quotesObservedAt, feed.now)}` : feed.quotes.label} />
       </button>
 
+      <button type="button" onClick={openDirectory} aria-label="Find a page" className="terminal-search-trigger"><span aria-hidden="true">⌕</span><span className="hidden xl:inline">Find a page</span><kbd className="hidden xl:inline">⌘ K</kbd></button>
       <AlertBell />
       <ThemeSwitcher />
       <SignOutButton />

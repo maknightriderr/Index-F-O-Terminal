@@ -73,6 +73,20 @@ export function SystemHealthPage() {
         </div>
       )}
 
+      <div className="terminal-health-grid">
+        <div className="terminal-health-main">
+      <Section title="Services" subtitle="Each component with its status and the evidence behind it.">
+        <DataTable columns={serviceColumns} rows={m.rows} rowKey={(r) => r.id} ariaLabel="Services and their status" pageSize={50} />
+      </Section>
+
+      {m.feed.length > 0 && (
+        <Section title="Market-data feed" subtitle="Per token, from the last tick and the token's own exchange session. A closed market's last tick is not a failure, and a connected socket is not evidence of a current price.">
+          <DataTable columns={feedColumns} rows={m.feed} rowKey={(r) => `${r.exchange}:${r.token}`} ariaLabel="Market-data feed by token" pageSize={25} initialSort={{ id: 'status', dir: 'desc' }} />
+        </Section>
+      )}
+
+        </div>
+        <aside aria-label="Sessions and planned services" className="terminal-health-side">
       {m.sessions.length > 0 && (
         <Section title="Exchange sessions" subtitle="Feeds are only expected to update while their exchange is in session.">
           <div className="flex flex-wrap gap-3">
@@ -86,19 +100,11 @@ export function SystemHealthPage() {
         </Section>
       )}
 
-      <Section title="Services" subtitle="Each component with its status and the evidence behind it.">
-        <DataTable columns={serviceColumns} rows={m.rows} rowKey={(r) => r.id} ariaLabel="Services and their status" pageSize={50} />
-      </Section>
-
-      {m.feed.length > 0 && (
-        <Section title="Market-data feed" subtitle="Per token, from the last tick and the token's own exchange session. A closed market's last tick is not a failure, and a connected socket is not evidence of a current price.">
-          <DataTable columns={feedColumns} rows={m.feed} rowKey={(r) => `${r.exchange}:${r.token}`} ariaLabel="Market-data feed by token" pageSize={25} initialSort={{ id: 'status', dir: 'desc' }} />
-        </Section>
-      )}
-
       <Section title="Planned services" subtitle="Not built yet. These are not failures." collapsible defaultOpen={false}>
         <DataTable columns={serviceColumns.slice(0, 3)} rows={m.planned} rowKey={(r) => r.id} ariaLabel="Planned services" pageSize={20} />
       </Section>
+        </aside>
+      </div>
     </PageBody>
   );
 }

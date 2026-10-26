@@ -1,5 +1,7 @@
 'use client';
 
+import { PageHeader } from '@/components/ui/card';
+
 import React, { useState } from 'react';
 import { formatIndianNumber } from '@fno/shared';
 import type { SentimentLabel, NextDayBias, InstitutionalFlowPrediction, PredictionAccuracyWindow } from '@fno/shared';
@@ -21,19 +23,11 @@ export function InstitutionalFlowPage() {
   const { predictions, accuracy, loading: accuracyLoading } = usePredictionAccuracy(accuracySymbol);
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-gray-100 light:text-slate-900">Institutional Flow Intelligence</h1>
-          <p className="text-sm text-gray-400 light:text-slate-600 mt-1">
-            Sentiment, next-day bias, and prediction tracking built from what's genuinely live — India VIX, PCR, F&O universe OI activity, and the existing market-bias engine.
-          </p>
-        </div>
-        <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-xs text-gray-400 light:text-slate-600">
+    <div className="terminal-page mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
+      <PageHeader title={"Institutional Flow Intelligence"} subtitle={<>Sentiment, next-day bias, and prediction tracking built from what's genuinely live — India VIX, PCR, F&O universe OI activity, and the existing market-bias engine.</>} actions={<><span role="status" aria-live="polite" className="flex items-center gap-1.5 text-xs text-gray-400 light:text-slate-600">
           <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
           {isLive ? 'Live' : loading ? 'Loading…' : 'Unreachable'}
-        </span>
-      </div>
+        </span></>} />
 
       {!isLive && !loading && (
         <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2.5 text-amber-400 light:text-amber-700 text-xs font-medium">
