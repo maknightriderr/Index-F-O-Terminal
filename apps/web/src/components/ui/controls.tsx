@@ -9,7 +9,7 @@
 
 import React from 'react';
 
-const btnBase = 'inline-flex min-h-8 items-center justify-center whitespace-nowrap rounded-md border px-3 py-1 text-sm font-medium transition-colors';
+const btnBase = 'terminal-choice inline-flex min-h-8 items-center justify-center whitespace-nowrap rounded-md border px-3 py-1 text-sm font-medium transition-colors';
 const btnOff = 'border-[var(--border-secondary)] text-[var(--text-secondary)] hover:bg-[var(--surface-card-alt)] hover:text-[var(--text-primary)]';
 const btnOn = 'border-[var(--desk-accent)]/50 bg-[var(--desk-accent)]/10 text-[var(--desk-accent)]';
 
@@ -92,7 +92,7 @@ export function ActionButton({ children, onClick, disabled, title, variant = 'de
 /** A horizontal tab strip (e.g. the Performance area's sub-views). */
 export function TabStrip<T extends string>({ value, tabs, onChange, label }: { value: T; tabs: ReadonlyArray<{ id: T; label: string; title?: string }>; onChange: (v: T) => void; label: string }) {
   return (
-    <div role="tablist" aria-label={label} className="flex flex-wrap gap-1 border-b border-[var(--border-secondary)]">
+    <div role="tablist" aria-label={label} className="terminal-tab-strip flex flex-wrap gap-1 border-b border-[var(--border-secondary)]">
       {tabs.map((t) => (
         <button
           key={t.id}

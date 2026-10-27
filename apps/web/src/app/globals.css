@@ -117,7 +117,7 @@
   --neutral: #64748b;
 
   --status-ok: #04664c;
-  --status-warn: #b45309;
+  --status-warn: #92400e;
   --status-bad: #b91c1c;
   --status-info: #1d4ed8;
   --status-off: #475569;
@@ -1209,4 +1209,63 @@ html, body {
 @media (min-width: 380px) and (max-width: 767px) {
   .terminal-metric-grid { --metric-columns: repeat(2, minmax(0, 1fr)); }
   .terminal-metric { overflow-wrap: anywhere; }
+}
+
+/* Selected navigation: solid contrast plus a position marker, in both themes.
+   Scoped to navigation/choice controls so P&L and warning colours stay semantic. */
+.terminal-workspace-tabs button,
+.terminal-tab-strip > button,
+.terminal-research-nav button,
+.terminal-rail-item,
+.terminal-asset-tab {
+  position: relative;
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease;
+}
+.terminal-workspace-tabs button { min-height: 34px; padding-inline: 14px; }
+.terminal-workspace-tabs button[aria-current],
+.terminal-segmented > button[aria-checked="true"],
+.terminal-choice[aria-pressed="true"],
+.terminal-tab-strip > button[aria-selected="true"],
+.terminal-asset-tab[data-active="true"] {
+  background: var(--desk-accent);
+  color: var(--desk-accent-ink);
+  border-color: var(--desk-accent);
+  font-weight: 700;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--desk-accent) 20%, transparent);
+}
+.terminal-workspace-tabs button[aria-current]::after,
+.terminal-tab-strip > button[aria-selected="true"]::after {
+  content: '';
+  position: absolute;
+  inset-inline: 12px;
+  bottom: 3px;
+  height: 2px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: .75;
+  pointer-events: none;
+}
+.terminal-tab-strip > button { position: relative; border-radius: 7px 7px 0 0; padding-bottom: 10px; }
+.terminal-asset-tab[data-active="true"] small { color: inherit; }
+.terminal-asset-tab[data-active="true"] .terminal-asset-close { border-left-color: color-mix(in srgb, var(--desk-accent-ink) 30%, transparent); }
+.terminal-asset-tab[data-active="true"] .terminal-asset-close:hover { background: color-mix(in srgb, var(--desk-accent-ink) 12%, transparent); color: var(--desk-accent-ink); }
+.terminal-rail-item[aria-current],
+.terminal-research-nav button[aria-pressed="true"],
+.terminal-directory-item[aria-current] {
+  background: color-mix(in srgb, var(--desk-accent) 16%, var(--surface-card));
+  color: var(--desk-accent);
+  border-color: color-mix(in srgb, var(--desk-accent) 65%, var(--border-secondary));
+  box-shadow: inset 3px 0 0 var(--desk-accent);
+  font-weight: 700;
+}
+.terminal-workspace-tabs button:not([aria-current]):hover,
+.terminal-tab-strip > button[aria-selected="false"]:hover,
+.terminal-asset-tab:not([data-active="true"]):hover {
+  background: var(--surface-card-alt);
+  color: var(--text-primary);
+  box-shadow: inset 0 -2px 0 var(--border-secondary);
+}
+@media (prefers-reduced-motion: reduce) {
+  .terminal-workspace-tabs button, .terminal-tab-strip > button,
+  .terminal-research-nav button, .terminal-rail-item, .terminal-asset-tab { transition: none; }
 }
