@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { createChart, ColorType, LineStyle, type IChartApi, type ISeriesApi, type IPriceLine, type UTCTimestamp } from 'lightweight-charts';
+import { chartCrosshairIst, chartTickIst } from '@/lib/chart-time';
 import { useUISettingsStore } from '@/stores';
 import { equityChartToken } from '@/lib/fno-radar';
 import { api } from '@/lib/api';
@@ -269,7 +270,8 @@ export function InstrumentChart({
       layout: { background: { type: ColorType.Solid, color: 'transparent' }, textColor: c.text },
       grid: { vertLines: { color: c.grid }, horzLines: { color: c.grid } },
       rightPriceScale: { borderColor: c.border, scaleMargins: { top: 0.08, bottom: 0.22 } },
-      timeScale: { borderColor: c.border, timeVisible: true, secondsVisible: false },
+      localization: { locale: 'en-IN', timeFormatter: chartCrosshairIst },
+      timeScale: { borderColor: c.border, timeVisible: true, secondsVisible: false, tickMarkFormatter: chartTickIst },
       autoSize: true,
     });
     const series = chart.addCandlestickSeries({
