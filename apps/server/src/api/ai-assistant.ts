@@ -10,11 +10,16 @@ import { explain, isTradeId, ExplainNotFoundError, type ExplainTarget } from '..
 import { REVIEW_HISTORY_KEY, type DailyReview } from '../services/ai-daily-review.js';
 import { redis } from '../lib/redis.js';
 import { AI_KEY_NAMES, isAiConfigured, type ChatTurn } from '../lib/llm.js';
+import { automaticReviewReport } from '../services/auto-review-store.js';
 
 const MAX_HISTORY_TURNS = 20;
 
 export function createAiAssistantRoutes(provider: MarketDataProvider): Router {
   const router = Router();
+  router.get('/trade-reviews', async (_req: Request, res: Response) => {
+    try { res.json({ success: true, data: await automaticReviewReport(), meta: { timestamp: Date.now(), readOnly: true } }); }
+    catch { res.status(502).json({ success: false, error: { code: 'TRADE_REVIEW_UNAVAILABLE', message: 'Automatic review report unavailable; retry shortly.' } }); }
+  });
 
   /**
    * POST /api/ai-assistant/chat

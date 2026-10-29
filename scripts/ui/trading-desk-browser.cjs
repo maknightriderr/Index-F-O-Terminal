@@ -43,6 +43,7 @@ return route.fulfill({contentType:'application/json',headers:{'access-control-al
 await page.goto(process.env.DESK_QA_URL || 'http://localhost:3000',{waitUntil:'networkidle'});
 await page.getByRole('heading',{name:'Setup spotlight',exact:true}).waitFor();
 await page.evaluate(()=>{const label=document.createElement('div');label.id='ui-fixture-label';label.textContent='UI TEST FIXTURE · SAMPLE DATA';label.style.cssText='position:fixed;bottom:0;left:0;z-index:9999;padding:5px 12px;background:#0c1520;color:#fff;font:12px sans-serif';document.body.append(label)});
+if(process.env.DESK_AUTO_REVIEW_ONLY === '1') { await require('./automatic-reviews-browser.cjs')(page,output);assert.equal(errors.length,0,JSON.stringify(errors));assert.equal(writes.length,0);console.log('PAGE ERRORS',errors,'WRITES',writes);await browser.close();return; }
 if(process.env.DESK_VALIDATION_ONLY === '1') { await require('./strategy-validation-browser.cjs')(page,output);assert.equal(errors.length,0,JSON.stringify(errors));assert.equal(writes.length,0);console.log('PAGE ERRORS',errors,'WRITES',writes);await browser.close();return; }
 if(process.env.DESK_WORKSPACES_ONLY === '1') { await require('./terminal-workspaces-browser.cjs')(page,output);assert.equal(errors.length,0,JSON.stringify(errors));assert.equal(writes.length,0);console.log('PAGE ERRORS',errors,'WRITES',writes);await browser.close();return; }
 await page.getByRole('button', {name:'15m',exact:true}).click();

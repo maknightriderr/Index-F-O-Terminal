@@ -133,6 +133,7 @@ export const FILES = [
   '044_paper_execution_ledger.sql',
   // Durable slot-decision -> trade link and the isolated paper experiment tables (EXP-2.0).
   '045_experiments_and_linkage.sql',
+  '046_automatic_ai_trade_reviews.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */
