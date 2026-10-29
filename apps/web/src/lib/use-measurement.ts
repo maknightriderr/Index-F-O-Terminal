@@ -2,11 +2,13 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
+import type { StrategyValidationReport } from '@fno/shared';
 
 const POLL_MS = 5 * 60_000;
 
 /** The deployed measurement report as returned (typed loosely: older deployments may lack newer sections). Read-only. */
 export interface MeasurementReport {
+  strategyValidation?: StrategyValidationReport;
   note?: string;
   versions?: Record<string, string>;
   schemaReady?: boolean;

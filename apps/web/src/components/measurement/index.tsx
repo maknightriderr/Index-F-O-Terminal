@@ -10,6 +10,7 @@ import { MetricDefinitions } from '@/components/performance/performance-nav';
 import { useMeasurement, type MeasurementReport, type Tally } from '@/lib/use-measurement';
 import { displayTally, reliabilityLines, SMALL_SAMPLE_BELOW } from '@/lib/measurement-view';
 import { MISSING } from '@/lib/format';
+import { StrategyValidation } from './strategy-validation';
 
 // ============================================================
 // MEASUREMENT — how much the numbers can be trusted
@@ -107,6 +108,7 @@ export function MeasurementPage() {
             {r && (
               <>
                 <Availability report={r} />
+                <StrategyValidation report={r.strategyValidation} />
                 <MetricDefinitions />
 
                 <Section title="Reliability cutoff and versions" subtitle="Read from the server's configuration, not hardcoded here.">

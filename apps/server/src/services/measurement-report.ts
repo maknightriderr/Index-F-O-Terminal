@@ -17,6 +17,8 @@
 // ============================================================
 
 import { minutesSinceSessionOpen } from '@fno/shared';
+import { TRIGGER_REGISTRY } from '@fno/analytics';
+import { summarizeStrategyValidation } from './strategy-validation.js';
 import type { Exchange } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { schemaFileReady } from './ensure-capture-schema.js';
@@ -91,9 +93,10 @@ export async function measurementReport(q: MeasurementQuery) {
       AND (${q.since}::timestamptz IS NULL OR s.time >= ${q.since})
       AND (${q.until}::timestamptz IS NULL OR s.time < ${q.until})
       AND (${q.instrument}::text IS NULL OR s.symbol = ${q.instrument})
-    ORDER BY s.time DESC LIMIT ${ROW_LIMIT}
+    ORDER BY s.time DESC LIMIT ${ROW_LIMIT + 1}
   `;
-  const all = rows.map(measuredTradeOf);
+  const loaded = rows.slice(0, ROW_LIMIT);
+  const all = loaded.map(measuredTradeOf);
   // Two populations, never mixed: trades from before the measurements existed, and the measurement-reliable sample.
   const trades = all.filter((t) => t.mintedAt < MEASUREMENT_RELIABLE_FROM);
   const reliable = all.filter((t) => t.mintedAt >= MEASUREMENT_RELIABLE_FROM);
@@ -132,6 +135,11 @@ export async function measurementReport(q: MeasurementQuery) {
   }
 
   return {
+    strategyValidation: summarizeStrategyValidation(loaded.map((r, index) => ({
+      trade: all[index],
+      logicVersion: typeof r.inputs?.logic?.logicVersion === 'string' ? r.inputs.logic.logicVersion : null,
+      sourceVersion: typeof r.inputs?.sourceVersion === 'string' ? r.inputs.sourceVersion : null,
+    })), ['INDICATOR', 'S1', 'MOMENTUM_BREAK', 'OB1', 'OF1', ...TRIGGER_REGISTRY.map(t => t.triggerId)], rows.length <= ROW_LIMIT, ROW_LIMIT, Date.now()),
     note:
       'Measurement only. Paper trades: every cost is a MODEL (basis ESTIMATED_MODEL), never an actual fill. Cohorts are by mint time and never pooled; voided, TRACKING_LOST, off-session, open, spread and geometry-less rows are counted in `excluded` and kept out of every figure; EXPIRED is a separate outcome. Baseline and conservative-fill results are computed on the same trades.',
     versions: { cost: COST_RECORD_VERSION, postExit: POST_EXIT_VERSION, payoffGrader: PAYOFF_GRADER_VERSION, conservativeFill: CONSERVATIVE_FILL.id },
