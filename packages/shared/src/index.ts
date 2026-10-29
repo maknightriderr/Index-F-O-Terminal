@@ -9,3 +9,4 @@ export * from './types/decision-record.js';
 export * from './utils/decision-quality.js';
 export * from './types/terminal-views.js';
 export * from './types/strategy-validation.js';
+export * from './types/ai-trade-review.js';

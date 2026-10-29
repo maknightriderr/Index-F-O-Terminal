@@ -6,6 +6,7 @@
 // ============================================================
 
 import type { MeasurementReport } from './use-measurement';
+import type { AutoReviewReport } from '@fno/shared';
 import { saveSession, sessionToken, signalSessionRequired } from './session';
 
 /** What "Why this trade?" / "Why no trade?" explains: a paper trade by id, or a symbol's latest decision. */
@@ -196,6 +197,10 @@ class ApiClient {
   /** The measurement report: cohorts, denominators, cost availability, conservative-fill sensitivity, payoff grading. Read-only. */
   async getMeasurement() {
     return this.get<MeasurementReport>('/api/diagnostics/measurement');
+  }
+
+  async getAutomaticTradeReviews() {
+    return this.get<AutoReviewReport>('/api/ai-assistant/trade-reviews');
   }
 
   /** The evidence reports (2026-10-15): scorecard, signal-quality, gate-validation, portfolio-risk. Read-only. */

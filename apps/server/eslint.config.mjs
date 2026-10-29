@@ -27,7 +27,7 @@ export const AI_ASSISTANT_FORBIDDEN = [
 
 export default [
   {
-    files: ['src/api/ai-assistant.ts', 'src/services/ai-assistant.ts', 'src/services/ai-explain.ts', 'src/services/ai-daily-review.ts'],
+    files: ['src/api/ai-assistant.ts', 'src/services/ai-assistant.ts', 'src/services/ai-explain.ts', 'src/services/ai-daily-review.ts', 'src/services/ai-trade-review.ts', 'src/services/auto-review-store.ts'],
     languageOptions: { parser: tseslint.parser, sourceType: 'module', ecmaVersion: 'latest' },
     rules: {
       'no-restricted-imports': [

@@ -65,6 +65,7 @@ import { startSetupEventsGrading } from './services/setup-events-grading.js';
 import { startOpportunityCensus } from './services/opportunity-census-job.js';
 import { startBarArchive } from './services/bar-archive.js';
 import { startDailyReview } from './services/daily-review-job.js';
+import { startAutomaticTradeReview } from './services/auto-review-job.js';
 import { startRecordReconciliation } from './services/record-reconciliation.js';
 import { opsStatus, startOpsMonitor } from './services/ops-monitor.js';
 import { orderFlowFeedActive, startOrderFlowFeed } from './services/dhan-feed.js';
@@ -421,6 +422,7 @@ for (const spec of [
   // Research only (2026-10-15): stores closed 15m / daily bars while no exchange trades. Never read by a decision.
   timerService('barArchive', () => startBarArchive(provider), held(schemaReady)),
   timerService('dailyReview', () => startDailyReview(), { ready: () => schemaReady }),
+  timerService('automaticTradeReview', () => startAutomaticTradeReview(), { ready: () => schemaReady }),
   // Audit 2026-10-18 (REC-1): once a day, every closed plan against its trade row; alerts a disagreement once. Read-only.
   timerService('recordReconciliation', () => startRecordReconciliation(), { ready: () => schemaReady }),
   // Audit 2026-10-18 (OBS-1): functional health checks every minute; one Telegram alert per incident. Read-only.
