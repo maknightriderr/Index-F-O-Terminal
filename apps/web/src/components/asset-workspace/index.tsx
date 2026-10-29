@@ -1,4 +1,5 @@
 'use client';
+import { trailingNote } from '@/lib/setup-trailing';
 
 import { InstrumentChart } from '@/components/dashboard/instrument-chart';
 import { OptionsRisk } from './options-risk';
@@ -1111,11 +1112,7 @@ function TradeSetupCard({ setup, structure, explainTarget }: { setup: TradeSetup
       </div>
       {setup.trailState && (
         <div className="mt-1.5 text-xs text-gray-400 light:text-slate-600" title="Server-side trailing rule: at +1R the stop moves to entry, at +2R it locks +1x initial risk. Display only.">
-          {setup.trailState.state === 'LOCKED_PROFIT'
-            ? `SL locked +1x risk (₹${setup.trailState.lockPremium.toFixed(2)})`
-            : setup.trailState.state === 'BREAKEVEN'
-            ? `SL at breakeven — next: locks +1x risk at +${setup.trailState.lockAtR}R (₹${setup.trailState.lockPremium.toFixed(2)})`
-            : `Next: SL → entry at +${setup.trailState.breakevenAtR}R (₹${setup.trailState.breakevenPremium.toFixed(2)}); locks +1x risk at +${setup.trailState.lockAtR}R (₹${setup.trailState.lockPremium.toFixed(2)})`}
+          {trailingNote(setup.entry!, setup.initialStopLoss ?? setup.stopLoss!, setup.target!, setup.trailState)}
         </div>
       )}
       {setup.positionSize && (
@@ -1123,10 +1120,12 @@ function TradeSetupCard({ setup, structure, explainTarget }: { setup: TradeSetup
           <span className="text-gray-400 light:text-slate-600">
             {setup.positionSize.lots > 0
               ? `${setup.positionSize.lots} lot(s) · ${setup.positionSize.quantity} qty`
-              : 'No lot count stays under target risk'}
+              : 'No permitted lot size (risk / premium limits)'}
           </span>
           <span className={setup.positionSize.riskPct > DEFAULT_RISK_CONFIG.maxRiskPerTrade ? 'text-amber-400 font-semibold' : 'text-gray-400 light:text-slate-600 font-semibold'}>
-            ₹{setup.positionSize.riskAmount.toFixed(0)} risk ({setup.positionSize.riskPct}% of ₹{(setup.positionSize.capital / 100000).toFixed(1)}L)
+            {setup.positionSize.lots > 0
+              ? `₹${setup.positionSize.riskAmount.toFixed(0)} risk (${setup.positionSize.riskPct}% of ₹${(setup.positionSize.capital / 100000).toFixed(1)}L)`
+              : '₹0 allocated · not risk-free'}
           </span>
         </div>
       )}

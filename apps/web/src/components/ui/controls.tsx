@@ -39,7 +39,7 @@ export function SelectField({ label, value, onChange, options, className = '' }:
   return (
     <label className={`inline-flex items-center gap-2 text-sm text-[var(--text-secondary)] ${className}`}>
       <span>{label}</span>
-      <select value={value} onChange={(e) => onChange(e.target.value)} className="min-h-8 rounded-md border border-[var(--border-secondary)] bg-[var(--surface-card)] px-2 py-1 text-sm text-[var(--text-primary)]">
+      <select aria-label={label} value={value} onChange={(e) => onChange(e.target.value)} className="min-h-8 rounded-md border border-[var(--border-secondary)] bg-[var(--surface-card)] px-2 py-1 text-sm text-[var(--text-primary)]">
         {options.map((o) => (
           <option key={o.id} value={o.id}>
             {o.label}
