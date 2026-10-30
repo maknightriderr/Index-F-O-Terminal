@@ -9,7 +9,7 @@ import { chat } from '../services/ai-assistant.js';
 import { explain, isTradeId, ExplainNotFoundError, type ExplainTarget } from '../services/ai-explain.js';
 import { REVIEW_HISTORY_KEY, type DailyReview } from '../services/ai-daily-review.js';
 import { redis } from '../lib/redis.js';
-import { AI_KEY_NAMES, isAiConfigured, type ChatTurn } from '../lib/llm.js';
+import { AI_KEY_NAMES, AiUnavailableError, isAiConfigured, type ChatTurn } from '../lib/llm.js';
 import { automaticReviewReport } from '../services/auto-review-store.js';
 
 const MAX_HISTORY_TURNS = 20;
@@ -50,6 +50,11 @@ export function createAiAssistantRoutes(provider: MarketDataProvider): Router {
 
       res.json({ success: true, data: { reply: answer.text, via: answer.label }, meta: { timestamp: Date.now(), model: answer.model } });
     } catch (error: any) {
+      if (error instanceof AiUnavailableError) {
+        res.setHeader('Retry-After', String(Math.max(1, Math.ceil((error.retryAt - Date.now()) / 1000))));
+        res.status(503).json({ success: false, error: { code: error.code, message: error.message, retryAt: error.retryAt } });
+        return;
+      }
       logger.error({ error: error.message }, 'AI assistant chat failed');
       res.status(502).json({
         success: false,
@@ -85,6 +90,11 @@ export function createAiAssistantRoutes(provider: MarketDataProvider): Router {
     } catch (error: any) {
       if (error instanceof ExplainNotFoundError) {
         res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: error.message } });
+        return;
+      }
+      if (error instanceof AiUnavailableError) {
+        res.setHeader('Retry-After', String(Math.max(1, Math.ceil((error.retryAt - Date.now()) / 1000))));
+        res.status(503).json({ success: false, error: { code: error.code, message: error.message, retryAt: error.retryAt } });
         return;
       }
       logger.error({ error: error.message }, 'AI explain failed');

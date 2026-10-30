@@ -17,6 +17,7 @@
 // ============================================================
 
 import axios from 'axios';
+import { createHash } from 'node:crypto';
 import { logger } from './logger.js';
 
 export interface ChatTurn {
@@ -120,32 +121,79 @@ async function callProvider(p: AiProviderSpec, system: string, messages: readonl
   return typeof text === 'string' ? text : '';
 }
 
-const describeError = (err: any): string => {
-  const status = err?.response?.status;
-  const detail = err?.response?.data?.error?.message ?? err?.message ?? 'unknown error';
-  return status ? `HTTP ${status}: ${String(detail).slice(0, 200)}` : String(detail).slice(0, 200);
-};
+// Shared across chat, commentary and automatic reviews in this server process.
+// One probe per model at a time; provider rate limits apply to the account, not to a page.
+const cooldowns = new Map<string, { until: number; strikes: number }>();
+const busy = new Set<string>();
+const providerKey = (p: AiProviderSpec) => `${p.id}:${p.model}:${createHash('sha256').update(p.apiKey).digest('hex').slice(0, 16)}`;
 
-/**
- * Ask the first provider that answers. Throws only when none is configured or every configured one failed;
- * the error names each provider's failure (never a key).
- */
+export class AiUnavailableError extends Error {
+  readonly code = 'AI_TEMPORARILY_UNAVAILABLE';
+  constructor(public readonly retryAt: number) {
+    const time = new Date(retryAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
+    super(`AI providers are temporarily unavailable or rate-limited. Next automatic availability check after ${time} IST. Saved reviews remain available; pending reviews will retry automatically. A provider quota increase or an available configured provider may be needed if limits persist.`);
+  }
+}
+
+/** Null means at least one configured model can be tried now. Never returns credentials. */
+export function aiRetryAt(env: Env = process.env): number | null {
+  const providers = configuredAiProviders(env);
+  if (!providers.length) return null;
+  const now = Date.now();
+  const waits = providers.map((p) => {
+    const key = providerKey(p);
+    return Math.max(cooldowns.get(key)?.until ?? 0, busy.has(key) ? now + 1000 : 0);
+  });
+  return waits.some((until) => until <= now) ? null : Math.min(...waits);
+}
+
+function retryDelay(err: any, strikes: number): number {
+  const now = Date.now();
+  const header = err?.response?.headers?.['retry-after'];
+  const seconds = Number(header);
+  if (header != null && String(header).trim() && Number.isFinite(seconds) && seconds > 0) return Math.max(1000, seconds * 1000);
+  const date = typeof header === 'string' ? Date.parse(header) : NaN;
+  if (Number.isFinite(date) && date > now) return date - now;
+  const error = err?.response?.data?.error;
+  for (const detail of Array.isArray(error?.details) ? error.details : []) {
+    const delay = /^(\d+(?:\.\d+)?)s$/.exec(detail?.retryDelay ?? '');
+    if (delay && Number(delay[1]) > 0) return Math.max(1000, Number(delay[1]) * 1000);
+  }
+  // A daily quota is not a minute limit. Without a reset hint probe hourly; never invent a reset time.
+  const quota = `${error?.code ?? ''} ${error?.type ?? ''} ${error?.message ?? ''} ${JSON.stringify(error?.details ?? [])}`;
+  if (/tokens per day|requests per day|\bTPD\b|\bRPD\b|perday|quota_exceeded/i.test(quota)) return 60 * 60_000;
+  return Math.min(15 * 60_000, 60_000 * 2 ** Math.min(strikes - 1, 4));
+}
+
+/** Try available providers in order; skip cooling models, then probe automatically after the provider's delay. */
 export async function askAi(system: string, messages: readonly ChatTurn[], opts: { env?: Env; post?: Post } = {}): Promise<AiReply> {
   const providers = configuredAiProviders(opts.env);
   if (providers.length === 0) throw new Error(`AI not configured: set ${AI_KEY_NAMES} on the backend`);
   const post: Post = opts.post ?? ((url, body, config) => axios.post(url, body, config));
   const failures: string[] = [];
   for (const p of providers) {
+    const key = providerKey(p);
+    if ((cooldowns.get(key)?.until ?? 0) > Date.now() || busy.has(key)) continue;
+    busy.add(key);
     try {
       const text = (await callProvider(p, system, messages, post)).trim();
       if (!text) throw new Error('empty answer');
-      if (failures.length > 0) logger.info({ provider: p.id, model: p.model, after: failures }, 'AI: answered by a fallback provider');
+      cooldowns.delete(key);
+      if (failures.length > 0) logger.info({ provider: p.id, model: p.model }, 'AI: answered by a fallback provider');
       return { text, provider: p.id, label: p.label, model: p.model };
     } catch (err: any) {
-      const why = describeError(err);
-      failures.push(`${p.label}: ${why}`);
-      logger.warn({ provider: p.id, model: p.model, error: why }, 'AI: provider failed, trying the next one');
+      const status = Number(err?.response?.status) || null;
+      const strikes = (cooldowns.get(key)?.strikes ?? 0) + 1;
+      const delay = status === 429 ? retryDelay(err, strikes) : status === 401 || status === 403 || status === 404 ? 15 * 60_000 : 30_000;
+      cooldowns.set(key, { until: Date.now() + delay, strikes });
+      failures.push(`${p.label}: ${status ? `HTTP ${status}` : 'request unavailable'}`);
+      // Provider bodies can contain account IDs, echoed prompts or credentials. Log structured status only.
+      logger.warn({ provider: p.id, model: p.model, status, retryAt: Date.now() + delay }, 'AI: provider cooling down, trying available fallback');
+    } finally {
+      busy.delete(key);
     }
   }
-  throw new Error(`Every AI provider failed — ${failures.join('; ')}`);
+  // Bounded state even after a model/key configuration change.
+  if (cooldowns.size > 100) for (const [key, value] of cooldowns) if (value.until < Date.now()) cooldowns.delete(key);
+  throw new AiUnavailableError(aiRetryAt(opts.env) ?? Date.now() + 1000);
 }

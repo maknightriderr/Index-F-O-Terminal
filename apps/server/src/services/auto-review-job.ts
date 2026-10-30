@@ -1,9 +1,11 @@
 // Separate observer: no close hooks, broker calls or imports from the decision/learning path.
 import { logger } from '../lib/logger.js';
-import { isAiConfigured } from '../lib/llm.js';
+import { aiRetryAt, isAiConfigured } from '../lib/llm.js';
 import { schemaFileReady } from './ensure-capture-schema.js';
 import { automaticReviewEvidence, autoReviewEnabled, writeAutomaticReview } from './ai-trade-review.js';
 import { automaticReviewSource, claimAutomaticReview, completeAutomaticReview, discoverAutomaticReviews, retryAutomaticReview } from './auto-review-store.js';
+
+import { automaticReviewBudgetAvailable, reserveAutomaticReviewBudget } from './auto-review-budget.js';
 
 let running = false;
 export async function runAutomaticReviewTick() {
@@ -12,11 +14,16 @@ export async function runAutomaticReviewTick() {
   try {
     await discoverAutomaticReviews();
     // Keep pending work durable even during a missing-key outage. No provider calls until configured.
-    if (!isAiConfigured()) return;
+    if (!isAiConfigured() || aiRetryAt() != null) return;
     for (let i = 0; i < 2; i++) {
+      if (aiRetryAt() != null || !(await automaticReviewBudgetAvailable())) break;
       const claim = await claimAutomaticReview();
       if (!claim) break;
       try {
+        if (!(await reserveAutomaticReviewBudget())) {
+          await retryAutomaticReview(claim);
+          break;
+        }
         const source = await automaticReviewSource(claim, schemaFileReady('044_paper_execution_ledger.sql'));
         const evidence = automaticReviewEvidence(source);
         const answer = await writeAutomaticReview(evidence);
