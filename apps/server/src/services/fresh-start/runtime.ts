@@ -1,3 +1,6 @@
+import { startFreshFeedQualification } from './qualification.js';
+import type { MarketDataProvider } from '../../providers/interface.js';
+import type { SubscriptionManager } from '../../lib/subscription-manager.js';
 import { evaluateFreshStrategies, type FreshContext, type FreshCandidate } from '@fno/analytics';
 import { freshEntriesEnabled } from '../../config/fresh-start.js';
 import { FreshPaperStore, type FreshEntryRequest } from './store.js';
@@ -54,4 +57,8 @@ export class FreshRuntime {
     }
 }
 export const freshRuntime = new FreshRuntime();
-export function startFreshPaperRecovery() { return freshRuntime.recover(); }
+let stopQualification:(()=>void)|null=null;
+export async function startFreshPaperRecovery(provider?:MarketDataProvider,subscriptions?:SubscriptionManager) {
+  await freshRuntime.recover();
+  if(provider&&subscriptions){stopQualification?.();stopQualification=startFreshFeedQualification(provider,subscriptions);}
+}

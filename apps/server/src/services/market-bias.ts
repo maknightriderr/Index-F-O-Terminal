@@ -3232,7 +3232,7 @@ async function resolveStickyTradeSetup(
   // (the DB insert succeeds but the very next Redis write fails) can
   // leave one harmless duplicate row, which is a far better failure mode
   // than the guaranteed-permanent gap this replaces.
-  if (storedIsPlausible && stored && !stored.signalId) {
+  if (legacyEntriesAllowed() && storedIsPlausible && stored && !stored.signalId) {
     const backfilledId = await recordTradeSetupGenerated(
       underlying,
       exchange,

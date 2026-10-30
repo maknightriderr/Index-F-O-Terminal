@@ -1,3 +1,4 @@
+import { snapDepth } from './snap-depth.js';
 // ============================================================
 // ANGEL ONE SMARTAPI PROVIDER
 // ============================================================
@@ -1184,6 +1185,7 @@ class AngelOneWebSocket implements WebSocketConnection {
       const tick: Tick = {
         token,
         exchange: this.exchangeTypeToExchange(exchangeType),
+        exchangeSegment: ({1:'NSE_CM',2:'NSE_FO',3:'BSE_CM',4:'BSE_FO',5:'MCX_FO'} as Record<number, ExchangeSegment>)[exchangeType],
         timestamp: arrival,
         ...(Number.isFinite(exchangeTs) && exchangeTs > 1_577_836_800_000 && exchangeTs < arrival + 86_400_000 ? { exchangeTimestamp: exchangeTs } : {}),
         ...(Number.isFinite(sequence) && sequence >= 0 ? { sequence } : {}),
@@ -1205,6 +1207,7 @@ class AngelOneWebSocket implements WebSocketConnection {
 
       if (mode >= 3 && packet.length >= WS_PACKET_BYTES.SNAP_QUOTE) {
         tick.oi = Number(packet.readBigInt64LE(131));
+        Object.assign(tick, snapDepth(packet));
       }
 
       return tick;

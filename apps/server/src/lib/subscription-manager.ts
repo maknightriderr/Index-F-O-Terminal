@@ -70,8 +70,9 @@ export class SubscriptionManager {
   }
 
   /** Called with the gaps to check whenever the feed comes back. */
-  onRecovering(listener: RecoveryListener): void {
+  onRecovering(listener: RecoveryListener): () => void {
     this.recoveryListeners.push(listener);
+    return () => { this.recoveryListeners = this.recoveryListeners.filter(x => x !== listener); };
   }
 
   /** The state of a token on the feed (null when nobody subscribes to it). */
@@ -174,8 +175,9 @@ export class SubscriptionManager {
     this.emitRecovering(this.feed.markRecovering(Date.now(), true) as FeedGap[]);
   }
 
-  onTick(listener: TickListener): void {
+  onTick(listener: TickListener): () => void {
     this.tickListeners.push(listener);
+    return () => { this.tickListeners = this.tickListeners.filter(x => x !== listener); };
   }
 
   /** Register a client's interest in a set of tokens. Connects upstream lazily. */
