@@ -193,19 +193,17 @@ describe('full replay of the real decision path', () => {
   // 15 points, which pays the PE 9.12 + 0.16 against 9.52 of decay over the 4.2 h hold: UNREALISTIC_TARGET, so F3 (and
   // A2 on the same bar) no longer mint and the indicator's own PE 24950 takes the slot. Diffed field by field: the
   // F3-specific fields (strategy, researchTrigger, structure, stop 72.44 -> the indicator's 78.83, target) only.
-  it('preserves the executed indicator trade and refuses oversized-stop watch contracts (end-to-end fingerprint)', async () => {
+  it('refuses weak-payoff entries while preserving the full replay fingerprint', async () => {
     const { stripVolatile } = await import('../full-replay.js');
     const { createHash } = await import('node:crypto');
     const noStamp = JSON.parse(JSON.stringify(live, (k, v) => (k === 'logicVersion' || k === 'logic' ? undefined : v)));
     const fp = createHash('sha256').update(JSON.stringify(stripVolatile(noStamp))).digest('hex').slice(0, 16);
     if (process.env.PRINT_FINGERPRINT) console.log(`FP e2e '${fp}'`);
-    // OPTION-2.1: diffed against PR #56's fc2e1006f19f2159. Only setupWatch changed:
-    // its first plan required 93.63/121.64 = 76.97% premium risk (now refused), and
-    // another watch row's over-limit OTM contract is rejected/re-ranked. The executed
-    // trade and all other top-level values are unchanged (independent field diff).
-    expect(fp).toBe('ac3a1be6b9935abf');
-    expect(live.setupWatch[0]).toMatchObject({ blockCode: 'INVALID_TRADE_GEOMETRY', plan: null });
-    expect(live.tradeSetup).toMatchObject({ available: true, strike: 24950, side: 'PE' });
+    // PAYOFF-ADMISSION-1: the old fixture minted a 0.04 net-R:R indicator leg.
+    // Its unchanged plan now remains research evidence, explicitly blocked, with no paper trade.
+    expect(fp).toBe('c19c041f2d460fc9');
+    expect(live.setupWatch[0]).toMatchObject({ blockCode: 'REWARD_RISK_TOO_LOW', plan: { netRR: 0.04, entryPremium: 124.25, slPremium: 78.83, t1Premium: 128.43 } });
+    expect(live.tradeSetup).toMatchObject({ available: false, noTradeCode: 'REWARD_RISK_TOO_LOW' });
     expect(live.tradeSetup.researchTrigger).toBeUndefined(); // F3's live-spot target no longer pays its decay
   });
 
@@ -223,15 +221,15 @@ describe('full replay of the real decision path', () => {
     expect(report.effects.onlyReplay).toEqual([]);
   });
 
-  it('the live poll went through the option build and the slot, and minted; the replay settles identically', () => {
-    // The fixture is built so a family candidate mints: the full chain ran (gates, option build, arbitration, settlement).
-    expect(live.tradeSetup.available).toBe(true);
-    expect(report.replayed).toMatchObject({ available: true, strike: live.tradeSetup.strike, strategy: live.tradeSetup.strategy ?? null });
-    // Settlement writes, reproduced as effects (never executed): the paper trade row and the slot.
+  it('live and replay both refuse the weak payoff without minting a paper trade', () => {
+    // Full production/replay path runs; insufficient payoff must not reach settlement.
+    expect(live.tradeSetup.available).toBe(false);
+    expect(report.replayed).toMatchObject({ available: false, noTradeCode: 'REWARD_RISK_TOO_LOW' });
+    // A refusal may write decision/watch evidence, but never a signal or an open trade slot.
     expect(report.effects.onlyLive).toEqual([]);
     const tapeWrites = stored.tape.filter((e: any) => e.write).map((e: any) => e.key);
-    expect(tapeWrites.some((k: string) => k.includes('INSERT INTO signals'))).toBe(true);
-    expect(tapeWrites.some((k: string) => k.includes('trade_setup:NSE:NIFTY:INTRADAY'))).toBe(true);
+    expect(tapeWrites.some((k: string) => k.includes('INSERT INTO signals'))).toBe(false);
+    expect(mem.has('trade_setup:NSE:NIFTY:INTRADAY')).toBe(false);
   });
 
   it('a tampered tape (a removed read) is a divergence, never answered with current data', async () => {

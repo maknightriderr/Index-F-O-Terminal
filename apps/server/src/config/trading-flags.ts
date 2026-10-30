@@ -436,11 +436,10 @@ export const STRATEGY_VERSION = 'STRUCTURE-15M-1.0';
 // at, not from the decision bar's close (structureEntrySpot). Rows before it carry 1.0.
 // FAMILIES-1.2: validate and reprice geometry on every expiry; invalid live spots fail closed.
 export const TRIGGER_VERSION = 'FAMILIES-1.2';
-// RISK-2.0 (2026-10-05): net R:R is a ranking / display input only — no
-// 1.50R gate anywhere in the live path (structure confirmation, the fill's
-// sequence gate, the family buckets, the option builder, the sticky slot's
-// plausibility read). Genuine geometry / stop / safety checks are unchanged.
-export const RISK_VERSION = 'RISK-2.0';
+// RISK-3.0: final option geometry must clear the existing net-payoff floor.
+// Targets/stops are not adjusted to pass; existing open trades retain their plans.
+// RISK-2.0 historical rows used display-only R:R and remain a separate cohort.
+export const RISK_VERSION = 'RISK-3.0';
 // OPTION-2.0 (2026-10-05): the target premium is the realistic payoff of the
 // expected move — delta + ½·gamma·move² − theta over the hold (trading time) —
 // not delta alone; costs on top as before. A contract whose decay eats the
@@ -882,7 +881,7 @@ export function effectiveTradingFlags(flags: Readonly<TradingFlags> = TRADING_FL
     CONCURRENCY_CAP: plain('CONCURRENCY_CAP'),
     CLOSING_GUARD: plain('CLOSING_GUARD'),
     RICH_IV_RR: flags.RICH_IV_RR
-      ? { on: true, effect: 'INERT', why: 'Net R:R is display / ranking only since 5 Oct (rrGate off in every live build): the higher R:R bar it sets refuses nothing.' }
+      ? { on: true, effect: 'ACTIVE', why: 'New entries enforce the rich-IV net-payoff floor after final geometry; open trades keep their original plans.' }
       : plain('RICH_IV_RR'),
   };
 }
@@ -975,8 +974,10 @@ export function logicStamp(
  */
 export const PAPER_RESEARCH_LOGIC_SUFFIX = '+paper-research';
 
-/** Every live stamp since 2026-10-05: net R:R is display / ranking only (RISK-2.0) — rows before it never pool with rows after. */
+/** Historical RISK-2.0 suffix, retained for historical consumers; new live stamps use PAYOFF_ADMISSION_LOGIC_SUFFIX. */
 export const RR_DISPLAY_ONLY_LOGIC_SUFFIX = '+rr-display-only.1';
+/** Supersedes display-only admission for new trades; historical and open plans are retained. */
+export const PAYOFF_ADMISSION_LOGIC_SUFFIX = '+payoff-admission.1';
 /**
  * Phase 4 (2026-10-05): parents are grouped by origin (PARENT-2.0), so the
  * one-trade-per-parent guard and the observation arbitration see different
@@ -1003,7 +1004,7 @@ export function liveLogicStamp(): LogicStamp {
   // + the OB1 / OF1 paper-source suffix while either may take the slot (empty when both are off).
   return {
     ...stamp,
-    logicVersion: `${stamp.logicVersion}${RR_DISPLAY_ONLY_LOGIC_SUFFIX}${PARENT_IDENTITY_LOGIC_SUFFIX}${TRIGGER_DEMOTION_LOGIC_SUFFIX}${orderFlowLogicSuffix()}`,
+    logicVersion: `${stamp.logicVersion}${PAYOFF_ADMISSION_LOGIC_SUFFIX}${PARENT_IDENTITY_LOGIC_SUFFIX}${TRIGGER_DEMOTION_LOGIC_SUFFIX}${orderFlowLogicSuffix()}`,
     effectiveFlags: effectiveTradingFlags(),
   };
 }

@@ -24,7 +24,10 @@ export function buildChartZones(bars: readonly ZoneCandle[], intervalSeconds: nu
   const closed = bars.filter((b) => b.time + intervalSeconds <= nowSeconds);
   if (closed.length < 3) return { zones: [], reason: 'At least three closed candles are needed.' };
   const lastTime = closed[closed.length - 1].time;
-  const zones: ChartZone[] = detectOrderBlocks(closed).map((b) => ({
+  // Missing intraday bars / overnight session gaps cannot manufacture a three-bar FVG or displacement.
+  // Daily candles are trading sessions, so weekends are allowed there.
+  const contiguous = (from: number, to: number) => intervalSeconds >= 86400 || closed.slice(from + 1, to + 1).every((b, i) => Math.abs(b.time - closed[from + i].time - intervalSeconds) < 1);
+  const zones: ChartZone[] = detectOrderBlocks(closed).filter((b) => contiguous(b.blockIndex, b.displacementIndex)).map((b) => ({
     id: `OB:${closed[b.blockIndex].time}:${b.type}`, kind: 'OB', direction: b.type,
     top: b.top, bottom: b.bottom, start: closed[b.displacementIndex].time,
     end: b.mitigatedIndex == null ? lastTime : closed[b.mitigatedIndex].time,
@@ -32,6 +35,7 @@ export function buildChartZones(bars: readonly ZoneCandle[], intervalSeconds: nu
   }));
   for (const g of detectFairValueGaps(closed.map((b) => b.high), closed.map((b) => b.low))) {
     const confirmation = g.atIndex + 1;
+    if (!contiguous(confirmation - 2, confirmation)) continue;
     // Same touch-based definition used by the shared detector, including exact boundary touches.
     const touch = closed.findIndex((b, index) => index > confirmation && b.high >= g.bottom && b.low <= g.top);
     zones.push({ id: `FVG:${closed[confirmation].time}:${g.type}`, kind: 'FVG', direction: g.type,

@@ -3694,7 +3694,7 @@ async function resolveStickyTradeSetup(
           : null;
       const refusal = entry?.kind === 'REFUSED' ? entry : null;
       const block =
-        refusal && !built?.rrPlan
+        refusal
           ? { code: refusal.code, reason: refusal.reason }
           : !entry && !(out as TradeSetup).available
             ? { code: (out as TradeSetup).noTradeCode ?? null, reason: (out as TradeSetup).reason }
@@ -4423,8 +4423,9 @@ function buildIndicatorContract(a: IndicatorContractArgs) {
           structuralStopBufferAtr: TRADING_PARAMS.STRUCTURAL_STOP_BUFFER_ATR,
           ivVsHv: entryContext?.ivVsHv ?? null,
           richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
-          // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
+          // Build unchanged geometry; final payoffAdmission refuses weak net payoff without squeezing stops.
           rrGate: false,
+          payoffAdmission: true,
           // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
           realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
           // COST-3.0 (audit 2026-10-18): this exchange's dated statutory + exchange charges, not the flat 0.2%.
@@ -4754,8 +4755,9 @@ async function resolveMomentumBreakSetup(ctx: {
           structuralStopBufferAtr: TRADING_PARAMS.STRUCTURAL_STOP_BUFFER_ATR,
           ivVsHv: entryContext?.ivVsHv ?? null,
           richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
-          // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
+          // Build unchanged geometry; final payoffAdmission refuses weak net payoff without squeezing stops.
           rrGate: false,
+          payoffAdmission: true,
           // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
           realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
           // COST-3.0 (audit 2026-10-18): this exchange's dated statutory + exchange charges, not the flat 0.2%.
@@ -5327,8 +5329,9 @@ export async function buildStructureContract(a: {
           structuralStopBufferAtr: fiveMinute ? 0 : STRUCTURE_RULES.stopBufferAtr,
           ivVsHv: entryContext?.ivVsHv ?? null,
           richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
-          // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
+          // Build unchanged geometry; final payoffAdmission refuses weak net payoff without squeezing stops.
           rrGate: false,
+          payoffAdmission: true,
           // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
           realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
           // COST-3.0 (audit 2026-10-18): this exchange's dated statutory + exchange charges, not the flat 0.2%.
@@ -5696,8 +5699,9 @@ async function planForLifecycle(
       structuralStopBufferAtr: fiveMinute ? 0 : STRUCTURE_RULES.stopBufferAtr,
       ivVsHv: null,
       richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
-      // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
+      // Build unchanged geometry; final payoffAdmission refuses weak net payoff without squeezing stops.
       rrGate: false,
+          payoffAdmission: true,
       // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
       realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
       // COST-3.0 (audit 2026-10-18): this exchange's dated statutory + exchange charges, not the flat 0.2%.
@@ -5744,7 +5748,7 @@ async function planForLifecycle(
     ranking: validated.fnoValidation?.strikeSelection?.ranking ?? null,
     trail: { breakevenAtR: TRAIL_TO_BREAKEVEN_AT_R, lockAtR: TRAIL_LOCK_PROFIT_AT_R },
   });
-  if (!block && !built.available && built.noTradeCode !== 'REWARD_RISK_TOO_LOW') block = { code: built.noTradeCode ?? null, reason: built.reason };
+  if (!block && !built.available) block = { code: built.noTradeCode ?? null, reason: built.reason };
   return { plan, block, optionBuildFailed: false, netRR, grossRR };
 }
 
@@ -5988,8 +5992,9 @@ async function buildStructurePreview(
           structuralStopBufferAtr: fiveMinute ? 0 : STRUCTURE_RULES.stopBufferAtr,
           ivVsHv: null,
           richIvMinRiskReward: TRADING_PARAMS.RICH_IV_MIN_RISK_REWARD,
-          // Net R:R is a ranking / display input only — never a refusal (2026-10-05).
+          // Build unchanged geometry; final payoffAdmission refuses weak net payoff without squeezing stops.
           rrGate: false,
+          payoffAdmission: true,
           // Realistic payoff (OPTION-2.0): delta + gamma − theta over the hold, on this exchange's session.
           realisticPayoff: { sessionHours: sessionHoursFor(exchange) },
           // COST-3.0 (audit 2026-10-18): this exchange's dated statutory + exchange charges, not the flat 0.2%.

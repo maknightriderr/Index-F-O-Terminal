@@ -1,5 +1,7 @@
 'use client';
 
+import { closedChartBars, swingConfirmationIndex } from '@/lib/chart-confirmation';
+
 import React, { useEffect, useRef, useState } from 'react';
 import { createChart, ColorType, LineStyle, type IChartApi, type ISeriesApi, type IPriceLine, type UTCTimestamp } from 'lightweight-charts';
 import { chartCrosshairIst, chartTickIst } from '@/lib/chart-time';
@@ -27,50 +29,6 @@ import type { ChartOverlayLine, OverlayTone } from '@/lib/chart-overlays';
 // have a trend to reverse (see candlestick-patterns/index.ts) — that took
 // the same sample from 13 marked bars to 2.
 const STRONG_REVERSAL_MIN_CONFIDENCE = 60;
-
-// A reversal has to reverse something, which means it has to sit at a
-// TURNING POINT — not merely be a recognisable shape somewhere in the
-// middle of a move. Requiring the bar to be the local extreme of a +-3
-// window is the standard swing-pivot definition, and it is what separates
-// "this candle is shaped like a hammer" from "this is where price turned".
-//
-// Measured on real NIFTY data, the shape test alone was nowhere near
-// enough: on a 3-month daily chart it produced 5 markers of which ZERO sat
-// at a swing extreme, and over a full year it marked 20 bars — roughly one
-// every 13 sessions, which is why they read as noise. Adding this test
-// takes that year down to 3.
-const SWING_WINDOW = 3;
-// Ties count. An exact float equality against the window's min/max would
-// drop a bar that made the low by a hair's breadth on a later retest.
-const SWING_TOLERANCE = 0.001;
-
-/**
- * Is bar `i` the local high (bearish reversal) or low (bullish reversal)
- * of its neighbourhood?
- *
- * Near the right edge there are fewer future bars to compare against, so
- * the most recent bars are judged on a shorter window and are effectively
- * PROVISIONAL — which is honest rather than a flaw: whether a bar turned
- * out to be the turn genuinely isn't knowable until price has moved away
- * from it. A marker there can disappear on the next refresh if price makes
- * a new extreme, and that is the correct behaviour.
- */
-function isSwingExtreme(
-  bars: Array<{ high: number; low: number }>,
-  i: number,
-  direction: 'BULLISH' | 'BEARISH'
-): boolean {
-  const from = Math.max(0, i - SWING_WINDOW);
-  const to = Math.min(bars.length, i + SWING_WINDOW + 1);
-  const window = bars.slice(from, to);
-  if (window.length < 2) return false;
-  if (direction === 'BULLISH') {
-    const lowest = Math.min(...window.map((b) => b.low));
-    return bars[i].low <= lowest * (1 + SWING_TOLERANCE);
-  }
-  const highest = Math.max(...window.map((b) => b.high));
-  return bars[i].high >= highest * (1 - SWING_TOLERANCE);
-}
 
 // How often to re-pull candles so newly-CLOSED bars appear. Live ticks
 // (below) already move the current bar in real time; this only exists to
@@ -389,7 +347,9 @@ export function InstrumentChart({
         // now" read into every reversal visible on screen. Kept to the
         // bar it actually confirms on (atIndex === i) so a pattern isn't
         // re-reported on each later bar it's still technically inside.
-        const ohlc = candles.map((c) => ({ open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume ?? 0 }));
+        const closedData = closedChartBars(data, intervalSeconds, Date.now() / 1000);
+        const closedCandles = candles.slice(0, closedData.length);
+        const ohlc = closedCandles.map((c) => ({ open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume ?? 0 }));
         const markers: Array<{ time: UTCTimestamp; position: 'aboveBar' | 'belowBar'; color: string; shape: 'arrowUp' | 'arrowDown'; text: string }> = [];
         const cc = CHART_COLORS[resolvedTheme];
         for (let i = 2; i < ohlc.length; i++) {
@@ -397,17 +357,16 @@ export function InstrumentChart({
           if (!hit || hit.atIndex !== i || hit.confidence < STRONG_REVERSAL_MIN_CONFIDENCE) continue;
           // The shape is necessary but nowhere near sufficient — it also has
           // to be where price actually turned. See isSwingExtreme.
-          if (!isSwingExtreme(ohlc, i, hit.direction)) continue;
+          const confirmedAt = swingConfirmationIndex(ohlc, i, hit.direction);
+          if (confirmedAt == null) continue;
           const bullish = hit.direction === 'BULLISH';
           markers.push({
-            time: data[i].time,
+            time: data[confirmedAt].time,
             position: bullish ? 'belowBar' : 'aboveBar',
             color: bullish ? cc.up : cc.down,
             shape: bullish ? 'arrowUp' : 'arrowDown',
-            // No per-candle label. The arrow alone says "price turned here",
-            // which is the whole ask — printing the pattern name on every
-            // one of them turned the chart into a running commentary.
-            text: '',
+            // This is when the swing became confirmable, not an entry at the earlier extreme.
+            text: 'Confirmed',
           });
         }
         seriesRef.current.setMarkers(markers);
@@ -418,8 +377,8 @@ export function InstrumentChart({
         // so switching timeframes re-detects fresh rather than reusing a
         // stale read from a different interval/range.
         setDetectedPattern(
-          data.length >= 15
-            ? detectPattern(candles.map((c) => c.high), candles.map((c) => c.low), candles.map((c) => c.close), candles.map((c) => c.volume))
+          closedCandles.length >= 15
+            ? detectPattern(closedCandles.map((c) => c.high), closedCandles.map((c) => c.low), closedCandles.map((c) => c.close), closedCandles.map((c) => c.volume))
             : null
         );
       })
@@ -570,7 +529,7 @@ export function InstrumentChart({
               detectedPattern.direction === 'BULLISH' ? 'bg-emerald-500/15 text-emerald-500 light:text-emerald-700' : 'bg-red-500/15 text-red-500 light:text-red-700'
             }`}
           >
-            {formatPatternName(detectedPattern.pattern)} · {detectedPattern.direction === 'BULLISH' ? '▲' : '▼'} {detectedPattern.confidence}%
+            Candidate {formatPatternName(detectedPattern.pattern)} · {detectedPattern.direction === 'BULLISH' ? '▲' : '▼'} {detectedPattern.confidence}/100 fit
           </div>
         )}
 
