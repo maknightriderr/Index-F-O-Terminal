@@ -77,8 +77,8 @@ const BIAS_RECHECK_POSITIONAL_MS = 15 * 60_000;
 
 let monitorStarted = false;
 let sweepRunning = false;
-// token -> what to watch; replaced wholesale on each sweep
-let watchesByToken = new Map<string, LockedSetupWatch>();
+// Setup slot -> watch. Two modes can hold the same contract with independent exits.
+let watchesBySetup = new Map<string, LockedSetupWatch>();
 // setup keys with a check already running, so a burst of ticks through a
 // stop triggers one close, not dozens
 const inFlight = new Set<string>();
@@ -87,8 +87,10 @@ const setupKey = (w: { exchange: Exchange; underlying: string; mode: TradingMode
 
 /** The open trades the tick feed currently watches (read by the ops monitor, OBS-1). A copy: callers never change it. */
 export function watchedSetups(): LockedSetupWatch[] {
-  return [...watchesByToken.values()].map((w) => ({ ...w }));
+  return [...watchesBySetup.values()].map((w) => ({ ...w }));
 }
+const contractKey = (w: { exchange: Exchange; token: string }) => `${w.exchange}:${w.token}`;
+const contractWatches = (w: { exchange: Exchange; token: string }) => [...watchesBySetup.values()].filter((x) => contractKey(x) === contractKey(w));
 const targetFor = (w: LockedSetupWatch): SubscriptionTarget => ({ token: w.token, exchange: w.exchange, exchangeSegment: FO_SEGMENT[w.exchange] });
 
 export function startTradeSetupPriceMonitor(provider: MarketDataProvider, subscriptions?: SubscriptionManager): void {
@@ -194,7 +196,7 @@ export async function primeSubscriptions(provider: MarketDataProvider, subscript
     sweepRunning = true;
     try {
       const instruments = await provider.getInstrumentMaster();
-      const next = new Map(watchesByToken);
+      const next = new Map(watchesBySetup);
       for (const key of await scanKeys('trade_setup:*')) {
         const parts = key.split(':'); // trade_setup:{exchange}:{underlying}:{mode}
         if (parts.length !== 4 || (parts[3] !== 'INTRADAY' && parts[3] !== 'POSITIONAL')) continue;
@@ -207,11 +209,12 @@ export async function primeSubscriptions(provider: MarketDataProvider, subscript
           continue;
         }
         const watch = watchFromSlot(instruments, exchange, underlying, mode, stored);
-        if (watch) next.set(watch.token, watch);
+        if (watch) next.set(setupKey(watch), watch);
       }
       await syncSubscriptions(subscriptions, next);
-      logger.info({ tokens: next.size }, 'Trade setup price monitor: open trades subscribed at boot, before the first sweep');
-      return next.size;
+      const tokens = new Set([...next.values()].map(contractKey)).size;
+      logger.info({ tokens, watchedSlots: next.size }, 'Trade setup price monitor: open trades subscribed at boot, before the first sweep');
+      return tokens;
     } finally {
       sweepRunning = false;
     }
@@ -239,14 +242,14 @@ async function sweep(provider: MarketDataProvider, subscriptions?: SubscriptionM
     const id = `${exchange}:${underlying}:${mode}`;
     if (inFlight.has(id)) {
       // A tick-triggered check is mid-flight — keep watching what we had.
-      for (const w of watchesByToken.values()) if (setupKey(w) === id) next.set(w.token, w);
+      for (const w of watchesBySetup.values()) if (setupKey(w) === id) next.set(setupKey(w), w);
       continue;
     }
 
     inFlight.add(id);
     try {
       const watch = (await checkLockedSetupPriceLevels(provider, exchange as Exchange, underlying, mode)) ?? (await watchForOpenSlot(provider, exchange, underlying, mode));
-      if (watch) next.set(watch.token, watch);
+      if (watch) next.set(setupKey(watch), watch);
     } catch (err: any) {
       logger.warn({ error: err.message, key }, 'Trade setup price monitor: one symbol check failed');
     } finally {
@@ -313,12 +316,14 @@ async function recheckBias(provider: MarketDataProvider, keys: string[]): Promis
 }
 
 async function syncSubscriptions(subscriptions: SubscriptionManager | undefined, next: Map<string, LockedSetupWatch>): Promise<void> {
-  const previous = watchesByToken;
-  watchesByToken = next;
+  const previous = watchesBySetup;
+  watchesBySetup = next;
   if (!subscriptions) return;
 
-  const added = [...next.values()].filter((w) => !previous.has(w.token));
-  const removed = [...previous.values()].filter((w) => !next.has(w.token));
+  const previousContracts = new Map([...previous.values()].map((w) => [contractKey(w), w]));
+  const nextContracts = new Map([...next.values()].map((w) => [contractKey(w), w]));
+  const added = [...nextContracts.values()].filter((w) => !previousContracts.has(contractKey(w)));
+  const removed = [...previousContracts.values()].filter((w) => !nextContracts.has(contractKey(w)));
 
   if (removed.length > 0) subscriptions.unsubscribe(TICK_CLIENT_ID, removed.map(targetFor));
   if (added.length > 0) {
@@ -338,36 +343,49 @@ async function syncSubscriptions(subscriptions: SubscriptionManager | undefined,
  */
 async function checkGaps(provider: MarketDataProvider, subscriptions: SubscriptionManager, gaps: FeedGap[]): Promise<void> {
   for (const gap of gaps) {
-    const watch = watchesByToken.get(gap.token);
-    if (!watch) {
+    const watches = contractWatches(gap);
+    if (watches.length === 0) {
       subscriptions.markRecovered(gap.key, 'NOT_CHECKED', 'No open paper trade on this token.');
       continue;
     }
-    const id = setupKey(watch);
-    // Wait out a price check already running for this setup (bounded).
-    for (let i = 0; i < 20 && inFlight.has(id); i++) await new Promise((r) => setTimeout(r, 250));
-    inFlight.add(id);
-    try {
-      const r = await runGapCheck({
-        gap,
-        watch,
-        fetchMinuteBars: (from, to) =>
-          provider.getHistoricalData({ exchange: watch.exchange, segment: 'FO', token: watch.token, interval: 'ONE_MINUTE', fromDate: istMinute(from - 60_000), toDate: istMinute(to) }),
-        closeAt: (price) => checkLockedSetupPriceLevels(provider, watch.exchange, watch.underlying, watch.mode, price),
-        record: async (res) => {
-          const level = res.outcome === 'LEVEL_TOUCHED' || res.outcome === 'NO_TOUCH' || res.outcome === 'NO_GAP_IN_SESSION' ? 'info' : 'warn';
-          logger[level]({ underlying: watch.underlying, exchange: watch.exchange, mode: watch.mode, token: watch.token, ...res }, `Trade setup monitor: feed gap check — ${res.outcome}`);
-          await redis
-            .set(`feed_gap:${id}:${res.from}`, JSON.stringify({ ...res, underlying: watch.underlying, exchange: watch.exchange, mode: watch.mode, token: watch.token, stopLoss: watch.stopLoss, target: watch.target, checkedAt: Date.now() }), 'EX', 3 * 24 * 60 * 60)
-            .catch(() => undefined);
-        },
-      });
-      subscriptions.markRecovered(gap.key, r.outcome, r.detail);
-    } catch (err: any) {
-      subscriptions.markRecovered(gap.key, 'MISSED_TOUCH_POSSIBLE', `Gap check failed: ${err.message}`);
-    } finally {
-      inFlight.delete(id);
+    const results: Array<{ outcome: Parameters<SubscriptionManager['markRecovered']>[1]; detail: string }> = [];
+    for (const watch of watches) {
+      const id = setupKey(watch);
+      // Wait out a price check already running for this setup (bounded).
+      for (let i = 0; i < 20 && inFlight.has(id); i++) await new Promise((r) => setTimeout(r, 250));
+      if (inFlight.has(id)) {
+        results.push({ outcome: 'MISSED_TOUCH_POSSIBLE', detail: `${id}: price check still running; gap not checked.` });
+        continue;
+      }
+      inFlight.add(id);
+      try {
+        const r = await runGapCheck({
+          gap,
+          watch,
+          fetchMinuteBars: (from, to) =>
+            provider.getHistoricalData({ exchange: watch.exchange, segment: 'FO', token: watch.token, interval: 'ONE_MINUTE', fromDate: istMinute(from - 60_000), toDate: istMinute(to) }),
+          closeAt: (price) => checkLockedSetupPriceLevels(provider, watch.exchange, watch.underlying, watch.mode, price),
+          record: async (res) => {
+            const level = res.outcome === 'LEVEL_TOUCHED' || res.outcome === 'NO_TOUCH' || res.outcome === 'NO_GAP_IN_SESSION' ? 'info' : 'warn';
+            logger[level]({ underlying: watch.underlying, exchange: watch.exchange, mode: watch.mode, token: watch.token, ...res }, `Trade setup monitor: feed gap check — ${res.outcome}`);
+            await redis
+              .set(`feed_gap:${id}:${res.from}`, JSON.stringify({ ...res, underlying: watch.underlying, exchange: watch.exchange, mode: watch.mode, token: watch.token, stopLoss: watch.stopLoss, target: watch.target, checkedAt: Date.now() }), 'EX', 3 * 24 * 60 * 60)
+              .catch(() => undefined);
+          },
+        });
+        results.push({ outcome: r.outcome, detail: `${id}: ${r.detail}` });
+      } catch (err: any) {
+        results.push({ outcome: 'MISSED_TOUCH_POSSIBLE', detail: `${id}: gap check failed: ${err.message}` });
+      } finally {
+        inFlight.delete(id);
+      }
     }
+    // Resolve the shared feed only after every affected slot has been checked.
+    const outcome = results.find((r) => r.outcome === 'MISSED_TOUCH_POSSIBLE')
+      ?? results.find((r) => r.outcome === 'FILL_UNCERTAIN')
+      ?? results.find((r) => r.outcome === 'LEVEL_TOUCHED')
+      ?? results[0];
+    subscriptions.markRecovered(gap.key, outcome.outcome, results.map((r) => r.detail).join(' | '));
   }
 }
 
@@ -378,40 +396,41 @@ function onTicks(provider: MarketDataProvider, subscriptions: SubscriptionManage
     } catch {
       /* measurement must never disturb the monitor */
     }
-    const watch = watchesByToken.get(tick.token);
-    if (!watch || !(tick.ltp > 0)) continue;
-    // Never evaluate a level on a token whose data is stale, in a gap, or not yet gap-checked.
-    const state = subscriptions.feedStateOfToken(tick.token);
-    // Measurement only (LEDGER-1.0): this tick as the trade's quote of the minute (with its feed state), whatever it triggers.
-    if (watch.signalId) {
-      try {
-        recordMark(
-          { signalId: watch.signalId, symbol: watch.underlying, exchange: watch.exchange, mode: watch.mode, entry: null, initialStop: null, currentStop: watch.stopLoss, target: watch.target, quantity: null, lotSize: null, riskBudgetInr: null, capitalInr: null },
-          observeTick(tick, state ?? null)
-        );
-      } catch {
-        /* measurement must never disturb the monitor */
+    if (!(tick.ltp > 0)) continue;
+    for (const watch of contractWatches(tick)) {
+      // Never evaluate a level on a token whose data is stale, in a gap, or not yet gap-checked.
+      const state = subscriptions.feedStateOfToken(tick.token);
+      // Measurement only (LEDGER-1.0): this tick as the trade's quote of the minute (with its feed state), whatever it triggers.
+      if (watch.signalId) {
+        try {
+          recordMark(
+            { signalId: watch.signalId, symbol: watch.underlying, exchange: watch.exchange, mode: watch.mode, entry: null, initialStop: null, currentStop: watch.stopLoss, target: watch.target, quantity: null, lotSize: null, riskBudgetInr: null, capitalInr: null },
+            observeTick(tick, state ?? null)
+          );
+        } catch {
+          /* measurement must never disturb the monitor */
+        }
       }
+      if (state != null && state !== 'DATA_FRESH') continue;
+      if (tick.ltp > watch.stopLoss && tick.ltp < watch.target) continue;
+
+      const id = setupKey(watch);
+      if (inFlight.has(id)) continue;
+      inFlight.add(id);
+
+      runInteractive(() => checkLockedSetupPriceLevels(provider, watch.exchange, watch.underlying, watch.mode, tick.ltp, observeTick(tick, state ?? null)))
+        .then((stillOpen) => {
+          if (stillOpen) {
+            watchesBySetup.set(setupKey(stillOpen), stillOpen); // e.g. the stop has since trailed
+            return;
+          }
+          if (watchesBySetup.get(id) === watch) {
+            watchesBySetup.delete(id);
+            if (contractWatches(watch).length === 0) subscriptions.unsubscribe(TICK_CLIENT_ID, [targetFor(watch)]);
+          }
+        })
+        .catch((err: any) => logger.warn({ error: err.message, underlying: watch.underlying }, 'Trade setup price monitor: tick-triggered check failed'))
+        .finally(() => inFlight.delete(id));
     }
-    if (state != null && state !== 'DATA_FRESH') continue;
-    if (tick.ltp > watch.stopLoss && tick.ltp < watch.target) continue;
-
-    const id = setupKey(watch);
-    if (inFlight.has(id)) continue;
-    inFlight.add(id);
-
-    runInteractive(() => checkLockedSetupPriceLevels(provider, watch.exchange, watch.underlying, watch.mode, tick.ltp, observeTick(tick, state ?? null)))
-      .then((stillOpen) => {
-        if (stillOpen) {
-          watchesByToken.set(stillOpen.token, stillOpen); // e.g. the stop has since trailed
-          return;
-        }
-        if (watchesByToken.get(watch.token) === watch) {
-          watchesByToken.delete(watch.token);
-          subscriptions.unsubscribe(TICK_CLIENT_ID, [targetFor(watch)]);
-        }
-      })
-      .catch((err: any) => logger.warn({ error: err.message, underlying: watch.underlying }, 'Trade setup price monitor: tick-triggered check failed'))
-      .finally(() => inFlight.delete(id));
   }
 }
