@@ -14,6 +14,22 @@ import type { MomentumBar } from '@fno/analytics';
 vi.mock('../../lib/logger.js', () => ({ logger: { info() {}, warn() {}, error() {}, debug() {} } }));
 vi.mock('../../lib/redis.js', () => ({ redis: { get: async () => null, mget: async () => [] }, scanKeys: async () => [] }));
 vi.mock('../ensure-capture-schema.js', () => ({ schemaFileReady: () => true }));
+// This file tests the full decision pipeline with a family actually reaching the paper-trade slot,
+// independent of today's RESEARCH_PAPER_TRADING/TRIGGER_DEMOTIONS production defaults (both off /
+// S1-inclusive since 2026-10-30 while a new strategy is built).
+vi.mock('../../config/trading-flags.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../config/trading-flags.js')>();
+  const demotions = { A4: actual.TRIGGER_DEMOTIONS.A4 };
+  const resolveTriggerStage: typeof actual.resolveTriggerStage = (
+    triggerId,
+    registryStatus,
+    promotions = actual.TRIGGER_PROMOTIONS,
+    overrides = {},
+    researchPaper = true,
+    demotionsArg = demotions
+  ) => actual.resolveTriggerStage(triggerId, registryStatus, promotions, overrides, researchPaper, demotionsArg);
+  return { ...actual, RESEARCH_PAPER_TRADING: true, TRIGGER_DEMOTIONS: demotions, resolveTriggerStage };
+});
 
 // The stored rows this decision produced, returned by query shape.
 const ARB = [

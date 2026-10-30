@@ -152,7 +152,7 @@ import {
   netRiskReward,
   sessionEndExitTime,
 } from './validation-gates.js';
-import { INDICATOR_CONFIDENCE_MODE, locationGateEnforced } from '../config/trading-flags.js';
+import { INDICATOR_CONFIDENCE_MODE, locationGateEnforced, INDICATOR_TRADING } from '../config/trading-flags.js';
 import type { ExposureSnapshot } from './exposure-tracker.js';
 import { stopOvershootPct } from './stop-overshoot.js';
 import type { NoTradeCode, TradeDecision } from '@fno/shared';
@@ -4221,6 +4221,9 @@ async function resolveStickyTradeSetup(
         metrics
       ),
       commit: async () => {
+        // INDICATOR_TRADING off (2026-10-30): the candidate still competes in arbitration
+        // and is still logged, it just never mints — same outcome as losing the mint-lock race.
+        if (!INDICATOR_TRADING) return { setup: fresh, minted: false };
         const { setup: minted, ours } = await mintUnderLockOutcome({ underlying, exchange, mode, key, today, isPositional, priorDecisionId, mintFresh });
         // Only this caller's own mint is MINTED; another caller's EXISTING setup is shown, not counted (2026-10-23).
         return { setup: minted, minted: ours && minted.available };

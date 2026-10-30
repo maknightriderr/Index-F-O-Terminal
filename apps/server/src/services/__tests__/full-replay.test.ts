@@ -73,6 +73,30 @@ vi.mock('../../lib/db.js', async () => {
 });
 vi.mock('../../lib/logger.js', () => ({ logger: { info() {}, warn() {}, error() {}, debug() {}, child() { return this; } } }));
 vi.mock('../ensure-capture-schema.js', () => ({ schemaFileReady: () => true, captureSchemaStatus: () => null }));
+// This file tests the real Indicator Engine's mint path end-to-end (live poll + tape replay fidelity),
+// independent of INDICATOR_TRADING being off since 2026-10-30 while a new strategy is built.
+vi.mock('../../config/trading-flags.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../config/trading-flags.js')>();
+  const demotions = { A4: actual.TRIGGER_DEMOTIONS.A4 };
+  const resolveTriggerStage: typeof actual.resolveTriggerStage = (
+    triggerId,
+    registryStatus,
+    promotions = actual.TRIGGER_PROMOTIONS,
+    overrides = {},
+    researchPaper = true,
+    demotionsArg = demotions
+  ) => actual.resolveTriggerStage(triggerId, registryStatus, promotions, overrides, researchPaper, demotionsArg);
+  // structureEnabledFor's own default (enabled = STRUCTURE) is a closure over trading-flags.ts's
+  // internal module state too — same as resolveTriggerStage, re-exporting STRUCTURE: true alone
+  // does not change it. Wrap it as well.
+  const structureEnabledFor: typeof actual.structureEnabledFor = (underlying, exchange, mode, enabled = true, symbols = actual.STRUCTURE_SYMBOLS) =>
+    actual.structureEnabledFor(underlying, exchange, mode, enabled, symbols);
+  return { ...actual, INDICATOR_TRADING: true, STRUCTURE: true, RESEARCH_PAPER_TRADING: true, TRIGGER_DEMOTIONS: demotions, resolveTriggerStage, structureEnabledFor };
+});
+vi.mock('../../config/order-flow-flags.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../config/order-flow-flags.js')>();
+  return { ...actual, OB1_TRADING: true, OF1_TRADING: true, ORDER_BLOCK_MODE: 'PAPER' };
+});
 
 // The store: capture what the live poll persisted (the snapshot and its tape).
 const stored: { snap: any; tape: any; live: any } = { snap: null, tape: null, live: null };

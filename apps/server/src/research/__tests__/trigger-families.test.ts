@@ -106,17 +106,18 @@ describe('no universal displacement gate', () => {
 });
 
 describe('stages: research families paper-trade, nothing has earned PAPER', () => {
-  it('defaults: S1 ACTIVE, the SWEEP_CLOSE restatements RETIRED, A4 demoted to SHADOW, every other family PAPER_RESEARCH, nothing promoted to PAPER', () => {
-    expect(RESEARCH_PAPER_TRADING).toBe(true);
+  it('2026-10-30: every strategy paused — RESEARCH_PAPER_TRADING off, S1 and A4 demoted to SHADOW, the SWEEP_CLOSE restatements RETIRED, nothing promoted to PAPER', () => {
+    expect(RESEARCH_PAPER_TRADING).toBe(false);
     expect(TRIGGER_PROMOTIONS).toEqual({});
     const stages = liveTriggerStages();
-    expect(stages.S1).toBe('ACTIVE');
     expect(stages.A1).toBe('RETIRED');
     expect(stages.F4).toBe('RETIRED');
-    // Demoted on its forward record (TRIGGER_DEMOTIONS, 2026-10-08): it keeps running in SHADOW.
+    // Demoted on their forward record / user decision (TRIGGER_DEMOTIONS, 2026-10-08 and 2026-10-30): SHADOW.
+    expect(stages.S1).toBe('SHADOW');
     expect(stages.A4).toBe('SHADOW');
-    expect(Object.keys(TRIGGER_DEMOTIONS)).toEqual(['A4']);
-    for (const [id, st] of Object.entries(stages)) if (!['S1', 'A1', 'F4', 'A4'].includes(id)) expect(st, id).toBe('PAPER_RESEARCH');
+    expect(Object.keys(TRIGGER_DEMOTIONS)).toEqual(['A4', 'S1']);
+    // RESEARCH_PAPER_TRADING off: no family (promoted or not) is raised to PAPER_RESEARCH — all SHADOW or RETIRED.
+    for (const [id, st] of Object.entries(stages)) if (!['A1', 'F4'].includes(id)) expect(st, id).toBe('SHADOW');
     expect(Object.values(stages).filter((x) => x === 'PAPER')).toEqual([]);
     expect(PAPER_TRADING_STAGES).toEqual(['PAPER_RESEARCH', 'PAPER', 'ACTIVE']);
   });

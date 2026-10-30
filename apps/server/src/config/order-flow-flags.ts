@@ -41,7 +41,9 @@ function parseFlag(raw: string | undefined, fallback: boolean): boolean {
 }
 
 export type OrderBlockMode = 'PAPER' | 'SHADOW' | 'OFF';
-export const ORDER_BLOCK_MODE_DEFAULT: OrderBlockMode = 'PAPER';
+// Turned off 2026-10-30 (user decision): all existing strategies paused while a new
+// intraday option-buying strategy is built. Rollback without a deploy: ORDER_BLOCK_MODE=PAPER.
+export const ORDER_BLOCK_MODE_DEFAULT: OrderBlockMode = 'SHADOW';
 
 export function parseOrderBlockMode(raw: string | undefined): { value: OrderBlockMode; rejected: string | null } {
   const v = (raw ?? '').trim().toUpperCase();
@@ -55,7 +57,9 @@ export const ORDER_BLOCK_MODE: OrderBlockMode = parsedObMode.value;
 export const ORDER_BLOCK_MODE_REJECTED = parsedObMode.rejected;
 
 export const OF1_ENABLED: boolean = parseFlag(process.env.OF1_ENABLED, true);
-export const OF1_TRADING_DEFAULT = true;
+// Turned off 2026-10-30 (user decision): all existing strategies paused while a new
+// intraday option-buying strategy is built. Rollback without a deploy: OF1_TRADING=on.
+export const OF1_TRADING_DEFAULT = false;
 /** OF1 paper trades (needs OF1_ENABLED). */
 export const OF1_TRADING: boolean = OF1_ENABLED && parseFlag(process.env.OF1_TRADING, OF1_TRADING_DEFAULT);
 /** Kept for the boot log (an OF1_TRADING=true with OF1_ENABLED=false cannot trade). */

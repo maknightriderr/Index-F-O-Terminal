@@ -568,8 +568,20 @@ export const PAPER_TRADING_STAGES: readonly LiveTriggerStage[] = ['PAPER_RESEARC
 // pooled with S1's or the indicator engine's history. The terminal has no
 // broker execution path: nothing here can place a real order.
 // Rollback without a deploy: RESEARCH_PAPER_TRADING=off (back to SHADOW).
-export const RESEARCH_PAPER_TRADING_DEFAULT = true;
+// Turned off 2026-10-30 (user decision): every A2-F3 trigger family is back to
+// SHADOW-only while a new strategy is built. Re-enable with RESEARCH_PAPER_TRADING=on.
+export const RESEARCH_PAPER_TRADING_DEFAULT = false;
 export const RESEARCH_PAPER_TRADING: boolean = parseFlag(process.env.RESEARCH_PAPER_TRADING, RESEARCH_PAPER_TRADING_DEFAULT);
+
+// ---- Indicator engine trading (user decision, 2026-10-30) ----
+// Gates ONLY whether the Indicator Engine's candidate may take the paper-trade
+// slot (mint a `signals` row). Its bias/confidence computation and its
+// (losing) seat in slot arbitration stay exactly as before — a candidate that
+// would have won now reports MINT_LOST instead of MINTED, same as a caller
+// that lost the mint-lock race. Off while a new intraday option-buying
+// strategy is built. Rollback without a deploy: INDICATOR_TRADING=on.
+export const INDICATOR_TRADING_DEFAULT = false;
+export const INDICATOR_TRADING: boolean = parseFlag(process.env.INDICATOR_TRADING, INDICATOR_TRADING_DEFAULT);
 
 export interface TriggerPromotion {
   stage: 'PAPER' | 'ACTIVE';
@@ -600,6 +612,13 @@ export const TRIGGER_DEMOTIONS: Readonly<Record<string, TriggerDemotion>> = Obje
       'Forward paper record to 2026-10-08 (Signal Diagnostics shadow view): INDEX 81 trades, 25% win, avg net -0.42R, PF 0.71; ' +
       'MCX 20 trades, 35% win, avg net -0.79R, PF 0.67. Both arms past the 30-trade bar and negative well beyond 0.10R.',
     approvedOn: '2026-10-08',
+  },
+  S1: {
+    stage: 'SHADOW',
+    evidence:
+      'User decision 2026-10-30: all existing strategies paused while a new intraday option-buying strategy is built. ' +
+      "Structure engine's own OOS backtest failed its pre-registered bar (avg -0.005R, PF 0.99); SWEEP_RECLAIMED exits were consistently ~-0.43R.",
+    approvedOn: '2026-10-30',
   },
 });
 
@@ -646,8 +665,11 @@ const parsedTriggerStages = parseTriggerStages(process.env.TRIGGER_STAGES);
 /** TRIGGER_STAGES entries that were not "ID=STAGE" — logged at boot. */
 export const TRIGGER_STAGES_REJECTED: readonly string[] = Object.freeze(parsedTriggerStages.rejected);
 
-/** User decision: live now, behind the flag. */
-export const STRUCTURE_DEFAULT = true;
+/** User decision: live now, behind the flag.
+ * Turned off 2026-10-30 (user decision): the structure engine (S1) no longer evaluates or mints
+ * while a new intraday option-buying strategy is built. Its own OOS backtest failed its
+ * pre-registered bar (avg -0.005R, PF 0.99). Rollback without a deploy: STRUCTURE=on. */
+export const STRUCTURE_DEFAULT = false;
 
 // ---- Entry timeframe (structure round 2, 2026-09-30) ----
 // Liquidity pools stay on 15m bars; with '5m' the sweep close-back,
@@ -987,8 +1009,11 @@ export const PARENT_IDENTITY_LOGIC_SUFFIX = '+parent-identity.1';
 /**
  * 2026-10-08: A4 demoted to SHADOW (TRIGGER_DEMOTIONS) — the pool of paper
  * candidates changed, so every live stamp after it carries this suffix.
+ * 2026-10-30: S1 demoted to SHADOW too (TRIGGER_DEMOTIONS), alongside
+ * RESEARCH_PAPER_TRADING and OB1/OF1 being turned off — every existing
+ * strategy paused while a new intraday option-buying strategy is built.
  */
-export const TRIGGER_DEMOTION_LOGIC_SUFFIX = '+demote-a4.1';
+export const TRIGGER_DEMOTION_LOGIC_SUFFIX = '+demote-a4.1+demote-s1.1';
 export function paperResearchStamp(stamp: LogicStamp, triggerId: string | null | undefined): LogicStamp {
   return triggerId ? { ...stamp, logicVersion: `${stamp.logicVersion}${PAPER_RESEARCH_LOGIC_SUFFIX}.${triggerId}` } : stamp;
 }
