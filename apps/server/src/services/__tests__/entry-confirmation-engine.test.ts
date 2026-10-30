@@ -3,6 +3,8 @@ import type { ExpCandidate } from '../experiment-arms.js';
 import { ENTRY_CONFIRMATION_VERSION as version, type EntryEvidence } from '../entry-confirmation-rules.js';
 
 const m = vi.hoisted(() => ({ queries: [] as Array<{ text: string; values: any[] }>, loadRows: [] as any[], failObservation: false, persistenceGate: null as Promise<void> | null }));
+// Historical characterization only: production legacy policy is tested separately with its real default.
+vi.mock('../../config/legacy-entry-policy.js',()=>({legacyEntriesAllowed:()=>true}));
 vi.mock('../../lib/db.js', () => {
   const sql: any = async (s: TemplateStringsArray, ...values: any[]) => {
     const text = s.join('?');

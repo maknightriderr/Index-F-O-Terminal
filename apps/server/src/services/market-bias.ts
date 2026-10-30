@@ -1,3 +1,4 @@
+import { legacyEntriesAllowed, LEGACY_ENTRY_REASON } from '../config/legacy-entry-policy.js';
 // ============================================================
 // MARKET BIAS / REGIME / INTELLIGENCE SCORE ENGINE
 // ============================================================
@@ -3456,6 +3457,9 @@ async function resolveStickyTradeSetup(
     await recordTradeSetupOutcome(stored!, 'EXPIRED', currentExitValue(storedChain, stored!), { underlying, exchange, mode, reason: 'SETUP_INVALIDATED', quote: storedLegQuote(storedChain, stored!) });
   }
 
+  // Held-plan handling above remains operational. No old engine may build a new entry.
+  if (!legacyEntriesAllowed()) return { available: false, noTradeCode: 'RISK_OFF', reason: LEGACY_ENTRY_REASON };
+
   // ALL ENGINES → ALL CANDIDATES → PARENT GROUPING → COMMON ELIGIBILITY →
   // ARBITRATION → ONE PAPER TRADE (slot-arbitration.ts).
   // Every engine that may paper-trade hands in every eligible candidate it has
@@ -6125,6 +6129,8 @@ async function mintTradeSetup(ctx: {
     underlying, exchange, mode, key, today, setupTtl, chain, fresh, direction, confidence, regime, intelligenceScore,
     voteSnapshot, entryContext, phase1Context, gateDiagnosticsFor, shadowModels,
   } = ctx;
+  // Final defense at the durable mint boundary, including direct engine callers.
+  if (!legacyEntriesAllowed()) return { ...fresh, available: false, noTradeCode: 'RISK_OFF', reason: LEGACY_ENTRY_REASON } as StoredTradeSetup;
   // Which rules and flags minted this setup — carried on the sticky setup and
   // written to signals.inputs.logic so pre- and post-review trades are never pooled.
   const logic = paperResearchStamp(liveLogicStamp(), ctx.structure?.triggerId);

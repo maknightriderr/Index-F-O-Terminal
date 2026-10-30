@@ -1,4 +1,5 @@
 // Separate observer: no close hooks, broker calls or imports from the decision/learning path.
+import { runFreshReviews } from './fresh-start/reviews.js';
 import { logger } from '../lib/logger.js';
 import { aiRetryAt, isAiConfigured } from '../lib/llm.js';
 import { schemaFileReady } from './ensure-capture-schema.js';
@@ -38,7 +39,7 @@ export async function runAutomaticReviewTick() {
 
 export function startAutomaticTradeReview() {
   // The supervisor owns these timers and can restart them; no persistent "started" flag.
-  const tick = () => runAutomaticReviewTick().catch(() => logger.warn('Automatic trade review tick failed; durable queue will retry'));
+  const tick = () => runAutomaticReviewTick().then(() => runFreshReviews()).catch(() => logger.warn('Automatic trade review tick failed; durable queue will retry'));
   setTimeout(tick, 15000);
   setInterval(tick, 60000);
 }
