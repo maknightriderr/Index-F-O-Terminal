@@ -82,17 +82,22 @@ for (const bear of [false, true]) describe(`${bear ? 'bearish PE' : 'bullish CE'
       provider: { getQuote: async () => [] } as any, underlying: 'SYN', exchange: 'NSE', chain: primary, lc, spot: structureEntrySpot(lc, primary),
       side, direction, confidence: 90, optionAtr: 5, fiveMinute: false, entryContext: undefined, at: T,
     });
-    it('reprices target, stop, ranking risk and returned fill geometry on the selected expiry', async () => {
+    it('reprices on the selected expiry and refuses its insufficient remaining payoff', async () => {
       const lc = lifecycle(bear), before = JSON.stringify(lc);
       const result = await call(lc);
-      expect(result.validated.setup.available).toBe(true);
+      expect(result.validated.setup).toMatchObject({ available: false, noTradeCode: 'REWARD_RISK_TOO_LOW' });
       expect(result.validated.chain.expiry).toBe('2026-10-29');
       expect(result).toMatchObject({ spot: bear ? 90 : 110, stopDistance: 40, targetMove: 30, remainingRToT1: 0.75 });
-      // Payoff = |delta|*30 + gamma*30²/2 - |theta|*hold/6.25; risk = |delta|*40 = 20 premium points.
-      expect(result.validated.setup.target).toBe(round2(100 + 0.5 * 30 + 0.002 * 30 * 30 / 2 - result.expectedHoldHours / 6.25));
-      expect(result.validated.setup.stopLoss).toBe(80);
       expect(result.validated.fnoValidation?.expiryFallback).toBe(true);
-      // Experiment callers stamp this selected expiry before the same final guard as production.
+      expect(JSON.stringify(lc)).toBe(before);
+    });
+    it('admits a fallback contract with sufficient unchanged payoff and valid final geometry', async () => {
+      const lc = { ...lifecycle(bear), t1: { kind: 'PD', price: bear ? 0.5 : 200 } } as LiveLifecycle;
+      const before = JSON.stringify(lc);
+      const result = await call(lc);
+      expect(result.validated.setup.available).toBe(true);
+      expect(result.validated.setup.stopLoss).toBe(80);
+      expect(result.validated.setup.target).toBe(round2(100 + .5 * result.targetMove + .002 * result.targetMove ** 2 / 2 - result.expectedHoldHours / 6.25));
       expect(preMintCheck({ ...result.validated.setup, expiry: result.validated.chain.expiry }, result.validated.chain, T)).toBeNull();
       expect(JSON.stringify(lc)).toBe(before);
     });
@@ -113,7 +118,7 @@ for (const bear of [false, true]) describe(`${bear ? 'bearish PE' : 'bullish CE'
       const lc = { ...lifecycle(bear), triggerId: undefined };
       expect(structureChainGeometry(lc, mocked.next!, 100)).toMatchObject({ spot: 100, stopDistance: 30, targetMove: 40 });
       const result = await call(lc);
-      expect(result.validated.setup.available).toBe(true);
+      expect(result.validated.setup).toMatchObject({ available: false, noTradeCode: 'REWARD_RISK_TOO_LOW' });
       expect(result).toMatchObject({ spot: 100, stopDistance: 30, targetMove: 40, remainingRToT1: 1.333 });
     });
   });

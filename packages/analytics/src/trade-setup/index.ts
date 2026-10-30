@@ -621,7 +621,7 @@ function buildNakedLong(
   let stopWidth: number;
   let structuralRecord: TradeSetupStructuralStop | undefined;
 
-  if (instrument.flags?.structuralStop !== true) {
+  if (instrument.flags?.structuralStop !== true && instrument.payoffAdmission !== true) {
     // Widest stop that still leaves the required R:R after costs, solving
     // (grossReward - cost) / (stopWidth + cost) >= requiredRr.
     const rrStopWidth = netReward / requiredRr - roundTripCost;
@@ -727,6 +727,23 @@ function buildNakedLong(
   const reward = grossReward;
   const riskReward = risk > 0 ? round2(reward / risk) : 0;
   const riskRewardNet = round2(netReward / (risk + roundTripCost));
+
+  // PAYOFF-ADMISSION-1: assess the final geometry without squeezing a stop or extending a target.
+  // Compare unrounded values; rounded display ratios must not turn a failing trade into a pass.
+  if (instrument.payoffAdmission === true) {
+    if (structuralRecord?.stopBeforeStructure) {
+      return { available: false, noTradeCode: 'INVALID_TRADE_GEOMETRY',
+        reason: 'The structural invalidation lies beyond the premium-risk ceiling; skip this contract rather than placing a stop before invalidation.',
+        structuralStop: structuralRecord, stopBeforeStructure: true };
+    }
+    if (netReward / (risk + roundTripCost) < requiredRr) {
+      return { available: false, noTradeCode: 'REWARD_RISK_TOO_LOW',
+        reason: `Projected reward:risk after estimated costs (${riskRewardNet.toFixed(2)}) is below ${requiredRr.toFixed(2)} at the unchanged stop. Target and stop are not moved to force admission. This is a payoff constraint, not proof of profitability.`,
+        requiredRiskReward: requiredRr,
+        ...(structuralRecord ? { structuralStop: structuralRecord, stopBeforeStructure: false } : {}),
+        ...(instrument.plan === true ? { rrPlan: rrPlanAt(risk) } : {}) };
+    }
+  }
 
   if (riskReward > MAX_RISK_REWARD) {
     return {
@@ -874,12 +891,14 @@ export interface SetupInstrumentContext {
    * the target and the expiry fallback are the caller's (they need the chain).
    */
   /**
-   * False (every live caller): net R:R is a ranking / display input only — the
-   * builder never refuses REWARD_RISK_TOO_LOW (incl. the RICH-IV bar); only
-   * genuine stop checks refuse. Absent / true = the original R:R gate
-   * (golden snapshots, research and backtests).
+   * Controls the legacy early R:R gate and stop sizing. False preserves the
+   * display-only historical path unless payoffAdmission is also enabled.
+   * Live callers disable legacy sizing and enable final payoff admission.
    */
   rrGate?: boolean;
+  /** New entries only: preserve the stop, refuse clipped structure and enforce the existing net-payoff floor.
+   * Opt-in keeps historical research/golden outputs reproducible. Never reads environment or changes open trades. */
+  payoffAdmission?: boolean;
 
   /**
    * Every live caller (COST-3.0, audit 2026-10-18): the exchange's dated statutory and exchange charges, % of the

@@ -263,11 +263,11 @@ describe('Phase 1 — net R:R never decides confirmation, eligibility or minting
     expect(log).toEqual(['MINT low', 'DECLINE lower']);
   });
 
-  it('versions are bumped: RISK-2.0 and +rr-display-only.1 on every live stamp', () => {
-    expect(RISK_VERSION).toBe('RISK-2.0');
+  it('new admissions carry RISK-3.0 and a separate payoff policy stamp', () => {
+    expect(RISK_VERSION).toBe('RISK-3.0');
     // Since Phase 4 the parent-identity suffix follows it (PARENT-2.0).
-    expect(liveLogicStamp().logicVersion.endsWith(`${RR_DISPLAY_ONLY_LOGIC_SUFFIX}+parent-identity.1+demote-a4.1+ob1-paper.1+of1-paper.2`)).toBe(true);
-    expect(liveLogicStamp().versions?.riskVersion).toBe('RISK-2.0');
+    expect(liveLogicStamp().logicVersion.endsWith(`+payoff-admission.1+parent-identity.1+demote-a4.1+ob1-paper.1+of1-paper.2`)).toBe(true);
+    expect(liveLogicStamp().versions?.riskVersion).toBe('RISK-3.0');
   });
 });
 
@@ -481,13 +481,14 @@ describe('the option leg: best valid strike, deterministic, premium levels', () 
   });
 });
 
-describe('Phase 1 source guards: the 1.5R gate cannot come back unnoticed', () => {
+describe('new admission preserves geometry and guards every live builder', () => {
   const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
-  it('every live option build passes rrGate: false', () => {
+  it('every live option build preserves geometry then applies final payoff admission', () => {
     const src = read('../market-bias.ts');
     const builds = src.match(/buildTradeSetup\(/g)?.length ?? 0;
     expect(builds).toBeGreaterThan(0);
     expect(src.match(/rrGate: false,/g)?.length).toBe(builds);
+    expect(src.match(/payoffAdmission: true,/g)?.length).toBe(builds);
   });
   it('the live structure engine runs the live rules (no R:R floor)', () => {
     // Since Phase 2 the engine call lives in the pure core advanceStructureCore (structure-live.ts), which market-bias runs.

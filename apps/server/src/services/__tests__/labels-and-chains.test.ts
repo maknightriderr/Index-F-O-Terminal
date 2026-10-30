@@ -19,10 +19,10 @@ const read = (f: string) => readFileSync(path.join(SRC, f), 'utf8');
 
 describe('the stamp says what each switch actually does', () => {
   const on = { STRUCTURAL_STOP: true, LOCATION_GATE: true, ROOM_GATE: false, CONCURRENCY_CAP: false, CLOSING_GUARD: true, RICH_IV_RR: true };
-  it('RICH_IV_RR and LOCATION_GATE are on but INERT in the live modes, with the reason', () => {
+  it('rich-IV admission is active while location remains evidence only', () => {
     const e = F.effectiveTradingFlags(on, 'EVIDENCE');
-    expect(e.RICH_IV_RR).toMatchObject({ on: true, effect: 'INERT' });
-    expect(e.RICH_IV_RR.why).toMatch(/display \/ ranking only/);
+    expect(e.RICH_IV_RR).toMatchObject({ on: true, effect: 'ACTIVE' });
+    expect(e.RICH_IV_RR.why).toMatch(/net-payoff floor/);
     expect(e.LOCATION_GATE).toMatchObject({ on: true, effect: 'INERT' });
     expect(e.LOCATION_GATE.why).toMatch(/EVIDENCE/);
     expect(e.STRUCTURAL_STOP).toMatchObject({ on: true, effect: 'ACTIVE' });

@@ -52,3 +52,9 @@ describe('closed-candle chart zones', () => {
     expect(selectChartZones(result.zones,false,true,true).every(z=>z.kind==='FVG')).toBe(true);
   });
 });
+
+it('does not manufacture an intraday gap zone across missing or overnight candles', () => {
+  const b = bars([[100,102,99,101],[102,107,101,106],[106,108,104,107]]);
+  b[2].time += 900;
+  expect(buildChartZones(b,900,allClosed).zones.filter(z=>z.kind==='FVG')).toEqual([]);
+});
