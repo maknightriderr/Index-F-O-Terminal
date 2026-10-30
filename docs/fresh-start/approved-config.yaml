@@ -1,11 +1,11 @@
 spec_version: FRESH-START-SPEC-1.1
 pack_version: NEW-INTRADAY-1.0
 status: IMPLEMENTATION_APPROVED_ACTIVATION_DISABLED
-approval_record: "User: approved hai; 2026-10-30; implementation only"
+approval_record: "User: approved hai; 2026-10-30; paper activation requested 2026-10-31; operational qualification pending"
 execution:
   enabled: false
   mode: SIGNAL_ONLY
-  paper_activation_approved: false
+  paper_activation_approved: true
   live_orders_allowed: false
 legacy:
   desired_new_entries: false
@@ -97,7 +97,7 @@ contracts:
   - -2
   model_reference_and_units_status: NEEDS_VERIFICATION
 risk:
-  capital_inr: null
+  capital_inr: 500000
   risk_fraction_per_trade_proposal: 0.0025
   premium_outlay_fraction_per_trade_proposal: 0.05
   daily_net_loss_fraction_proposal: 0.01

@@ -1,3 +1,4 @@
+import { freshFeedQualification } from './qualification.js';
 import { freshPerformanceFromTotals, FRESH_PACK_VERSION } from '@fno/analytics';
 import { sql } from '../../lib/db.js';
 import { FRESH_CONFIG, freshEntriesEnabled } from '../../config/fresh-start.js';
@@ -24,10 +25,11 @@ export async function freshStartStatus() {
     FROM fresh_paper_positions WHERE version=${FRESH_PACK_VERSION} GROUP BY strategy
   ` : [];
     const reviews = schemaReady ? await sql<any[]> `SELECT position_id,status,response,completed_at FROM fresh_paper_reviews WHERE version=${FRESH_PACK_VERSION} ORDER BY completed_at DESC NULLS LAST LIMIT 50` : [];
-    return { reviews, version: FRESH_CONFIG.version, implementationApproved: true, enabled: freshEntriesEnabled(), legacyNewEntries: LEGACY_NEW_ENTRIES_ENABLED,
+    const resolved=new Set(['CAPITAL_CONFIGURATION','EXPLICIT_PAPER_ACTIVATION_APPROVAL']);
+    return { activationRequested:FRESH_CONFIG.activationRequested,activationApproved:FRESH_CONFIG.activationApproved,feedQualification:freshFeedQualification(), reviews, version: FRESH_CONFIG.version, implementationApproved: true, enabled: freshEntriesEnabled(), legacyNewEntries: LEGACY_NEW_ENTRIES_ENABLED,
         legacyExitsPreserved: true, liveOrdersAllowed: false, schemaReady, capital: FRESH_CONFIG.capital,
-        blockers: [...(!schemaReady ? ['FRESH_SCHEMA_UNAVAILABLE'] : []), ...FRESH_CONFIG.requirements],
-        capabilities: FRESH_CONFIG.requirements.map(id => ({ id, status: id === 'EXPLICIT_PAPER_ACTIVATION_APPROVAL' ? 'NOT_APPROVED' : 'NEEDS_VERIFICATION' })),
+        blockers: [...(!schemaReady ? ['FRESH_SCHEMA_UNAVAILABLE'] : []), ...FRESH_CONFIG.requirements.filter(id=>!resolved.has(id))],
+        capabilities: FRESH_CONFIG.requirements.map(id => ({ id, status: resolved.has(id)?'APPROVED':'NEEDS_VERIFICATION' })),
         strategies: FRESH_CONFIG.strategies, performance: freshPerformanceFromTotals(aggregate),
         positions: positions.slice(0, 1000).map(p => ({ strategy: p.strategy, version: p.version, session: p.session, status: p.status, state: p.state })),
         positionsTruncated: positions.length > 1000, candidates, evidence: 'OBSERVED_QUOTE_PAPER_ONLY', performanceValidated: false };

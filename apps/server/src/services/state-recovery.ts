@@ -1,3 +1,4 @@
+import { reconcileRetiredLegacySlots } from './fresh-start/legacy-reset.js';
 // ============================================================
 // STATE RECOVERY — PostgreSQL is the source of truth, Redis the cache (Phase 6)
 // ============================================================
@@ -347,6 +348,8 @@ export async function rehydrateFromPostgres(now = Date.now()): Promise<Rehydrati
       logger.error({ error: err.message, step: name }, 'State recovery: step failed — that part of Redis is left as it was');
     }
   };
+
+  await step('retired_legacy_slots', async () => { await reconcileRetiredLegacySlots(); });
 
   // Queued closes first: a trade whose close failed to write must be closed, not revived.
   await step('pending_outcomes', async () => {

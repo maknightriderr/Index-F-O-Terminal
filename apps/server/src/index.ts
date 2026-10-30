@@ -408,7 +408,7 @@ for (const spec of [
   timerService('institutionalFlowScanner', () => startInstitutionalFlowScanner(provider), held()),
   timerService('tradeSetupPriceMonitor', () => startTradeSetupPriceMonitor(provider, subscriptionManager), { critical: true, ready: () => recoveryReady }),
   // Isolated paper experiment arms (EXP-2.0): their own positions on the shared tick feed; never read by the baseline.
-  timerService('freshPaperRecovery', () => startFreshPaperRecovery(), { ready: () => schemaReady }),
+  timerService('freshPaperRecovery', () => startFreshPaperRecovery(provider, subscriptionManager), { ready: () => schemaReady }),
   timerService('experimentEngine', () => startExperimentEngine(subscriptionManager), { ready: () => recoveryReady }),
   timerService('marketScanner', () => startMarketScanner(provider), held()),
   timerService('fiiDiiTracker', () => startFiiDiiTracker()),

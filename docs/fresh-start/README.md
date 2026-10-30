@@ -42,3 +42,20 @@ Tests use explicit synthetic market/contract fixtures and an embedded real Postg
 Keep new activation disabled. Do not remove legacy exit monitors, turn off the complete experiment engine, delete legacy rows, or enable old strategies as a rollback shortcut. Do not drop fresh tables with held/pending risk. A rollback must retain the fresh monitor/state reducer until its portfolio is reconciled flat; the previous binary cannot monitor fresh positions. This version cannot activate new risk, so production remains in drain mode after deployment.
 
 Run builds for `@fno/server` and `@fno/web`, and tests for server, web and analytics. No dependency installation is required. Migration `047_fresh_start_paper.sql` is idempotent and is included in the existing schema bootstrap; schema failure blocks fresh capability.
+
+## Phase 2 — activation request, 31 October 2026
+
+The user requested active forward paper trading and explicitly selected **INR 500,000 virtual capital**. That closes the activation-permission and capital-configuration requirements, with INR 1,250 planned risk per trade under the approved pack. It does not constitute a profitability result or erase mandatory operational checks. `activationApproved`/`activationRequested` are true; effective `enabled` remains false until the complete production adapter and required data are qualified. The UI distinguishes that blocked request from an unapproved request.
+
+This phase adds:
+
+- The missing SmartAPI Snap Quote best-five decoder at the documented binary offsets, with packet-header exchange-segment provenance. LTP/partial/unsafe/crossed books cannot masquerade as an executable book.
+- A bounded shared-socket book bridge with exact segment/token identity, exchange-time freshness, post-arrival first-book selection, independent connection epochs, recovery invalidation and owned subscription cleanup. There is no fallback to an LTP or to another provider for entries.
+- An automatic market-session qualification observer for the exact NIFTY/BANKNIFTY futures and a bounded five-strike/two-expiry option sample. It uses the existing shared socket, respects its documented 1,000-subscription limit with headroom and stays idle outside verified regular sessions. A successful subscription request is not treated as proof of observed data or complete paper readiness. Stocks and full-universe discovery are not yet qualified.
+- Reconciliation for the user's reported PostgreSQL history deletion: retired Redis positions with demonstrably missing original signal rows are atomically moved to a separate 30-day quarantine. Surviving PostgreSQL positions are preserved. A database outage leaves all slots intact. Unknown/unlinked slots are flagged, not declared flat. Retired slots are never backfilled as new historical trades. No database records, risk counters or whole Redis namespace are blindly deleted/reset.
+
+The complete production strategy-context/contract/model adapter, verified scheduled-event coverage, pricing/fee qualification, live-session observed-depth verification and actual portfolio inventory/load verification remain blockers. The qualification observer does not place paper trades or promote strategies. Deleting prior PostgreSQL records cannot establish an empty Redis portfolio, a validated new strategy or a usable historical sample; old performance is not reconstructed from deleted data.
+
+Protocol sources checked 31 October 2026:
+- https://smartapi.angelone.in/docs — WebSocket Streaming 2.0 / Best Five Data, exchange timestamp, segment header and 1,000 subscriptions per socket.
+- https://nsearchives.nseindia.com/content/circulars/FAOP71777.pdf — 2026 regular F&O holidays. Special sessions and uncovered calendar years remain excluded.

@@ -1,9 +1,9 @@
 import { FRESH_PACK_VERSION, FRESH_STRATEGIES } from '@fno/analytics';
-/** Implementation approved by the user. Activation is a separate, ungranted approval. */
+/** Implementation and forward paper activation requested by the user; execution remains gated by operational qualification. */
 export const FRESH_CONFIG = Object.freeze({
     version: FRESH_PACK_VERSION, spec: 'FRESH-START-SPEC-1.1', implementationApproved: true,
-    approval: 'User: approved hai; 2026-10-30', enabled: false, activationApproved: false,
-    liveOrdersAllowed: false, capital: null as number | null, baselineTrailing: false,
+    approval: 'User requested paper activation and selected INR 500000 virtual capital; 2026-10-31', enabled: false, activationApproved: true, activationRequested: true,
+    liveOrdersAllowed: false, capital: 500000 as number | null, baselineTrailing: false,
     strategies: FRESH_STRATEGIES.map(id => ({ id, enabled: false })),
     primarySource: 'ANGEL_EXACT_REFERENCE', automaticEntryFallback: false,
     markets: ['NSE_INDEX_OPTIONS', 'NSE_STOCK_OPTIONS'],

@@ -24,6 +24,9 @@ export interface FreshStrategyPerformance {
     note: string;
 }
 export interface FreshStartStatus {
+    activationRequested:boolean;
+    activationApproved:boolean;
+    feedQualification:{status:string;lastCheckAt:number|null;sourceEpoch:string|null;referenceContracts:number;optionContracts:number;observedExecutableBooks:number;error:string|null};
     version: string;
     implementationApproved: boolean;
     enabled: boolean;

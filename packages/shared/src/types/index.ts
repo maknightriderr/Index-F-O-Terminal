@@ -120,6 +120,8 @@ export interface Expiry {
 
 export interface Tick {
   token: string;
+  /** Exact exchange segment from the packet header, when available. */
+  exchangeSegment?: ExchangeSegment;
   exchange: Exchange;
   /** Arrival time at this server (epoch ms). */
   timestamp: number;
@@ -142,6 +144,7 @@ export interface Tick {
   avgPrice?: number;
   totalBuyQty?: number;
   totalSellQty?: number;
+  depth?: {buy:Array<{price:number;quantity:number;orders:number}>;sell:Array<{price:number;quantity:number;orders:number}>};
 }
 
 export interface OHLCV {
