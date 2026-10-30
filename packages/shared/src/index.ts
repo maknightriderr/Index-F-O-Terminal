@@ -10,3 +10,4 @@ export * from './utils/decision-quality.js';
 export * from './types/terminal-views.js';
 export * from './types/strategy-validation.js';
 export * from './types/ai-trade-review.js';
+export * from './types/fresh-start.js';

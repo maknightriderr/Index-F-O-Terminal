@@ -189,6 +189,10 @@ class ApiClient {
     return this.requestEnvelope<MarketScanResult>('/api/market-scanner/refresh', { method: 'POST', body: {}, headers: { 'X-Explicit-Action': 'run-market-scan' } });
   }
 
+  async getFreshStartStatus() {
+    return this.get<import('@fno/shared').FreshStartStatus>('/api/fresh-start/status');
+  }
+
   /** Every paper trade (open and closed) with live tracking, estimated costs and an explicit status. Read-only. */
   async getPaperTrades(limit = 500) {
     return this.get<PaperTradesResponse>(`/api/paper-trades?limit=${limit}`);

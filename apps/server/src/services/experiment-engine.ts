@@ -1,3 +1,4 @@
+import { legacyEntriesAllowed } from '../config/legacy-entry-policy.js';
 // ============================================================
 // ISOLATED PAPER EXPERIMENTS — engine (EXP-2.0, 2026-10-23)
 // ============================================================
@@ -47,7 +48,7 @@ import {
 export const EXPERIMENTS_MIGRATION = '045_experiments_and_linkage.sql';
 export const EXPERIMENT_ARMS_ENABLED = (process.env.EXPERIMENT_ARMS ?? 'on').toLowerCase() !== 'off';
 /** Rollback drain switch: unlike EXPERIMENT_ARMS=off, this leaves all exit monitoring running. */
-export const experimentEntriesEnabled = () => (process.env.EXPERIMENT_NEW_ENTRIES ?? 'on').toLowerCase() !== 'off';
+export const experimentEntriesEnabled = () => legacyEntriesAllowed() && (process.env.EXPERIMENT_NEW_ENTRIES ?? 'on').toLowerCase() !== 'off';
 const CLIENT_ID = 'experiment-engine';
 const TICK_MS = 60_000;
 
@@ -171,6 +172,7 @@ const invalidated = new Map<string, InvalidatedSetup[]>();
 function open(arm: ArmDef, c: ExpCandidate, pollAt: number): void {
   // The poll's clock starts before the candidate's contract build (a median 17 s, up to 98 s on 23 Oct): a position
   // exists no earlier than its own entry quote, so it is stamped (and its fill judged) at that quote's receipt.
+  if (!experimentEntriesEnabled()) return;
   const at = Math.max(pollAt, c.quote.receivedAt ?? pollAt);
   const p = openPosition(arm, c, randomUUID(), at);
   positions.set(p.id, p);
@@ -208,6 +210,7 @@ export async function onIndicatorPoll(poll: IndicatorPoll): Promise<void> {
     const day = istDay(poll.at);
     // EXP-3.0 trigger arms: each routed candidate of their trigger, once per arm. Every one is recorded, including those
     // never built because the arm's slot is held (ARM_SLOT_HELD) or the stateless gates / contract build refused it (NOT_BUILT).
+    if (!experimentEntriesEnabled()) return;
     for (const tc of poll.triggerCandidates ?? []) {
       const sourceArms = armsOf(tc.source);
       if (sourceArms.some((arm) => isEntryArm(arm.id))) await Promise.all(sourceArms.map((arm) => observeEntryRule(arm, tc, poll)));

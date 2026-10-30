@@ -1,0 +1,236 @@
+spec_version: FRESH-START-SPEC-1.1
+pack_version: NEW-INTRADAY-1.0
+status: IMPLEMENTATION_APPROVED_ACTIVATION_DISABLED
+approval_record: "User: approved hai; 2026-10-30; implementation only"
+execution:
+  enabled: false
+  mode: SIGNAL_ONLY
+  paper_activation_approved: false
+  live_orders_allowed: false
+legacy:
+  desired_new_entries: false
+  effective_all_off_verified: false
+  keep_residual_exit_monitoring: true
+  automatic_reactivation: false
+source:
+  signal_authority_proposal: ANGEL_EXACT_REFERENCE
+  index_signal_reference: EXACT_FUTURES
+  stock_signal_reference: EQUITY
+  option_quote_proposal: ANGEL_COMPLETE_SNAP_QUOTE
+  automatic_entry_fallback: false
+  qualified_secondary_role: MONITORING_ONLY
+  quote_max_age_ms_proposal: 2000
+  reference_contract_frozen: true
+  conflict_max_event_skew_ms_proposal: 1000
+  conflict_midpoint_pct_proposal: 0.5
+  conflict_min_ticks_proposal: 2
+  conflict_consecutive_observations_proposal: 3
+  failback_stable_seconds_proposal: 60
+  numeric_angel_limits_status: NEEDS_VERIFICATION
+markets:
+  NSE_INDEX_OPTIONS:
+    enabled: false
+    candidate_scope: true
+    allow_0dte_proposal: false
+    minimum_trading_sessions_to_expiry_proposal: 1
+    maximum_trading_sessions_to_expiry_proposal: 10
+  NSE_STOCK_OPTIONS:
+    enabled: false
+    candidate_scope: true
+    allow_0dte_proposal: false
+    minimum_trading_sessions_to_expiry_proposal: 3
+    maximum_trading_sessions_to_expiry_proposal: 15
+  BSE_VERIFIED_OPTIONS:
+    enabled: false
+    candidate_scope: false
+    status: DISCOVERY_ONLY_PENDING_PRODUCT_VERIFICATION
+  MCX_VERIFIED_FUTURES_OPTIONS:
+    enabled: false
+    candidate_scope: false
+    status: DISCOVERY_ONLY_PENDING_PRODUCT_VERIFICATION
+context:
+  setup_minutes: 5
+  trend_minutes: 15
+  atr_period: 14
+  atr_smoothing: WILDER
+  ema_periods:
+  - 20
+  - 50
+  minimum_5m_bars: 100
+  minimum_15m_bars: 75
+  rvol_reference_sessions: 20
+  rvol_min_valid_sessions: 15
+  rvol_reference: SAME_ELAPSED_SESSION_SLOT_MEDIAN
+  vwap: CLOSED_1M_HLC3_VOLUME_SESSION_PROXY
+  swing_left_right:
+  - 2
+  - 2
+  entry_score_gate_enabled: false
+entry_and_exit:
+  entry_latency_ms_proposal: 250
+  entry_quote_deadline_ms_proposal: 2000
+  max_entry_extension_atr_proposal: 0.25
+  last_entry_minutes_before_verified_cutoff_proposal: 60
+  forced_exit_minutes_before_verified_cutoff_proposal: 10
+  adverse_slippage_ticks_per_side_proposal: 1
+  target_exit: UNDERLYING_OBJECTIVE_THEN_ELIGIBLE_BID
+  max_hold_5m_bars_proposal: 12
+  no_progress_check_5m_bars_proposal: 3
+  no_progress_mfe_r_threshold_proposal: 0.25
+  no_progress_requires_current_underlying_adverse: true
+  baseline_trailing_enabled: false
+  stop_target_tie_policy_proposal: PROTECTIVE_EXIT
+  missing_exit_quote: EXIT_PENDING_UNRESOLVED
+contracts:
+  delta_abs_band_proposal:
+  - 0.45
+  - 0.65
+  max_strikes_proposal: 5
+  max_expiries_proposal: 2
+  max_index_spread_midpoint_pct_proposal: 1.0
+  max_stock_spread_midpoint_pct_proposal: 1.5
+  full_displayed_depth_required: true
+  unknown_book_units: BLOCK
+  scenario_minutes_proposal: 15
+  scenario_iv_shocks_vol_percentage_points_proposal:
+  - 0
+  - -2
+  model_reference_and_units_status: NEEDS_VERIFICATION
+risk:
+  capital_inr: null
+  risk_fraction_per_trade_proposal: 0.0025
+  premium_outlay_fraction_per_trade_proposal: 0.05
+  daily_net_loss_fraction_proposal: 0.01
+  max_open_positions_proposal: 2
+  max_correlated_positions_proposal: 1
+  pause_after_consecutive_net_losses_proposal: 3
+  pause_duration_proposal: REMAINDER_OF_SESSION
+  emergency_premium_loss_fraction_proposal: 0.25
+  min_stressed_net_reward_risk_proposal: 1.5
+  initial_r: FROZEN_MODELED_STRESSED_INVALIDATION_OR_EMERGENCY_MAX_PLUS_NONEMBEDDED_COSTS
+  high_water_reference: ELIGIBLE_SIZE_AWARE_BID
+  stop_trigger_reference: ELIGIBLE_SIZE_AWARE_BID
+  atomic_reservations_required: true
+  zero_lots: NO_TRADE
+  same_parent_max_selected_positions: 1
+  same_underlying_max_open_new_positions: 1
+  reentry_min_5m_bars_proposal: 3
+  max_entries_per_underlying_session_proposal: 2
+  account_day_calendar_and_reset_status: NEEDS_APPROVAL
+event_policy:
+  mandatory_scheduled_coverage: true
+  index_scheduled_blackout_minutes_before_after_proposal:
+  - 15
+  - 15
+  issuer_results_day_stock_entry_proposal: false
+  verified_source: null
+  unknown_coverage: BLOCK_AFFECTED_CAPABILITY
+strategies:
+- id: NEW_ORB_RETEST_V1
+  enabled: false
+  status: IMPLEMENTATION_APPROVED_ACTIVATION_DISABLED
+  rule_pack: report section 7 / NEW_ORB_RETEST_V1
+  opening_range_bars: 3
+  or_width_atr_band:
+  - 0.5
+  - 3.0
+  breakout_buffer_atr: 0.05
+  breakout_body_min: 0.6
+  breakout_close_location_min: 0.75
+  rvol_min: 1.5
+  retest_deadline_bars: 3
+  retest_tolerance_atr: 0.15
+  retest_body_min: 0.5
+  retest_close_location_min: 0.7
+  invalidation_buffer_atr: 0.1
+  entry_window_end_minutes_after_open: 120
+- id: NEW_VWAP_PULLBACK_V1
+  enabled: false
+  status: IMPLEMENTATION_APPROVED_ACTIVATION_DISABLED
+  rule_pack: report section 7 / NEW_VWAP_PULLBACK_V1
+  window_start_minutes_after_open: 30
+  impulse_reference_bars: 3
+  impulse_min_atr: 0.75
+  impulse_rvol_min: 1.2
+  pullback_bars_band:
+  - 2
+  - 5
+  vwap_approach_atr: 0.2
+  max_impulse_retracement_fraction: 0.6
+  pullback_volume_ratio_max_exclusive: 0.8
+  invalid_consecutive_closes_beyond_vwap: 2
+  trigger_body_min: 0.5
+  invalidation_buffer_atr: 0.1
+- id: NEW_PREVIOUS_SESSION_SWEEP_V1
+  enabled: false
+  status: IMPLEMENTATION_APPROVED_ACTIVATION_DISABLED
+  rule_pack: report section 7 / NEW_PREVIOUS_SESSION_SWEEP_V1
+  window_start_minutes_after_open: 30
+  eligible_levels:
+  - PREVIOUS_REGULAR_SESSION_HIGH
+  - PREVIOUS_REGULAR_SESSION_LOW
+  sweep_depth_atr_band:
+  - 0.05
+  - 0.75
+  reclaim_subsequent_bar_deadline: 2
+  reclaim_close_location_min: 0.7
+  reclaim_rvol_min: 1.2
+  trigger_subsequent_bar_deadline: 2
+  trigger_body_min: 0.5
+  invalidation_buffer_atr: 0.1
+- id: NEW_FIRST_OPENING_PULLBACK_V1
+  enabled: false
+  status: IMPLEMENTATION_APPROVED_ACTIVATION_DISABLED
+  rule_pack: report section 7 / NEW_FIRST_OPENING_PULLBACK_V1
+  initial_impulse_bars: 3
+  initial_impulse_min_atr: 1.5
+  impulse_close_location_min: 0.8
+  impulse_cumulative_rvol_min: 1.5
+  pullback_bars_band:
+  - 1
+  - 3
+  impulse_retracement_fraction_band:
+  - 0.2
+  - 0.5
+  pullback_volume_ratio_max_exclusive: 0.8
+  trigger_body_min: 0.5
+  invalidation_buffer_atr: 0.1
+  max_strategy_attempts_per_session: 1
+  entry_window_end_minutes_after_open: 120
+research:
+  aspiration_net_win_rate: 0.7
+  guaranteed_performance: false
+  chronological_split_fractions_proposal:
+  - 0.6
+  - 0.2
+  - 0.2
+  minimum_completed_trades_per_strategy_proposal: 200
+  minimum_independent_sessions_per_strategy_proposal: 60
+  net_expectancy_95pct_day_block_bootstrap_lower_bound_required_positive_proposal: true
+  minimum_net_profit_factor_proposal: 1.2
+  max_equity_drawdown_fraction_proposal: 0.05
+  minimum_forward_paper_sessions_proposal: 30
+  minimum_forward_completed_trades_proposal: 100
+  dataset_inventory_status: BLOCKED_AUTHENTICATED_DATA_COVERAGE
+  holdout_dates: null
+resources:
+  create_new_services: false
+  candidate_queue_proposal: 100
+  scanner_concurrent_batches_proposal: 2
+  option_analysis_queue_proposal: 20
+  option_build_concurrency_proposal: 2
+  history_concurrency_proposal: 1
+  shortlist_underlyings_proposal: 20
+  new_subscription_ceiling_proposal: 250
+  subscription_ceiling_requires_verified_broker_capacity_and_reserved_position_watches: true
+  external_notifications_enabled: false
+required_before_activation:
+- P0_LEGACY_ENTRY_VETO_VERIFICATION
+- EXACT_RULE_PACK_APPROVAL
+- CAPITAL_CONFIGURATION
+- SOURCE_QUOTE_TIME_DEPTH_VERIFICATION
+- PRODUCT_MODEL_CALENDAR_AND_FEES_VERIFICATION
+- EVENT_COVERAGE
+- HISTORY_EVIDENCE_AND_VALIDATION
+- MONITORING_LOAD_TEST
+- EXPLICIT_PAPER_ACTIVATION_APPROVAL

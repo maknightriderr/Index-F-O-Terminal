@@ -10,6 +10,7 @@ import { useFeedSummary } from '@/lib/use-feed-summary';
 import { byMintedDesc, countTrades, DEFAULT_FILTERS, distinct, filterTrades, type PeriodFilter, type StateFilter, type TradeFilters } from '@/lib/paper-trade-view';
 import { formatIstDateTime } from '@/lib/format';
 import { TradesTable } from './trades-table';
+import { FreshStartPanel } from './fresh-start';
 import { AutomaticTradeReviews } from './automatic-reviews';
 
 const STATE_OPTIONS: ReadonlyArray<{ id: StateFilter; label: string }> = [
@@ -52,6 +53,7 @@ export function PaperTradesPage() {
         actions={<ActionButton onClick={reload}>Refresh</ActionButton>}
       />
       <SimulatedNotice />
+      <FreshStartPanel />
       <AutomaticTradeReviews />
 
       <DataState loading={loading} error={error} hasData={!!data} isEmpty={!!data && data.trades.length === 0} onRetry={reload} errorTitle="Could not load paper trades" emptyTitle="No paper trades have been recorded yet" emptyHint="They appear here as the engines mint them during a session." staleNote={data?.counts.truncated ? `Showing the newest ${all.length} of ${data.counts.recorded} recorded paper trades (every open trade is included). Older closed trades are not on this page.` : undefined}>

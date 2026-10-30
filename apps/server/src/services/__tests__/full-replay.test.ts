@@ -9,6 +9,13 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import type { MarketQuote, OHLCV } from '@fno/shared';
 
+// Preserve the historical replay fingerprint, then separately exercise the actual retirement policy below.
+const retirement = vi.hoisted(()=>({historical:true}));
+vi.mock('../../config/legacy-entry-policy.js',async(importOriginal)=>{
+  const actual=await importOriginal<typeof import('../../config/legacy-entry-policy.js')>();
+  return {...actual,legacyEntriesAllowed:()=>retirement.historical?true:actual.legacyEntriesAllowed()};
+});
+
 // ---- the live boundaries: in-memory Redis and SQL, behind the real tape wrappers ----
 const io = { liveCalls: 0, blocked: false };
 const mem = new Map<string, string>();
@@ -267,4 +274,19 @@ describe('full replay of the real decision path', () => {
     expect(out.divergences.length).toBeGreaterThan(0);
     expect(io.liveCalls).toBe(0);
   });
+});
+
+// This case uses the real production policy; it must not inherit the historical fixture exemption.
+it('production retirement refuses the real indicator/structure/family mint path and keeps held plans',async()=>{
+ retirement.historical=false;io.blocked=false;io.liveCalls=0;vi.setSystemTime(POLL);mem.clear();
+ const {buildMarketBias}=await import('../market-bias.js');
+ const denied=await buildMarketBias(liveProvider,'NIFTY','NSE','INTRADAY');
+ expect(denied.tradeSetup).toMatchObject({available:false,noTradeCode:'RISK_OFF'});
+ expect(stored.tape.filter((e:any)=>e.write).some((e:any)=>String(e.key).includes('INSERT INTO signals'))).toBe(false);
+ const key='trade_setup:NSE:NIFTY:INTRADAY';
+ mem.set(key,JSON.stringify({available:true,signalId:'old-signal',day:'2026-08-10',direction:'BEARISH',strike:24950,side:'PE',expiry:EXPIRY,entry:120,stopLoss:70,target:200,riskReward:1.6,decisionId:'old-decision',structureType:'NAKED_LONG',mintedAt:POLL-1000}));
+ const held=await buildMarketBias(liveProvider,'NIFTY','NSE','INTRADAY');
+ expect(held.tradeSetup).toMatchObject({available:true,signalId:'old-signal',entry:120,target:200});
+ expect(JSON.parse(mem.get(key)!)).toMatchObject({signalId:'old-signal',entry:120,target:200});
+ retirement.historical=true;
 });

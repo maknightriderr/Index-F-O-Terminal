@@ -4,6 +4,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const m = vi.hoisted(() => ({ writes: [] as string[], loadRows: [] as Array<{ state: any }> }));
+// Historical characterization only: production legacy policy is tested separately with its real default.
+vi.mock('../../config/legacy-entry-policy.js',()=>({legacyEntriesAllowed:()=>true}));
 vi.mock('../../lib/db.js', () => {
   const sql: any = (strings: TemplateStringsArray) => {
     m.writes.push(strings.join('?').trim().split(/\s+/).slice(0, 3).join(' '));

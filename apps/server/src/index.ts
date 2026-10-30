@@ -40,6 +40,8 @@ import { createBacktestingRoutes } from './api/backtesting.js';
 import { createLearningRoutes } from './api/learning.js';
 import { createLossAttributionRoutes } from './api/loss-attribution.js';
 import { createStructureRoutes } from './api/structure.js';
+import { startFreshPaperRecovery } from './services/fresh-start/runtime.js';
+import { createFreshStartRoutes } from './api/fresh-start.js';
 import { createPaperTradesRoutes } from './api/paper-trades.js';
 import { orderFlowFeedStatus } from './services/dhan-feed.js';
 import { STRUCTURE, STRUCTURE_ENTRY_TF, STRUCTURE_ENTRY_TF_REJECTED, STRUCTURE_PARAMS, INDICATOR_CONFIDENCE_MODE, INDICATOR_CONFIDENCE_MODE_REJECTED, INDICATOR_LOCATION_MODE, INDICATOR_LOCATION_MODE_REJECTED, RESEARCH_PAPER_TRADING } from './config/trading-flags.js';
@@ -149,6 +151,7 @@ app.use('/api/loss-attribution', createLossAttributionRoutes());
 app.use('/api/structure', createStructureRoutes());
 app.use('/api/diagnostics', createDiagnosticsRoutes());
 app.use('/api/paper-trades', createPaperTradesRoutes());
+app.use('/api/fresh-start', createFreshStartRoutes());
 
 // --- Health Check ---
 
@@ -405,6 +408,7 @@ for (const spec of [
   timerService('institutionalFlowScanner', () => startInstitutionalFlowScanner(provider), held()),
   timerService('tradeSetupPriceMonitor', () => startTradeSetupPriceMonitor(provider, subscriptionManager), { critical: true, ready: () => recoveryReady }),
   // Isolated paper experiment arms (EXP-2.0): their own positions on the shared tick feed; never read by the baseline.
+  timerService('freshPaperRecovery', () => startFreshPaperRecovery(), { ready: () => schemaReady }),
   timerService('experimentEngine', () => startExperimentEngine(subscriptionManager), { ready: () => recoveryReady }),
   timerService('marketScanner', () => startMarketScanner(provider), held()),
   timerService('fiiDiiTracker', () => startFiiDiiTracker()),
