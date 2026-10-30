@@ -50,7 +50,7 @@ import {
 } from '../trigger-router.js';
 import { structureSequenceRefusal, lifecycleIdOf, type LiveLifecycle } from '../structure-live.js';
 import { setupConfidenceRefusal } from '../validation-gates.js';
-import { INDICATOR_CONFIDENCE_MODE, PAPER_TRADING_STAGES, paperResearchStamp, liveLogicStamp } from '../../config/trading-flags.js';
+import { INDICATOR_CONFIDENCE_MODE, PAPER_TRADING_STAGES, paperResearchStamp, liveLogicStamp, resolveTriggerStage } from '../../config/trading-flags.js';
 import { strategyFamilyOfSetup } from '../backtesting.js';
 import {
   NOT_MEASURED,
@@ -154,9 +154,14 @@ const candidate = (triggerId: string, over: Partial<TriggerCandidate> = {}): Tri
     timing: { class: 'ACCEPTABLE' },
     ...over,
   }) as unknown as TriggerCandidate;
+// This file tests the RESEARCH_PAPER_TRADING mechanism itself (every SHADOW family raised to
+// PAPER_RESEARCH), independent of today's production default — so stages here are resolved with
+// researchPaper forced true and no demotions, not read from the live liveTriggerStages() default.
+const researchPaperStage = (triggerId: string) =>
+  resolveTriggerStage(triggerId, TRIGGER_REGISTRY.find((t) => t.triggerId === triggerId)?.status ?? 'SHADOW', undefined, {}, true, {});
 const routed = (c: TriggerCandidate, parentId = 'P1', over: Partial<RoutedCandidate> = {}): RoutedCandidate => ({
   candidate: c,
-  stage: liveTriggerStages()[c.triggerId],
+  stage: researchPaperStage(c.triggerId),
   risk: validateCandidateRisk(c, { sessionOk: true, costPct: 2, maxCostPct: 5 }),
   cost: null,
   lifecycleId: routedLifecycleId('NSE', 'NIFTY', c),
@@ -577,11 +582,10 @@ describe('12. no broker / live-order path', () => {
     for (const f of files) expect(readFileSync(f, 'utf8'), f).not.toMatch(/placeOrder|place_order|\/orders\b|modifyOrder|kite\.place/i);
     // Reads every server source file: ~2 s alone, past the 5 s default under a parallel run on a synced folder.
   }, 30_000);
-  it('no family has been promoted to PAPER or ACTIVE; research families are PAPER_RESEARCH (A4 demoted to SHADOW)', () => {
+  it('2026-10-30: every strategy paused — S1 and A4 demoted, no family promoted or research-paper-traded', () => {
     for (const [id, st] of Object.entries(liveTriggerStages())) {
-      if (id === 'S1') expect(st).toBe('ACTIVE');
-      else if (id === 'A4') expect(st).toBe('SHADOW');
-      else expect(['PAPER_RESEARCH', 'RETIRED'], id).toContain(st);
+      if (id === 'S1' || id === 'A4') expect(st).toBe('SHADOW');
+      else expect(['SHADOW', 'RETIRED'], id).toContain(st);
     }
   });
 });

@@ -114,7 +114,11 @@ function gatesFingerprint() {
   return out;
 }
 
-// Computed on main (4628fba), before the Order Block fix and OF1.
+// triggers:*/structure:*/option fingerprints computed on main (4628fba), before the Order Block fix
+// and OF1 — unaffected by trading-flags defaults, so still identical.
+// router:*/gates regenerated 2026-10-30: RESEARCH_PAPER_TRADING off and S1 demoted to SHADOW (user
+// decision, every existing strategy paused while a new one is built) change liveTriggerStages()
+// itself, which both fingerprints include by design.
 const EXPECTED: Record<string, string> = {
   'triggers:ADANIGREEN': '62dee9119d01b245',
   'triggers:BANKNIFTY': '048a3a11f2a02c77',
@@ -128,14 +132,14 @@ const EXPECTED: Record<string, string> = {
   'structure:KALYANKJIL': 'fc215c1a0d770424',
   'structure:NIFTY': 'cb722a43a2d21f7e',
   'structure:POLICYBZR': '91273077537002bf',
-  'router:ADANIGREEN': '87751ee4f2385059',
-  'router:BANKNIFTY': 'b080ab33393f5f42',
-  'router:CRUDEOIL': '26547aae08816678',
-  'router:KALYANKJIL': '4b641216d1119ab2',
-  'router:NIFTY': 'a73221767b2e435e',
-  'router:POLICYBZR': '034c2d8e09c6e7d2',
+  'router:ADANIGREEN': '1e19d261121e28cd',
+  'router:BANKNIFTY': 'afa60b1dd96e4285',
+  'router:CRUDEOIL': 'e7d3261d061bbd2f',
+  'router:KALYANKJIL': '14d481fa8327898d',
+  'router:NIFTY': '086c970be11f7e3b',
+  'router:POLICYBZR': '6d44e7eed12e150d',
   option: '8e947c8e9caa077b',
-  gates: 'f11bf550a74638e1',
+  gates: '164b387b2db9107b',
 };
 
 describe('strategy regression fingerprint: A2–F3, A4 stage, S1, router, slot ranking, option builder, gates', () => {

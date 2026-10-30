@@ -13,8 +13,14 @@ vi.mock('../setup-events.js', () => ({ recordSetupEvent: () => undefined }));
 
 const analytics = await import('@fno/analytics');
 const { prepareMomentumSeries, buildSeriesContext, runSessionEvents, evaluateTriggersAt, TRIGGER_RULES } = analytics;
-const { evaluateFamiliesCore, EMPTY_FAMILY_ROUTER_STATE, liveTriggerStages } = await import('../trigger-router.js');
+const { evaluateFamiliesCore, EMPTY_FAMILY_ROUTER_STATE } = await import('../trigger-router.js');
+const { resolveTriggerStage } = await import('../../config/trading-flags.js');
 const sa = await import('../slot-arbitration.js');
+const { TRIGGER_REGISTRY } = analytics;
+// This test exercises the RESEARCH_PAPER_TRADING mechanism itself (a family at the paper-trade
+// slot throwing), independent of today's production default — so stages are forced researchPaper:
+// true / no demotions here rather than read from the live default.
+const researchPaperStages = () => Object.fromEntries(TRIGGER_REGISTRY.map((t: any) => [t.triggerId, resolveTriggerStage(t.triggerId, t.status, undefined, {}, true, {})]));
 
 // The router-live fixture session: several families fire on the newest bar.
 const M15 = 15 * 60 * 1000;
@@ -76,7 +82,7 @@ describe('trigger families are independent', () => {
   });
 
   it('the live router keeps every other family when one throws, and reports the failure', () => {
-    const run = () => evaluateFamiliesCore({ underlying: 'NIFTY', exchange: 'NSE', mode: 'INTRADAY', bars, chain: null, now: NOW, stages: liveTriggerStages(), state: EMPTY_FAMILY_ROUTER_STATE });
+    const run = () => evaluateFamiliesCore({ underlying: 'NIFTY', exchange: 'NSE', mode: 'INTRADAY', bars, chain: null, now: NOW, stages: researchPaperStages(), state: EMPTY_FAMILY_ROUTER_STATE });
     const clean = run();
     const paperFirst = clean.paper[0]?.candidate.triggerId;
     expect(paperFirst).toBeTruthy();

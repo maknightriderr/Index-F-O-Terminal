@@ -38,6 +38,22 @@ vi.mock('../../lib/db.js', () => ({ sql: new Proxy(() => undefined, { apply: () 
 vi.mock('../../lib/logger.js', () => ({ logger: { info() {}, warn() {}, error() {}, debug() {} } }));
 const recorded: any[] = [];
 vi.mock('../setup-events.js', () => ({ recordSetupEvent: (e: any) => recorded.push(e) }));
+// This file tests the full decision pipeline (events, candidates, arbitration) with a family actually
+// reaching the paper-trade slot, independent of today's RESEARCH_PAPER_TRADING/TRIGGER_DEMOTIONS
+// production defaults (both off / S1-inclusive since 2026-10-30 while a new strategy is built).
+vi.mock('../../config/trading-flags.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../config/trading-flags.js')>();
+  const demotions = { A4: actual.TRIGGER_DEMOTIONS.A4 };
+  const resolveTriggerStage: typeof actual.resolveTriggerStage = (
+    triggerId,
+    registryStatus,
+    promotions = actual.TRIGGER_PROMOTIONS,
+    overrides = {},
+    researchPaper = true,
+    demotionsArg = demotions
+  ) => actual.resolveTriggerStage(triggerId, registryStatus, promotions, overrides, researchPaper, demotionsArg);
+  return { ...actual, RESEARCH_PAPER_TRADING: true, TRIGGER_DEMOTIONS: demotions, resolveTriggerStage };
+});
 
 const dr = await import('../decision-record.js');
 const { routeTriggerFamilies, EMPTY_FAMILY_ROUTER_STATE, liveTriggerStages } = await import('../trigger-router.js');
@@ -166,7 +182,7 @@ describe('SignalDecisionSnapshot', () => {
     const v = build().versions;
     for (const k of ['gitCommit', 'analyticsVersion', 'signalEngineVersion', 'optionModelVersion', 'parentingVersion', 'arbitrationVersion', 'ruleVersion', 'strategyVersion', 'costModelVersion', 'snapshotSchemaVersion'])
       expect(v, k).toHaveProperty(k);
-    expect(v.signalEngineVersion).toMatch(/\+payoff-admission\.1\+parent-identity\.1\+demote-a4\.1\+ob1-paper\.1\+of1-paper\.2$/);
+    expect(v.signalEngineVersion).toMatch(/\+payoff-admission\.1\+parent-identity\.1\+demote-a4\.1\+demote-s1\.1$/);
     expect(v.parentingVersion).toBe('PARENT-2.0');
   });
 

@@ -21,6 +21,24 @@ vi.mock('../../lib/redis.js', () => ({
 }));
 const recorded: any[] = [];
 vi.mock('../../services/setup-events.js', () => ({ recordSetupEvent: (e: any) => recorded.push(e) }));
+// This file tests the live router mechanism itself (every eligible paper-stage candidate handed
+// to the slot), independent of today's RESEARCH_PAPER_TRADING/TRIGGER_DEMOTIONS production defaults
+// (both off / S1-inclusive since 2026-10-30 while a new strategy is built).
+vi.mock('../../config/trading-flags.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../config/trading-flags.js')>();
+  const demotions = { A4: actual.TRIGGER_DEMOTIONS.A4 };
+  // resolveTriggerStage's own defaults are closures over trading-flags.ts's internal module state, so
+  // re-exporting overridden constants alongside the original function has no effect on it. Wrap it instead.
+  const resolveTriggerStage: typeof actual.resolveTriggerStage = (
+    triggerId,
+    registryStatus,
+    promotions = actual.TRIGGER_PROMOTIONS,
+    overrides = {},
+    researchPaper = true,
+    demotionsArg = demotions
+  ) => actual.resolveTriggerStage(triggerId, registryStatus, promotions, overrides, researchPaper, demotionsArg);
+  return { ...actual, RESEARCH_PAPER_TRADING: true, TRIGGER_DEMOTIONS: demotions, resolveTriggerStage };
+});
 
 const { routeTriggerFamilies } = await import('../../services/trigger-router.js');
 
