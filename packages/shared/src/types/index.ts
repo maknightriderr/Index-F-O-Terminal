@@ -51,6 +51,8 @@ export interface Instrument {
   lotSize: number;
   tickSize: number;
   isFnO: boolean;
+  /** Raw broker quantity is distinct from legacy lotSize (premium P&L units on MCX). */
+  contractUnits?: { source: 'ANGEL_MASTER_PRICE_V1'; brokerLotQuantity:number; premiumUnitsPerLot:number; quantityVerified:boolean; tickVerified:boolean; };
 }
 
 // --- Asset (user-facing watchlist entity) ---

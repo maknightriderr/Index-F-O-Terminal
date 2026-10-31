@@ -25,14 +25,14 @@ export async function freshStartStatus() {
     FROM fresh_paper_positions WHERE version=${FRESH_PACK_VERSION} GROUP BY strategy
   ` : [];
     const reviews = schemaReady ? await sql<any[]> `SELECT position_id,status,response,completed_at FROM fresh_paper_reviews WHERE version=${FRESH_PACK_VERSION} ORDER BY completed_at DESC NULLS LAST LIMIT 50` : [];
-    const resolved=new Set(['CAPITAL_CONFIGURATION','EXPLICIT_PAPER_ACTIVATION_APPROVAL','CURRENT_EXCHANGE_AND_BROKER_COSTS','PRICING_MODEL_AND_SCENARIOS']);
+    const resolved=new Set(['CAPITAL_CONFIGURATION','EXPLICIT_PAPER_ACTIVATION_APPROVAL']);
     const adapter=freshProductionState(),adapterSchemaReady=schemaFileReady('048_fresh_start_adapter.sql');
     const adapterDecisions=adapterSchemaReady?await sql<any[]>`SELECT candidate_id,at,strategy,code FROM fresh_adapter_decisions WHERE version=${FRESH_PACK_VERSION} ORDER BY at DESC LIMIT 50`:[];
     const evaluations=adapterSchemaReady?await sql<any[]>`SELECT id,at,instrument,session,result->'refusals' AS refusals FROM fresh_evaluations WHERE version=${FRESH_PACK_VERSION} ORDER BY at DESC LIMIT 20`:[];
-    return { activationRequested:FRESH_CONFIG.activationRequested,activationApproved:FRESH_CONFIG.activationApproved,feedQualification:adapter,adapterDecisions,evaluations,engineConfigured:FRESH_CONFIG.enabled,brokeragePerOrder:20,adapterSchemaReady, reviews, version: FRESH_CONFIG.version, implementationApproved: true, enabled: freshEntriesEnabled(), legacyNewEntries: LEGACY_NEW_ENTRIES_ENABLED,
+    return { activationRequested:FRESH_CONFIG.activationRequested,activationApproved:FRESH_CONFIG.activationApproved,feedQualification:adapter,marketReadiness:adapter.marketReadiness,discovery:adapter.discovery,requiredEventConfiguration:adapter.requiredEventConfiguration,adapterDecisions,evaluations,engineConfigured:FRESH_CONFIG.enabled,brokeragePerOrder:20,adapterSchemaReady, reviews, version: FRESH_CONFIG.version, implementationApproved: true, enabled: freshEntriesEnabled(), legacyNewEntries: LEGACY_NEW_ENTRIES_ENABLED,
         legacyExitsPreserved: true, liveOrdersAllowed: false, schemaReady, capital: FRESH_CONFIG.capital,
         blockers: [...(!schemaReady||!adapterSchemaReady ? ['FRESH_SCHEMA_UNAVAILABLE'] : []),...adapter.entryBlockers,...(!adapter.recovered?['QUALIFIED_SHARED_FEED_ADAPTER']:[])],
-        capabilities: FRESH_CONFIG.requirements.map(id => ({ id, status: resolved.has(id)?'APPROVED':'NEEDS_VERIFICATION' })),
+        capabilities: FRESH_CONFIG.requirements.map(id => ({ id, status: resolved.has(id)?'APPROVED':['CURRENT_EXCHANGE_AND_BROKER_COSTS','PRICING_MODEL_AND_SCENARIOS'].includes(id)?'NSE_IMPLEMENTED_OTHER_MARKETS_BLOCKED':'NEEDS_VERIFICATION' })),
         strategies: FRESH_CONFIG.strategies.map(s=>({...s,enabled:s.enabled&&freshEntriesEnabled()})), performance: freshPerformanceFromTotals(aggregate),
         positions: positions.slice(0, 1000).map(p => ({ strategy: p.strategy, version: p.version, session: p.session, status: p.status, state: p.state })),
         positionsTruncated: positions.length > 1000, candidates, evidence: 'OBSERVED_QUOTE_PAPER_ONLY', performanceValidated: false };

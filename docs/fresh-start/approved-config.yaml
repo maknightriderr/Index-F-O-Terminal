@@ -1,5 +1,5 @@
 spec_version: FRESH-START-SPEC-1.1
-pack_version: NEW-INTRADAY-1.1
+pack_version: NEW-INTRADAY-1.2
 status: FORWARD_PAPER_APPROVED_OPERATIONALLY_GATED
 approval_record: "User: approved hai; 2026-10-30; paper activation requested 2026-10-31; operational qualification pending"
 execution:
@@ -44,11 +44,11 @@ markets:
     maximum_trading_sessions_to_expiry_proposal: 15
   BSE_VERIFIED_OPTIONS:
     enabled: false
-    candidate_scope: false
+    candidate_scope: true
     status: DISCOVERY_ONLY_PENDING_PRODUCT_VERIFICATION
   MCX_VERIFIED_FUTURES_OPTIONS:
     enabled: false
-    candidate_scope: false
+    candidate_scope: true
     status: DISCOVERY_ONLY_PENDING_PRODUCT_VERIFICATION
 context:
   setup_minutes: 5
@@ -238,7 +238,10 @@ required_before_activation:
 - EXPLICIT_PAPER_ACTIVATION_APPROVAL
 
 production_adapter:
-  initial_scope: [NIFTY, BANKNIFTY]
+  requested_scope: [NSE_INDEX_OPTIONS, NSE_STOCK_OPTIONS, BSE_VERIFIED_OPTIONS, MCX_VERIFIED_FUTURES_OPTIONS]
+  initial_forward_scope: VERIFIED_NSE_INDEX_REFERENCES
+  BSE_status: DISCOVERY_ONLY_PENDING_PRODUCT_POLICY
+  MCX_status: DISCOVERY_ONLY_PENDING_EXACT_LINK_UNITS_AND_PRODUCT_POLICY
   stocks_status: BLOCKED_ISSUER_RESULTS_COVERAGE
   pricing_model: EUROPEAN_FORWARD_PARITY_BLACK76_1
   calibration_pairs_min: 3

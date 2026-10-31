@@ -16,7 +16,7 @@ describe('production contract adapter → durable entry → executable exit',()=
   const manager={onTick:(f:any)=>{emit=f;return ()=>{};},onRecovering:()=>()=>{},subscribe:async()=>{},unsubscribe:()=>{}};
   const feed=new FreshSharedFeed(manager as any,()=>now);feed.start();
   const expiry='2026-11-03',expiryAt=Date.parse(expiry+'T15:30:00+05:30'),t=(expiryAt-now)/31536000000;
-  const master=[24950,25000,25050].flatMap((strike,i)=>['CE','PE'].map((optionType,j)=>({token:String(100+i*2+j),name:'NIFTY',symbol:`NIFTY${strike}${optionType}`,exchange:'NSE',segment:'FO',instrumentType:'OPTIDX',expiry,strike,optionType,lotSize:25,tickSize:.05}))) as any[];
+  const master=[24950,25000,25050].flatMap((strike,i)=>['CE','PE'].map((optionType,j)=>({token:String(100+i*2+j),name:'NIFTY',symbol:`NIFTY${strike}${optionType}`,exchange:'NSE',segment:'FO',instrumentType:'OPTIDX',expiry,strike,optionType,lotSize:25,tickSize:.05,contractUnits:{source:'ANGEL_MASTER_PRICE_V1',brokerLotQuantity:25,premiumUnitsPerLot:25,quantityVerified:true,tickVerified:true}}))) as any[];
   const signal={token:'1',name:'NIFTY',segment:'FO',exchange:'NSE',instrumentType:'FUTIDX',expiry:'2026-11-24',lotSize:25,tickSize:.05} as any;
   const ref:FreshReference={id:'NSE_FO:1',name:'NIFTY',signal,spot:{token:'2',exchangeSegment:'NSE_CM'},market:'NSE_INDEX_OPTIONS',riskGroup:'INDEX'};
   await feed.reserve([{token:'1',exchange:'NSE',exchangeSegment:'NSE_FO'},{token:'2',exchange:'NSE',exchangeSegment:'NSE_CM'},...master.map(x=>({token:x.token,exchange:'NSE' as const,exchangeSegment:'NSE_FO' as const}))],250);
