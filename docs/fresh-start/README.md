@@ -178,3 +178,7 @@ See [quantity and expiry qualification](quantity-expiry-qualification.md) for sh
 ### Phase 10 — gated BSE index paper path
 
 See [the BSE paper policy proposal](bse-paper-policy.md) for the implemented and tested adapter/admission path, proposed 1–10-session/no-0DTE policy, explicit approval gate and remaining event-data dependency. Production BSE entry approval remains false.
+
+### Phase 11 — MCX paper path and independent pricing validation
+
+See [MCX policy and pricing evidence](mcx-paper-policy.md) for the exact-future Black-76 path, independently benchmarked normal-CDF correction, proposed 3–15-session/1.5%-spread policy and remaining quantity/event dependencies. MCX parameter approval remains false.

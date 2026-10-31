@@ -80,6 +80,7 @@ export class FreshSharedFeed {
             f();
     }
     underlying(id: string) { const t = this.latest.get(id); return t?.exchangeTimestamp != null && this.now() - t.exchangeTimestamp <= 2000 && t.timestamp <= this.now() ? { price: t.ltp, at: t.exchangeTimestamp } : null; }
+    futuresObservation(id:string,tick:number){const value=this.underlying(id),t=this.latest.get(id);return value&&t?{contract:id,price:value.price,tick,source:'ANGEL',epoch:this.sourceEpoch,eventAt:value.at,receivedAt:t.timestamp}:null;}
     quote(id: string, tick: number): FreshQuote | null {
         const q = this.books.get(id)?.at(-1);
         if (!q || this.latest.get(id)?.exchangeTimestamp !== q.eventAt)

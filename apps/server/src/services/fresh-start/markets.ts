@@ -3,6 +3,7 @@ import {resolveFreshMcxLink,type FreshMcxLink} from './mcx-contracts.js';
 import {freshFeePolicyFor} from './fees.js';
 import {freshContractUnits} from './contract-units.js';
 import {freshBsePaperPolicyApproved} from './bse-policy.js';
+import {freshMcxPaperPolicyApproved} from './mcx-policy.js';
 export const FRESH_MARKETS=['NSE_INDEX_OPTIONS','NSE_STOCK_OPTIONS','BSE_VERIFIED_OPTIONS','MCX_VERIFIED_FUTURES_OPTIONS'] as const;
 export type FreshMarket=typeof FRESH_MARKETS[number];
 export interface FreshReference {
@@ -19,7 +20,7 @@ export const freshOptionType=(market:FreshMarket)=>market==='NSE_STOCK_OPTIONS'?
 export function freshMarketBlockers(market:FreshMarket):string[]{
   // Issuer/action coverage is dynamic and checked by the event-source adapter.
   if(market==='BSE_VERIFIED_OPTIONS')return freshBsePaperPolicyApproved()?[]:['BLOCKED_BSE_PRODUCT_AND_EXPIRY_POLICY'];
-  if(market==='MCX_VERIFIED_FUTURES_OPTIONS')return ['BLOCKED_MCX_EXACT_OPTION_FUTURES_LINK','BLOCKED_MCX_BOOK_QUANTITY_UNITS','BLOCKED_MCX_PRODUCT_AND_EXPIRY_POLICY'];
+  if(market==='MCX_VERIFIED_FUTURES_OPTIONS')return ['BLOCKED_MCX_EXACT_OPTION_FUTURES_LINK','BLOCKED_MCX_BOOK_QUANTITY_UNITS',...(freshMcxPaperPolicyApproved()?[]:['BLOCKED_MCX_PRODUCT_AND_EXPIRY_POLICY'])];
   return [];
 }
 export function freshBookSupportsLot(instrument:Instrument,q:{bidUnits:number;askUnits:number}|null){const u=freshContractUnits(instrument);return !!q&&!!u&&Number.isSafeInteger(q.bidUnits)&&Number.isSafeInteger(q.askUnits)&&q.bidUnits>=u.lotQuantity&&q.askUnits>=u.lotQuantity;}
@@ -42,7 +43,7 @@ export function discoverFreshMarkets(master:readonly Instrument[],day:string):Fr
       const candidates=master.filter(x=>x.exchange===exchange&&x.name===name&&(stock?x.segment==='CM'&&x.instrumentType==='EQ'&&x.symbol===`${name}-EQ`:active(x)&&x.instrumentType===(commodity?'FUTCOM':'FUTIDX'))).sort((a,b)=>(a.expiry??'').localeCompare(b.expiry??'')||a.token.localeCompare(b.token));
       const linkedCommodity=commodity;
       const commodityExpiries=linkedCommodity?[...new Map(master.filter(x=>active(x)&&x.exchange==='MCX'&&x.name===name&&x.instrumentType==='OPTFUT'&&['CE','PE'].includes(x.optionType??'')).map(x=>[`${x.expiry}:${x.tickSize}`,x])).values()]:[];
-      const links=commodityExpiries.map(x=>resolveFreshMcxLink(x,master)).filter((x):x is FreshMcxLink=>x!==null);
+      const links=commodityExpiries.map(x=>resolveFreshMcxLink(x,candidates)).filter((x):x is FreshMcxLink=>x!==null);
       const linkedTokens=new Set(links.map(x=>x.futureToken));
       const signal=linkedCommodity?candidates.find(x=>linkedTokens.has(x.token)):candidates[0];
       if(linkedCommodity&&!signal){unmapped.push({name,market,code:'BLOCKED_MCX_EXACT_OPTION_FUTURES_LINK'});continue;}
@@ -53,7 +54,7 @@ export function discoverFreshMarkets(master:readonly Instrument[],day:string):Fr
       const spot=spotCandidates.length===1?{token:spotCandidates[0].token,exchangeSegment:CM_SEGMENT[exchange]}:!stock&&!commodity&&KNOWN_INDEX_TOKENS[name]?{token:KNOWN_INDEX_TOKENS[name],exchangeSegment:CM_SEGMENT[exchange]}:null;
       if(!spot){unmapped.push({name,market,code:'BLOCKED_EXACT_PRICING_REFERENCE'});continue;}
       const sector=stock?freshSector(name):null,blockers:string[]=freshMarketBlockers(market);
-      if(linkedCommodity)blockers.splice(blockers.indexOf('BLOCKED_MCX_EXACT_OPTION_FUTURES_LINK'),1);
+      if(linkedCommodity){blockers.splice(blockers.indexOf('BLOCKED_MCX_EXACT_OPTION_FUTURES_LINK'),1);if(master.filter(x=>active(x)&&x.exchange==='MCX'&&x.name===name&&x.instrumentType==='OPTFUT').some(x=>freshContractUnits(x)&&resolveFreshMcxLink(x,candidates)?.futureToken===signal.token))blockers.splice(blockers.indexOf('BLOCKED_MCX_BOOK_QUANTITY_UNITS'),1);}
       if(stock&&!sector)blockers.push('BLOCKED_SECTOR_MAPPING');
       if(!freshFeePolicyFor({exchange,segment:'FO',instrumentType:optionType,name},day))blockers.push('BLOCKED_PRODUCT_SPECIFIC_FEE_POLICY');
       references.push({id:`${stock?CM_SEGMENT[exchange]:FO_SEGMENT[exchange]}:${signal.token}`,name,signal,spot,exchange,market,riskGroup:stock?`NSE_SECTOR:${sector??'UNMAPPED'}`:commodity?`MCX:${name}`:'NSE_INDEX_CORRELATED',capabilityBlockers:blockers,...(linkedCommodity?{mcxLinks:[...new Map(links.filter(x=>x.futureToken===signal.token).map(x=>[x.optionExpiry,x])).values()]}:{})});

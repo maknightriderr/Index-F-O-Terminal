@@ -230,11 +230,13 @@ describe('full replay of the real decision path', () => {
     const noStamp = JSON.parse(JSON.stringify(live, (k, v) => (k === 'logicVersion' || k === 'logic' ? undefined : v)));
     const fp = createHash('sha256').update(JSON.stringify(stripVolatile(noStamp))).digest('hex').slice(0, 16);
     if (process.env.PRINT_FINGERPRINT) console.log(`FP e2e '${fp}'`);
-    // PAYOFF-ADMISSION-1: the old fixture minted a 0.04 net-R:R indicator leg.
-    // Its unchanged plan now remains research evidence, explicitly blocked, with no paper trade.
-    expect(fp).toBe('c19c041f2d460fc9');
-    expect(live.setupWatch[0]).toMatchObject({ blockCode: 'REWARD_RISK_TOO_LOW', plan: { netRR: 0.04, entryPremium: 124.25, slPremium: 78.83, t1Premium: 128.43 } });
-    expect(live.tradeSetup).toMatchObject({ available: false, noTradeCode: 'REWARD_RISK_TOO_LOW' });
+    // CDF-SQRT2-FIX: independent Gaussian/price benchmarks correct shared model maths.
+    // Reviewed changes from c19c041f2d460fc9: delta/IV/decay and selected strike;
+    // cost/target/geometry gates now reject before the former 0.04 net-R:R plan.
+    // This historical-fixture override still cannot mint a paper trade.
+    expect(fp).toBe('d80de8d57c285a3d');
+    expect(live.setupWatch).toEqual(expect.arrayContaining([expect.objectContaining({source:'A2',blockCode:'INVALID_TRADE_GEOMETRY',plan:null}),expect.objectContaining({source:'F3',blockCode:'UNREALISTIC_TARGET',plan:null})]));
+    expect(live.tradeSetup).toMatchObject({ available: false, noTradeCode: 'COST_EXCEEDS_EDGE',fnoValidation:{strikeSelection:{selectedStrike:25050}} });
     expect(live.tradeSetup.researchTrigger).toBeUndefined(); // F3's live-spot target no longer pays its decay
   });
 
@@ -255,7 +257,7 @@ describe('full replay of the real decision path', () => {
   it('live and replay both refuse the weak payoff without minting a paper trade', () => {
     // Full production/replay path runs; insufficient payoff must not reach settlement.
     expect(live.tradeSetup.available).toBe(false);
-    expect(report.replayed).toMatchObject({ available: false, noTradeCode: 'REWARD_RISK_TOO_LOW' });
+    expect(report.replayed).toMatchObject({ available: false, noTradeCode: 'COST_EXCEEDS_EDGE' });
     // A refusal may write decision/watch evidence, but never a signal or an open trade slot.
     expect(report.effects.onlyLive).toEqual([]);
     const tapeWrites = stored.tape.filter((e: any) => e.write).map((e: any) => e.key);

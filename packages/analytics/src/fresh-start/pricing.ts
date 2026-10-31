@@ -2,6 +2,20 @@ import {blackScholesPrice,calculateIV,calculateGreeks} from '../greeks/index.js'
 import type {FreshQuote} from './paper.js';
 export interface ParityPair {strike:number;call:FreshQuote;put:FreshQuote;}
 export interface FreshParityBasis {forward:number;discount:number;expiryAt:number;at:number;epoch:string;source:string;strikes:number[];}
+export interface FreshFutureObservation {contract:string;price:number;tick:number;source:string;epoch:string;eventAt:number;receivedAt:number;}
+export interface FreshFuturesParityBasis extends FreshParityBasis {futureContract:string;futureAt:number;}
+function validFuture(f:FreshFutureObservation,now:number){return !!f.contract&&!!f.source&&!!f.epoch&&[f.price,f.tick,f.eventAt,f.receivedAt,now].every(Number.isFinite)&&f.price>0&&f.tick>0&&f.eventAt<=f.receivedAt&&f.receivedAt<=now&&now-f.eventAt<=2000;}
+/** C-P=D(F-K), with F fixed to the exact mapped future observation, never a fitted replacement future. */
+export function fitFreshFuturesParity(pairs:readonly ParityPair[],future:FreshFutureObservation,expiryAt:number,now:number):FreshFuturesParityBasis|null {
+  if(!validFuture(future,now))return null;
+  const fitted=fitFreshParity(pairs,expiryAt,now),quotes=pairs.flatMap(x=>[x.call,x.put]);
+  if(!fitted||fitted.source!==future.source||fitted.epoch!==future.epoch||new Set(quotes.map(q=>q.contract)).size!==quotes.length||quotes.some(q=>Math.abs(q.eventAt-future.eventAt)>1000))return null;
+  const xs=pairs.map(x=>future.price-x.strike),ys=pairs.map(x=>(x.call.bid+x.call.ask-x.put.bid-x.put.ask)/2),sumSquares=xs.reduce((s,x)=>s+x*x,0);
+  if(!(sumSquares>0&&Number.isFinite(sumSquares)))return null;
+  const discount=xs.reduce((s,x,i)=>s+x*ys[i],0)/sumSquares;
+  if(!(discount>0&&discount<=1)||pairs.some(x=>discount*(future.price-x.strike)<x.call.bid-x.put.ask-1e-8||discount*(future.price-x.strike)>x.call.ask-x.put.bid+1e-8))return null;
+  return {...fitted,forward:future.price,discount,futureContract:future.contract,futureAt:future.eventAt};
+}
 /** European parity C-P=D(F-K); the caller verifies exact underlying and expiry identity from the master. */
 export function fitFreshParity(pairs:readonly ParityPair[],expiryAt:number,now:number):FreshParityBasis|null {
   if(pairs.length<3||pairs.length>5||!Number.isFinite(expiryAt)||expiryAt<=now)return null;
@@ -29,9 +43,16 @@ export function freshPremiumScenarios(args:{basis:FreshParityBasis;quote:FreshQu
   const horizon=Math.min(900000,args.cutoff-args.now),remaining=Math.max(0,(b.expiryAt-args.now-horizon)/31536000000),discount=b.discount**(remaining/t),ratio=b.forward/args.signalPrice;
   const forwardAt=(level:number)=>level*(args.signalKind==='SPOT'?ratio**(remaining/t):ratio),halfSpread=(q.ask-q.bid)/2;
   const bid=(level:number,vol:number)=>Math.max(0,fair(forwardAt(level),remaining,vol,discount)-halfSpread);
-  return {delta,iv,targetPremiumScenarios:[bid(args.target,iv),bid(args.target,Math.max(0,iv-.02))],invalidationPremiumScenarios:[bid(args.stop,iv),bid(args.stop,Math.max(0,iv-.02))],evidence:{model:'EUROPEAN_FORWARD_PARITY_BLACK76_1',forward:b.forward,discount:b.discount,signalToForwardRatio:ratio,signalKind:args.signalKind,pricingSpot:args.pricingSpot,horizonMs:horizon,ivShocks:[0,-.02],futureSpread:'CURRENT_ABSOLUTE_HALF_SPREAD_ASSUMPTION',calibrationStrikes:b.strikes}};
+  return {delta,iv,targetPremiumScenarios:[bid(args.target,iv),bid(args.target,Math.max(0,iv-.02))],invalidationPremiumScenarios:[bid(args.stop,iv),bid(args.stop,Math.max(0,iv-.02))],evidence:{model:'EUROPEAN_FORWARD_PARITY_BLACK76_1',normalCdf:'ERF_SQRT2_FIXED_V1',forward:b.forward,discount:b.discount,signalToForwardRatio:ratio,signalKind:args.signalKind,pricingSpot:args.pricingSpot,horizonMs:horizon,ivShocks:[0,-.02],futureSpread:'CURRENT_ABSOLUTE_HALF_SPREAD_ASSUMPTION',calibrationStrikes:b.strikes}};
 }
 export interface FreshFeePolicy {version:string;brokeragePerOrder:number;exchangeFraction:number;sebiFraction:number;stampBuyFraction:number;sellTaxFraction:number;gstFraction:number;}
+export function freshFuturesPremiumScenarios(args:{basis:FreshFuturesParityBasis;future:FreshFutureObservation;quote:FreshQuote;strike:number;side:'CE'|'PE';target:number;stop:number;now:number;cutoff:number}){
+  const {basis:b,future:f,quote:q}=args;
+  if(!validFuture(f,args.now)||f.contract!==b.futureContract||f.eventAt!==b.futureAt||f.price!==b.forward||f.source!==b.source||f.epoch!==b.epoch)return null;
+  if(![q.bid,q.ask,q.tick,q.eventAt,q.receivedAt].every(Number.isFinite)||q.bid<=0||q.ask<q.bid||q.tick<=0||!Number.isSafeInteger(q.bidUnits)||!Number.isSafeInteger(q.askUnits)||q.bidUnits<=0||q.askUnits<=0||q.eventAt>q.receivedAt||q.receivedAt>args.now||args.now-q.eventAt>2000||Math.abs(q.eventAt-f.eventAt)>1000)return null;
+  const result=freshPremiumScenarios({...args,signalKind:'FUTURES',signalPrice:f.price,pricingSpot:f.price});
+  return result?{...result,evidence:{...result.evidence,model:'EUROPEAN_EXACT_FUTURE_BLACK76_1',futureContract:f.contract,futureAt:f.eventAt,referenceRule:'EXACT_FUTURE_NO_SPOT_OR_MONTH_SUBSTITUTION'}}:null;
+}
 export function freshRoundTripFeeBreakdown(entry:number,exit:number,quantity:number,multiplier:number,p:FreshFeePolicy) {
   if(![entry,exit,quantity,multiplier,p.brokeragePerOrder,p.exchangeFraction,p.sebiFraction,p.stampBuyFraction,p.sellTaxFraction,p.gstFraction].every(Number.isFinite)||entry<=0||exit<0||!Number.isSafeInteger(quantity)||quantity<=0||multiplier<=0||Object.entries(p).some(([k,v])=>k!=='version'&&(v as number)<0))throw Error('INVALID_FEE_INPUT');
   const buy=entry*quantity*multiplier,sell=exit*quantity*multiplier,turnover=buy+sell,brokerage=2*p.brokeragePerOrder,exchange=turnover*p.exchangeFraction,sebi=turnover*p.sebiFraction;
