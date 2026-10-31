@@ -24,6 +24,8 @@ export interface FreshStrategyPerformance {
     note: string;
 }
 export interface FreshStartStatus {
+    calendarSchemaReady?:boolean;
+    eventSources?:{macro:{source:string;status:string;configured:boolean;coverageConfirmed:boolean;fetchedAt:number|null;expiresAt:number|null;snapshotId:string|null;nextAttemptAt:number;eventCount:number|null};issuer:{failureCode?:string|null;source:string;status:string;fetchedAt:number|null;expiresAt:number|null;snapshotId:string|null;nextAttemptAt:number;responseCounts:{events:number;meetings:number;actions:number}|null}|null}|null;
     marketReadiness?:Array<{market:string;universe:number;selected:number;references:number;optionContracts:number;observedExecutableBooks:number;eligibleReferences:number;sessionOpen:boolean;blockers:string[]}>;
     discovery?:{at:number|null;totalReferences:number;unmapped:number;selected:number;historyCache:number;historyLimit:number;historyRequestsPerCycle:number;subscriptionLimit:number;windowMinutes:number};
     requiredEventConfiguration?:string[];

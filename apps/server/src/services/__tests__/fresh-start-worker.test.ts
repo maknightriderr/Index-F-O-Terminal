@@ -1,10 +1,11 @@
 import {describe,it,expect,vi,afterEach} from 'vitest';
 const mocks=vi.hoisted(()=>({recover:vi.fn(),sql:vi.fn(),keys:vi.fn(),read:vi.fn(),audit:vi.fn(async()=>{})}));
+vi.mock('../fresh-start/issuer-events.js',()=>({FreshIssuerEvents:class{async refresh(){} clearance(){return 'BLOCKED_ISSUER_RESULTS_COVERAGE';}view(){return null;}evidence(){return null;}}}));
 vi.mock('../fresh-start/store.js',()=>({FreshPaperStore:class{async recover(){return [];}}}));
 vi.mock('../fresh-start/runtime.js',()=>({FreshRuntime:class{recover=mocks.recover;}}));
 vi.mock('../../lib/db.js',()=>({sql:mocks.sql}));
 vi.mock('../../lib/redis.js',()=>({redis:{get:mocks.read},scanKeys:mocks.keys}));
-vi.mock('../fresh-start/audit.js',()=>({auditFreshEvaluation:mocks.audit,auditFreshAdapter:mocks.audit}));
+vi.mock('../fresh-start/audit.js',()=>({auditFreshEvaluation:mocks.audit,auditFreshAdapter:mocks.audit,persistFreshCalendarSnapshot:mocks.audit}));
 vi.mock('../ensure-capture-schema.js',()=>({schemaFileReady:()=>true}));
 import {FreshPaperWorker} from '../fresh-start/worker.js';
 import {freshAdapterState as state} from '../fresh-start/adapter-state.js';

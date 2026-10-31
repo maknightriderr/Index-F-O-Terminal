@@ -1,6 +1,6 @@
 // Approved implementation pack; pure functions only. Time, calendars and data provenance are injected.
 import { atr, ema } from '../indicators/index.js';
-export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.2';
+export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.3';
 export const FRESH_STRATEGIES = ['NEW_ORB_RETEST_V1', 'NEW_VWAP_PULLBACK_V1', 'NEW_PREVIOUS_SESSION_SWEEP_V1', 'NEW_FIRST_OPENING_PULLBACK_V1'] as const;
 export type FreshStrategy = typeof FRESH_STRATEGIES[number];
 export type FreshDirection = 'BULLISH' | 'BEARISH';
@@ -37,6 +37,7 @@ export interface FreshContext {
     previousLow: number;
     referenceVerified: boolean;
     eventClear: boolean;
+    eventEvidence?: Record<string,unknown>;
     calendarVerified: boolean;
 }
 export interface FreshCandidate {
@@ -55,7 +56,7 @@ export interface FreshCandidate {
     atr: number;
     expiresAt: number;
     origin: number;
-    evidence: Record<string, number | string>;
+    evidence: Record<string, unknown>;
 }
 export interface FreshEvaluation {
     candidates: FreshCandidate[];
@@ -230,7 +231,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                 continue;
             }
             const parentId = `${c.instrument}:${c.session}:${direction}:${origin}`;
-            out.candidates.push({ id: `${FRESH_PACK_VERSION}:${c.sourceEpoch}:${parentId}:${strategy}:${current.time}`, parentId, version: FRESH_PACK_VERSION, strategy, direction, instrument: c.instrument, sourceEpoch: c.sourceEpoch, session: c.session, at: decisionAt, referenceEntry: current.close, stop, target: ahead[0].price, atr: a, origin, expiresAt: Math.min(decisionAt + 2000, c.sessionClose - 3600000), evidence: { rvol: finite(rvol(current)) ? rvol(current) : 'UNAVAILABLE', vwap, reference: 'BAR_VWAP_PROXY', targetKind: ahead[0].kind } });
+            out.candidates.push({ id: `${FRESH_PACK_VERSION}:${c.sourceEpoch}:${parentId}:${strategy}:${current.time}`, parentId, version: FRESH_PACK_VERSION, strategy, direction, instrument: c.instrument, sourceEpoch: c.sourceEpoch, session: c.session, at: decisionAt, referenceEntry: current.close, stop, target: ahead[0].price, atr: a, origin, expiresAt: Math.min(decisionAt + 2000, c.sessionClose - 3600000), evidence: { ...(c.eventEvidence?{eventCalendar:c.eventEvidence}:{}), rvol: finite(rvol(current)) ? rvol(current) : 'UNAVAILABLE', vwap, reference: 'BAR_VWAP_PROXY', targetKind: ahead[0].kind } });
             emitted = true;
         }
         if (!emitted && !out.refusals.some(x => x.strategy === strategy))

@@ -1,5 +1,5 @@
 spec_version: FRESH-START-SPEC-1.1
-pack_version: NEW-INTRADAY-1.2
+pack_version: NEW-INTRADAY-1.3
 status: FORWARD_PAPER_APPROVED_OPERATIONALLY_GATED
 approval_record: "User: approved hai; 2026-10-30; paper activation requested 2026-10-31; operational qualification pending"
 execution:
@@ -242,7 +242,7 @@ production_adapter:
   initial_forward_scope: VERIFIED_NSE_INDEX_REFERENCES
   BSE_status: DISCOVERY_ONLY_PENDING_PRODUCT_POLICY
   MCX_status: DISCOVERY_ONLY_PENDING_EXACT_LINK_UNITS_AND_PRODUCT_POLICY
-  stocks_status: BLOCKED_ISSUER_RESULTS_COVERAGE
+  stocks_status: DYNAMIC_NSE_ISSUER_ACTION_SECTOR_AND_MACRO_GATES
   pricing_model: EUROPEAN_FORWARD_PARITY_BLACK76_1
   calibration_pairs_min: 3
   calibration_pairs_max: 5
@@ -251,3 +251,15 @@ production_adapter:
   scheduled_events: EXPLICIT_CREDENTIALS_AND_CONFIRMED_COVERAGE_REQUIRED
   historical_validation: NOT_VALIDATED
   forward_collection: USER_APPROVED
+
+event_coverage:
+  nse_issuer_source: NSE_PUBLIC_RANGE_V1
+  nse_issuer_refresh: AUTOMATIC_WHILE_NSE_OPEN_AND_STOCKS_IN_SCOPE
+  per_endpoint_timeout_seconds: 15
+  issuer_cache_max_age_seconds: 300
+  issuer_success_refresh_seconds: 180
+  issuer_failure_retry_seconds: 60
+  explicit_ranges_required: true
+  source_snapshot_persistence_required: true
+  macro_provider_credentials_required: true
+  commodity_coverage_status: NOT_QUALIFIED
