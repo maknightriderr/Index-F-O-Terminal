@@ -1,10 +1,12 @@
 spec_version: FRESH-START-SPEC-1.1
-pack_version: NEW-INTRADAY-1.0
-status: IMPLEMENTATION_APPROVED_ACTIVATION_DISABLED
+pack_version: NEW-INTRADAY-1.1
+status: FORWARD_PAPER_APPROVED_OPERATIONALLY_GATED
 approval_record: "User: approved hai; 2026-10-30; paper activation requested 2026-10-31; operational qualification pending"
 execution:
   enabled: false
-  mode: SIGNAL_ONLY
+  mode: OBSERVED_QUOTE_FORWARD_PAPER
+  engine_configured: true
+  effective_enablement: RUNTIME_RECOVERY_MONITOR_EVENT_BOOK_AND_PER_CANDIDATE_GATES
   paper_activation_approved: true
   live_orders_allowed: false
 legacy:
@@ -128,7 +130,7 @@ event_policy:
 strategies:
 - id: NEW_ORB_RETEST_V1
   enabled: false
-  status: IMPLEMENTATION_APPROVED_ACTIVATION_DISABLED
+  status: FORWARD_PAPER_APPROVED_OPERATIONALLY_GATED
   rule_pack: report section 7 / NEW_ORB_RETEST_V1
   opening_range_bars: 3
   or_width_atr_band:
@@ -146,7 +148,7 @@ strategies:
   entry_window_end_minutes_after_open: 120
 - id: NEW_VWAP_PULLBACK_V1
   enabled: false
-  status: IMPLEMENTATION_APPROVED_ACTIVATION_DISABLED
+  status: FORWARD_PAPER_APPROVED_OPERATIONALLY_GATED
   rule_pack: report section 7 / NEW_VWAP_PULLBACK_V1
   window_start_minutes_after_open: 30
   impulse_reference_bars: 3
@@ -163,7 +165,7 @@ strategies:
   invalidation_buffer_atr: 0.1
 - id: NEW_PREVIOUS_SESSION_SWEEP_V1
   enabled: false
-  status: IMPLEMENTATION_APPROVED_ACTIVATION_DISABLED
+  status: FORWARD_PAPER_APPROVED_OPERATIONALLY_GATED
   rule_pack: report section 7 / NEW_PREVIOUS_SESSION_SWEEP_V1
   window_start_minutes_after_open: 30
   eligible_levels:
@@ -180,7 +182,7 @@ strategies:
   invalidation_buffer_atr: 0.1
 - id: NEW_FIRST_OPENING_PULLBACK_V1
   enabled: false
-  status: IMPLEMENTATION_APPROVED_ACTIVATION_DISABLED
+  status: FORWARD_PAPER_APPROVED_OPERATIONALLY_GATED
   rule_pack: report section 7 / NEW_FIRST_OPENING_PULLBACK_V1
   initial_impulse_bars: 3
   initial_impulse_min_atr: 1.5
@@ -234,3 +236,15 @@ required_before_activation:
 - HISTORY_EVIDENCE_AND_VALIDATION
 - MONITORING_LOAD_TEST
 - EXPLICIT_PAPER_ACTIVATION_APPROVAL
+
+production_adapter:
+  initial_scope: [NIFTY, BANKNIFTY]
+  stocks_status: BLOCKED_ISSUER_RESULTS_COVERAGE
+  pricing_model: EUROPEAN_FORWARD_PARITY_BLACK76_1
+  calibration_pairs_min: 3
+  calibration_pairs_max: 5
+  brokerage_per_executed_order_inr: 20
+  brokerage_status: USER_SELECTED_PAPER_ESTIMATE_2026_10_31
+  scheduled_events: EXPLICIT_CREDENTIALS_AND_CONFIRMED_COVERAGE_REQUIRED
+  historical_validation: NOT_VALIDATED
+  forward_collection: USER_APPROVED

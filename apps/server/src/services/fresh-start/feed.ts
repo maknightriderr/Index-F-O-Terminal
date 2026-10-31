@@ -8,6 +8,7 @@ export class FreshSharedFeed {
     private closed = false;
     private readonly connectionId = randomUUID();
     private books = new Map<string, FreshQuote[]>();
+    private referenceHistory=new Map<string,Tick[]>();
     private latest = new Map<string, Tick>();
     private listeners = new Set<() => void>();
     private targets = new Map<string, SubscriptionTarget>();
@@ -21,7 +22,7 @@ export class FreshSharedFeed {
         if (this.removeTick)
             return;
         this.removeTick = this.subscriptions.onTick(ticks => this.receive(ticks));
-        this.removeRecovery = this.subscriptions.onRecovering(() => { this.epoch++; this.books.clear(); this.latest.clear(); this.notify(); });
+        this.removeRecovery = this.subscriptions.onRecovering(() => { this.epoch++; this.books.clear(); this.latest.clear(); this.referenceHistory.clear(); this.notify(); });
     }
     async reserve(targets: readonly SubscriptionTarget[], verifiedNewCapacity: number) {
         if (this.closed)
@@ -43,6 +44,13 @@ export class FreshSharedFeed {
         }
         this.targets = combined;
     }
+    get subscribedTargets(){return [...this.targets.values()];}
+    async syncTargets(targets:readonly SubscriptionTarget[],capacity:number){
+        const wanted=new Set(targets.map(t=>`${t.exchangeSegment}:${t.token}`));
+        for(const [id,t] of this.targets)if(!wanted.has(id)){this.subscriptions.unsubscribe(this.clientId,[t]);this.targets.delete(id);this.books.delete(id);this.latest.delete(id);this.referenceHistory.delete(id);}
+        if(targets.length)await this.reserve(targets,capacity);
+    }
+    underlyingAt(id:string,at:number){const t=this.referenceHistory.get(id)?.filter(x=>x.timestamp<=at&&x.exchangeTimestamp!=null&&x.exchangeTimestamp<=at&&at-x.exchangeTimestamp<=2000).at(-1);return t?{price:t.ltp,at:t.exchangeTimestamp!}:null;}
     private receive(ticks: readonly Tick[]) {
         for (const t of ticks) {
             if (t.exchangeTimestamp == null || ![t.exchangeTimestamp, t.timestamp, t.ltp].every(Number.isFinite) || t.ltp <= 0 || t.exchangeTimestamp > t.timestamp || t.timestamp > this.now() || this.now() - t.exchangeTimestamp > 2000)
@@ -53,6 +61,7 @@ export class FreshSharedFeed {
                 if (t.exchangeTimestamp == null || t.exchangeTimestamp <= 0 || (old?.exchangeTimestamp != null && t.exchangeTimestamp <= old.exchangeTimestamp))
                     continue;
                 this.latest.set(id, t);
+                this.referenceHistory.set(id,[...(this.referenceHistory.get(id)??[]).filter(x=>this.now()-x.timestamp<=2500),t].slice(-100));
                 if (t.bid == null || t.ask == null || t.bidQty == null || t.askQty == null)
                     continue;
                 // Tick size is added only from a verified exact contract at read time, never inferred from LTP.
@@ -73,7 +82,7 @@ export class FreshSharedFeed {
     underlying(id: string) { const t = this.latest.get(id); return t?.exchangeTimestamp != null && this.now() - t.exchangeTimestamp <= 2000 && t.timestamp <= this.now() ? { price: t.ltp, at: t.exchangeTimestamp } : null; }
     quote(id: string, tick: number): FreshQuote | null {
         const q = this.books.get(id)?.at(-1);
-        if (!q)
+        if (!q || this.latest.get(id)?.exchangeTimestamp !== q.eventAt)
             return null;
         const value = { ...q, tick };
         return freshQuoteCode(value, id, 'ANGEL', this.sourceEpoch, this.now()) === null ? value : null;
@@ -103,5 +112,5 @@ export class FreshSharedFeed {
         });
     }
     onObservation(fn: () => void) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
-    close() { this.closed = true; this.removeTick?.(); this.removeRecovery?.(); this.removeTick = null; this.removeRecovery = null; this.subscriptions.unsubscribe(this.clientId); this.targets.clear(); this.books.clear(); this.latest.clear(); this.notify(); this.listeners.clear(); }
+    close() { this.closed = true; this.removeTick?.(); this.removeRecovery?.(); this.removeTick = null; this.removeRecovery = null; this.subscriptions.unsubscribe(this.clientId); this.targets.clear(); this.books.clear(); this.latest.clear(); this.referenceHistory.clear(); this.notify(); this.listeners.clear(); }
 }

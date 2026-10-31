@@ -135,6 +135,7 @@ export const FILES = [
   '045_experiments_and_linkage.sql',
   '046_automatic_ai_trade_reviews.sql',
   '047_fresh_start_paper.sql',
+  '048_fresh_start_adapter.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */

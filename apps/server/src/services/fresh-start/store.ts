@@ -1,4 +1,4 @@
-import { FRESH_PACK_VERSION, admitFreshPaper, advanceFreshPosition, canonicalFreshParent, freshQuoteCode, type FreshCandidate, type FreshContract, type FreshQuote, type FreshPaperPosition } from '@fno/analytics';
+import { freshRoundTripFees, FRESH_PACK_VERSION, admitFreshPaper, advanceFreshPosition, canonicalFreshParent, freshQuoteCode, type FreshCandidate, type FreshContract, type FreshQuote, type FreshPaperPosition } from '@fno/analytics';
 import { sql } from '../../lib/db.js';
 import { freshEntriesEnabled } from '../../config/fresh-start.js';
 export interface FreshDb {
@@ -65,7 +65,8 @@ export class FreshPaperStore {
                     marksComplete = false;
                     continue;
                 }
-                unrealized += (Math.max(0, q.bid - q.tick) - p.entry - k.explicitRoundTripCostPerUnit) * p.quantity * k.multiplier;
+                const exit=Math.max(0,q.bid-q.tick),units=p.quantity*k.multiplier;
+                unrealized += (exit-p.entry)*units-(k.feePolicy?freshRoundTripFees(p.entry,exit,p.quantity,k.multiplier,k.feePolicy):k.explicitRoundTripCostPerUnit*units);
             }
             const parents = await tx.unsafe('SELECT id,instrument,direction,session,origin,ended,traded,evidence FROM fresh_parent_moves WHERE account_id=$1 AND instrument=$2', [r.accountId, r.candidate.instrument]);
             for (const parent of parents) {
@@ -89,7 +90,7 @@ export class FreshPaperStore {
             await tx.unsafe('INSERT INTO fresh_candidates(id,account_id,at,version,strategy,parent_id,decision,code,evidence) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb) ON CONFLICT DO NOTHING', [c.id, r.accountId, new Date(r.now), c.version, c.strategy, c.parentId, code === 'FILLED' ? 'FILLED' : 'REFUSED', code, JSON.stringify({ candidate: c, contract: r.contract, quote: r.quote, account, admission })]);
             if (!admission.ok || s4Used)
                 return { ok: false, code };
-            const p: FreshPaperPosition = { id: c.id, contract: r.contract, candidate: c, quantity: admission.quantity, entry: admission.entry, originalRiskCurrency: admission.initialRiskCurrency,
+            const p: FreshPaperPosition = { id: c.id, sessionCutoff:r.cutoff, contract: {...r.contract,explicitRoundTripCostPerUnit:admission.explicitCostPerUnit}, candidate: c, quantity: admission.quantity, entry: admission.entry, originalRiskCurrency: admission.initialRiskCurrency,
                 emergencyStop: admission.emergencyStop, currentStop: admission.emergencyStop, highBid: r.quote.bid, openedAt: r.now, lastEventAt: r.now,
                 state: 'OPEN', exitTriggeredAt: null, exitReason: null, exitPrice: null, netPnl: null, maxUnderlyingFavorable: 0 };
             await tx.unsafe('INSERT INTO fresh_parent_moves(account_id,id,instrument,direction,session,origin,traded,evidence) VALUES($1,$2,$3,$4,$5,$6,true,$7::jsonb) ON CONFLICT(account_id,id) DO UPDATE SET traded=true', [r.accountId, c.parentId, c.instrument, c.direction, r.session, c.origin, JSON.stringify(c)]);
@@ -97,6 +98,16 @@ export class FreshPaperStore {
             await tx.unsafe("INSERT INTO fresh_paper_events(id,position_id,revision,at,kind,evidence) VALUES($1,$2,0,$3,'ENTRY_FILL',$4::jsonb)", [`${c.id}:0`, c.id, new Date(r.now), JSON.stringify({ request: r, admission })]);
             return { ok: true, code: 'FILLED', id: c.id };
         });
+    }
+    async accountView(accountId:string,capital:number,marks:Readonly<Record<string,FreshQuote>>,now:number){
+        const [a]=await this.db.unsafe('SELECT * FROM fresh_paper_accounts WHERE id=$1',[accountId]);
+        const rows=await this.recover();let unrealized=0,reservedRisk=0,reservedPremium=0,marksComplete=!a||(a.capital===capital&&a.version===FRESH_PACK_VERSION);
+        for(const {id,state:p} of rows){const k=p.contract,q=marks[id],units=p.quantity*k.multiplier;reservedRisk+=p.originalRiskCurrency;reservedPremium+=p.entry*units;
+            if(!q||freshQuoteCode(q,k.id,k.source,k.sourceEpoch,now)!==null||q.bidUnits<p.quantity){marksComplete=false;continue;}
+            const exit=Math.max(0,q.bid-q.tick);unrealized+=(exit-p.entry)*units-(k.feePolicy?freshRoundTripFees(p.entry,exit,p.quantity,k.multiplier,k.feePolicy):k.explicitRoundTripCostPerUnit*units);
+        }
+        const dailyNet=(a?.realized_net??0)+unrealized;
+        return {capital,equity:capital+dailyNet,dailyNet,reservedRisk,reservedPremium,marksComplete,openPositions:rows.length,consecutiveNetLosses:a?.paused?3:a?.consecutive_losses??0};
     }
     /** Exit monitoring is deliberately independent of the entry/activation switch. */
     async observe(accountId: string, id: string, e: Parameters<typeof advanceFreshPosition>[1]) {

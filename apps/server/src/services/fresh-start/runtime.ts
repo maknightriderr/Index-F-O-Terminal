@@ -1,4 +1,4 @@
-import { startFreshFeedQualification } from './qualification.js';
+import {FreshPaperWorker} from './worker.js';
 import type { MarketDataProvider } from '../../providers/interface.js';
 import type { SubscriptionManager } from '../../lib/subscription-manager.js';
 import { evaluateFreshStrategies, type FreshContext, type FreshCandidate } from '@fno/analytics';
@@ -7,7 +7,10 @@ import { FreshPaperStore, type FreshEntryRequest } from './store.js';
 import { FreshWorkQueue } from './queue.js';
 /** Shared-feed adapter must supply verified calendars, event coverage, model/costs and exact-contract books.
  * No legacy midpoint/spot-volume fallback is accepted. Production qualification is deliberately absent. */
+export interface FreshPreparedCandidate {candidate:FreshCandidate;netRR:number;finish():Promise<FreshEntryRequest|null>;}
 export interface FreshQualifiedAdapter {
+    prepare?(c:FreshCandidate):Promise<FreshPreparedCandidate|null>;
+    decision?(c:FreshCandidate,code:string):Promise<void>;
     qualified: boolean;
     build(c: FreshCandidate): Promise<FreshEntryRequest | null>;
     watch(positions: Awaited<ReturnType<FreshPaperStore['recover']>>, observe: FreshPaperStore['observe']): Promise<void>;
@@ -36,6 +39,16 @@ export class FreshRuntime {
         return this.evaluations.add(context.now + 2000, async () => {
             const evaluation = evaluateFreshStrategies(context);
             await adapter.audit(context, evaluation);
+            if(adapter.prepare){
+                const plans=await Promise.all(evaluation.candidates.map(c=>this.builds.add(c.expiresAt,()=>adapter.prepare!(c))));
+                const eligible=plans.filter((p):p is FreshPreparedCandidate=>p!==null).sort((a,b)=>a.candidate.at-b.candidate.at||b.netRR-a.netRR||a.candidate.origin-b.candidate.origin||a.candidate.strategy.localeCompare(b.candidate.strategy));
+                const selected=eligible[0];if(!selected)return 'NO_ELIGIBLE_ENTRY';
+                for(const other of eligible.slice(1))await adapter.decision?.(other.candidate,'ANOTHER_CANDIDATE_SELECTED');
+                const request=await selected.finish();if(!request)return 'NO_ELIGIBLE_ENTRY';
+                const result=await this.store.enter({...request,now:Date.now()});
+                if(result.ok){await adapter.watch(await this.store.recover(),this.store.observe.bind(this.store));return 'FILLED';}
+                await adapter.decision?.(selected.candidate,result.code);return result.code;
+            }
             // Build only bounded candidates, then arbitrate using actual worst-case net payoff.
             const built = await Promise.all(evaluation.candidates.map(c => this.builds.add(c.expiresAt, () => adapter.build(c))));
             // Same confirmation time is ordered by modeled net RR; admission is rechecked transactionally at fill.
@@ -49,16 +62,18 @@ export class FreshRuntime {
             for (const r of requests) {
                 // Processing time cannot reuse a formerly fresh quote after queue/network delay.
                 const result = await this.store.enter({ ...r, now: Date.now() });
-                if (result.ok)
+                if (result.ok){
+                    await adapter.watch(await this.store.recover(),this.store.observe.bind(this.store));
                     return 'FILLED';
+                }
             }
             return 'NO_ELIGIBLE_ENTRY';
         });
     }
 }
 export const freshRuntime = new FreshRuntime();
-let stopQualification:(()=>void)|null=null;
-export async function startFreshPaperRecovery(provider?:MarketDataProvider,subscriptions?:SubscriptionManager) {
-  await freshRuntime.recover();
-  if(provider&&subscriptions){stopQualification?.();stopQualification=startFreshFeedQualification(provider,subscriptions);}
+let productionWorker:FreshPaperWorker|null=null;
+export function startFreshPaperRecovery(provider?:MarketDataProvider,subscriptions?:SubscriptionManager){
+    if(!provider||!subscriptions)return freshRuntime.recover();
+    productionWorker?.stop();productionWorker=new FreshPaperWorker(provider,subscriptions);return productionWorker.start();
 }
