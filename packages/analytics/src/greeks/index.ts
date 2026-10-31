@@ -29,10 +29,12 @@ function normalCDF(x: number): number {
   const p = 0.3275911;
 
   const sign = x < 0 ? -1 : 1;
-  const absX = Math.abs(x);
+  // Phi(x) = (1 + erf(x / sqrt(2))) / 2. These coefficients approximate erf.
+  // Both the polynomial argument and its exponential must use the scaled value.
+  const absX = Math.abs(x) / Math.SQRT2;
 
   const t = 1.0 / (1.0 + p * absX);
-  const y = 1.0 - ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t * Math.exp(-absX * absX / 2);
+  const y = 1.0 - ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t * Math.exp(-absX * absX);
 
   return 0.5 * (1.0 + sign * y);
 }
