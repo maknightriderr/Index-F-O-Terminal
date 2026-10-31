@@ -170,3 +170,7 @@ See [the bullion qualification evidence](bullion-qualification.md) for current G
 ### Phase 8 — product fee estimates
 
 See [product-specific fee policies](product-fees.md) for dated BSE/MCX tariff selection, premium-turnover component calculations, frozen entry evidence and remaining activation gates. The NSE production path uses the selector while preserving its existing policy and held exits.
+
+### Phase 9 — quantity conversion and expiry validation
+
+See [quantity and expiry qualification](quantity-expiry-qualification.md) for shared verified sizing terms, book/risk conversion, strict exchange-calendar checks and the explicit remaining MCX unit and BSE/MCX expiry-policy dependencies.
