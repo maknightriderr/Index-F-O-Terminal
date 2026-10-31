@@ -43,7 +43,7 @@ export class FreshPaperWorker {
     // The source's in-flight/cadence guard coalesces a simultaneous open-session refresh.
     void this.events.refresh({macro:false,issuer:false,commodity:FRESH_CONFIG.markets.includes('MCX_VERIFIED_FUTURES_OPTIONS'),publicMacro:true}).then(()=>{
       if(this.stopped)return;state.eventSources=this.events.view();
-      logger.info({event:'freshPublicCalendarPreflight',commodity:state.eventSources.commodity,publicMacro:state.eventSources.publicMacro},'Fresh-start public calendar preflight completed; complete event coverage remains gated');
+      logger.info({event:'freshPublicCalendarPreflight',commodity:state.eventSources.commodity,publicMacro:state.eventSources.publicMacro,officialMacro:state.eventSources.officialMacro},'Fresh-start public calendar preflight completed; complete event coverage remains gated');
     },()=>{if(!this.stopped)logger.warn({event:'freshPublicCalendarPreflightFailed'},'Fresh-start public calendar preflight failed; complete event coverage remains gated');});
     void this.scan();
   }

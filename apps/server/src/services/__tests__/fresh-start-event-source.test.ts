@@ -4,6 +4,17 @@ const at=Date.parse('2026-10-30T06:00:00Z');
 const config={provider:'TRADING_ECONOMICS' as const,apiKey:'never-log-this',coverageConfirmed:true};
 const row={CalendarId:'123',Date:'2026-10-30T12:00:00',Country:'India',Event:'Scheduled data',Importance:3,DateSpan:0};
 describe('verified scheduled-event source and fail-closed coverage',()=>{
+ it('records independent official-source evidence and preserves mandatory coverage even when known dates add vetoes',async()=>{
+   const official={refresh:vi.fn(async()=>{}),blockers:vi.fn(()=>['RBI_MEETING_TIME_UNCERTAIN']),evidence:()=>[{id:'rbi-plan',scope:'PUBLISHED_MPC_MEETING_DAYS_ONLY'}],view:()=>[{completeMacroCoverage:false}]};
+   const get=vi.fn(async()=>({status:200,data:[]}));
+   const missing=new FreshEventSource(undefined,get as any,()=>at,null,undefined,null,null,official as any);
+   await missing.refresh({macro:false,issuer:false,publicMacro:true});expect(get).not.toHaveBeenCalled();expect(official.refresh).toHaveBeenCalledOnce();
+   expect(missing.blockers(at,'2026-10-30','INDEX')).toEqual(['RBI_MEETING_TIME_UNCERTAIN','BLOCKED_EVENT_PROVIDER_CONFIGURATION']);
+   expect(missing.blockers(at,'2026-10-30','COMMODITY')).toEqual(['RBI_MEETING_TIME_UNCERTAIN','BLOCKED_COMMODITY_EVENT_COVERAGE']);
+   expect(missing.evidence(at,'INDEX')).toMatchObject({macro:null,officialMacroCalendars:[{id:'rbi-plan'}]});
+   const covered=new FreshEventSource(config,get as any,()=>at,null,undefined,null,null,official as any);await covered.refresh();
+   expect(covered.clearance(at,'2026-10-30','INDEX')).toBe('RBI_MEETING_TIME_UNCERTAIN');
+ });
  it('uses public BLS schedules only as additional veto/evidence and never as complete macro or commodity coverage',async()=>{
    const bls={refresh:vi.fn(async()=>{}),blackout:vi.fn(()=>null as string|null),evidence:()=>({id:'bls-proof',scope:'SELECTED_BLS_RELEASES_ONLY'}),view:()=>({completeMacroCoverage:false})};
    const get=vi.fn(async()=>({status:200,data:[]}));
