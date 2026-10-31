@@ -1,3 +1,5 @@
+> Approval update, 31 October 2026: after presentation of the MCX proposal, the user replied "merge, deploy and start next phase". Record acceptance of 3–15 trading sessions, no expiry/final-two-session entries and 1.5% maximum spread. The parameter gate returns true; independently verified quantities and qualified commodity-event coverage remain mandatory. Original proposal and engineering evidence follow for audit.
+
 # Phase 11: exact-future MCX paper path and pricing correction
 
 Started 31 October 2026 after approved/deployed PR #83 (main `04c49be`). MCX engineering path implemented; production parameter approval remains **PROPOSED_NOT_APPROVED**. `freshMcxPaperPolicyApproved()` returns false.
