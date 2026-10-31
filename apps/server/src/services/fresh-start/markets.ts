@@ -1,4 +1,5 @@
 import {CM_SEGMENT,FO_SEGMENT,KNOWN_INDEX_TOKENS,SECTOR_MAP,type Exchange,type ExchangeSegment,type Instrument} from '@fno/shared';
+import {resolveFreshMcxLink,type FreshMcxLink} from './mcx-contracts.js';
 export const FRESH_MARKETS=['NSE_INDEX_OPTIONS','NSE_STOCK_OPTIONS','BSE_VERIFIED_OPTIONS','MCX_VERIFIED_FUTURES_OPTIONS'] as const;
 export type FreshMarket=typeof FRESH_MARKETS[number];
 export interface FreshReference {
@@ -6,6 +7,7 @@ export interface FreshReference {
   market:FreshMarket;riskGroup:string;exchange?:Exchange;
   /** Static capability failures are explicit; dynamic books/events are checked separately. */
   capabilityBlockers?:string[];
+  mcxLinks?:FreshMcxLink[];
 }
 export const freshMarketExchange=(market:FreshMarket):Exchange=>market.startsWith('BSE')?'BSE':market.startsWith('MCX')?'MCX':'NSE';
 export const freshReferenceExchange=(ref:FreshReference)=>ref.exchange??freshMarketExchange(ref.market);
@@ -35,17 +37,23 @@ export function discoverFreshMarkets(master:readonly Instrument[],day:string):Fr
       counts[market]++;
       const stock=market==='NSE_STOCK_OPTIONS',commodity=exchange==='MCX';
       const candidates=master.filter(x=>x.exchange===exchange&&x.name===name&&(stock?x.segment==='CM'&&x.instrumentType==='EQ'&&x.symbol===`${name}-EQ`:active(x)&&x.instrumentType===(commodity?'FUTCOM':'FUTIDX'))).sort((a,b)=>(a.expiry??'').localeCompare(b.expiry??'')||a.token.localeCompare(b.token));
-      const signal=candidates[0];
+      const energy=commodity&&['CRUDEOIL','NATURALGAS'].includes(name);
+      const energyExpiries=energy?[...new Map(master.filter(x=>active(x)&&x.exchange==='MCX'&&x.name===name&&x.instrumentType==='OPTFUT'&&['CE','PE'].includes(x.optionType??'')).map(x=>[`${x.expiry}:${x.tickSize}`,x])).values()]:[];
+      const links=energyExpiries.map(x=>resolveFreshMcxLink(x,master)).filter((x):x is FreshMcxLink=>x!==null);
+      const linkedTokens=new Set(links.map(x=>x.futureToken));
+      const signal=energy?candidates.find(x=>linkedTokens.has(x.token)):candidates[0];
+      if(energy&&!signal){unmapped.push({name,market,code:'BLOCKED_MCX_EXACT_OPTION_FUTURES_LINK'});continue;}
       if(!signal||(stock&&candidates.length!==1)||(!stock&&candidates.filter(x=>x.expiry===signal.expiry).length!==1)){unmapped.push({name,market,code:'BLOCKED_EXACT_SIGNAL_REFERENCE'});continue;}
-      // A nearest MCX future is an indicative discovery reference only, never an option-underlying link.
+      // Bullion remains indicative until its launch/tender calendar is verified. Energy uses only exact links.
       const spotCandidates=commodity?[signal]:stock?[signal]:master.filter(x=>x.exchange===exchange&&x.segment==='CM'&&x.instrumentType==='INDEX'&&x.name===name);
       if(spotCandidates.length>1){unmapped.push({name,market,code:'BLOCKED_AMBIGUOUS_PRICING_REFERENCE'});continue;}
       const spot=spotCandidates.length===1?{token:spotCandidates[0].token,exchangeSegment:CM_SEGMENT[exchange]}:!stock&&!commodity&&KNOWN_INDEX_TOKENS[name]?{token:KNOWN_INDEX_TOKENS[name],exchangeSegment:CM_SEGMENT[exchange]}:null;
       if(!spot){unmapped.push({name,market,code:'BLOCKED_EXACT_PRICING_REFERENCE'});continue;}
       const sector=stock?freshSector(name):null,blockers:string[]=freshMarketBlockers(market);
+      if(energy)blockers.splice(blockers.indexOf('BLOCKED_MCX_EXACT_OPTION_FUTURES_LINK'),1);
       if(stock&&!sector)blockers.push('BLOCKED_SECTOR_MAPPING');
       if(name==='NIFTYFPI')blockers.push('BLOCKED_PRODUCT_SPECIFIC_FEE_POLICY');
-      references.push({id:`${stock?CM_SEGMENT[exchange]:FO_SEGMENT[exchange]}:${signal.token}`,name,signal,spot,exchange,market,riskGroup:stock?`NSE_SECTOR:${sector??'UNMAPPED'}`:commodity?`MCX:${name}`:'NSE_INDEX_CORRELATED',capabilityBlockers:blockers});
+      references.push({id:`${stock?CM_SEGMENT[exchange]:FO_SEGMENT[exchange]}:${signal.token}`,name,signal,spot,exchange,market,riskGroup:stock?`NSE_SECTOR:${sector??'UNMAPPED'}`:commodity?`MCX:${name}`:'NSE_INDEX_CORRELATED',capabilityBlockers:blockers,...(energy?{mcxLinks:[...new Map(links.filter(x=>x.futureToken===signal.token).map(x=>[x.optionExpiry,x])).values()]}:{})});
     }
   }
   return {references:references.sort((a,b)=>FRESH_MARKETS.indexOf(a.market)-FRESH_MARKETS.indexOf(b.market)||a.name.localeCompare(b.name)),unmapped,counts};
@@ -63,6 +71,7 @@ export function freshDiscoveryWindow(refs:readonly FreshReference[],cursor:numbe
 export function freshReferenceOptions(master:readonly Instrument[],ref:FreshReference,day:string,price:number|null){
   if(price==null||!Number.isFinite(price)||price<=0)return [];
   const exchange=freshReferenceExchange(ref),rows=master.filter(x=>x.exchange===exchange&&x.segment==='FO'&&x.name===ref.name&&x.instrumentType===freshOptionType(ref.market)&&x.expiry&&x.expiry>day&&x.strike!=null&&x.strike>0&&Number.isSafeInteger(x.lotSize)&&x.lotSize>0&&Number.isFinite(x.tickSize)&&x.tickSize>0);
-  const expiries=[...new Set(rows.map(x=>x.expiry!))].sort().slice(0,2),strikes=[...new Set(rows.filter(x=>expiries.includes(x.expiry!)).map(x=>x.strike!))].sort((a,b)=>Math.abs(a-price)-Math.abs(b-price)||a-b).slice(0,5);
-  return rows.filter(x=>expiries.includes(x.expiry!)&&strikes.includes(x.strike!)&&['CE','PE'].includes(x.optionType??'')).slice(0,20);
+  const linked=ref.mcxLinks?rows.filter(x=>ref.mcxLinks!.some(link=>link.optionExpiry===x.expiry&&link.futureToken===ref.signal.token)):rows;
+  const expiries=[...new Set(linked.map(x=>x.expiry!))].sort().slice(0,2),strikes=[...new Set(linked.filter(x=>expiries.includes(x.expiry!)).map(x=>x.strike!))].sort((a,b)=>Math.abs(a-price)-Math.abs(b-price)||a-b).slice(0,5);
+  return linked.filter(x=>expiries.includes(x.expiry!)&&strikes.includes(x.strike!)&&['CE','PE'].includes(x.optionType??'')&&(!ref.mcxLinks||resolveFreshMcxLink(x,master)?.futureToken===ref.signal.token)).slice(0,20);
 }
