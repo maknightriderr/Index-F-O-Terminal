@@ -1,6 +1,7 @@
 import {describe,it,expect,vi,afterEach} from 'vitest';
 const mocks=vi.hoisted(()=>({recover:vi.fn(),sql:vi.fn(),keys:vi.fn(),read:vi.fn(),audit:vi.fn(async()=>{}),eiaRefresh:vi.fn(async()=>{})}));
 vi.mock('../../lib/logger.js',()=>({logger:{info:vi.fn(),warn:vi.fn()}}));
+vi.mock('../fresh-start/bls-events.js',()=>({FreshBlsEvents:class{async refresh(){} blackout(){return null;}evidence(){return null;}view(){return null;}}}));
 vi.mock('../fresh-start/eia-events.js',()=>({FreshEiaEvents:class{async refresh(){await mocks.eiaRefresh();} blackout(){return null;}evidence(){return null;}view(){return [];}}}));
 vi.mock('../fresh-start/issuer-events.js',()=>({FreshIssuerEvents:class{async refresh(){} clearance(){return 'BLOCKED_ISSUER_RESULTS_COVERAGE';}view(){return null;}evidence(){return null;}}}));
 vi.mock('../fresh-start/store.js',()=>({FreshPaperStore:class{async recover(){return [];}}}));

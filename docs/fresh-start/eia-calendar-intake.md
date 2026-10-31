@@ -4,7 +4,7 @@ Started 31 October 2026 from deployed main `dca31ef` (PR #84). No newer fresh-st
 
 ## Implemented
 
-The existing worker now refreshes EIA schedules automatically only when the MCX session is open and scoped MCX instruments exist. It adds no timer, broker connection, paid API or local tooling dependency. Three canonical calendar/report reads occur at most once per five minutes, with bounded same-host report-delivery redirects, request deadlines and response sizes. The contact-bearing user agent identifies the public repository. Failures are sanitized into stable timeout/HTTP/parse/persistence codes.
+The worker refreshes EIA schedules during open MCX sessions with scoped instruments. PR #86 additionally runs one nonblocking public-calendar preflight after successful position recovery, including on closed-market days. It adds no timer, broker connection, paid API or local tooling dependency. Three canonical calendar/report reads occur at most once per five minutes, with bounded same-host report-delivery redirects, request deadlines and response sizes. The contact-bearing user agent identifies the public repository. Failures are sanitized into stable timeout/HTTP/parse/persistence codes.
 
 - Petroleum: the [official WPSR JSON calendar](https://www.eia.gov/petroleum/supply/weekly/includes/wpsr-calendar.json), linked by the [current report](https://www.eia.gov/petroleum/supply/weekly/), supplies explicit release dates and times. No Wednesday recurrence is fabricated.
 - Natural Gas: the [current report](https://ir.eia.gov/ngs/ngs.html) supplies its actual last/next release dates; the [official schedule](https://ir.eia.gov/ngs/schedule.html) supplies the Thursday default and holiday exceptions. Unsupported years, unannounced non-Thursday dates and changed markup fail closed.
@@ -30,7 +30,9 @@ Published samples fetched on 31 October 2026 passed the actual parsers:
 | Natural Gas | 29 October 2026 | 20:00 |
 | Natural Gas next release | 5 November 2026 | 21:00 |
 
-These demonstrate explicit dates/holiday handling and the US daylight-saving transition. They are not production connectivity or trade evidence. Remote default Axios transport timed out; a diagnostic using the configured HTTPS proxy's CONNECT transport successfully fetched the 110-row petroleum JSON. Production connectivity remains unverified. Production routing was not changed to work around the workspace transport behavior; the adapter invalidates failed observations and exposes safe failure codes.
+These demonstrate explicit dates/holiday handling and the US daylight-saving transition. Remote default Axios transport timed out; a diagnostic using the configured HTTPS proxy's CONNECT transport successfully fetched the 110-row petroleum JSON. Production routing was not changed to work around the workspace transport behavior; the adapter invalidates failed observations and exposes safe failure codes.
+
+Production connectivity and durable observation were subsequently verified after PR #86 deployed as `08bbefc` on 31 October 2026. The startup preflight logged `SINGLE_REPORT_SCHEDULE_OBSERVED` for both products with no failure code, petroleum snapshot `c1a3d61114165a72458cde831c59d0cccb52367bddedcf4c92c860c385010d48` and gas snapshot `39c56cfdade2ed62b6fd8986296a8011784631ffa8daaa8718beae7a46ab9107`. These were time-limited observations, not permanent current coverage or trade evidence. `completeCommodityCoverage` remained false.
 
 EIA's [automated retrieval policy](https://www.eia.gov/about/privacy_security_policy.php) was inspected. Only public canonical hosts and the documented same-host gas delivery redirect are used; signed delivery query strings are never persisted or logged. No account registration or subscription purchase occurred.
 

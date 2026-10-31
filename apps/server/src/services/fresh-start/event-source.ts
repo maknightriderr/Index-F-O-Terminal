@@ -1,6 +1,7 @@
 import {createHash} from 'node:crypto';
 import {FreshIssuerEvents,type IssuerCalendarSnapshot} from './issuer-events.js';
 import {FreshEiaEvents,type EiaCalendarSnapshot} from './eia-events.js';
+import {FreshBlsEvents,type BlsCalendarSnapshot} from './bls-events.js';
 import axios from 'axios';
 import {freshEventClearance,type FreshScheduledEvent} from '@fno/analytics';
 import {freshIstDay} from './context.js';
@@ -21,14 +22,14 @@ export function parseFreshEvents(data:unknown){
   return {events,uncertainSessions};
 }
 export interface MacroCalendarSnapshot {id:string;source:'TRADING_ECONOMICS';from:number;to:number;fetchedAt:number;expiresAt:number;events:FreshScheduledEvent[];uncertainSessions:string[];}
-export type FreshCalendarSnapshot=MacroCalendarSnapshot|IssuerCalendarSnapshot|EiaCalendarSnapshot;
+export type FreshCalendarSnapshot=MacroCalendarSnapshot|IssuerCalendarSnapshot|EiaCalendarSnapshot|BlsCalendarSnapshot;
 export class FreshEventSource {
   private qualifiedAt:number|null=null;
   private snapshot:MacroCalendarSnapshot|null=null;
   private nextAttempt=0;private inFlight:Promise<void>|null=null;
   code='BLOCKED_EVENT_PROVIDER_CONFIGURATION';
-  constructor(private config=freshEventConfig(),private get:typeof axios.get=axios.get,private now:()=>number=Date.now,private issuer:FreshIssuerEvents|null=null,private persist:(s:FreshCalendarSnapshot)=>Promise<void>=async()=>{},private eia:FreshEiaEvents|null=null){}
-  async refresh(needed:{macro:boolean;issuer:boolean;commodity?:boolean}={macro:true,issuer:true}):Promise<void>{await Promise.all([needed.macro?this.refreshMacro():undefined,needed.issuer?this.issuer?.refresh():undefined,needed.commodity?this.eia?.refresh():undefined]);}
+  constructor(private config=freshEventConfig(),private get:typeof axios.get=axios.get,private now:()=>number=Date.now,private issuer:FreshIssuerEvents|null=null,private persist:(s:FreshCalendarSnapshot)=>Promise<void>=async()=>{},private eia:FreshEiaEvents|null=null,private bls:FreshBlsEvents|null=null){}
+  async refresh(needed:{macro:boolean;issuer:boolean;commodity?:boolean;publicMacro?:boolean}={macro:true,issuer:true}):Promise<void>{await Promise.all([needed.macro?this.refreshMacro():undefined,needed.issuer?this.issuer?.refresh():undefined,needed.commodity?this.eia?.refresh():undefined,(needed.publicMacro??(needed.macro||needed.commodity))?this.bls?.refresh():undefined]);}
   private refreshMacro():Promise<void>{
     if(!this.config?.apiKey||!this.config.coverageConfirmed)return Promise.resolve();
     if(this.inFlight)return this.inFlight;
@@ -47,8 +48,9 @@ export class FreshEventSource {
     return freshEventClearance({now,session,market:'INDEX',issuer:null,coverage:{verified:true,from:s.from,to:s.to,source:'TRADING_ECONOMICS_CONFIRMED_COVERAGE'},events:s.events});
   }
   blockers(now:number,session:string,market:'INDEX'|'STOCK'|'COMMODITY',issuer:string|null=null):string[]{
-    if(market==='COMMODITY'){const blackout=this.eia?.blackout(now,issuer);return [...(blackout?[blackout]:[]),'BLOCKED_COMMODITY_EVENT_COVERAGE'];}
-    const codes:string[]=[];
+    const publicBlackout=this.bls?.blackout(now);
+    if(market==='COMMODITY'){const blackout=this.eia?.blackout(now,issuer);return [...(publicBlackout?[publicBlackout]:[]),...(blackout?[blackout]:[]),'BLOCKED_COMMODITY_EVENT_COVERAGE'];}
+    const codes:string[]=publicBlackout?[publicBlackout]:[];
     if(market==='STOCK'){
       const results=this.issuer?this.issuer.clearance(now,session,issuer,'RESULTS'):'BLOCKED_ISSUER_RESULTS_COVERAGE';
       const actions=this.issuer?this.issuer.clearance(now,session,issuer,'ACTIONS'):'BLOCKED_CORPORATE_ACTION_COVERAGE';
@@ -59,8 +61,8 @@ export class FreshEventSource {
   clearance(now:number,session:string,market:'INDEX'|'STOCK'|'COMMODITY',issuer:string|null=null){return this.blockers(now,session,market,issuer)[0]??null;}
   evidence(now:number,market:'INDEX'|'STOCK'|'COMMODITY',issuer:string|null=null){
     const s=this.snapshot,macro=s&&this.qualifiedAt!=null&&this.qualifiedAt<=now&&s.fetchedAt<=now&&now<=s.expiresAt?{id:s.id,source:s.source,qualifiedAt:this.qualifiedAt,fetchedAt:s.fetchedAt,expiresAt:s.expiresAt,from:s.from,to:s.to}:null;
-    return {observedAt:now,market,issuer,macro,issuerCalendar:market==='STOCK'?this.issuer?.evidence(now)??null:null,commodityCalendar:market==='COMMODITY'?this.eia?.evidence(now,issuer)??null:null};
+    return {observedAt:now,market,issuer,macro,publicMacroCalendar:this.bls?.evidence(now)??null,issuerCalendar:market==='STOCK'?this.issuer?.evidence(now)??null:null,commodityCalendar:market==='COMMODITY'?this.eia?.evidence(now,issuer)??null:null};
   }
-  view(){const s=this.snapshot;return {macro:{source:'TRADING_ECONOMICS',qualifiedAt:this.qualifiedAt,status:!this.config?.apiKey?'BLOCKED_EVENT_PROVIDER_CONFIGURATION':!this.config.coverageConfirmed?'BLOCKED_EVENT_COVERAGE_CONFIRMATION':s&&this.now()>s.expiresAt?'BLOCKED_EVENT_COVERAGE':this.code,configured:!!this.config?.apiKey,coverageConfirmed:!!this.config?.coverageConfirmed,fetchedAt:s?.fetchedAt??null,expiresAt:s?.expiresAt??null,snapshotId:s?.id??null,nextAttemptAt:this.nextAttempt,eventCount:s?.events.length??null},issuer:this.issuer?.view()??null,commodity:this.eia?.view()??[]};}
+  view(){const s=this.snapshot;return {macro:{source:'TRADING_ECONOMICS',qualifiedAt:this.qualifiedAt,status:!this.config?.apiKey?'BLOCKED_EVENT_PROVIDER_CONFIGURATION':!this.config.coverageConfirmed?'BLOCKED_EVENT_COVERAGE_CONFIRMATION':s&&this.now()>s.expiresAt?'BLOCKED_EVENT_COVERAGE':this.code,configured:!!this.config?.apiKey,coverageConfirmed:!!this.config?.coverageConfirmed,fetchedAt:s?.fetchedAt??null,expiresAt:s?.expiresAt??null,snapshotId:s?.id??null,nextAttemptAt:this.nextAttempt,eventCount:s?.events.length??null},issuer:this.issuer?.view()??null,commodity:this.eia?.view()??[],publicMacro:this.bls?.view()??null};}
 }
-export function createFreshEventSource(persist:(s:FreshCalendarSnapshot)=>Promise<void>){return new FreshEventSource(undefined,axios.get,Date.now,new FreshIssuerEvents(axios.get,Date.now,persist),persist,new FreshEiaEvents(axios.get,Date.now,persist));}
+export function createFreshEventSource(persist:(s:FreshCalendarSnapshot)=>Promise<void>){return new FreshEventSource(undefined,axios.get,Date.now,new FreshIssuerEvents(axios.get,Date.now,persist),persist,new FreshEiaEvents(axios.get,Date.now,persist),new FreshBlsEvents(axios.get,Date.now,persist));}

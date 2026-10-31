@@ -4,6 +4,22 @@ const at=Date.parse('2026-10-30T06:00:00Z');
 const config={provider:'TRADING_ECONOMICS' as const,apiKey:'never-log-this',coverageConfirmed:true};
 const row={CalendarId:'123',Date:'2026-10-30T12:00:00',Country:'India',Event:'Scheduled data',Importance:3,DateSpan:0};
 describe('verified scheduled-event source and fail-closed coverage',()=>{
+ it('uses public BLS schedules only as additional veto/evidence and never as complete macro or commodity coverage',async()=>{
+   const bls={refresh:vi.fn(async()=>{}),blackout:vi.fn(()=>null as string|null),evidence:()=>({id:'bls-proof',scope:'SELECTED_BLS_RELEASES_ONLY'}),view:()=>({completeMacroCoverage:false})};
+   const get=vi.fn(async()=>({status:200,data:[]}));
+   const unconfigured=new FreshEventSource(undefined,get as any,()=>at,null,undefined,null,bls as any);
+   await unconfigured.refresh({macro:false,issuer:false,publicMacro:true});
+   expect(get).not.toHaveBeenCalled();expect(bls.refresh).toHaveBeenCalledOnce();
+   expect(unconfigured.clearance(at,'2026-10-30','INDEX')).toBe('BLOCKED_EVENT_PROVIDER_CONFIGURATION');
+   expect(unconfigured.blockers(at,'2026-10-30','COMMODITY')).toContain('BLOCKED_COMMODITY_EVENT_COVERAGE');
+   const configured=new FreshEventSource(config,get as any,()=>at,null,undefined,null,bls as any);await configured.refresh();
+   expect(configured.clearance(at,'2026-10-30','INDEX')).toBeNull();
+   bls.blackout.mockReturnValue('BLS_RELEASE_BLACKOUT');
+   expect(configured.clearance(at,'2026-10-30','INDEX')).toBe('BLS_RELEASE_BLACKOUT');
+   expect(unconfigured.blockers(at,'2026-10-30','INDEX')).toEqual(['BLS_RELEASE_BLACKOUT','BLOCKED_EVENT_PROVIDER_CONFIGURATION']);
+   expect(configured.blockers(at,'2026-10-30','COMMODITY')).toEqual(['BLS_RELEASE_BLACKOUT','BLOCKED_COMMODITY_EVENT_COVERAGE']);
+   expect(configured.evidence(at,'INDEX')).toMatchObject({publicMacroCalendar:{id:'bls-proof'},macro:{source:'TRADING_ECONOMICS'}});
+ });
  it('makes no request without explicit credentials and coverage approval',async()=>{for(const c of [undefined,{...config,coverageConfirmed:false}]){const get=vi.fn();const source=new FreshEventSource(c,get,()=>at);await source.refresh();expect(get).not.toHaveBeenCalled();expect(source.clearance(at,'2026-10-30','INDEX')).toBe('BLOCKED_EVENT_PROVIDER_CONFIGURATION');}});
  it('interprets timezone-less provider timestamps as UTC',()=>{expect(parseFreshEvents([row]).events[0].at).toBe(Date.parse(row.Date+'Z'));});
  it('blocks uncertain high-impact event sessions and stock issuer coverage',async()=>{const source=new FreshEventSource(config,vi.fn(async()=>({status:200,data:[{...row,DateSpan:1}]})) as any,()=>at);await source.refresh();expect(source.clearance(at,'2026-10-30','INDEX')).toBe('BLOCKED_UNCERTAIN_EVENT_TIME');expect(source.clearance(at,'2026-10-30','STOCK','ABC')).toBe('BLOCKED_ISSUER_RESULTS_COVERAGE');});
