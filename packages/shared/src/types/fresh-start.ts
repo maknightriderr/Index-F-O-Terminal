@@ -24,9 +24,14 @@ export interface FreshStrategyPerformance {
     note: string;
 }
 export interface FreshStartStatus {
+    engineConfigured?:boolean;
+    adapterSchemaReady?:boolean;
+    brokeragePerOrder?:number;
+    adapterDecisions?:Array<{candidate_id:string;at:string;strategy:string;code:string}>;
+    evaluations?:Array<{id:string;at:string;instrument:string;session:string;refusals:unknown}>;
     activationRequested:boolean;
     activationApproved:boolean;
-    feedQualification:{status:string;lastCheckAt:number|null;sourceEpoch:string|null;referenceContracts:number;optionContracts:number;observedExecutableBooks:number;error:string|null};
+    feedQualification:{status:string;lastCheckAt:number|null;sourceEpoch:string|null;referenceContracts:number;optionContracts:number;observedExecutableBooks:number;error:string|null;scope?:string[];monitorRunning?:boolean;recovered?:boolean;entriesArmed?:boolean;barCallbacks?:number;lastDecision?:string|null;eventCode?:string};
     version: string;
     implementationApproved: boolean;
     enabled: boolean;

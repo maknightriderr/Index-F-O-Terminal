@@ -1,10 +1,11 @@
+import {freshAdapterState} from '../services/fresh-start/adapter-state.js';
 import { FRESH_PACK_VERSION, FRESH_STRATEGIES } from '@fno/analytics';
 /** Implementation and forward paper activation requested by the user; execution remains gated by operational qualification. */
 export const FRESH_CONFIG = Object.freeze({
     version: FRESH_PACK_VERSION, spec: 'FRESH-START-SPEC-1.1', implementationApproved: true,
-    approval: 'User requested paper activation and selected INR 500000 virtual capital; 2026-10-31', enabled: false, activationApproved: true, activationRequested: true,
+    approval: 'User requested paper activation and selected INR 500000 virtual capital; 2026-10-31', enabled: true, activationApproved: true, activationRequested: true,
     liveOrdersAllowed: false, capital: 500000 as number | null, baselineTrailing: false,
-    strategies: FRESH_STRATEGIES.map(id => ({ id, enabled: false })),
+    strategies: FRESH_STRATEGIES.map(id => ({ id, enabled: true })),
     primarySource: 'ANGEL_EXACT_REFERENCE', automaticEntryFallback: false,
     markets: ['NSE_INDEX_OPTIONS', 'NSE_STOCK_OPTIONS'],
     requirements: [
@@ -17,5 +18,5 @@ export const FRESH_CONFIG = Object.freeze({
     ],
 });
 export function freshEntriesEnabled(): boolean {
-    return FRESH_CONFIG.enabled && FRESH_CONFIG.activationApproved && FRESH_CONFIG.capital != null && FRESH_CONFIG.capital > 0;
+    return freshAdapterState.entriesArmed && freshAdapterState.recovered && freshAdapterState.monitorRunning && FRESH_CONFIG.enabled && FRESH_CONFIG.activationApproved && FRESH_CONFIG.capital != null && FRESH_CONFIG.capital > 0;
 }

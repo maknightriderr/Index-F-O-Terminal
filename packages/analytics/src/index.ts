@@ -56,3 +56,5 @@ export * from './fresh-start/report.js';
 export * from './fresh-start/source.js';
 export * from './fresh-start/research.js';
 export * from './fresh-start/events.js';
+
+export * from './fresh-start/pricing.js';

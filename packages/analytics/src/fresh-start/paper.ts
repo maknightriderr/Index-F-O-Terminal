@@ -1,3 +1,4 @@
+import {freshPremiumForNet,freshRoundTripFees,type FreshFeePolicy} from './pricing.js';
 import type { FreshCandidate } from './strategies.js';
 export interface FreshQuote {
     contract: string;
@@ -27,6 +28,8 @@ export interface FreshContract {
     targetPremiumScenarios: readonly number[];
     invalidationPremiumScenarios: readonly number[];
     explicitRoundTripCostPerUnit: number;
+    feePolicy?: FreshFeePolicy;
+    evidence?: Record<string, unknown>;
 }
 export interface FreshAccount {
     capital: number;
@@ -62,7 +65,7 @@ export function freshQuoteCode(q: FreshQuote, contract: string, source: string, 
         return 'STALE_OR_FUTURE_QUOTE';
     return null;
 }
-export function admitFreshPaper(args: {
+function assessFreshPaper(args: {
     candidate: FreshCandidate;
     contract: FreshContract;
     quote: FreshQuote;
@@ -78,7 +81,7 @@ export function admitFreshPaper(args: {
     correlatedPositionOpen: boolean;
     entriesToday: number;
     barsSinceLastClose: number | null;
-}): FreshAdmission {
+}, planning = false): FreshAdmission {
     const { candidate: c, contract: k, quote: q, account: a } = args, refuse = (code: string): FreshAdmission => ({ ok: false, code });
     if (!args.calendarVerified || !args.eventClear || !k.metadataVerified || !k.modelVerified || !k.feesVerified)
         return refuse('BLOCKED_REQUIRED_CAPABILITY');
@@ -96,7 +99,7 @@ export function admitFreshPaper(args: {
     const d = c.direction === 'BULLISH' ? 1 : -1;
     if (c.atr <= 0 || c.stop <= 0 || d * (c.referenceEntry - c.stop) <= 0 || d * (c.target - c.referenceEntry) <= 0 || d * (args.currentUnderlying - c.stop) <= 0 || d * (c.target - args.currentUnderlying) <= 0)
         return refuse('INVALIDATED_OR_TARGET_REACHED');
-    if (args.arrivalAt < c.at + 250 || args.now < args.arrivalAt || q.receivedAt < args.arrivalAt || q.eventAt < args.arrivalAt || args.now > c.expiresAt || args.now >= args.cutoff - 3600000)
+    if ((!planning && (args.arrivalAt < c.at + 250 || args.now < args.arrivalAt || q.receivedAt < args.arrivalAt || q.eventAt < args.arrivalAt)) || (planning && args.now < c.at) || args.now > c.expiresAt || args.now >= args.cutoff - 3600000)
         return refuse('ENTRY_EXPIRED_OR_EARLY');
     if (d * (args.currentUnderlying - c.referenceEntry) > .25 * c.atr)
         return refuse('EXTENDED_ENTRY');
@@ -112,20 +115,28 @@ export function admitFreshPaper(args: {
         return refuse('MODEL_OR_COST_UNAVAILABLE');
     const entry = q.ask + q.tick, emergencyStop = Math.ceil(entry * .75 / q.tick - 1e-9) * q.tick;
     const explicit = k.explicitRoundTripCostPerUnit;
-    // Spread lives in entry/exit scenarios; only nonembedded costs enter again.
-    const initialRiskPerUnit = Math.max(entry - Math.min(...k.invalidationPremiumScenarios), entry - emergencyStop) + explicit;
-    const reward = Math.min(...k.targetPremiumScenarios) - q.tick - entry - explicit;
-    if (!(initialRiskPerUnit > 0) || reward / initialRiskPerUnit < 1.5)
-        return refuse('NET_PAYOFF_TOO_LOW');
-    const perLot = k.lotQuantity * k.multiplier;
-    const lots = Math.floor(Math.min(Math.min(.0025 * a.capital, .005 * a.capital - a.reservedRisk, .01 * a.capital + a.dailyNet - a.reservedRisk) / (initialRiskPerUnit * perLot), .05 * a.capital / (entry * perLot), (a.equity - a.reservedPremium) / (entry * perLot), q.askUnits / k.lotQuantity));
-    if (lots < 1)
-        return refuse('ZERO_PERMITTED_LOTS');
-    const quantity = lots * k.lotQuantity;
-    if (!Number.isSafeInteger(quantity) || ![entry * quantity * k.multiplier, initialRiskPerUnit * quantity * k.multiplier].every(Number.isFinite))
-        return refuse('INVALID_SIZING_UNITS');
-    return { ok: true, entry, emergencyStop, quantity, lots, initialRiskPerUnit, initialRiskCurrency: initialRiskPerUnit * quantity * k.multiplier, premiumCurrency: entry * quantity * k.multiplier, riskRewardNet: reward / initialRiskPerUnit, explicitCostPerUnit: explicit };
+    // Both adverse exit tick and quantity-level flat brokerage belong in frozen initial R.
+    const baseRisk = Math.max(entry - Math.max(0,Math.min(...k.invalidationPremiumScenarios)-q.tick), entry-Math.max(0,emergencyStop-q.tick));
+    const targetExit=Math.max(0,Math.min(...k.targetPremiumScenarios)-q.tick),perLot=k.lotQuantity*k.multiplier;
+    const budget=Math.min(.0025*a.capital,.005*a.capital-a.reservedRisk,.01*a.capital+a.dailyNet-a.reservedRisk);
+    let fixed=0,variable=explicit*perLot;
+    try { if(k.feePolicy){fixed=2*k.feePolicy.brokeragePerOrder*(1+k.feePolicy.gstFraction);variable=freshRoundTripFees(entry,entry,k.lotQuantity,k.multiplier,k.feePolicy)-fixed;} }
+    catch {return refuse('MODEL_OR_COST_UNAVAILABLE');}
+    const lots=Math.floor(Math.min((budget-fixed)/(baseRisk*perLot+variable),.05*a.capital/(entry*perLot),(a.equity-a.reservedPremium)/(entry*perLot),Math.min(q.askUnits,q.bidUnits)/k.lotQuantity));
+    if(!Number.isFinite(lots)||lots<1)return refuse('ZERO_PERMITTED_LOTS');
+    const quantity=lots*k.lotQuantity,units=quantity*k.multiplier;
+    if(!Number.isSafeInteger(quantity)||!Number.isFinite(units*entry))return refuse('INVALID_SIZING_UNITS');
+    const riskFees=k.feePolicy?freshRoundTripFees(entry,entry,quantity,k.multiplier,k.feePolicy):explicit*units;
+    const rewardFees=k.feePolicy?freshRoundTripFees(entry,targetExit,quantity,k.multiplier,k.feePolicy):explicit*units;
+    const initialRiskCurrency=baseRisk*units+riskFees,rr=((targetExit-entry)*units-rewardFees)/initialRiskCurrency;
+    if(!(initialRiskCurrency>0)||!Number.isFinite(rr)||rr<1.5)return refuse('NET_PAYOFF_TOO_LOW');
+    return {ok:true,entry,emergencyStop,quantity,lots,initialRiskPerUnit:initialRiskCurrency/units,initialRiskCurrency,premiumCurrency:entry*units,riskRewardNet:rr,explicitCostPerUnit:riskFees/units};
 }
+export type FreshAdmissionInput=Parameters<typeof assessFreshPaper>[0];
+/** Indicative selection only. Never use this result as a fill authorization. */
+export function assessFreshPlan(args:FreshAdmissionInput){return assessFreshPaper(args,true);}
+export function admitFreshPaper(args:FreshAdmissionInput){return assessFreshPaper(args,false);}
+
 export interface FreshPaperPosition {
     id: string;
     contract: FreshContract;
@@ -144,6 +155,8 @@ export interface FreshPaperPosition {
     exitPrice: number | null;
     netPnl: number | null;
     maxUnderlyingFavorable: number;
+    sessionCutoff?: number;
+    estimatedFees?: number;
 }
 /** Immutable observation reduction. Missing quotes never invent a fill or clear an existing pending exit. */
 export function advanceFreshPosition(p: FreshPaperPosition, e: {
@@ -154,6 +167,7 @@ export function advanceFreshPosition(p: FreshPaperPosition, e: {
     cutoff: number;
     barsSinceFill: number;
     trail: boolean;
+    monitorEpoch?: string;
 }): FreshPaperPosition {
     if (p.state === 'CLOSED' || e.at <= p.lastEventAt || !Number.isFinite(e.at))
         return p;
@@ -161,7 +175,7 @@ export function advanceFreshPosition(p: FreshPaperPosition, e: {
         return p;
     const n = { ...p, lastEventAt: e.at }, d = p.candidate.direction === 'BULLISH' ? 1 : -1;
     const underlyingFresh = e.underlying != null && Number.isFinite(e.underlying) && e.underlying > 0 && e.underlyingAt != null && e.underlyingAt <= e.at && e.at - e.underlyingAt <= 2000;
-    const q = e.quote, quoteFresh = q && freshQuoteCode(q, p.contract.id, p.contract.source, p.contract.sourceEpoch, e.at) === null;
+    const q = e.quote, quoteFresh = q && freshQuoteCode(q, p.contract.id, p.contract.source, e.monitorEpoch ?? p.contract.sourceEpoch, e.at) === null;
     if (underlyingFresh)
         n.maxUnderlyingFavorable = Math.max(n.maxUnderlyingFavorable, d * (e.underlying! - p.candidate.referenceEntry));
     const beforeStop = n.currentStop;
@@ -171,11 +185,12 @@ export function advanceFreshPosition(p: FreshPaperPosition, e: {
             n.highBid = Math.max(n.highBid, q!.bid);
             if (e.trail) {
                 const perUnitR = n.originalRiskCurrency / (n.quantity * n.contract.multiplier), fee = n.contract.explicitRoundTripCostPerUnit;
-                const r = (q!.bid - n.entry - fee) / perUnitR;
+                const policy=n.contract.feePolicy,units=n.quantity*n.contract.multiplier;
+                const r = policy?((Math.max(0,q!.bid-q!.tick)-n.entry)*units-freshRoundTripFees(n.entry,Math.max(0,q!.bid-q!.tick),n.quantity,n.contract.multiplier,policy))/n.originalRiskCurrency:(q!.bid-n.entry-fee)/perUnitR;
                 if (r >= 1)
-                    n.currentStop = Math.max(n.currentStop, Math.ceil((n.entry + fee) / q!.tick) * q!.tick);
+                    n.currentStop = Math.max(n.currentStop, Math.ceil((policy?freshPremiumForNet(n.entry,n.quantity,n.contract.multiplier,policy,0):n.entry+fee) / q!.tick) * q!.tick);
                 if (r >= 2)
-                    n.currentStop = Math.max(n.currentStop, Math.ceil((n.entry + fee + perUnitR) / q!.tick) * q!.tick);
+                    n.currentStop = Math.max(n.currentStop, Math.ceil((policy?freshPremiumForNet(n.entry,n.quantity,n.contract.multiplier,policy,n.originalRiskCurrency):n.entry+fee+perUnitR) / q!.tick) * q!.tick);
             }
         }
     }
@@ -194,7 +209,8 @@ export function advanceFreshPosition(p: FreshPaperPosition, e: {
     if (n.state === 'EXIT_PENDING' && quoteFresh && q!.receivedAt >= n.exitTriggeredAt! + 250 && q!.eventAt >= n.exitTriggeredAt! + 250 && q!.bidUnits >= n.quantity) {
         n.state = 'CLOSED';
         n.exitPrice = Math.max(0, q!.bid - q!.tick);
-        n.netPnl = (n.exitPrice - n.entry - n.contract.explicitRoundTripCostPerUnit) * n.quantity * n.contract.multiplier;
+        n.estimatedFees = n.contract.feePolicy?freshRoundTripFees(n.entry,n.exitPrice,n.quantity,n.contract.multiplier,n.contract.feePolicy):n.contract.explicitRoundTripCostPerUnit*n.quantity*n.contract.multiplier;
+        n.netPnl = (n.exitPrice-n.entry)*n.quantity*n.contract.multiplier-n.estimatedFees;
     }
     return n;
 }

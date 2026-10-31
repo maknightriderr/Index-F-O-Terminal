@@ -59,3 +59,29 @@ The complete production strategy-context/contract/model adapter, verified schedu
 Protocol sources checked 31 October 2026:
 - https://smartapi.angelone.in/docs — WebSocket Streaming 2.0 / Best Five Data, exchange timestamp, segment header and 1,000 subscriptions per socket.
 - https://nsearchives.nseindia.com/content/circulars/FAOP71777.pdf — 2026 regular F&O holidays. Special sessions and uncovered calendar years remain excluded.
+
+## Phase 3 — production paper adapter (31 October 2026)
+
+This phase supersedes the earlier statements that the production adapter is absent and the compiled engine cannot activate. `NEW-INTRADAY-1.1` configures the four approved strategies for **forward paper collection**, initially NIFTY/BANKNIFTY only. Effective entries still require recovered inventory, a running exit monitor and current per-candidate operational qualification. This is not a claim of historical validation or profitability, and no live-order route is added.
+
+- The worker reuses the shared Angel socket with exact segment/token identities. Shortlists rotate within five strikes/two expiries, with held option/reference interests preserved first. Confirmation histories seed without retrospective fills; only a newly observed current closed bar can produce a new entry. One-minute bars are fetched before the final five-minute confirmation receipt; revised data receives a new availability time.
+- Three to five same-expiry CE/PE pairs fit European put-call parity, yielding an observed forward and discount. Black-76 scenarios use the verified signal-to-forward relationship, a 15-minute-or-earlier horizon, unchanged IV / minus two percentage-point IV assumptions, and the current absolute half-spread hypothesis. Calibration failures and unavailable quotes block entries. This is a paper pricing hypothesis, not a promised future premium.
+- The user-selected **INR20 per executed order** is a frozen estimate. Quantity-level fees apply the two flat order charges once, statutory turnover charges, GST, entry/exit ticks and full executable depth. No lot fits the INR1,250 planned-risk cap means no trade. Initial R and fee assumptions remain attached to the fill; realized net P&L uses actual paper exit premium and held quantity.
+- Selection precedes arrival. Only the selected candidate waits for its first observed ask after at least 250ms; an unselected candidate cannot hold arbitration until its quote deadline. Final admission rechecks the portfolio under the existing transactional lock. Exits run independently of entry activation, retain pending transitions through storage failures, and require a later eligible full-size bid. Reconnects invalidate old quote caches; entry provenance remains immutable.
+- Migration048 stores immutable evaluation input/result tapes and adapter decision evidence. The status panel separates configured engine, effective entry readiness, exit monitoring, capital, unvalidated results and current blockers. Deleted PostgreSQL history is not reconstructed or used as a new validation cohort.
+
+### Optional scheduled-event provider
+
+The adapter makes no event-provider calls by default. Configure all three only after authorizing credentials and confirming the account's complete applicable high-impact scheduled-event coverage:
+
+```
+FRESH_EVENT_PROVIDER=TRADING_ECONOMICS
+FRESH_EVENT_API_KEY=<secret configured outside git>
+FRESH_EVENT_COVERAGE_CONFIRMED=true
+```
+
+The provider request has a bounded response, no redirects, a 10-second timeout and a one-minute refresh/retry interval. Timezone-less release times are parsed as provider-documented UTC. Estimated high-impact times block the entire affected IST session. Missing coverage, stale responses, 429s, invalid/duplicate records or potentially truncated pages block new entries; raw response/error URLs and credentials are not exposed. Stock options remain blocked until issuer-results/sector coverage is implemented. News text does not establish scheduled-event coverage.
+
+Sources: https://docs.tradingeconomics.com/economic_calendar/country/ and https://docs.tradingeconomics.com/economic_calendar/schema/; https://nsearchives.nseindia.com/content/circulars/FA73061.pdf; https://www.angelone.in/exchange-transaction-charges; https://www.nseclearing.in/clearing-settlement/equity-derivatives/settlement-mechanism.
+
+Keep the monitor and fresh tables on rollback until all held/pending positions are reconciled. Disable new entries to stop collection; never revive retired strategies or delete open risk. All engineering here occurs in the connected remote workspace; the user's local machine is untouched. Live-session source coverage, actual provider entitlements, sustained load, broker-bill reconciliation and a genuine independent forward sample must still be verified after deployment. Synthetic/PGlite tests prove mechanics only.
