@@ -37,23 +37,23 @@ export function discoverFreshMarkets(master:readonly Instrument[],day:string):Fr
       counts[market]++;
       const stock=market==='NSE_STOCK_OPTIONS',commodity=exchange==='MCX';
       const candidates=master.filter(x=>x.exchange===exchange&&x.name===name&&(stock?x.segment==='CM'&&x.instrumentType==='EQ'&&x.symbol===`${name}-EQ`:active(x)&&x.instrumentType===(commodity?'FUTCOM':'FUTIDX'))).sort((a,b)=>(a.expiry??'').localeCompare(b.expiry??'')||a.token.localeCompare(b.token));
-      const energy=commodity&&['CRUDEOIL','NATURALGAS'].includes(name);
-      const energyExpiries=energy?[...new Map(master.filter(x=>active(x)&&x.exchange==='MCX'&&x.name===name&&x.instrumentType==='OPTFUT'&&['CE','PE'].includes(x.optionType??'')).map(x=>[`${x.expiry}:${x.tickSize}`,x])).values()]:[];
-      const links=energyExpiries.map(x=>resolveFreshMcxLink(x,master)).filter((x):x is FreshMcxLink=>x!==null);
+      const linkedCommodity=commodity;
+      const commodityExpiries=linkedCommodity?[...new Map(master.filter(x=>active(x)&&x.exchange==='MCX'&&x.name===name&&x.instrumentType==='OPTFUT'&&['CE','PE'].includes(x.optionType??'')).map(x=>[`${x.expiry}:${x.tickSize}`,x])).values()]:[];
+      const links=commodityExpiries.map(x=>resolveFreshMcxLink(x,master)).filter((x):x is FreshMcxLink=>x!==null);
       const linkedTokens=new Set(links.map(x=>x.futureToken));
-      const signal=energy?candidates.find(x=>linkedTokens.has(x.token)):candidates[0];
-      if(energy&&!signal){unmapped.push({name,market,code:'BLOCKED_MCX_EXACT_OPTION_FUTURES_LINK'});continue;}
+      const signal=linkedCommodity?candidates.find(x=>linkedTokens.has(x.token)):candidates[0];
+      if(linkedCommodity&&!signal){unmapped.push({name,market,code:'BLOCKED_MCX_EXACT_OPTION_FUTURES_LINK'});continue;}
       if(!signal||(stock&&candidates.length!==1)||(!stock&&candidates.filter(x=>x.expiry===signal.expiry).length!==1)){unmapped.push({name,market,code:'BLOCKED_EXACT_SIGNAL_REFERENCE'});continue;}
-      // Bullion remains indicative until its launch/tender calendar is verified. Energy uses only exact links.
+      // Each commodity option slice, signal history and pricing reference share its exact linked future.
       const spotCandidates=commodity?[signal]:stock?[signal]:master.filter(x=>x.exchange===exchange&&x.segment==='CM'&&x.instrumentType==='INDEX'&&x.name===name);
       if(spotCandidates.length>1){unmapped.push({name,market,code:'BLOCKED_AMBIGUOUS_PRICING_REFERENCE'});continue;}
       const spot=spotCandidates.length===1?{token:spotCandidates[0].token,exchangeSegment:CM_SEGMENT[exchange]}:!stock&&!commodity&&KNOWN_INDEX_TOKENS[name]?{token:KNOWN_INDEX_TOKENS[name],exchangeSegment:CM_SEGMENT[exchange]}:null;
       if(!spot){unmapped.push({name,market,code:'BLOCKED_EXACT_PRICING_REFERENCE'});continue;}
       const sector=stock?freshSector(name):null,blockers:string[]=freshMarketBlockers(market);
-      if(energy)blockers.splice(blockers.indexOf('BLOCKED_MCX_EXACT_OPTION_FUTURES_LINK'),1);
+      if(linkedCommodity)blockers.splice(blockers.indexOf('BLOCKED_MCX_EXACT_OPTION_FUTURES_LINK'),1);
       if(stock&&!sector)blockers.push('BLOCKED_SECTOR_MAPPING');
       if(name==='NIFTYFPI')blockers.push('BLOCKED_PRODUCT_SPECIFIC_FEE_POLICY');
-      references.push({id:`${stock?CM_SEGMENT[exchange]:FO_SEGMENT[exchange]}:${signal.token}`,name,signal,spot,exchange,market,riskGroup:stock?`NSE_SECTOR:${sector??'UNMAPPED'}`:commodity?`MCX:${name}`:'NSE_INDEX_CORRELATED',capabilityBlockers:blockers,...(energy?{mcxLinks:[...new Map(links.filter(x=>x.futureToken===signal.token).map(x=>[x.optionExpiry,x])).values()]}:{})});
+      references.push({id:`${stock?CM_SEGMENT[exchange]:FO_SEGMENT[exchange]}:${signal.token}`,name,signal,spot,exchange,market,riskGroup:stock?`NSE_SECTOR:${sector??'UNMAPPED'}`:commodity?`MCX:${name}`:'NSE_INDEX_CORRELATED',capabilityBlockers:blockers,...(linkedCommodity?{mcxLinks:[...new Map(links.filter(x=>x.futureToken===signal.token).map(x=>[x.optionExpiry,x])).values()]}:{})});
     }
   }
   return {references:references.sort((a,b)=>FRESH_MARKETS.indexOf(a.market)-FRESH_MARKETS.indexOf(b.market)||a.name.localeCompare(b.name)),unmapped,counts};
