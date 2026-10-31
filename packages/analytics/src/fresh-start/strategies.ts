@@ -36,6 +36,7 @@ export interface FreshContext {
     previousHigh: number;
     previousLow: number;
     referenceVerified: boolean;
+    /** Entry permitted under the declared event policy; complete coverage is separate immutable evidence. */
     eventClear: boolean;
     eventEvidence?: Record<string,unknown>;
     calendarVerified: boolean;

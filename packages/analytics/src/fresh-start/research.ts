@@ -8,6 +8,8 @@ export interface FreshResearchTrade {
     exitAt: number;
     netPnl: number;
     initialRisk: number;
+    eventEvidenceClass?: 'EVENT_DATA_UNVERIFIED'|'EVENT_COVERAGE_VERIFIED'|'EVENT_POLICY_UNRECORDED';
+    eventPolicyId?:string;
 }
 export interface FreshDatasetManifest {
     id: string;
@@ -29,6 +31,8 @@ export function partitionFreshResearch(trades: readonly FreshResearchTrade[], m:
         throw Error('INVALID_FROZEN_RESEARCH_PROTOCOL');
     if (m.holdoutInspected)
         throw Error('HOLDOUT_ALREADY_INSPECTED');
+    const eventCohorts=new Set(trades.map(t=>JSON.stringify([t.eventPolicyId??'UNRECORDED',t.eventEvidenceClass??'EVENT_POLICY_UNRECORDED'])));
+    if(eventCohorts.size>1)throw Error('MIXED_EVENT_POLICY_COHORT');
     const ids = new Set<string>();
     for (const t of trades) {
         if (ids.has(t.id) || t.version !== FRESH_PACK_VERSION || ![t.entryAt, t.exitAt, t.netPnl, t.initialRisk].every(Number.isFinite) || t.initialRisk <= 0 || t.entryAt >= t.exitAt)
@@ -85,6 +89,7 @@ export function freshValidationGate(args: {
     const blockers: string[] = [];
     const { manifest: m } = args;
     const split = partitionFreshResearch(args.trades, m), sample = split.holdout.filter(t => t.strategy === args.strategy);
+    if(args.trades.some(t=>t.eventEvidenceClass!=='EVENT_COVERAGE_VERIFIED'||!t.eventPolicyId))blockers.push('UNVERIFIED_EVENT_COVERAGE');
     if (m.evidence !== 'OBSERVED_QUOTE_BACKTEST' || !m.fixedContractQuotes)
         blockers.push('INSUFFICIENT_EXECUTION_EVIDENCE');
     if (!m.pointInTimeUniverse || !m.costsVerified || !m.calendarsVerified)
