@@ -4,7 +4,7 @@ import {formatIstDateTime} from '@/lib/format';
 
 export function PublicCalendarSources({sources,now}:{sources:NonNullable<FreshStartStatus['eventSources']>;now:number}){
   const officialNames:Record<string,string>={RBI_MPC_PLAN_2026_27_V1:'India MPC meeting plan · RBI',BEA_SELECTED_RELEASES_V1:'US GDP and personal income · BEA'};
-  const rows=[...(sources.officialMacro??[]).map(s=>({...s,label:officialNames[s.source]??s.source})),...(sources.publicMacro?[{...sources.publicMacro,label:'US inflation and labour · BLS'}]:[]),...(sources.commodity??[]).map(s=>({...s,label:s.product==='CRUDEOIL'?'Crude Oil · EIA petroleum':'Natural Gas · EIA storage'}))];
+  const rows=[...(sources.freeGlobal?[{...sources.freeGlobal,label:'Global high-impact · ShowMyTrades (partial)'}]:[]),...(sources.officialMacro??[]).map(s=>({...s,label:officialNames[s.source]??s.source})),...(sources.publicMacro?[{...sources.publicMacro,label:'US inflation and labour · BLS'}]:[]),...(sources.commodity??[]).map(s=>({...s,label:s.product==='CRUDEOIL'?'Crude Oil · EIA petroleum':'Natural Gas · EIA storage'}))];
   if(!rows.length)return null;
   const time=(at:number|null)=>at==null?'—':`${formatIstDateTime(at,now)} IST`;
   return <div className="mt-4 overflow-x-auto">
@@ -21,6 +21,6 @@ export function PublicCalendarSources({sources,now}:{sources:NonNullable<FreshSt
         </tr>;
       })}</tbody>
     </table>
-    <p className="mt-2 text-xs text-[var(--text-secondary)]">Sources: Reserve Bank of India, U.S. Bureau of Economic Analysis, U.S. Bureau of Labor Statistics and U.S. Energy Information Administration. These schedules cover selected releases only. They do not establish complete India/global macro or commodity-event coverage, and do not enable paper entries.</p>
+    <p className="mt-2 text-xs text-[var(--text-secondary)]">Sources: Reserve Bank of India, U.S. Bureau of Economic Analysis, U.S. Bureau of Labor Statistics and U.S. Energy Information Administration. Selected schedules only. ShowMyTrades reports nine currencies, excludes INR and is a third-party source. They do not establish complete India/global macro or commodity-event coverage, and do not establish paper readiness alone. Current event policy and other entry gates apply. <a href="https://showmytrades.com/tools/economic-calendar" target="_blank" rel="noopener noreferrer" className="underline">Economic calendar by ShowMyTrades</a>.</p>
   </div>;
 }

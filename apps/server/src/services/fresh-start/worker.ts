@@ -43,8 +43,8 @@ export class FreshPaperWorker {
     // The source's in-flight/cadence guard coalesces a simultaneous open-session refresh.
     void this.events.refresh({macro:false,issuer:false,commodity:FRESH_CONFIG.markets.includes('MCX_VERIFIED_FUTURES_OPTIONS'),publicMacro:true}).then(()=>{
       if(this.stopped)return;state.eventSources=this.events.view();
-      logger.info({event:'freshPublicCalendarPreflight',commodity:state.eventSources.commodity,publicMacro:state.eventSources.publicMacro,officialMacro:state.eventSources.officialMacro},'Fresh-start public calendar preflight completed; complete event coverage remains gated');
-    },()=>{if(!this.stopped)logger.warn({event:'freshPublicCalendarPreflightFailed'},'Fresh-start public calendar preflight failed; complete event coverage remains gated');});
+      logger.info({event:'freshPublicCalendarPreflight',paperEventPolicy:FRESH_CONFIG.eventPolicy,freeGlobal:state.eventSources.freeGlobal,commodity:state.eventSources.commodity,publicMacro:state.eventSources.publicMacro,officialMacro:state.eventSources.officialMacro},'Fresh-start public calendar preflight completed; paper event policy recorded');
+    },()=>{if(!this.stopped)logger.warn({event:'freshPublicCalendarPreflightFailed'},'Fresh-start public calendar preflight failed; missing coverage remains explicitly labeled');});
     void this.scan();
   }
   private pollMonitor(){this.monitor.tick();if(!this.monitor.healthy){state.entriesArmed=false;if(!state.entryBlockers.includes('BLOCKED_EXIT_PERSISTENCE'))state.entryBlockers.push('BLOCKED_EXIT_PERSISTENCE');}}
@@ -80,10 +80,10 @@ export class FreshPaperWorker {
       const now=Date.now(),day=freshIstDay(now),sessions=new Map<Exchange,ReturnType<typeof getSessionWindow>>((['NSE','BSE','MCX'] as Exchange[]).map(e=>[e,getSessionWindow(e,day)]));
       if(!HOLIDAY_CALENDAR_YEARS.includes(Number(day.slice(0,4))))throw Error('BLOCKED_CALENDAR_YEAR');
       const openExchanges=new Set([...sessions].filter(([,s])=>s&&now>=s.open&&now<s.close).map(([e])=>e));
+      state.eventCode=this.events.clearance(Date.now(),day,'INDEX')??(this.events.evidence(Date.now(),'INDEX').coverage.evidenceClass==='EVENT_DATA_UNVERIFIED'?'PAPER_EVENT_DATA_UNVERIFIED':'CLEAR');
       if(!openExchanges.size){state.status='WAITING_FOR_MARKET';state.observedExecutableBooks=0;state.optionContracts=0;state.entryBlockers=['OUTSIDE_VERIFIED_SESSION'];for(const m of state.marketReadiness){m.sessionOpen=false;m.eligibleReferences=0;m.observedExecutableBooks=0;m.blockers=['OUTSIDE_VERIFIED_SESSION',...freshMarketBlockers(m.market)];m.blockers.push(...this.events.blockers(now,day,freshEventMarket(m.market)));state.eventSources=this.events.view();}this.shortlist=[];await this.syncTargets();return;}
       if(!this.provider.isAuthenticated())throw Error('BLOCKED_BROKER_AUTH');
       await this.loadMaster(day);if(this.stopped)return;void this.events.refresh({macro:openExchanges.has('NSE')||openExchanges.has('BSE'),issuer:openExchanges.has('NSE')&&this.discovery!.counts.NSE_STOCK_OPTIONS>0,commodity:openExchanges.has('MCX')&&this.discovery!.counts.MCX_VERIFIED_FUTURES_OPTIONS>0}).then(()=>{if(!this.stopped)state.eventSources=this.events.view();},()=>{if(!this.stopped){state.entriesArmed=false;state.eventCode='BLOCKED_EVENT_REFRESH';state.entryBlockers=[...new Set([...state.entryBlockers,'BLOCKED_EVENT_REFRESH'])];}});state.eventSources=this.events.view();
-      state.eventCode=this.events.clearance(Date.now(),day,'INDEX')??'CLEAR';
       const exchangeKey=[...openExchanges].sort().join(',');
       if(!this.selectionAt||now-this.selectionAt>=1800000||exchangeKey!==this.selectionExchangeKey){const window=freshDiscoveryWindow(this.discovery!.references.filter(r=>openExchanges.has(freshReferenceExchange(r))),this.cursor);this.selected=window.selected;this.cursor=window.nextCursor;this.selectionAt=now;this.selectionExchangeKey=exchangeKey;}
       const refs=this.selected.filter(r=>openExchanges.has(freshReferenceExchange(r)));
