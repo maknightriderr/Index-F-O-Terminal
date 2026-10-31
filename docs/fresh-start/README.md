@@ -132,3 +132,33 @@ Remaining after this phase:
 - Actual exchange-open paper fills/exits, independent forward samples, load and profitability validation remain outstanding. No deleted trade history is recreated, no old strategy is reactivated and no live order path is introduced.
 
 Primary sources: https://www.nseindia.com/companies-listing/corporate-filings-event-calendar; https://www.nseindia.com/companies-listing/corporate-filings-board-meetings; https://www.nseindia.com/companies-listing/corporate-filings-actions; https://docs.tradingeconomics.com/economic_calendar/country/; https://docs.tradingeconomics.com/economic_calendar/schema/.
+
+### Phase 6 — exact MCX energy references (partial; activation remains blocked)
+
+Crude Oil and Natural Gas discovery now resolves each option expiry to exactly one MCX future using the published two-business-day expiry rule. Signal history, pricing reference and the option slice use that same future. An absent/ambiguous match is excluded rather than replaced with a nearest future. Universe counts retain these instruments and readiness preserves the actual mapping refusal. Option slices cannot mix a later future's options into the selected reference.
+
+The resolver counts an evening-open MCX holiday as a business day, excludes fully closed dates, and refuses unknown calendar years. It validates the applicable option tick and explicitly limits March 2026 energy specifications to option expiries before January 2027; the already published January 2027 specifications require requalification. Tests cover holidays, weekends, duplicate futures, foreign exchange/product matches, wrong ticks, rollover and cross-month slices.
+
+Primary specifications verified on 31 October 2026:
+
+- [Crude Oil, March 2026 onwards](https://www.mcxindia.com/docs/default-source/products/contract-specification/crude-oil-options/crudeoil-(100-barrels)-options-march-2026-contract-onwards4f4aed50-0f8d-46a4-8f1b-efba7c9b9479.pdf): European options, Black 76, two business days before underlying future expiry, premium tick ₹0.10.
+- [Natural Gas, March 2026 onwards](https://www.mcxindia.com/docs/default-source/products/contract-specification/natural-gas-option/natural-gas-(1250-mmbtu)-options-march-2026-contract-onwards.pdf): same expiry relationship and model, premium tick ₹0.05.
+- [Gold, July 2026 onwards](https://www.mcxindia.com/docs/default-source/options/gold-option-july-2026-contract-onwards8d88befa-a326-4ac6-8de1-4bfec750135e.pdf): expiry is specified by the launch calendar. Do not infer it from the nearest future.
+- [Silver, February 2026 onwards](https://www.mcxindia.com/docs/default-source/options/silver-(30-kilograms)-options-february-2026-contract-onwards.pdf): expiry is three business days before the first business day of the underlying future's tender period. The instrument master's future expiry does not supply that tender date.
+
+This is contract-reference qualification, not permission to trade MCX. Broker depth quantity units, commodity event coverage, product-specific costs and approved expiry buckets remain mandatory. Both the production adapter and pure paper engine continue rejecting unsupported BSE/MCX entries. Bullion retains its explicit exact-link blocker; BSE retains its product/expiry-policy blocker.
+
+Next phase dependencies and acceptance:
+
+| Dependency | Required evidence before activation |
+|---|---|
+| Macro calendar | Trading Economics key in Railway secret variables and independently confirmed India/global high-impact coverage. Existing `FRESH_EVENT_*` flags must not be asserted merely to clear a blocker. |
+| Free-calendar replacement | Complete required coverage plus fresh source evidence and permitted automated use. FinanceCalendar's inspected status was stale/degraded with no India central-bank records; Xoomar was US-only; PipAtlas terms excluded automated signal use. None qualifies as a drop-in replacement. |
+| Gold/Silver exact linkage | Official current launch/tender calendar keyed to option expiry and exact underlying future. No nearest-month fallback. |
+| MCX execution units | Broker-documented or observed contract-specific depth/order-quantity semantics, separate from premium P&L multipliers. |
+| BSE/MCX activation | Verified product-specific costs/calendar/model and explicit expiry policy; then adapter/engine integration and rejection-path tests. |
+| Forward validation | Real newly observed paper fills with costs and independent sessions. Deleted historical records are not reconstructed. |
+
+No provider was purchased, no API key fabricated, no local tooling installed, and no production data or risk configuration changed for this phase. NSE public-session transport returned HTTP 200 in a remote Node/Axios probe; this is connectivity evidence, not production issuer-coverage qualification.
+
+Validation: full server suite 1,861 passed / 5 existing skips; analytics 48 passed; server and web builds passed. A current public Angel master probe (147,460 rows; 1,656 selected energy rows, held only in scratch) resolved CRUDEOIL option 17 Nov 2026 → future token 573422 expiring 19 Nov, and NATURALGAS option 20 Nov → future token 574319 expiring 24 Nov. Each diagnostic slice contained 10 contracts for its single linked expiry. This verifies reference mapping against the observed master, not executable books or fills.
