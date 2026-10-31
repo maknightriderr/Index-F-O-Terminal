@@ -20,6 +20,7 @@ export interface FreshContract {
     multiplier: number;
     expiryTradableSessions: number;
     market: 'NSE_INDEX_OPTIONS' | 'NSE_STOCK_OPTIONS' | 'BSE_VERIFIED_OPTIONS' | 'MCX_VERIFIED_FUTURES_OPTIONS';
+    marketPolicy?: 'BSE_INDEX_1_10_PAPER_V1';
     delta: number;
     metadataVerified: boolean;
     modelVerified: boolean;
@@ -85,7 +86,7 @@ function assessFreshPaper(args: {
     const { candidate: c, contract: k, quote: q, account: a } = args, refuse = (code: string): FreshAdmission => ({ ok: false, code });
     if (!args.calendarVerified || !args.eventClear || !k.metadataVerified || !k.modelVerified || !k.feesVerified)
         return refuse('BLOCKED_REQUIRED_CAPABILITY');
-    if (k.market !== 'NSE_INDEX_OPTIONS' && k.market !== 'NSE_STOCK_OPTIONS')
+    if (k.market !== 'NSE_INDEX_OPTIONS' && k.market !== 'NSE_STOCK_OPTIONS' && !(k.market === 'BSE_VERIFIED_OPTIONS' && k.marketPolicy === 'BSE_INDEX_1_10_PAPER_V1'))
         return refuse('MARKET_DISCOVERY_ONLY');
     if (!Number.isSafeInteger(k.expiryTradableSessions) || k.expiryTradableSessions < (k.market === 'NSE_STOCK_OPTIONS' ? 3 : 1) || k.expiryTradableSessions > (k.market === 'NSE_STOCK_OPTIONS' ? 15 : 10))
         return refuse('EXPIRY_INELIGIBLE');
@@ -109,7 +110,7 @@ function assessFreshPaper(args: {
         return refuse('ACCOUNT_PAUSED');
     if (!Number.isSafeInteger(k.lotQuantity) || k.lotQuantity <= 0 || !Number.isFinite(k.multiplier) || k.multiplier <= 0 || Math.abs(k.delta) < .45 || Math.abs(k.delta) > .65 || (d === 1 ? k.delta <= 0 : k.delta >= 0))
         return refuse('INVALID_CONTRACT');
-    if ((q.ask - q.bid) / ((q.ask + q.bid) / 2) > (k.market === 'NSE_INDEX_OPTIONS' ? .01 : .015))
+    if ((q.ask - q.bid) / ((q.ask + q.bid) / 2) > (k.market === 'NSE_STOCK_OPTIONS' ? .015 : .01))
         return refuse('WIDE_SPREAD');
     if (k.targetPremiumScenarios.length !== 2 || k.invalidationPremiumScenarios.length !== 2 || ![...k.targetPremiumScenarios, ...k.invalidationPremiumScenarios].every(x => Number.isFinite(x) && x >= 0) || k.explicitRoundTripCostPerUnit < 0)
         return refuse('MODEL_OR_COST_UNAVAILABLE');
