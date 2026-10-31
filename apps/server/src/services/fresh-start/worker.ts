@@ -1,4 +1,5 @@
 import {randomUUID} from 'node:crypto';
+import {logger} from '../../lib/logger.js';
 import {getSessionWindow,HOLIDAY_CALENDAR_YEARS,FO_SEGMENT,type Exchange,type Instrument} from '@fno/shared';
 import {evaluateFreshStrategies,type FreshBar} from '@fno/analytics';
 import type {MarketDataProvider} from '../../providers/interface.js';
@@ -37,7 +38,14 @@ export class FreshPaperWorker {
   private async bootstrap(){
     if(!schemaFileReady('047_fresh_start_paper.sql')||!schemaFileReady('048_fresh_start_adapter.sql')||!schemaFileReady('049_fresh_start_calendars.sql'))throw Error('BLOCKED_FRESH_SCHEMA');
     try{await this.runtime.recover();}catch(error){state.entriesArmed=false;state.status='BLOCKED_RECOVERY';state.entryBlockers=['BLOCKED_POSITION_RECOVERY'];throw error;}if(this.stopped)return;
-    this.ready=true;state.recovered=true;state.monitorRunning=true;state.scannerRunning=true;state.status='DISCOVERY_STARTING';void this.scan();
+    this.ready=true;state.recovered=true;state.monitorRunning=true;state.scannerRunning=true;state.status='DISCOVERY_STARTING';
+    // One public-calendar preflight after recovery; never await it or infer entry permission.
+    // The source's in-flight/cadence guard coalesces a simultaneous open-session refresh.
+    if(FRESH_CONFIG.markets.includes('MCX_VERIFIED_FUTURES_OPTIONS'))void this.events.refresh({macro:false,issuer:false,commodity:true}).then(()=>{
+      if(this.stopped)return;state.eventSources=this.events.view();
+      logger.info({event:'freshEiaPreflight',sources:state.eventSources.commodity},'Fresh-start public EIA calendar preflight completed; commodity coverage remains gated');
+    },()=>{if(!this.stopped)logger.warn({event:'freshEiaPreflightFailed'},'Fresh-start public EIA preflight failed; commodity coverage remains gated');});
+    void this.scan();
   }
   private pollMonitor(){this.monitor.tick();if(!this.monitor.healthy){state.entriesArmed=false;if(!state.entryBlockers.includes('BLOCKED_EXIT_PERSISTENCE'))state.entryBlockers.push('BLOCKED_EXIT_PERSISTENCE');}}
   stop(){this.stopped=true;this.ready=false;for(const t of this.timers)clearInterval(t);this.removeObservation?.();this.feed.close();state.entriesArmed=false;state.monitorRunning=false;state.scannerRunning=false;}
