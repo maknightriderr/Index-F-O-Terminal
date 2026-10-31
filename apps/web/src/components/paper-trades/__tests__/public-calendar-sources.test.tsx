@@ -1,0 +1,14 @@
+import React from 'react';
+import {describe,it,expect} from 'vitest';
+import {render,screen,within,cleanup} from '@testing-library/react';
+import {afterEach} from 'vitest';
+import {PublicCalendarSources} from '../public-calendar-sources';
+const now=Date.parse('2026-10-31T06:00:00Z');
+const source={source:'BLS_PUBLIC_ICS_V1',status:'SELECTED_RELEASE_SCHEDULE_OBSERVED',failureCode:null,snapshotId:'immutable-bls-proof',fetchedAt:now,expiresAt:now+600000,nextAttemptAt:now+300000,nextReleaseAt:Date.parse('2026-11-03T15:00:00Z'),eventCount:20,completeMacroCoverage:false};
+const sources=(publicMacro:any,commodity:any[]=[])=>({publicMacro,commodity,macro:{},issuer:null} as any);
+afterEach(cleanup);
+describe('public schedule evidence and coverage limits',()=>{
+ it('shows persisted BLS and EIA schedules in IST with explicit partial coverage',()=>{render(<PublicCalendarSources sources={sources(source,[{...source,source:'EIA_WPSR_PUBLIC_V1',product:'CRUDEOIL',snapshotId:'eia-proof',completeCommodityCoverage:false}])} now={now}/>);const table=screen.getByRole('table',{name:'Public release schedules · partial event coverage'});expect(within(table).getByRole('rowheader',{name:'US inflation and labour · BLS'})).toBeInTheDocument();expect(within(table).getByRole('rowheader',{name:'Crude Oil · EIA petroleum'})).toBeInTheDocument();expect(within(table).getAllByText('Observed · limited scope')).toHaveLength(2);expect(within(table).getByText('immutable-bls-proof')).toBeInTheDocument();expect(table).toHaveTextContent('20:30');expect(screen.getByText(/do not enable paper entries/)).toBeInTheDocument();});
+ it('does not display a stale or future-receipt snapshot as current or offer its next date',()=>{for(const at of [now-1,now+600001]){const {unmount}=render(<PublicCalendarSources sources={sources(source)} now={at}/>);expect(screen.queryByText('Observed · limited scope')).toBeNull();expect(screen.getByText('Expired / clock mismatch')).toBeInTheDocument();const row=screen.getByRole('rowheader',{name:'US inflation and labour · BLS'}).closest('tr')!;expect(within(row).getAllByRole('cell')[2]).toHaveTextContent('—');unmount();}});
+ it('shows source failure separately and tolerates an older API without public schedules',()=>{const {unmount}=render(<PublicCalendarSources sources={sources({...source,fetchedAt:null,expiresAt:null,snapshotId:null,failureCode:'BLS_HTTP_403'})} now={now}/>);expect(screen.getByText('BLS HTTP 403')).toBeInTheDocument();expect(screen.queryByText('Observed · limited scope')).toBeNull();unmount();const {container}=render(<PublicCalendarSources sources={sources(undefined)} now={now}/>);expect(container).toBeEmptyDOMElement();});
+});

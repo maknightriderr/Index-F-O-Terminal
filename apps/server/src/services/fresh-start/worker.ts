@@ -41,10 +41,10 @@ export class FreshPaperWorker {
     this.ready=true;state.recovered=true;state.monitorRunning=true;state.scannerRunning=true;state.status='DISCOVERY_STARTING';
     // One public-calendar preflight after recovery; never await it or infer entry permission.
     // The source's in-flight/cadence guard coalesces a simultaneous open-session refresh.
-    if(FRESH_CONFIG.markets.includes('MCX_VERIFIED_FUTURES_OPTIONS'))void this.events.refresh({macro:false,issuer:false,commodity:true}).then(()=>{
+    void this.events.refresh({macro:false,issuer:false,commodity:FRESH_CONFIG.markets.includes('MCX_VERIFIED_FUTURES_OPTIONS'),publicMacro:true}).then(()=>{
       if(this.stopped)return;state.eventSources=this.events.view();
-      logger.info({event:'freshEiaPreflight',sources:state.eventSources.commodity},'Fresh-start public EIA calendar preflight completed; commodity coverage remains gated');
-    },()=>{if(!this.stopped)logger.warn({event:'freshEiaPreflightFailed'},'Fresh-start public EIA preflight failed; commodity coverage remains gated');});
+      logger.info({event:'freshPublicCalendarPreflight',commodity:state.eventSources.commodity,publicMacro:state.eventSources.publicMacro},'Fresh-start public calendar preflight completed; complete event coverage remains gated');
+    },()=>{if(!this.stopped)logger.warn({event:'freshPublicCalendarPreflightFailed'},'Fresh-start public calendar preflight failed; complete event coverage remains gated');});
     void this.scan();
   }
   private pollMonitor(){this.monitor.tick();if(!this.monitor.healthy){state.entriesArmed=false;if(!state.entryBlockers.includes('BLOCKED_EXIT_PERSISTENCE'))state.entryBlockers.push('BLOCKED_EXIT_PERSISTENCE');}}
