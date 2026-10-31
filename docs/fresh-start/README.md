@@ -186,3 +186,7 @@ See [MCX policy and pricing evidence](mcx-paper-policy.md) for the exact-future 
 ### Operational activation handoff
 
 See [the next-phase qualification handoff](activation-handoff.md) for the verified state, one-time macro-access configuration, unresolved MCX depth/commodity-event evidence and measurable completion checks. Further code deployment cannot substitute for missing provider credentials or evidence.
+
+### Official EIA schedule intake
+
+See [EIA calendar intake](eia-calendar-intake.md) for automatic keyless energy-report schedules, durable evidence, IST/DST and holiday handling, known-source blackouts and explicitly incomplete commodity coverage. This does not replace the macro calendar or qualify MCX quantities.
