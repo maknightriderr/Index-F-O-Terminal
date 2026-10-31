@@ -3,7 +3,7 @@ import type {FreshBar,FreshContext} from '@fno/analytics';
 export const freshIstDay=(at:number)=>new Date(at).toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'});
 export function freshExpirySessions(session:string,expiry:string,exchange:Exchange='NSE'):number|null {
   if(!/^\d{4}-\d{2}-\d{2}$/.test(session)||!/^\d{4}-\d{2}-\d{2}$/.test(expiry)||expiry<session)return null;
-  const a=Date.parse(session+'T12:00:00+05:30'),b=Date.parse(expiry+'T12:00:00+05:30');if(!Number.isFinite(a)||!Number.isFinite(b)||b-a>60*86400000)return null;
+  const a=Date.parse(session+'T12:00:00+05:30'),b=Date.parse(expiry+'T12:00:00+05:30');if(!Number.isFinite(a)||!Number.isFinite(b)||freshIstDay(a)!==session||freshIstDay(b)!==expiry||b-a>60*86400000||![session,expiry].every(day=>HOLIDAY_CALENDAR_YEARS.includes(Number(day.slice(0,4)))&&getSessionWindow(exchange,day)!==null))return null;
   let n=0;for(let d=a+86400000;d<=b;d+=86400000){const day=freshIstDay(d);if(!HOLIDAY_CALENDAR_YEARS.includes(Number(day.slice(0,4))))return null;if(getSessionWindow(exchange,day))n++;}return n;
 }
 export function freshBars(rows:readonly OHLCV[],minutes:number,receivedAt:number):FreshBar[]{

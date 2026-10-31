@@ -1,6 +1,7 @@
 import {CM_SEGMENT,FO_SEGMENT,KNOWN_INDEX_TOKENS,SECTOR_MAP,type Exchange,type ExchangeSegment,type Instrument} from '@fno/shared';
 import {resolveFreshMcxLink,type FreshMcxLink} from './mcx-contracts.js';
 import {freshFeePolicyFor} from './fees.js';
+import {freshContractUnits} from './contract-units.js';
 export const FRESH_MARKETS=['NSE_INDEX_OPTIONS','NSE_STOCK_OPTIONS','BSE_VERIFIED_OPTIONS','MCX_VERIFIED_FUTURES_OPTIONS'] as const;
 export type FreshMarket=typeof FRESH_MARKETS[number];
 export interface FreshReference {
@@ -20,7 +21,7 @@ export function freshMarketBlockers(market:FreshMarket):string[]{
   if(market==='MCX_VERIFIED_FUTURES_OPTIONS')return ['BLOCKED_MCX_EXACT_OPTION_FUTURES_LINK','BLOCKED_MCX_BOOK_QUANTITY_UNITS','BLOCKED_MCX_PRODUCT_AND_EXPIRY_POLICY'];
   return [];
 }
-export function freshBookSupportsLot(instrument:Instrument,q:{bidUnits:number;askUnits:number}|null){const u=instrument.contractUnits;return !!q&&u?.quantityVerified===true&&u.tickVerified&&u.brokerLotQuantity>0&&q.bidUnits>=u.brokerLotQuantity&&q.askUnits>=u.brokerLotQuantity;}
+export function freshBookSupportsLot(instrument:Instrument,q:{bidUnits:number;askUnits:number}|null){const u=freshContractUnits(instrument);return !!q&&!!u&&Number.isSafeInteger(q.bidUnits)&&Number.isSafeInteger(q.askUnits)&&q.bidUnits>=u.lotQuantity&&q.askUnits>=u.lotQuantity;}
 export const freshEventMarket=(market:FreshMarket)=>market==='NSE_STOCK_OPTIONS'?'STOCK':market==='MCX_VERIFIED_FUTURES_OPTIONS'?'COMMODITY':'INDEX';
 export function freshSector(name:string):string|null {
   const matches=Object.entries(SECTOR_MAP).filter(([,symbols])=>symbols.includes(name)).map(([sector])=>sector);
