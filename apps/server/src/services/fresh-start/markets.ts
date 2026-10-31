@@ -12,7 +12,7 @@ export const freshReferenceExchange=(ref:FreshReference)=>ref.exchange??freshMar
 export const freshReferenceSpotId=(ref:FreshReference)=>`${ref.spot.exchangeSegment}:${ref.spot.token}`;
 export const freshOptionType=(market:FreshMarket)=>market==='NSE_STOCK_OPTIONS'?'OPTSTK':market==='MCX_VERIFIED_FUTURES_OPTIONS'?'OPTFUT':'OPTIDX';
 export function freshMarketBlockers(market:FreshMarket):string[]{
-  if(market==='NSE_STOCK_OPTIONS')return ['BLOCKED_ISSUER_RESULTS_COVERAGE','BLOCKED_CORPORATE_ACTION_COVERAGE'];
+  // Issuer/action coverage is dynamic and checked by the event-source adapter.
   if(market==='BSE_VERIFIED_OPTIONS')return ['BLOCKED_BSE_PRODUCT_AND_EXPIRY_POLICY'];
   if(market==='MCX_VERIFIED_FUTURES_OPTIONS')return ['BLOCKED_MCX_EXACT_OPTION_FUTURES_LINK','BLOCKED_MCX_BOOK_QUANTITY_UNITS','BLOCKED_MCX_PRODUCT_AND_EXPIRY_POLICY'];
   return [];

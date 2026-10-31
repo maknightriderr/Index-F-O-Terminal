@@ -8,7 +8,7 @@ import {redis,scanKeys} from '../../lib/redis.js';
 import {schemaFileReady} from '../ensure-capture-schema.js';
 import {FRESH_CONFIG} from '../../config/fresh-start.js';
 import {FreshSharedFeed} from './feed.js';
-import {FreshEventSource} from './event-source.js';
+import {createFreshEventSource} from './event-source.js';
 import {FreshProductionAdapter,type FreshReference} from './adapter.js';
 import {FreshPaperStore} from './store.js';
 import {FreshPositionMonitor} from './monitor.js';
@@ -16,10 +16,10 @@ import {FreshRuntime} from './runtime.js';
 import {FRESH_MARKETS,freshMarketBlockers,freshBookSupportsLot,discoverFreshMarkets,freshDiscoveryWindow,freshReferenceOptions,freshReferenceExchange,freshReferenceSpotId,freshEventMarket,type FreshMarket} from './markets.js';
 import {freshAdapterState as state} from './adapter-state.js';
 import {freshIstDay,freshBars,mergeFreshBars,buildFreshReferenceContext} from './context.js';
-import {auditFreshAdapter,auditFreshEvaluation} from './audit.js';
+import {auditFreshAdapter,auditFreshEvaluation,persistFreshCalendarSnapshot} from './audit.js';
 type History={five:FreshBar[];one:FreshBar[];lastSeen:number};
 export class FreshPaperWorker {
-  private feed:FreshSharedFeed;private events=new FreshEventSource();private store=new FreshPaperStore();private monitor:FreshPositionMonitor;private runtime:FreshRuntime;
+  private feed:FreshSharedFeed;private events=createFreshEventSource(persistFreshCalendarSnapshot);private store=new FreshPaperStore();private monitor:FreshPositionMonitor;private runtime:FreshRuntime;
   private refs=new Map<string,FreshReference>();private master:Instrument[]=[];private masterDay='';private histories=new Map<string,History>();private shortlist:SubscriptionTarget[]=[];
   private positions:Awaited<ReturnType<FreshPaperStore['recover']>>=[];private timers:ReturnType<typeof setInterval>[]=[];private removeObservation:(()=>void)|null=null;private scanning=false;private ready=false;private stopped=false;private lastScan=0;private discovery:ReturnType<typeof discoverFreshMarkets>|null=null;private selectionAt=0;private cursor=0;private selected:FreshReference[]=[];private selectionExchangeKey='';private historyCursor=0;private historyFailures=new Map<string,string>();private subscriptionReady=false;
   constructor(private provider:MarketDataProvider,private subscriptions:SubscriptionManager){
@@ -35,7 +35,7 @@ export class FreshPaperWorker {
     return this.bootstrap();
   }
   private async bootstrap(){
-    if(!schemaFileReady('047_fresh_start_paper.sql')||!schemaFileReady('048_fresh_start_adapter.sql'))throw Error('BLOCKED_FRESH_SCHEMA');
+    if(!schemaFileReady('047_fresh_start_paper.sql')||!schemaFileReady('048_fresh_start_adapter.sql')||!schemaFileReady('049_fresh_start_calendars.sql'))throw Error('BLOCKED_FRESH_SCHEMA');
     try{await this.runtime.recover();}catch(error){state.entriesArmed=false;state.status='BLOCKED_RECOVERY';state.entryBlockers=['BLOCKED_POSITION_RECOVERY'];throw error;}if(this.stopped)return;
     this.ready=true;state.recovered=true;state.monitorRunning=true;state.scannerRunning=true;state.status='DISCOVERY_STARTING';void this.scan();
   }
@@ -63,6 +63,7 @@ export class FreshPaperWorker {
     this.histories.delete(ref.id);this.histories.set(ref.id,{five:bars5,one:bars1,lastSeen});
     while(this.histories.size>40)this.histories.delete(this.histories.keys().next().value!);
     const c=buildFreshReferenceContext({now:receivedAt,exchange:freshReferenceExchange(ref),instrument:ref.id,sourceEpoch:this.feed.sourceEpoch,bars5,bars1,eventClear:this.events.clearance(receivedAt,freshIstDay(receivedAt),freshEventMarket(ref.market),ref.name)===null,referenceVerified:!!this.feed.underlying(ref.id)&&!!this.feed.underlying(freshReferenceSpotId(ref))});
+    if(c)c.eventEvidence=this.events.evidence(receivedAt,freshEventMarket(ref.market),ref.name);
     return {context:c,newClose:!!old&&lastSeen>old.lastSeen,lastSeen};
   }
   private async scan(){
@@ -71,9 +72,9 @@ export class FreshPaperWorker {
       const now=Date.now(),day=freshIstDay(now),sessions=new Map<Exchange,ReturnType<typeof getSessionWindow>>((['NSE','BSE','MCX'] as Exchange[]).map(e=>[e,getSessionWindow(e,day)]));
       if(!HOLIDAY_CALENDAR_YEARS.includes(Number(day.slice(0,4))))throw Error('BLOCKED_CALENDAR_YEAR');
       const openExchanges=new Set([...sessions].filter(([,s])=>s&&now>=s.open&&now<s.close).map(([e])=>e));
-      if(!openExchanges.size){state.status='WAITING_FOR_MARKET';state.observedExecutableBooks=0;state.optionContracts=0;state.entryBlockers=['OUTSIDE_VERIFIED_SESSION'];for(const m of state.marketReadiness){m.sessionOpen=false;m.eligibleReferences=0;m.observedExecutableBooks=0;m.blockers=['OUTSIDE_VERIFIED_SESSION',...freshMarketBlockers(m.market)];const event=this.events.clearance(now,day,freshEventMarket(m.market));if(event)m.blockers.push(event);}this.shortlist=[];await this.syncTargets();return;}
+      if(!openExchanges.size){state.status='WAITING_FOR_MARKET';state.observedExecutableBooks=0;state.optionContracts=0;state.entryBlockers=['OUTSIDE_VERIFIED_SESSION'];for(const m of state.marketReadiness){m.sessionOpen=false;m.eligibleReferences=0;m.observedExecutableBooks=0;m.blockers=['OUTSIDE_VERIFIED_SESSION',...freshMarketBlockers(m.market)];m.blockers.push(...this.events.blockers(now,day,freshEventMarket(m.market)));state.eventSources=this.events.view();}this.shortlist=[];await this.syncTargets();return;}
       if(!this.provider.isAuthenticated())throw Error('BLOCKED_BROKER_AUTH');
-      await this.loadMaster(day);if(this.stopped)return;await this.events.refresh();if(this.stopped)return;
+      await this.loadMaster(day);if(this.stopped)return;void this.events.refresh({macro:openExchanges.has('NSE')||openExchanges.has('BSE'),issuer:openExchanges.has('NSE')&&this.discovery!.counts.NSE_STOCK_OPTIONS>0}).then(()=>{if(!this.stopped)state.eventSources=this.events.view();},()=>{if(!this.stopped){state.entriesArmed=false;state.eventCode='BLOCKED_EVENT_REFRESH';state.entryBlockers=[...new Set([...state.entryBlockers,'BLOCKED_EVENT_REFRESH'])];}});state.eventSources=this.events.view();
       state.eventCode=this.events.clearance(Date.now(),day,'INDEX')??'CLEAR';
       const exchangeKey=[...openExchanges].sort().join(',');
       if(!this.selectionAt||now-this.selectionAt>=1800000||exchangeKey!==this.selectionExchangeKey){const window=freshDiscoveryWindow(this.discovery!.references.filter(r=>openExchanges.has(freshReferenceExchange(r))),this.cursor);this.selected=window.selected;this.cursor=window.nextCursor;this.selectionAt=now;this.selectionExchangeKey=exchangeKey;}
@@ -88,7 +89,7 @@ export class FreshPaperWorker {
       state.referenceContracts=refs.length;state.optionContracts=slices.reduce((n,s)=>n+s.options.length,0);state.sourceEpoch=this.feed.sourceEpoch;
       const legacyOpen=await this.legacyRisk(),monitorHealthy=this.monitor.healthy;
       const blockersFor=(ref:FreshReference)=>{
-        const codes=[...(ref.capabilityBlockers??[])];const historyFailure=this.historyFailures.get(ref.id);if(historyFailure)codes.push(historyFailure);const event=this.events.clearance(Date.now(),day,freshEventMarket(ref.market),ref.name);if(event)codes.push(event);
+        const codes=[...(ref.capabilityBlockers??[])];const historyFailure=this.historyFailures.get(ref.id);if(historyFailure)codes.push(historyFailure);codes.push(...this.events.blockers(Date.now(),day,freshEventMarket(ref.market),ref.name));
         if(!this.feed.underlying(ref.id)||!this.feed.underlying(freshReferenceSpotId(ref)))codes.push('WAITING_FOR_EXACT_REFERENCES');
         const slice=slices.find(s=>s.ref.id===ref.id),books=(slice?.options??[]).filter(x=>{const q=this.feed.quote(`${FO_SEGMENT[freshReferenceExchange(ref)]}:${x.token}`,x.tickSize);return freshBookSupportsLot(x,q);}).length;
         if(!books)codes.push('WAITING_FOR_OBSERVED_BOOKS');if(legacyOpen)codes.push('LEGACY_POSITION_OR_INVENTORY_UNAVAILABLE');if(!monitorHealthy)codes.push('BLOCKED_EXIT_PERSISTENCE');if(!this.subscriptionReady)codes.push('BLOCKED_SHARED_SUBSCRIPTION_HEADROOM');return [...new Set(codes)];
