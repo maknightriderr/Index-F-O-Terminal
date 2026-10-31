@@ -162,3 +162,7 @@ Next phase dependencies and acceptance:
 No provider was purchased, no API key fabricated, no local tooling installed, and no production data or risk configuration changed for this phase. NSE public-session transport returned HTTP 200 in a remote Node/Axios probe; this is connectivity evidence, not production issuer-coverage qualification.
 
 Validation: full server suite 1,861 passed / 5 existing skips; analytics 48 passed; server and web builds passed. A current public Angel master probe (147,460 rows; 1,656 selected energy rows, held only in scratch) resolved CRUDEOIL option 17 Nov 2026 → future token 573422 expiring 19 Nov, and NATURALGAS option 20 Nov → future token 574319 expiring 24 Nov. Each diagnostic slice contained 10 contracts for its single linked expiry. This verifies reference mapping against the observed master, not executable books or fills.
+
+### Phase 7 — bullion qualification
+
+See [the bullion qualification evidence](bullion-qualification.md) for current Gold launch-calendar and Silver tender-period mappings, source hashes, current-master verification and remaining activation dependencies. This supersedes Phase 6's pending bullion-link research; it does not remove other MCX or BSE entry vetoes.
