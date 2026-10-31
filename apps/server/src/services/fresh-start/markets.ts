@@ -1,5 +1,6 @@
 import {CM_SEGMENT,FO_SEGMENT,KNOWN_INDEX_TOKENS,SECTOR_MAP,type Exchange,type ExchangeSegment,type Instrument} from '@fno/shared';
 import {resolveFreshMcxLink,type FreshMcxLink} from './mcx-contracts.js';
+import {freshFeePolicyFor} from './fees.js';
 export const FRESH_MARKETS=['NSE_INDEX_OPTIONS','NSE_STOCK_OPTIONS','BSE_VERIFIED_OPTIONS','MCX_VERIFIED_FUTURES_OPTIONS'] as const;
 export type FreshMarket=typeof FRESH_MARKETS[number];
 export interface FreshReference {
@@ -52,7 +53,7 @@ export function discoverFreshMarkets(master:readonly Instrument[],day:string):Fr
       const sector=stock?freshSector(name):null,blockers:string[]=freshMarketBlockers(market);
       if(linkedCommodity)blockers.splice(blockers.indexOf('BLOCKED_MCX_EXACT_OPTION_FUTURES_LINK'),1);
       if(stock&&!sector)blockers.push('BLOCKED_SECTOR_MAPPING');
-      if(name==='NIFTYFPI')blockers.push('BLOCKED_PRODUCT_SPECIFIC_FEE_POLICY');
+      if(!freshFeePolicyFor({exchange,segment:'FO',instrumentType:optionType,name},day))blockers.push('BLOCKED_PRODUCT_SPECIFIC_FEE_POLICY');
       references.push({id:`${stock?CM_SEGMENT[exchange]:FO_SEGMENT[exchange]}:${signal.token}`,name,signal,spot,exchange,market,riskGroup:stock?`NSE_SECTOR:${sector??'UNMAPPED'}`:commodity?`MCX:${name}`:'NSE_INDEX_CORRELATED',capabilityBlockers:blockers,...(linkedCommodity?{mcxLinks:[...new Map(links.filter(x=>x.futureToken===signal.token).map(x=>[x.optionExpiry,x])).values()]}:{})});
     }
   }

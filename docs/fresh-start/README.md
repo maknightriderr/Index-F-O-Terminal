@@ -166,3 +166,7 @@ Validation: full server suite 1,861 passed / 5 existing skips; analytics 48 pass
 ### Phase 7 — bullion qualification
 
 See [the bullion qualification evidence](bullion-qualification.md) for current Gold launch-calendar and Silver tender-period mappings, source hashes, current-master verification and remaining activation dependencies. This supersedes Phase 6's pending bullion-link research; it does not remove other MCX or BSE entry vetoes.
+
+### Phase 8 — product fee estimates
+
+See [product-specific fee policies](product-fees.md) for dated BSE/MCX tariff selection, premium-turnover component calculations, frozen entry evidence and remaining activation gates. The NSE production path uses the selector while preserving its existing policy and held exits.

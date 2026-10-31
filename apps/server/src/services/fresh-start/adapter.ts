@@ -1,11 +1,11 @@
 import {getSessionWindow,type Instrument} from '@fno/shared';
-import {assessFreshPlan,fitFreshParity,freshPremiumScenarios,freshRoundTripFees,type FreshCandidate,type FreshQuote,type FreshContract} from '@fno/analytics';
+import {assessFreshPlan,fitFreshParity,freshPremiumScenarios,freshRoundTripFees,freshRoundTripFeeBreakdown,type FreshCandidate,type FreshQuote,type FreshContract} from '@fno/analytics';
 import type {FreshQualifiedAdapter,FreshPreparedCandidate} from './runtime.js';
 import {FreshSharedFeed} from './feed.js';
 import {FreshEventSource} from './event-source.js';
 import {FreshPaperStore,type FreshEntryRequest} from './store.js';
 import {freshExpirySessions} from './context.js';
-import {FRESH_NSE_FEES} from './fees.js';
+import {freshFeePolicyFor} from './fees.js';
 import {freshReferenceExchange,freshReferenceSpotId,freshEventMarket,type FreshReference} from './markets.js';
 export type {FreshReference} from './markets.js';
 
@@ -45,11 +45,12 @@ export class FreshProductionAdapter implements FreshQualifiedAdapter {
       const expirySession=getSessionWindow('NSE',expiry);if(!expirySession)continue;
       const basis=fitFreshParity(pairs,expirySession.close,now);if(!basis)continue;
       for(const strike of strikes){const side=c.direction==='BULLISH'?'CE':'PE',instrument=exact(strike,side);if(!instrument)continue;
+        const selectedFees=freshFeePolicyFor(instrument,c.session);if(!selectedFees)continue;
         const units=instrument.contractUnits;if(!units?.quantityVerified||!units.tickVerified||units.brokerLotQuantity!==instrument.lotSize)continue;
         const q=this.feed.quote(`NSE_FO:${instrument.token}`,instrument.tickSize);if(!q)continue;
         const scenarios=freshPremiumScenarios({basis,quote:q,strike,side,signalKind:ref.signal.segment==='CM'?'SPOT':'FUTURES',signalPrice:signal.price,pricingSpot:spot.price,target:c.target,stop:c.stop,now,cutoff:session.close-600000});if(!scenarios)continue;
-        const entry=q.ask+q.tick,explicit=freshRoundTripFees(entry,entry,instrument.lotSize,1,FRESH_NSE_FEES)/instrument.lotSize;
-        const contract:FreshContract={id:q.contract,source:q.source,sourceEpoch:q.epoch,lotQuantity:instrument.lotSize,multiplier:1,expiryTradableSessions:freshExpirySessions(c.session,expiry)!,market,delta:scenarios.delta,metadataVerified:true,modelVerified:true,feesVerified:true,targetPremiumScenarios:scenarios.targetPremiumScenarios,invalidationPremiumScenarios:scenarios.invalidationPremiumScenarios,explicitRoundTripCostPerUnit:explicit,feePolicy:FRESH_NSE_FEES,evidence:{...scenarios.evidence,masterUnits:units,eventCalendar:this.events.evidence(now,freshEventMarket(market),ref.name),tickSize:instrument.tickSize,expiry,strike,side,signalReference:ref.id,spotReference:freshReferenceSpotId(ref)}};
+        const entry=q.ask+q.tick,explicit=freshRoundTripFees(entry,entry,instrument.lotSize,1,selectedFees.policy)/instrument.lotSize;
+        const contract:FreshContract={id:q.contract,source:q.source,sourceEpoch:q.epoch,lotQuantity:instrument.lotSize,multiplier:1,expiryTradableSessions:freshExpirySessions(c.session,expiry)!,market,delta:scenarios.delta,metadataVerified:true,modelVerified:true,feesVerified:true,targetPremiumScenarios:scenarios.targetPremiumScenarios,invalidationPremiumScenarios:scenarios.invalidationPremiumScenarios,explicitRoundTripCostPerUnit:explicit,feePolicy:selectedFees.policy,evidence:{...scenarios.evidence,fees:{...selectedFees.evidence,flatPremiumRoundTripEstimate:freshRoundTripFeeBreakdown(entry,entry,instrument.lotSize,1,selectedFees.policy)},masterUnits:units,eventCalendar:this.events.evidence(now,freshEventMarket(market),ref.name),tickSize:instrument.tickSize,expiry,strike,side,signalReference:ref.id,spotReference:freshReferenceSpotId(ref)}};
         const plan=assessFreshPlan({candidate:c,contract,quote:q,account,now,arrivalAt:now+250,currentUnderlying:signal.price,cutoff:session.close,calendarVerified:true,eventClear:true,legacyPositionOpen:false,parentAlreadyTraded:false,correlatedPositionOpen:false,entriesToday:0,barsSinceLastClose:null});
         if(plan.ok)eligible.push({contract,rr:plan.riskRewardNet,spread:(q.ask-q.bid)/((q.ask+q.bid)/2),tick:q.tick});else refusals.push({contract:contract.id,code:plan.code});
       }
