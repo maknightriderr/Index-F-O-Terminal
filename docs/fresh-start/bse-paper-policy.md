@@ -1,3 +1,5 @@
+> Approval update, 31 October 2026: after the concrete policy was presented, the user replied "merge, deploy and start next phase". This accepts the proposed BSE 1–10-session/no-0DTE/1% spread paper hypothesis. The approval gate now returns true. Event/data/fee/risk checks remain mandatory; this is not a claim that trades are currently occurring. The original proposal and validation record follow for audit.
+
 # Phase 10: BSE index paper path and reviewable policy
 
 Started 31 October 2026 after PR #82 (main `b787d63`). Engineering path implemented and tested; production policy approval remains **PROPOSED_NOT_APPROVED**. `freshBsePaperPolicyApproved()` deliberately returns false. There is no environment-variable shortcut to silently approve the proposal.
