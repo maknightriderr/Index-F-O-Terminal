@@ -2,6 +2,7 @@ import {CM_SEGMENT,FO_SEGMENT,KNOWN_INDEX_TOKENS,SECTOR_MAP,type Exchange,type E
 import {resolveFreshMcxLink,type FreshMcxLink} from './mcx-contracts.js';
 import {freshFeePolicyFor} from './fees.js';
 import {freshContractUnits} from './contract-units.js';
+import {freshBsePaperPolicyApproved} from './bse-policy.js';
 export const FRESH_MARKETS=['NSE_INDEX_OPTIONS','NSE_STOCK_OPTIONS','BSE_VERIFIED_OPTIONS','MCX_VERIFIED_FUTURES_OPTIONS'] as const;
 export type FreshMarket=typeof FRESH_MARKETS[number];
 export interface FreshReference {
@@ -17,7 +18,7 @@ export const freshReferenceSpotId=(ref:FreshReference)=>`${ref.spot.exchangeSegm
 export const freshOptionType=(market:FreshMarket)=>market==='NSE_STOCK_OPTIONS'?'OPTSTK':market==='MCX_VERIFIED_FUTURES_OPTIONS'?'OPTFUT':'OPTIDX';
 export function freshMarketBlockers(market:FreshMarket):string[]{
   // Issuer/action coverage is dynamic and checked by the event-source adapter.
-  if(market==='BSE_VERIFIED_OPTIONS')return ['BLOCKED_BSE_PRODUCT_AND_EXPIRY_POLICY'];
+  if(market==='BSE_VERIFIED_OPTIONS')return freshBsePaperPolicyApproved()?[]:['BLOCKED_BSE_PRODUCT_AND_EXPIRY_POLICY'];
   if(market==='MCX_VERIFIED_FUTURES_OPTIONS')return ['BLOCKED_MCX_EXACT_OPTION_FUTURES_LINK','BLOCKED_MCX_BOOK_QUANTITY_UNITS','BLOCKED_MCX_PRODUCT_AND_EXPIRY_POLICY'];
   return [];
 }

@@ -174,3 +174,7 @@ See [product-specific fee policies](product-fees.md) for dated BSE/MCX tariff se
 ### Phase 9 — quantity conversion and expiry validation
 
 See [quantity and expiry qualification](quantity-expiry-qualification.md) for shared verified sizing terms, book/risk conversion, strict exchange-calendar checks and the explicit remaining MCX unit and BSE/MCX expiry-policy dependencies.
+
+### Phase 10 — gated BSE index paper path
+
+See [the BSE paper policy proposal](bse-paper-policy.md) for the implemented and tested adapter/admission path, proposed 1–10-session/no-0DTE policy, explicit approval gate and remaining event-data dependency. Production BSE entry approval remains false.
