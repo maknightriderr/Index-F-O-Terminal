@@ -32,11 +32,13 @@ export function freshPremiumScenarios(args:{basis:FreshParityBasis;quote:FreshQu
   return {delta,iv,targetPremiumScenarios:[bid(args.target,iv),bid(args.target,Math.max(0,iv-.02))],invalidationPremiumScenarios:[bid(args.stop,iv),bid(args.stop,Math.max(0,iv-.02))],evidence:{model:'EUROPEAN_FORWARD_PARITY_BLACK76_1',forward:b.forward,discount:b.discount,signalToForwardRatio:ratio,signalKind:args.signalKind,pricingSpot:args.pricingSpot,horizonMs:horizon,ivShocks:[0,-.02],futureSpread:'CURRENT_ABSOLUTE_HALF_SPREAD_ASSUMPTION',calibrationStrikes:b.strikes}};
 }
 export interface FreshFeePolicy {version:string;brokeragePerOrder:number;exchangeFraction:number;sebiFraction:number;stampBuyFraction:number;sellTaxFraction:number;gstFraction:number;}
-export function freshRoundTripFees(entry:number,exit:number,quantity:number,multiplier:number,p:FreshFeePolicy):number {
+export function freshRoundTripFeeBreakdown(entry:number,exit:number,quantity:number,multiplier:number,p:FreshFeePolicy) {
   if(![entry,exit,quantity,multiplier,p.brokeragePerOrder,p.exchangeFraction,p.sebiFraction,p.stampBuyFraction,p.sellTaxFraction,p.gstFraction].every(Number.isFinite)||entry<=0||exit<0||!Number.isSafeInteger(quantity)||quantity<=0||multiplier<=0||Object.entries(p).some(([k,v])=>k!=='version'&&(v as number)<0))throw Error('INVALID_FEE_INPUT');
   const buy=entry*quantity*multiplier,sell=exit*quantity*multiplier,turnover=buy+sell,brokerage=2*p.brokeragePerOrder,exchange=turnover*p.exchangeFraction,sebi=turnover*p.sebiFraction;
-  return brokerage+exchange+sebi+buy*p.stampBuyFraction+sell*p.sellTaxFraction+(brokerage+exchange+sebi)*p.gstFraction;
+  const stampBuy=buy*p.stampBuyFraction,sellTax=sell*p.sellTaxFraction,gst=(brokerage+exchange+sebi)*p.gstFraction;
+  return {buyTurnover:buy,sellTurnover:sell,brokerage,exchange,sebi,stampBuy,sellTax,gst,total:brokerage+exchange+sebi+stampBuy+sellTax+gst};
 }
+export function freshRoundTripFees(entry:number,exit:number,quantity:number,multiplier:number,p:FreshFeePolicy):number{return freshRoundTripFeeBreakdown(entry,exit,quantity,multiplier,p).total;}
 export function freshPremiumForNet(entry:number,quantity:number,multiplier:number,p:FreshFeePolicy,netCurrency:number){
   const base=freshRoundTripFees(entry,0,quantity,multiplier,p),slope=freshRoundTripFees(entry,1,quantity,multiplier,p)-base,units=quantity*multiplier;
   if(!Number.isFinite(netCurrency)||units<=slope)throw Error('INVALID_NET_PRICE_INPUT');
