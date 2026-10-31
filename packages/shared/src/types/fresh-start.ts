@@ -24,6 +24,9 @@ export interface FreshStrategyPerformance {
     note: string;
 }
 export interface FreshStartStatus {
+    marketReadiness?:Array<{market:string;universe:number;selected:number;references:number;optionContracts:number;observedExecutableBooks:number;eligibleReferences:number;sessionOpen:boolean;blockers:string[]}>;
+    discovery?:{at:number|null;totalReferences:number;unmapped:number;selected:number;historyCache:number;historyLimit:number;historyRequestsPerCycle:number;subscriptionLimit:number;windowMinutes:number};
+    requiredEventConfiguration?:string[];
     engineConfigured?:boolean;
     adapterSchemaReady?:boolean;
     brokeragePerOrder?:number;

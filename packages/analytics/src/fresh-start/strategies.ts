@@ -1,6 +1,6 @@
 // Approved implementation pack; pure functions only. Time, calendars and data provenance are injected.
 import { atr, ema } from '../indicators/index.js';
-export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.1';
+export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.2';
 export const FRESH_STRATEGIES = ['NEW_ORB_RETEST_V1', 'NEW_VWAP_PULLBACK_V1', 'NEW_PREVIOUS_SESSION_SWEEP_V1', 'NEW_FIRST_OPENING_PULLBACK_V1'] as const;
 export type FreshStrategy = typeof FRESH_STRATEGIES[number];
 export type FreshDirection = 'BULLISH' | 'BEARISH';

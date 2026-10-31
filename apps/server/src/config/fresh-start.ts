@@ -7,7 +7,7 @@ export const FRESH_CONFIG = Object.freeze({
     liveOrdersAllowed: false, capital: 500000 as number | null, baselineTrailing: false,
     strategies: FRESH_STRATEGIES.map(id => ({ id, enabled: true })),
     primarySource: 'ANGEL_EXACT_REFERENCE', automaticEntryFallback: false,
-    markets: ['NSE_INDEX_OPTIONS', 'NSE_STOCK_OPTIONS'],
+    markets: ['NSE_INDEX_OPTIONS', 'NSE_STOCK_OPTIONS', 'BSE_VERIFIED_OPTIONS', 'MCX_VERIFIED_FUTURES_OPTIONS'],
     requirements: [
         'CAPITAL_CONFIGURATION', 'QUALIFIED_SHARED_FEED_ADAPTER', 'EXACT_CONTRACT_REFERENCE_AND_SOURCE_EPOCH',
         'EXCHANGE_SESSION_EXPIRY_CALENDAR', 'VERIFIED_EVENT_COVERAGE',

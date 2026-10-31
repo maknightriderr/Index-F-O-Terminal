@@ -33,7 +33,8 @@ export class FreshEventSource {
       this.snapshot={...parseFreshEvents(r.data),from:Date.parse(fromDay+'T00:00:00Z'),to:Date.parse(toDay+'T23:59:59Z'),fetchedAt:this.now()};this.code='EVENT_FEED_OBSERVED';
     }catch{this.snapshot=null;this.code='BLOCKED_EVENT_PROVIDER_RESPONSE';}finally{this.inFlight=null;}})();return this.inFlight;
   }
-  clearance(now:number,session:string,market:'INDEX'|'STOCK',issuer:string|null=null){
+  clearance(now:number,session:string,market:'INDEX'|'STOCK'|'COMMODITY',issuer:string|null=null){
+    if(market==='COMMODITY')return 'BLOCKED_COMMODITY_EVENT_COVERAGE';
     if(market==='STOCK')return 'BLOCKED_ISSUER_RESULTS_COVERAGE';
     const s=this.snapshot;if(!s||now<s.fetchedAt||now-s.fetchedAt>60000)return this.code==='EVENT_FEED_OBSERVED'?'BLOCKED_EVENT_COVERAGE':this.code;
     if(s.uncertainSessions.includes(session))return 'BLOCKED_UNCERTAIN_EVENT_TIME';

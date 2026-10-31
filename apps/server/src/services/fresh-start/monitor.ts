@@ -1,4 +1,4 @@
-import {getSessionWindow} from '@fno/shared';
+import {getSessionWindow,type Exchange} from '@fno/shared';
 import {advanceFreshPosition,type FreshPaperPosition} from '@fno/analytics';
 import {FreshSharedFeed} from './feed.js';
 import {FreshPaperStore} from './store.js';
@@ -18,7 +18,7 @@ export class FreshPositionMonitor {
   tick(){
     const now=this.now();
     for(const [id,row] of this.rows){
-      const p=this.projected.get(id)??row.state,session=getSessionWindow('NSE',p.candidate.session),cutoff=p.sessionCutoff??session?.close;
+      const p=this.projected.get(id)??row.state,exchange=(p.contract.id.startsWith('MCX_FO:')?'MCX':p.contract.id.startsWith('BSE_FO:')?'BSE':'NSE') as Exchange,session=getSessionWindow(exchange,p.candidate.session),cutoff=p.sessionCutoff??session?.close;
       if(!session||cutoff==null){this.failures.add(id);continue;}
       const tick=Number(p.contract.evidence?.tickSize),quote=tick>0?this.feed.quote(p.contract.id,tick):null,underlying=this.feed.underlying(p.candidate.instrument);
       const event:Observation={at:now,underlying:underlying?.price??null,underlyingAt:underlying?.at??null,quote,cutoff,barsSinceFill:completeFreshBarsSinceFill(p.openedAt,now,session.open),trail:false,monitorEpoch:this.feed.sourceEpoch};

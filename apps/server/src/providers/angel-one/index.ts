@@ -1,3 +1,4 @@
+import {angelMasterUnits} from './master-units.js';
 import { snapDepth } from './snap-depth.js';
 // ============================================================
 // ANGEL ONE SMARTAPI PROVIDER
@@ -403,7 +404,7 @@ export class AngelOneProvider implements MarketDataProvider {
   async getInstrumentMaster(): Promise<Instrument[]> {
     // Cache for 24 hours (refreshed daily)
     const cacheAge = Date.now() - this.instrumentCacheTime;
-    if (this.instrumentCache.length > 0 && cacheAge < 24 * 60 * 60 * 1000) {
+    if (this.instrumentCache.length > 0 && cacheAge < 24 * 60 * 60 * 1000 && new Date(this.instrumentCacheTime).toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'})===new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'})) {
       return this.instrumentCache;
     }
 
@@ -806,6 +807,7 @@ export class AngelOneProvider implements MarketDataProvider {
     // as segment "CM"/type "EQ" and silently drops out of every derivative filter.
     const segment = this.isDerivativeType(instrumentType) ? 'FO' as const : 'CM' as const;
     const underlying = this.resolveUnderlying(raw.symbol, raw.name, instrumentType);
+    const masterUnits = angelMasterUnits(raw.exch_seg,raw.name,raw.lotsize,raw.tick_size);
 
     return {
       token: raw.token,
@@ -823,7 +825,8 @@ export class AngelOneProvider implements MarketDataProvider {
       expiry: raw.expiry ? this.parseExpiry(raw.expiry) : undefined,
       // The P&L multiplier of one lot, not Angel One's quantity unit (MCX GOLD 1 -> 100, GOLDM 100 -> 10; lot-size.ts).
       lotSize: unitsPerLot(exchange, raw.name, parseInt(raw.lotsize)).lotSize,
-      tickSize: parseFloat(raw.tick_size) || 0.05,
+      tickSize: masterUnits.tickSize,
+      contractUnits: masterUnits.contractUnits,
       isFnO: segment === 'FO',
     };
   }

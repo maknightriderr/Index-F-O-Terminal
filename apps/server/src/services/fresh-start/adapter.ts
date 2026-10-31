@@ -6,7 +6,9 @@ import {FreshEventSource} from './event-source.js';
 import {FreshPaperStore,type FreshEntryRequest} from './store.js';
 import {freshExpirySessions} from './context.js';
 import {FRESH_NSE_FEES} from './fees.js';
-export interface FreshReference {id:string;name:string;signal:Instrument;spot:{token:string;exchangeSegment:'NSE_CM'};market:'NSE_INDEX_OPTIONS'|'NSE_STOCK_OPTIONS';riskGroup:string;}
+import {freshReferenceExchange,freshReferenceSpotId,freshEventMarket,type FreshReference} from './markets.js';
+export type {FreshReference} from './markets.js';
+
 export interface FreshAdapterPorts {
   references():ReadonlyMap<string,FreshReference>;master():readonly Instrument[];capital:number;
   legacyRisk():Promise<boolean>;
@@ -24,27 +26,30 @@ export class FreshProductionAdapter implements FreshQualifiedAdapter {
   }
   async prepare(c:FreshCandidate):Promise<FreshPreparedCandidate|null>{
     let now=(this.ports.now??Date.now)();
-    const reject=async(code:string)=>{await this.ports.refusal(c,code);return null;},ref=this.ports.references().get(c.instrument),session=getSessionWindow('NSE',c.session);
+    const reject=async(code:string)=>{await this.ports.refusal(c,code);return null;},ref=this.ports.references().get(c.instrument),session=ref?getSessionWindow(freshReferenceExchange(ref),c.session):null;
     if(!ref||!session||c.sourceEpoch!==this.feed.sourceEpoch)return reject('BLOCKED_EXACT_REFERENCE');
-    const event=this.events.clearance(now,c.session,ref.market==='NSE_INDEX_OPTIONS'?'INDEX':'STOCK',ref.name);if(event)return reject(event);
+    if(ref.capabilityBlockers?.length)return reject(ref.capabilityBlockers[0]);
+    if(ref.market!=='NSE_INDEX_OPTIONS'&&ref.market!=='NSE_STOCK_OPTIONS')return reject('MARKET_PRODUCT_POLICY_NOT_QUALIFIED');
+    const event=this.events.clearance(now,c.session,freshEventMarket(ref.market),ref.name);if(event)return reject(event);
     if(await this.ports.legacyRisk())return reject('LEGACY_POSITION_OR_INVENTORY_UNAVAILABLE');
-    let signal=this.feed.underlying(ref.id),spot=this.feed.underlying(`NSE_CM:${ref.spot.token}`);if(!signal||!spot)return reject('STALE_EXACT_REFERENCE');
+    let signal=this.feed.underlying(ref.id),spot=this.feed.underlying(freshReferenceSpotId(ref));if(!signal||!spot)return reject('STALE_EXACT_REFERENCE');
     const market=ref.market,universe=this.ports.master().filter(x=>x.exchange==='NSE'&&x.segment==='FO'&&x.name===ref.name&&x.instrumentType===(market==='NSE_INDEX_OPTIONS'?'OPTIDX':'OPTSTK')&&x.expiry&&x.strike&&x.strike>0&&Number.isSafeInteger(x.lotSize)&&x.lotSize>0&&x.tickSize>0);
     const expiries=[...new Set(universe.map(x=>x.expiry!))].filter(d=>{const n=freshExpirySessions(c.session,d);return n!=null&&n>=(market==='NSE_INDEX_OPTIONS'?1:3)&&n<=(market==='NSE_INDEX_OPTIONS'?10:15);}).sort().slice(0,2);
     const spotPrice=spot.price;
     const strikes=[...new Set(universe.filter(x=>expiries.includes(x.expiry!)).map(x=>x.strike!))].sort((a,b)=>Math.abs(a-spotPrice)-Math.abs(b-spotPrice)||a-b).slice(0,5);
     const rows=await this.store.recover(),marks=this.marks(rows),accountId=`${c.version}:${c.session}`,account=await this.store.accountView(accountId,this.ports.capital,marks,now),eligible:{contract:FreshContract;rr:number;spread:number;tick:number}[]=[],refusals:{contract:string;code:string}[]=[];
-    now=(this.ports.now??Date.now)();signal=this.feed.underlying(ref.id);spot=this.feed.underlying(`NSE_CM:${ref.spot.token}`);if(!signal||!spot||now>c.expiresAt)return reject('STALE_PLAN_INPUTS');
+    now=(this.ports.now??Date.now)();signal=this.feed.underlying(ref.id);spot=this.feed.underlying(freshReferenceSpotId(ref));if(!signal||!spot||now>c.expiresAt)return reject('STALE_PLAN_INPUTS');
     for(const expiry of expiries){
       const exact=(strike:number,side:string)=>{const xs=universe.filter(x=>x.expiry===expiry&&x.strike===strike&&x.optionType===side);return xs.length===1?xs[0]:null;};
       const pairs=strikes.flatMap(strike=>{const call=exact(strike,'CE'),put=exact(strike,'PE');if(!call||!put)return [];const cq=this.feed.quote(`NSE_FO:${call.token}`,call.tickSize),pq=this.feed.quote(`NSE_FO:${put.token}`,put.tickSize);return cq&&pq?[{strike,call:cq,put:pq}]:[];});
       const expirySession=getSessionWindow('NSE',expiry);if(!expirySession)continue;
       const basis=fitFreshParity(pairs,expirySession.close,now);if(!basis)continue;
       for(const strike of strikes){const side=c.direction==='BULLISH'?'CE':'PE',instrument=exact(strike,side);if(!instrument)continue;
+        const units=instrument.contractUnits;if(!units?.quantityVerified||!units.tickVerified||units.brokerLotQuantity!==instrument.lotSize)continue;
         const q=this.feed.quote(`NSE_FO:${instrument.token}`,instrument.tickSize);if(!q)continue;
         const scenarios=freshPremiumScenarios({basis,quote:q,strike,side,signalKind:ref.signal.segment==='CM'?'SPOT':'FUTURES',signalPrice:signal.price,pricingSpot:spot.price,target:c.target,stop:c.stop,now,cutoff:session.close-600000});if(!scenarios)continue;
         const entry=q.ask+q.tick,explicit=freshRoundTripFees(entry,entry,instrument.lotSize,1,FRESH_NSE_FEES)/instrument.lotSize;
-        const contract:FreshContract={id:q.contract,source:q.source,sourceEpoch:q.epoch,lotQuantity:instrument.lotSize,multiplier:1,expiryTradableSessions:freshExpirySessions(c.session,expiry)!,market,delta:scenarios.delta,metadataVerified:true,modelVerified:true,feesVerified:true,targetPremiumScenarios:scenarios.targetPremiumScenarios,invalidationPremiumScenarios:scenarios.invalidationPremiumScenarios,explicitRoundTripCostPerUnit:explicit,feePolicy:FRESH_NSE_FEES,evidence:{...scenarios.evidence,tickSize:instrument.tickSize,expiry,strike,side,signalReference:ref.id,spotReference:`NSE_CM:${ref.spot.token}`}};
+        const contract:FreshContract={id:q.contract,source:q.source,sourceEpoch:q.epoch,lotQuantity:instrument.lotSize,multiplier:1,expiryTradableSessions:freshExpirySessions(c.session,expiry)!,market,delta:scenarios.delta,metadataVerified:true,modelVerified:true,feesVerified:true,targetPremiumScenarios:scenarios.targetPremiumScenarios,invalidationPremiumScenarios:scenarios.invalidationPremiumScenarios,explicitRoundTripCostPerUnit:explicit,feePolicy:FRESH_NSE_FEES,evidence:{...scenarios.evidence,masterUnits:units,tickSize:instrument.tickSize,expiry,strike,side,signalReference:ref.id,spotReference:freshReferenceSpotId(ref)}};
         const plan=assessFreshPlan({candidate:c,contract,quote:q,account,now,arrivalAt:now+250,currentUnderlying:signal.price,cutoff:session.close,calendarVerified:true,eventClear:true,legacyPositionOpen:false,parentAlreadyTraded:false,correlatedPositionOpen:false,entriesToday:0,barsSinceLastClose:null});
         if(plan.ok)eligible.push({contract,rr:plan.riskRewardNet,spread:(q.ask-q.bid)/((q.ask+q.bid)/2),tick:q.tick});else refusals.push({contract:contract.id,code:plan.code});
       }
@@ -53,7 +58,7 @@ export class FreshProductionAdapter implements FreshQualifiedAdapter {
     return {candidate:c,netRR:selected.rr,finish:async()=>{
       const arrivalAt=Math.max(c.at,(this.ports.now??Date.now)())+250,q=await this.feed.firstAsk(selected.contract.id,selected.tick,arrivalAt,c.expiresAt);if(!q)return reject('ENTRY_QUOTE_DEADLINE');
       const underlying=this.feed.underlyingAt(ref.id,q.receivedAt);if(!underlying)return reject('MISSING_ARRIVAL_REFERENCE');
-      const code=this.events.clearance(q.receivedAt,c.session,market==='NSE_INDEX_OPTIONS'?'INDEX':'STOCK',ref.name);if(code)return reject(code);
+      const code=this.events.clearance(q.receivedAt,c.session,freshEventMarket(market),ref.name);if(code)return reject(code);
       const legacyPositionOpen=await this.ports.legacyRisk();
       return {accountId,session:c.session,capital:this.ports.capital,riskGroup:ref.riskGroup,candidate:c,contract:selected.contract,quote:q,now:(this.ports.now??Date.now)(),arrivalAt,currentUnderlying:underlying.price,cutoff:session.close,calendarVerified:true,eventClear:true,legacyPositionOpen,marks:this.marks(await this.store.recover())};
     }};

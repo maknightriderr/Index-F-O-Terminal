@@ -31,7 +31,7 @@ export class FreshSharedFeed {
             throw Error('UNVERIFIED_SUBSCRIPTION_CAPACITY');
         const combined = new Map(this.targets);
         for (const t of targets) {
-            if (t.exchange !== 'NSE' || !['NSE_CM', 'NSE_FO'].includes(t.exchangeSegment))
+            if (!({NSE:['NSE_CM','NSE_FO'],BSE:['BSE_CM','BSE_FO'],MCX:['MCX_FO']} as Record<string,string[]>)[t.exchange]?.includes(t.exchangeSegment))
                 throw Error('MARKET_NOT_QUALIFIED');
             combined.set(`${t.exchangeSegment}:${t.token}`, t);
         }
