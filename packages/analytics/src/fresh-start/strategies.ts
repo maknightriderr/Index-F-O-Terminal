@@ -2,6 +2,15 @@
 import { atr, ema } from '../indicators/index.js';
 export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.5';
 /** Minimum underlying reward / risk for a target, and the furthest target in 5-minute ATR before it is capped (1.5). */
+/**
+ * 1.5 regime filter: the trend strategies (ORB, VWAP pullback, opening pullback) stand aside on a choppy day, where a
+ * naked option buyer loses most. Choppy = repeated VWAP crosses without a strong 15-minute trend, or a 5-minute
+ * Kaufman efficiency ratio (|net move| ÷ path length) below FRESH_MIN_EFFICIENCY over the last FRESH_EFFICIENCY_BARS.
+ */
+export const FRESH_MIN_EFFICIENCY = 0.3;
+export const FRESH_EFFICIENCY_BARS = 12;
+/** VWAP pullback runs only from 75 minutes after the open (10:30 on NSE), after the ORB and opening-pullback window. */
+export const FRESH_VWAP_START_MS = 75 * 60000;
 export const FRESH_MIN_TARGET_R = 1.5;
 export const FRESH_MAX_TARGET_ATR = 3;
 export const FRESH_STRATEGIES = ['NEW_ORB_RETEST_V1', 'NEW_VWAP_PULLBACK_V1', 'NEW_PREVIOUS_SESSION_SWEEP_V1', 'NEW_FIRST_OPENING_PULLBACK_V1'] as const;
@@ -150,9 +159,16 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
         levels.push({ price: orh, role: 'RESISTANCE', kind: 'ORH', knownAt: opening[2].availableAt }, { price: orl, role: 'SUPPORT', kind: 'ORL', knownAt: opening[2].availableAt });
     if (c.previousHigh > c.previousLow && c.previousLow > 0)
         levels.push({ price: c.previousHigh, role: 'RESISTANCE', kind: 'PDH', knownAt: c.sessionOpen }, { price: c.previousLow, role: 'SUPPORT', kind: 'PDL', knownAt: c.sessionOpen });
+    const recent = today.slice(-FRESH_EFFICIENCY_BARS), path = recent.reduce((sum, x, i) => sum + (i > 0 ? Math.abs(x.close - recent[i - 1].close) : 0), 0);
+    const efficiency = recent.length >= 4 && path > 0 ? Math.abs(last(recent).close - recent[0].close) / path : 1;
+    const choppy = range || efficiency < FRESH_MIN_EFFICIENCY;
     const directions = [1, -1] as const;
     for (const strategy of FRESH_STRATEGIES) {
         let emitted = false;
+        if (choppy && strategy !== 'NEW_PREVIOUS_SESSION_SWEEP_V1') {
+            out.refusals.push({ strategy, code: 'CHOPPY_REGIME' });
+            continue;
+        }
         for (const d of directions) {
             const directional = d === 1 ? bull : bear, direction: FreshDirection = d === 1 ? 'BULLISH' : 'BEARISH';
             const favorable = (x: number, y: number) => d * (x - y) > 0, vw = (x: FreshBar) => vwapAt(x.time + 300000);
@@ -172,7 +188,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                         }
                     }
             }
-            if (strategy === 'NEW_VWAP_PULLBACK_V1' && directional && c.now - c.sessionOpen >= 1800000) {
+            if (strategy === 'NEW_VWAP_PULLBACK_V1' && directional && c.now - c.sessionOpen >= FRESH_VWAP_START_MS) {
                 for (let start = Math.max(3, today.length - 5); start <= today.length - 2; start++) {
                     const impulse = today.slice(start - 3, start), pull = today.slice(start), prev = today[start - 1], initial = today[start];
                     const pivot = levels.filter(x => x.kind === 'CONFIRMED_SWING' && x.knownAt <= prev.time + 300000 && x.role === (d === 1 ? 'RESISTANCE' : 'SUPPORT')).sort((x, y) => y.knownAt - x.knownAt)[0];
@@ -266,7 +282,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
             }
             const targetPrice = capped ? current.close + d * cap : chosen.price, targetKind = capped ? 'ATR_CAP' : chosen.kind;
             const parentId = `${c.instrument}:${c.session}:${direction}:${origin}`;
-            out.candidates.push({ id: `${FRESH_PACK_VERSION}:${c.sourceEpoch}:${parentId}:${strategy}:${current.time}`, parentId, version: FRESH_PACK_VERSION, strategy, direction, instrument: c.instrument, sourceEpoch: c.sourceEpoch, session: c.session, at: decisionAt, referenceEntry: current.close, stop, target: targetPrice, atr: a, origin, expiresAt: Math.min(decisionAt + 2000, c.sessionClose - 3600000), evidence: { ...(c.eventEvidence?{eventCalendar:c.eventEvidence}:{}), rvol: finite(rvol(current)) ? rvol(current) : 'UNAVAILABLE', vwap, reference: 'BAR_VWAP_PROXY', targetKind, targetR: d * (targetPrice - current.close) / risk } });
+            out.candidates.push({ id: `${FRESH_PACK_VERSION}:${c.sourceEpoch}:${parentId}:${strategy}:${current.time}`, parentId, version: FRESH_PACK_VERSION, strategy, direction, instrument: c.instrument, sourceEpoch: c.sourceEpoch, session: c.session, at: decisionAt, referenceEntry: current.close, stop, target: targetPrice, atr: a, origin, expiresAt: Math.min(decisionAt + 2000, c.sessionClose - 3600000), evidence: { ...(c.eventEvidence?{eventCalendar:c.eventEvidence}:{}), rvol: finite(rvol(current)) ? rvol(current) : 'UNAVAILABLE', vwap, reference: 'BAR_VWAP_PROXY', efficiency, targetKind, targetR: d * (targetPrice - current.close) / risk } });
             emitted = true;
         }
         if (!emitted && !out.refusals.some(x => x.strategy === strategy))

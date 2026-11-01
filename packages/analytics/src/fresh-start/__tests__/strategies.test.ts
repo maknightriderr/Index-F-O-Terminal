@@ -8,6 +8,8 @@ function context(today: FreshBar[]): FreshContext {
     const bars15 = Array.from({ length: 80 }, (_, i) => bar(open + Math.floor((now - open) / 900000) * 900000 - (80 - i) * 900000, 96 + i * .1, 97 + i * .1, 95 + i * .1, 96 + i * .1));
     return { now, session: '2026-10-30', sessionOpen: open, sessionClose: open + 21600000, instrument: 'NIFTY-FUT', sourceEpoch: 'e1', bars5: [...prior, ...today], bars15, bars1: Array.from({ length: today.length * 5 }, (_, i) => ({ ...bar(open + i * 60000, 100, 101, 99, 100), availableAt: open + (i + 1) * 60000 })), rvolReferences: Object.fromEntries(Array.from({ length: 30 }, (_, i) => [i, Array(20).fill(1000)])), openingVolumeReferences: Array(20).fill(1000), levels: [{ price: 125, role: 'RESISTANCE', knownAt: open - 1, kind: 'PDH' }], previousHigh: 125, previousLow: 95, referenceVerified: true, eventClear: true, calendarVerified: true };
 }
+/** Shifts a session forward by nine flat opening bars (45 minutes), so a pattern lands after the 10:30 VWAP window. */
+function late(bars: FreshBar[]): FreshBar[] { const pad = Array.from({ length: 9 }, (_, i) => bar(open + i * 300000)); return [...pad, ...bars.map(x => ({ ...x, time: x.time + 2700000, availableAt: x.availableAt + 2700000 }))]; }
 function orb() { return context([bar(open, 100, 101, 99, 100.5), bar(open + 300000, 100.5, 101, 99.5, 100.5), bar(open + 600000, 100.5, 101, 99.5, 100.5), bar(open + 900000, 100.5, 104.5, 100.4, 104, 2000), bar(open + 1200000, 101.2, 103, 100.9, 102.8)]); }
 function mirrored(c: FreshContext): FreshContext { const map = (b: FreshBar) => ({ ...b, open: 250 - b.open, high: 250 - b.low, low: 250 - b.high, close: 250 - b.close }); return { ...c, bars5: c.bars5.map(map), bars15: c.bars15.map(map), bars1: c.bars1.map(map), previousHigh: 250 - c.previousLow, previousLow: 250 - c.previousHigh, levels: c.levels.map(x => ({ ...x, price: 250 - x.price, role: x.role === 'RESISTANCE' ? 'SUPPORT' : 'RESISTANCE' })) }; }
 describe('fresh-start point-in-time strategy rules', () => {
@@ -30,14 +32,14 @@ describe('fresh-start point-in-time strategy rules', () => {
             expect(evaluateFreshStrategies(x).candidates.some(s => s.strategy === 'NEW_FIRST_OPENING_PULLBACK_V1')).toBe(false);
     });
     it('confirms the VWAP pullback with a known impulse break and preserved swing in both directions', () => {
-        const c = context([bar(open), bar(open + 300000), bar(open + 600000, 100, 101.2, 99.8, 101), bar(open + 900000, 101, 102.2, 100.8, 102), bar(open + 1200000, 102, 104.2, 101.8, 104, 2000), bar(open + 1500000, 104, 104.1, 102.6, 103, 100), bar(open + 1800000, 103, 103.2, 102, 102.5, 100), bar(open + 2100000, 102.5, 104.8, 102.4, 104.6, 100)]);
+        const c = context(late([bar(open), bar(open + 300000), bar(open + 600000, 100, 101.2, 99.8, 101), bar(open + 900000, 101, 102.2, 100.8, 102), bar(open + 1200000, 102, 104.2, 101.8, 104, 2000), bar(open + 1500000, 104, 104.1, 102.6, 103, 100), bar(open + 1800000, 103, 103.2, 102, 102.5, 100), bar(open + 2100000, 102.5, 104.8, 102.4, 104.6, 100)]));
         c.bars1 = c.bars1.map(x => ({ ...x, open: 102.2, high: 102.3, low: 102.1, close: 102.2 }));
         c.levels = [...c.levels, { price: 101.5, knownAt: open - 1, role: 'RESISTANCE', kind: 'CONFIRMED_SWING' }, { price: 99.5, knownAt: open - 1, role: 'SUPPORT', kind: 'CONFIRMED_SWING' }];
         for (const x of [c, mirrored(c)])
             expect(evaluateFreshStrategies(x).candidates.some(s => s.strategy === 'NEW_VWAP_PULLBACK_V1'), JSON.stringify(evaluateFreshStrategies(x))).toBe(true);
     });
     it('refuses a VWAP pullback confirmed after only one pullback bar', () => {
-        const c = context([bar(open), bar(open + 300000), bar(open + 600000, 100, 101.2, 99.8, 101), bar(open + 900000, 101, 102.2, 100.8, 102), bar(open + 1200000, 102, 104.2, 101.8, 104, 2000), bar(open + 1500000, 104, 104.1, 102, 102.5, 100), bar(open + 1800000, 102.5, 104.8, 102.4, 104.6, 100)]);
+        const c = context(late([bar(open), bar(open + 300000), bar(open + 600000, 100, 101.2, 99.8, 101), bar(open + 900000, 101, 102.2, 100.8, 102), bar(open + 1200000, 102, 104.2, 101.8, 104, 2000), bar(open + 1500000, 104, 104.1, 102, 102.5, 100), bar(open + 1800000, 102.5, 104.8, 102.4, 104.6, 100)]));
         c.bars1 = c.bars1.map(x => ({ ...x, open: 102.2, high: 102.3, low: 102.1, close: 102.2 }));
         c.levels = [...c.levels, { price: 101.5, knownAt: open - 1, role: 'RESISTANCE', kind: 'CONFIRMED_SWING' }, { price: 99.5, knownAt: open - 1, role: 'SUPPORT', kind: 'CONFIRMED_SWING' }];
         for (const x of [c, mirrored(c)])
@@ -89,6 +91,23 @@ describe('fresh-start point-in-time strategy rules', () => {
             const r = evaluateFreshStrategies(ctx);
             expect(r.candidates.some(x => x.strategy === 'NEW_ORB_RETEST_V1')).toBe(false);
             expect(r.refusals).toContainEqual({ strategy: 'NEW_ORB_RETEST_V1', code: 'TARGET_TOO_CLOSE' });
+        });
+    });
+    describe('1.5 regime filter and VWAP window', () => {
+        it('refuses the VWAP pullback before 10:30 even when the pattern is valid', () => {
+            const c = context([bar(open), bar(open + 300000), bar(open + 600000, 100, 101.2, 99.8, 101), bar(open + 900000, 101, 102.2, 100.8, 102), bar(open + 1200000, 102, 104.2, 101.8, 104, 2000), bar(open + 1500000, 104, 104.1, 102.6, 103, 100), bar(open + 1800000, 103, 103.2, 102, 102.5, 100), bar(open + 2100000, 102.5, 104.8, 102.4, 104.6, 100)]);
+            c.bars1 = c.bars1.map(x => ({ ...x, open: 102.2, high: 102.3, low: 102.1, close: 102.2 }));
+            c.levels = [...c.levels, { price: 101.5, knownAt: open - 1, role: 'RESISTANCE', kind: 'CONFIRMED_SWING' }, { price: 99.5, knownAt: open - 1, role: 'SUPPORT', kind: 'CONFIRMED_SWING' }];
+            expect(evaluateFreshStrategies(c).candidates.some(s => s.strategy === 'NEW_VWAP_PULLBACK_V1')).toBe(false);
+        });
+        it('stands the trend strategies aside on a choppy session and records the efficiency on a trade', () => {
+            // A see-saw open: the closes go nowhere over a long path (efficiency well below 0.3).
+            const saw = context([bar(open, 100, 101, 99, 100.5), bar(open + 300000, 100.5, 101, 99.5, 99.5), bar(open + 600000, 99.5, 101, 99.4, 100.6), bar(open + 900000, 100.6, 101, 99.4, 99.6), bar(open + 1200000, 99.6, 101, 99.5, 100.4)]);
+            const r = evaluateFreshStrategies(saw);
+            for (const s of ['NEW_ORB_RETEST_V1', 'NEW_VWAP_PULLBACK_V1', 'NEW_FIRST_OPENING_PULLBACK_V1'] as const) expect(r.refusals).toContainEqual({ strategy: s, code: 'CHOPPY_REGIME' });
+            expect(r.refusals.some(x => x.strategy === 'NEW_PREVIOUS_SESSION_SWEEP_V1' && x.code === 'CHOPPY_REGIME')).toBe(false);
+            const ok = evaluateFreshStrategies(orb()).candidates.find(x => x.strategy === 'NEW_ORB_RETEST_V1')!;
+            expect(ok.evidence.efficiency as number).toBeGreaterThanOrEqual(0.3);
         });
     });
 });
