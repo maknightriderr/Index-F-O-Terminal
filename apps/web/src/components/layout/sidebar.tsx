@@ -19,7 +19,10 @@ function Icon({ d, className = '' }: { d: string; className?: string }) {
 }
 
 const ICONS: Record<string, string> = {
-  dashboard: 'M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z M9 22V12h6v10',
+  dashboard: 'M3 3h7v9H3z M14 3h7v5h-7z M14 12h7v9h-7z M3 16h7v5H3z',
+  'market-overview': 'M3 17l6-6 4 4 8-8 M14 7h7v7',
+  'option-chain': 'M4 6h16 M4 12h16 M4 18h16 M12 3v18',
+  'strategy-lab': 'M9 3h6 M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3 M7.5 14h9',
   indices: 'M22 12h-4l-3 9L9 3l-3 9H2',
   'fno-stocks': 'M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2 M9 12h6 M9 16h6 M12 2v4',
   'corporate-actions': 'M8 2v4 M16 2v4 M3 10h18 M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z M8 14h.01 M12 14h.01 M16 14h.01 M8 18h.01 M12 18h.01',
@@ -47,13 +50,15 @@ export function Sidebar() {
   const setActiveTab = useMarketStore(s => s.setActiveTab);
   const openDirectory = useTerminalNavigation();
   const primary = [
-    { id: 'dashboard', label: 'Dashboard', pages: ['dashboard'] },
-    { id: 'indices', label: 'Markets', pages: ['indices', 'fno-explorer', 'corporate-actions', 'institutional-flow'] },
+    { id: 'dashboard', label: 'Command', pages: ['dashboard'] },
+    { id: 'option-chain', label: 'Chain', pages: ['option-chain'] },
+    { id: 'indices', label: 'Markets', pages: ['market-overview', 'indices', 'fno-explorer', 'corporate-actions', 'institutional-flow'] },
     { id: 'best-setups', label: 'Setups', pages: ['best-setups', 'market-scanner', 'strategy-scanner'] },
     { id: 'paper-trades', label: 'Paper trades', pages: ['paper-trades'] },
+    { id: 'strategy-lab', label: 'Lab', pages: ['strategy-lab'] },
     { id: 'measurement', label: 'Performance', pages: ['measurement', 'backtesting', 'loss-attribution', 'evidence'] },
     { id: 'signal-diagnostics', label: 'Research', pages: ['signal-diagnostics'] },
-    { id: 'system-health', label: 'System', pages: ['system-health', 'alerts', 'system-learning'] },
+    { id: 'system-health', label: 'Ops', pages: ['system-health', 'alerts', 'system-learning'] },
   ];
   const items = NAV_GROUPS.flatMap(g => g.items);
   return <aside aria-label="Primary" className="desk-rail terminal-rail">

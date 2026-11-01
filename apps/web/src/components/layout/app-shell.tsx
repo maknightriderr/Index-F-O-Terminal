@@ -5,6 +5,8 @@ import { TerminalNavigation, WorkspaceTabs } from './terminal-navigation';
 import { Sidebar } from './sidebar';
 import { TopBar } from './topbar';
 import { AssetTabBar } from './asset-tab-bar';
+import { TickerTape } from './ticker-tape';
+import { MobileTabBar } from './mobile-tab-bar';
 import { ThemeEffect } from '@/components/theme-effect';
 import { AssistantLauncher } from '@/components/assistant/assistant-launcher';
 import { useMarketStore } from '@/stores';
@@ -61,6 +63,7 @@ export function AppShell({ children }: AppShellProps) {
       <Sidebar />
 
       <div className="relative z-[1] flex min-w-0 flex-1 flex-col">
+        <TickerTape />
         <TopBar />
         <WorkspaceTabs />
         <AssetTabBar />
@@ -72,6 +75,7 @@ export function AppShell({ children }: AppShellProps) {
         </div>
       </div>
       <AssistantLauncher />
+      <MobileTabBar />
     </div></TerminalNavigation>
   );
 }

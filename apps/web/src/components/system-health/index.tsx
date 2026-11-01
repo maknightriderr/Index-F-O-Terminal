@@ -10,6 +10,9 @@ import { useFeedSummary } from '@/lib/use-feed-summary';
 import { useHealth } from '@/lib/use-health';
 import { formatAge, formatIstDateTime, MISSING } from '@/lib/format';
 import type { FeedRow, HealthRow } from '@/lib/health-model';
+import { Horizons } from '@/components/command-center';
+import { Pill } from '@/components/command-center/panel';
+import { useNow } from '@/lib/use-health';
 
 // ============================================================
 // SYSTEM HEALTH — what is actually known, and how we know it
@@ -22,7 +25,9 @@ import type { FeedRow, HealthRow } from '@/lib/health-model';
 
 export function SystemHealthPage() {
   const feed = useFeedSummary();
-  const { loading, refresh, fetchedAt } = useHealth();
+  const { loading, refresh, fetchedAt, data } = useHealth();
+  const now = useNow(30_000);
+  const incidents = data?.ops?.incidents ?? [];
   const m = feed.health;
 
   const serviceColumns = useMemo<Column<HealthRow>[]>(
@@ -54,8 +59,8 @@ export function SystemHealthPage() {
   return (
     <PageBody>
       <PageHeader
-        title="System Health"
-        subtitle="Service and data-feed status from observed evidence: timestamps, exchange sessions and what the server reports. Where the evidence is missing the status says so."
+        title="Ops & Health"
+        subtitle="Services, data feeds, open incidents and expiring calendars from observed evidence: timestamps, exchange sessions and what the server reports. Where the evidence is missing the status says so."
         actions={<ActionButton onClick={refresh}>{loading ? 'Checking…' : 'Check now'}</ActionButton>}
       />
 
@@ -87,6 +92,21 @@ export function SystemHealthPage() {
 
         </div>
         <aside aria-label="Sessions and planned services" className="terminal-health-side">
+      <Section title={`Open incidents (${incidents.length})`} subtitle="Functional checks from the server's ops monitor. A DEGRADES incident degrades overall health; WARN does not.">
+        {incidents.length === 0 ? (
+          <p className="text-sm text-[var(--text-secondary)]">No incident open{data?.ops?.at ? ` · last check ${formatIstDateTime(data.ops.at, feed.now)}` : ''}.</p>
+        ) : (
+          <ol className="m-0 flex list-none flex-col gap-3 p-0">
+            {incidents.map((i) => (
+              <li key={i.key} className="flex items-start gap-3">
+                <Pill tone={i.severity === 'DEGRADES' ? 'bad' : 'warn'}>{i.severity}</Pill>
+                <div className="min-w-0"><p className="cc-num text-xs">{i.key}</p><p className="text-sm text-[var(--text-secondary)]">{i.detail}</p><p className="text-xs text-[var(--text-muted)]">Since {formatIstDateTime(i.since, feed.now)}</p></div>
+              </li>
+            ))}
+          </ol>
+        )}
+      </Section>
+      <Horizons horizons={data?.calendarHorizons ?? []} now={now} />
       {m.sessions.length > 0 && (
         <Section title="Exchange sessions" subtitle="Feeds are only expected to update while their exchange is in session.">
           <div className="flex flex-wrap gap-3">

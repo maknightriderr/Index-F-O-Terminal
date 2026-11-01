@@ -71,6 +71,7 @@ import { startDailyReview } from './services/daily-review-job.js';
 import { startAutomaticTradeReview } from './services/auto-review-job.js';
 import { startRecordReconciliation } from './services/record-reconciliation.js';
 import { opsStatus, startOpsMonitor } from './services/ops-monitor.js';
+import { freshCalendarHorizons } from './services/fresh-start/calendar-horizon.js';
 import { orderFlowFeedActive, startOrderFlowFeed } from './services/dhan-feed.js';
 import { createDiagnosticsRoutes } from './api/diagnostics.js';
 import { ensureCaptureSchema } from './services/ensure-capture-schema.js';
@@ -247,6 +248,8 @@ app.get('/api/health', async (_req, res) => {
       orderFlow: orderFlowFeedStatus(),
       memory: memoryStatus(),
       ops,
+      // Reference data with an end date (holiday table, fee schedule, MCX contract calendars): the Ops page counts down to each.
+      calendarHorizons: freshCalendarHorizons(),
       version: '0.1.0',
     },
   });

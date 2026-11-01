@@ -18,13 +18,13 @@
 
 :root {
   /* Terminal Color Palette (dark — default) */
-  --bg-primary: #090f17;
-  --bg-secondary: #0c1520;
-  --bg-tertiary: #101c29;
-  --bg-elevated: #192a3a;
+  --bg-primary: #0a0d11;
+  --bg-secondary: #0f1318;
+  --bg-tertiary: #12171d;
+  --bg-elevated: #19202a;
 
-  --border-primary: rgba(255, 255, 255, 0.06);
-  --border-secondary: rgba(255, 255, 255, 0.08);
+  --border-primary: #1b222b;
+  --border-secondary: #232b35;
 
   /* Contrast-audited against --bg-primary AND the darkest card surface
      (#12121a), since text sits on cards far more often than on the page
@@ -32,70 +32,78 @@
      #4b5563 (2.47:1) — the latter failed even the 3:1 non-text minimum,
      and both were routinely used at 10-11px where WCAG allows no
      large-text exemption at all. */
-  --text-primary: #edf3fc;
-  --text-secondary: #a7b6cb;
-  --text-muted: #9ca3af;
-  --text-dimmed: #93a3b8;
+  --text-primary: #e8ebef;
+  --text-secondary: #a9b3c0;
+  --text-muted: #919ba8;
+  --text-dimmed: #8d97a4;
 
   --accent-green: #34d399;
-  --accent-red: #f87171;
-  --accent-yellow: #fbbf24;
-  --accent-blue: #60a5fa;
+  --accent-red: #ff6b6b;
+  --accent-yellow: #f5a524;
+  --accent-blue: #5aa9ff;
   --accent-cyan: #22d3ee;
-  --accent-purple: #a78bfa;
+  --accent-purple: #b794f6;
   /* Primary brand accent (deep indigo) and a champagne/gold highlight for
      premium/high-conviction moments — distinct from the functional accent
      colors above, which stay tied to their existing meanings (bullish/
      bearish/etc). Brighter than the light-theme values below since dark
      backgrounds need more luminance for the same perceived weight. */
-  --accent-indigo: #818cf8;
-  --accent-gold: #d4b877;
+  --accent-indigo: #5aa9ff;
+  --accent-gold: #f5a524;
 
   --positive: #34d399;
-  --negative: #f87171;
+  --negative: #ff6b6b;
   --neutral: #6b7280;
 
   /* Status colours: one set, one meaning (see components/ui/status-badge.tsx). Each is also paired with a
      text label and a glyph wherever it appears, so colour is never the only signal. */
   --status-ok: #34d399;
-  --status-warn: #fbbf24;
-  --status-bad: #f87171;
-  --status-info: #60a5fa;
-  --status-off: #9ca3af;
-  --focus-ring: #a5b4fc;
+  --status-warn: #f5a524;
+  --status-bad: #ff6b6b;
+  --status-info: #5aa9ff;
+  --status-off: #919ba8;
+  --focus-ring: #f5a524;
 
   /* Surfaces and spacing used by the shared primitives */
-  --surface-card: #101c29;
-  --surface-card-alt: rgba(255, 255, 255, 0.025);
-  --surface-row-alt: rgba(255, 255, 255, 0.025);
-  --surface-sticky: #0e1925;
+  --surface-card: #12171d;
+  --surface-card-alt: rgba(145, 155, 168, 0.06);
+  --surface-row-alt: rgba(145, 155, 168, 0.035);
+  --surface-sticky: #0f1318;
   --space-card: 1rem;
   --space-section: 1.25rem;
-  --radius-card: 0.625rem;
-  --desk-accent: #26dfcc;
-  --desk-accent-ink: #052c29;
-  --desk-shadow: 0 8px 28px -18px #000;
+  --radius-card: 0.5rem;
+  --desk-accent: #f5a524;
+  --desk-accent-ink: #141008;
+  --desk-shadow: none;
   color-scheme: dark;
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --up-bg: rgba(52, 211, 153, 0.12);
+  --down-bg: rgba(255, 107, 107, 0.12);
+  --warn-bg: rgba(245, 165, 36, 0.12);
+  --info-bg: rgba(90, 169, 255, 0.12);
+  --muted-bg: rgba(145, 155, 168, 0.12);
+  --tape-bg: #0a0d11;
 }
 
 [data-theme="light"] {
-  --desk-accent: #075f58;
+  --desk-accent: #a35f00;
   --desk-accent-ink: #ffffff;
-  --desk-shadow: 0 5px 24px -16px #50657a;
+  --desk-shadow: 0 1px 2px rgba(19, 23, 28, 0.04);
   color-scheme: light;
-  --bg-primary: #eef3f7;
+  --bg-primary: #f3f4f6;
   --bg-secondary: #ffffff;
   --bg-tertiary: #ffffff;
-  --bg-elevated: #f1f5f9;
+  --bg-elevated: #f1f3f5;
 
-  --border-primary: rgba(15, 23, 42, 0.08);
-  --border-secondary: rgba(15, 23, 42, 0.12);
+  --border-primary: #e5e8ec;
+  --border-secondary: #dde1e6;
 
-  --text-primary: #0f172a;
-  --text-secondary: #475569;
-  --text-muted: #475569;
+  --text-primary: #13171c;
+  --text-secondary: #3f4955;
+  --text-muted: #56606d;
   /* Was #94a3b8 — 2.56:1 on white, below even the 3:1 non-text floor. */
-  --text-dimmed: #64748b;
+  --text-dimmed: #56606d;
 
   /* Accent hues stay recognizable (green=bullish, red=bearish, etc)
      across themes — only darkened slightly where the -400 shades
@@ -103,30 +111,36 @@
   /* Darkened from #059669 / #d97706, which measured 3.77:1 and 3.19:1 on
      white — both below AA for normal text, and green/amber carry P&L and
      warning meaning here, so they can't sit at large-text-only contrast. */
-  --accent-green: #047857;
-  --accent-red: #dc2626;
-  --accent-yellow: #b45309;
-  --accent-blue: #2563eb;
+  --accent-green: #08754a;
+  --accent-red: #b42318;
+  --accent-yellow: #a35f00;
+  --accent-blue: #1f5fbf;
   --accent-cyan: #0891b2;
-  --accent-purple: #7c3aed;
-  --accent-indigo: #4338ca;
-  --accent-gold: #b8935f;
+  --accent-purple: #6b3fc4;
+  --accent-indigo: #1f5fbf;
+  --accent-gold: #a35f00;
 
-  --positive: #059669;
-  --negative: #dc2626;
+  --positive: #08754a;
+  --negative: #b42318;
   --neutral: #64748b;
 
-  --status-ok: #04664c;
-  --status-warn: #92400e;
-  --status-bad: #b91c1c;
-  --status-info: #1d4ed8;
-  --status-off: #475569;
-  --focus-ring: #4338ca;
+  --status-ok: #08754a;
+  --status-warn: #8a5000;
+  --status-bad: #b42318;
+  --status-info: #1f5fbf;
+  --status-off: #56606d;
+  --focus-ring: #a35f00;
 
   --surface-card: #ffffff;
-  --surface-card-alt: rgba(15, 23, 42, 0.03);
-  --surface-row-alt: rgba(15, 23, 42, 0.035);
-  --surface-sticky: #f1f5f9;
+  --surface-card-alt: rgba(86, 96, 109, 0.06);
+  --surface-row-alt: rgba(86, 96, 109, 0.04);
+  --surface-sticky: #f8f9fa;
+  --up-bg: rgba(8, 117, 74, 0.10);
+  --down-bg: rgba(180, 35, 24, 0.08);
+  --warn-bg: rgba(163, 95, 0, 0.10);
+  --info-bg: rgba(31, 95, 191, 0.08);
+  --muted-bg: rgba(86, 96, 109, 0.10);
+  --tape-bg: #f8f9fa;
 }
 
 /* ============================================================
@@ -194,7 +208,7 @@ html, body {
   overflow: hidden;
   background-color: var(--bg-primary);
   color: var(--text-primary);
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -1268,4 +1282,93 @@ html, body {
 @media (prefers-reduced-motion: reduce) {
   .terminal-workspace-tabs button, .terminal-tab-strip > button,
   .terminal-research-nav button, .terminal-rail-item, .terminal-asset-tab { transition: none; }
+}
+
+/* ============================================================
+   COMMAND CENTER DESIGN SYSTEM (2026-11 redesign)
+   Bloomberg-style panels: flat surfaces, hairline borders, uppercase micro-labels, mono numerals,
+   one amber accent. Every colour is a token above, so dark and light share the same rules.
+   ============================================================ */
+.cc-page { max-width: 1600px; margin: 0 auto; padding: 16px 20px 32px; display: flex; flex-direction: column; gap: 14px; }
+.cc-panel { background: var(--surface-card); border: 1px solid var(--border-secondary); border-radius: 8px; min-width: 0; }
+.cc-panel-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 11px 14px; border-bottom: 1px solid var(--border-primary); }
+.cc-panel-body { padding: 12px 14px; }
+.cc-title { margin: 0; font-size: 11.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--text-primary); }
+.cc-title small { font-weight: 400; letter-spacing: .02em; text-transform: none; color: var(--text-muted); margin-left: 6px; font-size: 12px; }
+.cc-label { font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--text-muted); }
+.cc-note { font-size: 11.5px; color: var(--text-muted); }
+.cc-num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.cc-up { color: var(--positive); } .cc-down { color: var(--negative); } .cc-flat { color: var(--text-secondary); } .cc-accent { color: var(--desk-accent); }
+.cc-strip { display: grid; gap: 1px; background: var(--border-secondary); border: 1px solid var(--border-secondary); border-radius: 8px; overflow: hidden; }
+.cc-strip > * { background: var(--surface-card); padding: 12px 14px; min-width: 0; }
+.cc-kpi-value { font-family: var(--font-mono); font-size: 21px; font-weight: 600; line-height: 1.25; margin: 4px 0 2px; font-variant-numeric: tabular-nums; }
+.cc-grid-auto { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+.cc-main { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+.cc-main > .cc-col-wide { flex: 999 1 640px; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.cc-main > .cc-col-side { flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.cc-pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; font: 600 10px/1.6 var(--font-mono); letter-spacing: .05em; white-space: nowrap; }
+.cc-pill[data-tone="ok"] { color: var(--status-ok); background: var(--up-bg); }
+.cc-pill[data-tone="warn"] { color: var(--status-warn); background: var(--warn-bg); }
+.cc-pill[data-tone="bad"] { color: var(--status-bad); background: var(--down-bg); }
+.cc-pill[data-tone="info"] { color: var(--status-info); background: var(--info-bg); }
+.cc-pill[data-tone="off"] { color: var(--text-muted); background: var(--muted-bg); }
+.cc-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; background: currentColor; }
+.cc-bar { height: 6px; border-radius: 3px; background: var(--muted-bg); overflow: hidden; }
+.cc-bar > span { display: block; height: 100%; border-radius: 3px; }
+.cc-chip { min-height: 32px; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--border-secondary); background: transparent; color: var(--text-secondary); font: 500 12px var(--font-sans); cursor: pointer; white-space: nowrap; }
+.cc-chip:hover { background: var(--surface-card-alt); color: var(--text-primary); }
+.cc-chip[aria-pressed="true"], .cc-chip[aria-selected="true"] { border-color: var(--desk-accent); color: var(--text-primary); background: var(--muted-bg); font-weight: 600; }
+.cc-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.cc-table th { font-size: 10.5px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); text-align: left; padding: 8px 10px; white-space: nowrap; }
+.cc-table td { padding: 8px 10px; border-top: 1px solid var(--border-primary); white-space: nowrap; }
+.cc-table tbody tr:hover td { background: var(--surface-card-alt); }
+.cc-table .r { text-align: right; }
+.cc-scroll { overflow-x: auto; }
+.cc-empty { padding: 22px 14px; text-align: center; color: var(--text-muted); font-size: 12.5px; }
+.cc-cell { padding: 5px 8px; border-radius: 6px; min-width: 120px; }
+.cc-cell b { display: block; font-size: 10.5px; letter-spacing: .04em; }
+.cc-cell span { display: block; font-size: 11px; opacity: .85; overflow: hidden; text-overflow: ellipsis; max-width: 170px; }
+.cc-cell[data-state="IN_TRADE"] { color: var(--text-primary); background: var(--muted-bg); box-shadow: inset 0 0 0 1px var(--desk-accent); }
+.cc-cell[data-state="FILLED"] { color: var(--status-ok); background: var(--up-bg); }
+.cc-cell[data-state="REFUSED"] { color: var(--status-warn); background: var(--warn-bg); }
+.cc-cell[data-state="NO_SETUP"] { color: var(--text-secondary); background: var(--muted-bg); }
+.cc-cell[data-state="NOT_EVALUATED"] { color: var(--text-muted); background: transparent; border: 1px dashed var(--border-secondary); }
+.cc-rail { position: relative; height: 8px; border-radius: 4px; background: linear-gradient(90deg, var(--down-bg), var(--muted-bg) 50%, var(--up-bg)); }
+.cc-rail > i { position: absolute; top: -4px; width: 3px; height: 16px; border-radius: 2px; background: var(--text-primary); transform: translateX(-1px); }
+.cc-rail > i.entry { width: 1px; background: var(--text-muted); }
+.cc-position { border: 1px solid var(--border-secondary); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 10px; background: var(--bg-secondary); text-align: left; width: 100%; color: inherit; cursor: pointer; }
+.cc-position:hover { border-color: var(--desk-accent); }
+
+/* Ticker tape above the top bar */
+.cc-tape { display: flex; gap: 22px; overflow-x: auto; white-space: nowrap; padding: 5px 16px; background: var(--tape-bg); border-bottom: 1px solid var(--border-primary); font: 11px var(--font-mono); scrollbar-width: none; flex-shrink: 0; }
+.cc-tape::-webkit-scrollbar { display: none; }
+.cc-tape b { font-weight: 600; color: var(--text-primary); }
+
+/* Option chain */
+.cc-chain td { padding: 5px 6px; font-family: var(--font-mono); font-size: 11.5px; }
+.cc-chain th { padding: 7px 6px; }
+.cc-chain td.itm { background: color-mix(in srgb, var(--accent-blue) 7%, transparent); }
+.cc-chain th.strike, .cc-chain td.strike { text-align: center; font-weight: 600; color: var(--text-primary); }
+.cc-chain tr.atm td.strike { background: var(--warn-bg); color: var(--desk-accent); }
+.cc-chain .pick { padding: 1px 6px; border-radius: 4px; box-shadow: 0 0 0 2px var(--desk-accent); font-weight: 600; }
+.cc-oi { display: inline-block; height: 6px; border-radius: 3px; vertical-align: middle; opacity: .55; }
+
+/* Trade detail dialog */
+.cc-dialog { width: min(1100px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); padding: 0; border: 1px solid var(--border-secondary); border-radius: 10px; background: var(--bg-primary); color: var(--text-primary); }
+.cc-dialog::backdrop { background: rgba(0, 0, 0, .55); }
+
+/* Phone: a bottom tab bar replaces the rail */
+.cc-tabbar { display: none; }
+@media (max-width: 767px) {
+  .cc-page { padding: 10px 10px 88px; }
+  .cc-tabbar { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; background: var(--bg-secondary); border-top: 1px solid var(--border-secondary); padding: 4px 4px calc(6px + env(safe-area-inset-bottom)); }
+  .cc-tabbar button { min-height: 48px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 10.5px; color: var(--text-muted); background: none; border: 0; }
+  .cc-tabbar button[aria-current] { color: var(--desk-accent); font-weight: 600; }
+  .cc-strip { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .terminal-shell .terminal-rail { display: none; }
+  .cc-assistant-fab { bottom: calc(72px + env(safe-area-inset-bottom)) !important; }
+  .cc-health { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .cc-health .cc-note { display: none; }
+  .cc-health .cc-pill { font-size: 9px; padding: 1px 6px; }
+  #main-content { padding-bottom: 88px; }
 }

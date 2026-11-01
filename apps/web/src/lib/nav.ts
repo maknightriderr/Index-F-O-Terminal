@@ -12,6 +12,9 @@
 
 export type PageId =
   | 'dashboard'
+  | 'market-overview'
+  | 'option-chain'
+  | 'strategy-lab'
   | 'indices'
   | 'fno-explorer'
   | 'corporate-actions'
@@ -50,7 +53,9 @@ export const NAV_GROUPS: NavGroup[] = [
     id: 'markets',
     title: 'Markets',
     items: [
-      { id: 'dashboard', label: 'Dashboard', description: 'Market status, paper trades, best setups and the main chart.', icon: 'dashboard' },
+      { id: 'dashboard', label: 'Command Center', description: 'System health, the paper account, live positions, the setup radar, the journal and market context.', icon: 'dashboard' },
+      { id: 'market-overview', label: 'Market Overview', description: 'Watchlist, the main chart, best setups and legacy paper history.', icon: 'market-overview' },
+      { id: 'option-chain', label: 'Option Chain', description: 'Bid/ask, delta, IV and OI by strike, with the contract the fresh-start rules would accept.', icon: 'option-chain' },
       { id: 'indices', label: 'Indices', description: 'NSE, BSE and MCX index levels.', icon: 'indices' },
       { id: 'fno-explorer', label: 'F&O Explorer', description: 'Market Radar breadth and top bullish/bearish candidates; F&O price, OI, IV and Greeks.', icon: 'fno-stocks' },
       { id: 'corporate-actions', label: 'Corporate Actions', description: 'Dividends, splits, bonuses and other corporate actions.', icon: 'corporate-actions' },
@@ -60,6 +65,7 @@ export const NAV_GROUPS: NavGroup[] = [
     id: 'trade-desk',
     title: 'Trade Desk',
     items: [
+      { id: 'strategy-lab', label: 'Strategy Lab', description: 'Fresh-start results by strategy: R distribution, time of day, exit reasons and the promotion gate.', icon: 'strategy-lab' },
       { id: 'paper-trades', label: 'Paper Trades', description: 'Every simulated trade: open, closed and expired, with costs and status.', icon: 'paper-trades' },
       { id: 'best-setups', label: 'Best Setups', description: 'Ranked candidates with their decision state.', icon: 'best-setups' },
       { id: 'strategy-scanner', label: 'Option-Buying Leans', description: 'Stock-by-stock option-buying leans from direction, IV rank and theta (the Strategy Scanner).', icon: 'strategy-scanner' },
@@ -86,7 +92,7 @@ export const NAV_GROUPS: NavGroup[] = [
     id: 'system',
     title: 'System',
     items: [
-      { id: 'system-health', label: 'System Health', description: 'Service and data-feed status, from observed evidence.', icon: 'system-health' },
+      { id: 'system-health', label: 'Ops & Health', description: 'Services, data feeds, open incidents and expiring calendars, from observed evidence.', icon: 'system-health' },
       { id: 'alerts', label: 'Alerts', description: 'Open-interest, volatility and trade alerts.', icon: 'alerts' },
       { id: 'system-learning', label: 'System Learning', description: 'Self-audit of failures and protections.', icon: 'system-learning' },
     ],
