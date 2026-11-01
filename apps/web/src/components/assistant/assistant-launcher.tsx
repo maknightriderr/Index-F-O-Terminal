@@ -176,7 +176,7 @@ export function AssistantLauncher() {
         aria-expanded={open}
         aria-controls="ai-assistant-panel"
         title={open ? 'Close AI assistant' : 'AI assistant'}
-        className={`fixed bottom-[max(1rem,env(safe-area-inset-bottom,0px))] right-[max(1rem,env(safe-area-inset-right,0px))] z-50 h-12 w-12 items-center justify-center rounded-full bg-[var(--accent-indigo)] text-white shadow-lg transition-transform hover:scale-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus-ring)] motion-reduce:transition-none motion-reduce:hover:scale-100 ${open ? 'hidden sm:flex' : 'flex'}`}
+        className={`cc-assistant-fab fixed bottom-[max(1rem,env(safe-area-inset-bottom,0px))] right-[max(1rem,env(safe-area-inset-right,0px))] z-50 h-12 w-12 items-center justify-center rounded-full bg-[var(--accent-indigo)] text-white shadow-lg transition-transform hover:scale-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus-ring)] motion-reduce:transition-none motion-reduce:hover:scale-100 ${open ? 'hidden sm:flex' : 'flex'}`}
       >
         {open ? <CloseIcon /> : <SparkIcon className="h-6 w-6" />}
       </button>

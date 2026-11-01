@@ -23,15 +23,15 @@ export function TopBar() {
   const { activeTab, setActiveTab } = useMarketStore();
   const feed = useFeedSummary();
   const openDirectory = useTerminalNavigation();
-  const title = activeTab === 'dashboard' ? 'Trading desk' : pageMeta(activeTab)?.label ?? 'Asset workspace';
+  const title = activeTab === 'dashboard' ? 'Command Center' : pageMeta(activeTab)?.label ?? 'Asset workspace';
 
   const clock = new Date(feed.now).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
   return (
-    <header className="relative z-10 flex h-16 shrink-0 items-center gap-2 border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 md:gap-4 md:px-4">
+    <header className="relative z-10 flex h-14 shrink-0 items-center gap-2 border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 md:gap-4 md:px-4">
       <div className="min-w-0">
         <p className="truncate text-base font-semibold tracking-tight md:text-xl">{title}</p>
-        <p className="hidden text-xs text-[var(--text-secondary)] lg:block">F&O TERMINAL · Research & paper trading</p>
+        <p className="hidden text-[11px] uppercase tracking-[.1em] text-[var(--text-muted)] lg:block">F&amp;O Terminal · Paper research desk</p>
       </div>
       <span className="rounded border border-[var(--desk-accent)]/40 bg-[var(--desk-accent)]/10 px-2 py-1 text-xs font-semibold tracking-wider text-[var(--desk-accent)]">PAPER</span>
 
@@ -52,7 +52,7 @@ export function TopBar() {
       <ThemeSwitcher />
       <SignOutButton />
 
-      <div className="shrink-0 text-right font-mono text-sm tabular-nums text-[var(--text-secondary)]" style={{ fontFamily: "'JetBrains Mono', monospace" }} aria-label={`Current time ${clock} IST`}>
+      <div className="shrink-0 text-right font-mono text-sm tabular-nums text-[var(--text-secondary)]" aria-label={`Current time ${clock} IST`}>
         <span className="sm:hidden">{clock.slice(0, 5)}</span>
         <span className="hidden sm:inline">{clock}</span>
         <span className="ml-1 hidden text-xs sm:inline">IST</span>

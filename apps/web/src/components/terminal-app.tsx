@@ -3,6 +3,9 @@
 import React from 'react';
 import { AppShell } from '@/components/layout/app-shell';
 import { Dashboard } from '@/components/dashboard';
+import { CommandCenter } from '@/components/command-center';
+import { OptionChainPage } from '@/components/option-chain';
+import { StrategyLabPage } from '@/components/strategy-lab';
 import { AssetWorkspace } from '@/components/asset-workspace';
 import { CorporateActionsPage } from '@/components/corporate-actions';
 import { IndicesPage } from '@/components/indices';
@@ -41,7 +44,13 @@ export function TerminalApp() {
 
     switch (activeTab) {
       case 'dashboard':
+        return <CommandCenter />;
+      case 'market-overview':
         return <Dashboard />;
+      case 'option-chain':
+        return <OptionChainPage />;
+      case 'strategy-lab':
+        return <StrategyLabPage />;
       case 'indices':
         return <IndicesPage />;
       case 'fno-explorer':
@@ -91,7 +100,7 @@ export function TerminalApp() {
       case 'settings':
         return <UnbuiltPage title="Settings" description="Broker, risk and alert settings are planned. The theme is changed from the top bar." />;
       default:
-        return <Dashboard />;
+        return <CommandCenter />;
     }
   };
 

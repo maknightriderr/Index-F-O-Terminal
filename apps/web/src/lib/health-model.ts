@@ -45,6 +45,8 @@ export interface HealthResponse {
   orderFlow?: { status?: string; dataPlan?: string; lastPacketAt?: number | null; lastError?: string | null; deltaMode?: string; deltaModeReason?: string; failedConnections?: number };
   /** Functional checks (server ops-monitor.ts, audit OBS-1): open incidents; DEGRADES ones degrade the overall status. */
   ops?: { at?: number | null; incidents?: Array<{ key: string; check: string; severity: 'DEGRADES' | 'WARN'; detail: string; since: number }> };
+  /** Reference calendars with an end date (YYYY-MM-DD): holiday table, fee schedule, MCX contract calendars. */
+  calendarHorizons?: Array<{ id: string; until: string }>;
 }
 
 export interface HealthRow {

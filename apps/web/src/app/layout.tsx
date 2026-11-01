@@ -35,7 +35,7 @@ export default function RootLayout({
         {/* Applies the stored theme (dark by default) before first paint — no flash of the wrong theme. */}
         <script dangerouslySetInnerHTML={{ __html: themeBootstrapScript() }} />
         <link
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
+          href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
           rel="stylesheet"
         />
       </head>
