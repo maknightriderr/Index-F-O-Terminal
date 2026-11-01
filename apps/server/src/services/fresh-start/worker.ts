@@ -67,6 +67,7 @@ export class FreshPaperWorker {
   private async context(ref:FreshReference,now:number,open:number){
     const old=this.histories.get(ref.id),params={exchange:freshReferenceExchange(ref),segment:ref.signal.segment,token:ref.signal.token,toDate:new Date(now).toISOString()};
     const one=await this.provider.getHistoricalData({...params,interval:'ONE_MINUTE',fromDate:new Date(open).toISOString()});
+    if(this.stopped)throw Error('WORKER_STOPPED');
     const five=await this.provider.getHistoricalData({...params,interval:'FIVE_MINUTE',fromDate:new Date(old?Math.max(open,old.lastSeen-300000):now-45*86400000).toISOString()});
     if(this.stopped)throw Error('WORKER_STOPPED');
     const receivedAt=Date.now(),bars5=mergeFreshBars(old?.five??[],freshBars(five,5,receivedAt),4000),bars1=mergeFreshBars(old?.one??[],freshBars(one,1,receivedAt),1440),lastSeen=bars5.at(-1)?.time??0;
