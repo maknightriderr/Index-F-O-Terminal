@@ -1,8 +1,9 @@
+import {FRESH_PAPER_EVENT_POLICY} from './fresh-event-policy.js';
 import {freshAdapterState} from '../services/fresh-start/adapter-state.js';
 import { FRESH_PACK_VERSION, FRESH_STRATEGIES } from '@fno/analytics';
 /** Implementation and forward paper activation requested by the user; execution remains gated by operational qualification. */
 export const FRESH_CONFIG = Object.freeze({
-    version: FRESH_PACK_VERSION, spec: 'FRESH-START-SPEC-1.1', implementationApproved: true,
+    eventPolicy:FRESH_PAPER_EVENT_POLICY,version: FRESH_PACK_VERSION, spec: 'FRESH-START-SPEC-1.1', implementationApproved: true,
     approval: 'User requested paper activation and selected INR 500000 virtual capital; 2026-10-31', enabled: true, activationApproved: true, activationRequested: true,
     liveOrdersAllowed: false, capital: 500000 as number | null, baselineTrailing: false,
     strategies: FRESH_STRATEGIES.map(id => ({ id, enabled: true })),

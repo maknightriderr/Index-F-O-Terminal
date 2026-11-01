@@ -190,3 +190,7 @@ See [the next-phase qualification handoff](activation-handoff.md) for the verifi
 ### Official EIA schedule intake
 
 See [EIA calendar intake](eia-calendar-intake.md) for automatic keyless energy-report schedules, durable evidence, IST/DST and holiday handling, known-source blackouts and explicitly incomplete commodity coverage. This does not replace the macro calendar or qualify MCX quantities.
+
+## Approved paper event-data exception — 1 November 2026
+
+The user approved paper research despite unavailable economic-calendar data after the free-source check. [PAPER_EVENT_UNVERIFIED_V1](paper-event-research-policy.md) supersedes the earlier mandatory complete macro/commodity gate only for that paper scope. Missing provider/complete coverage is a warning; known blackouts, issuer/actions, verified units/quotes, account risk and exits remain mandatory. Every affected fill is labeled EVENT_DATA_UNVERIFIED, source/cohort evidence is frozen, and separate results cannot be pooled into an event-qualified validation claim. Paid calendar credentials are optional. Existing counters, held positions and historical records are preserved.
