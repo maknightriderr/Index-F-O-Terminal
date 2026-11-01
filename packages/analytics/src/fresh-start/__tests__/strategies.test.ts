@@ -69,4 +69,26 @@ describe('fresh-start point-in-time strategy rules', () => {
     it('does not use future bars, late-arriving confirmations or future target levels', () => { const c = orb(), baseline = evaluateFreshStrategies(c); c.bars5 = [...c.bars5, bar(open + 1500000, 103, 105, 102, 104)]; expect(evaluateFreshStrategies(c)).toEqual(baseline); const delayed = orb(); delayed.bars5 = delayed.bars5.map((x, i, a) => i === a.length - 1 ? { ...x, availableAt: delayed.now + 1000 } : x); expect(evaluateFreshStrategies(delayed).candidates).toEqual([]); const target = orb(); target.previousHigh = 0; target.previousLow = 0; target.levels = target.levels.map(x => ({ ...x, knownAt: target.now + 1000 })); expect(evaluateFreshStrategies(target).candidates.find(x => x.strategy === 'NEW_ORB_RETEST_V1')).toBeUndefined(); });
     it('rejects a stale decision and an unfinished breakout without retest', () => { const c = orb(); c.now += 2100; expect(evaluateFreshStrategies(c).refusals[0].code).toBe('LATE_DECISION'); const x = orb(); x.bars5 = x.bars5.slice(0, -1); x.now -= 300000; expect(evaluateFreshStrategies(x).candidates).toEqual([]); });
     it('does not label a swing before its two right-hand bars are known', () => { const b = [bar(open, 100, 101), bar(open + 300000, 100, 102), bar(open + 600000, 100, 105), bar(open + 900000, 100, 103), bar(open + 1200000, 100, 102)]; expect(freshSwingLevels(b, open + 1200000)).toEqual([]); expect(freshSwingLevels(b, open + 1500000)).toContainEqual({ price: 105, knownAt: open + 1500000, role: 'RESISTANCE', kind: 'CONFIRMED_SWING' }); });
+    describe('1.5 target selection', () => {
+        const base = () => evaluateFreshStrategies(orb()).candidates.find(x => x.strategy === 'NEW_ORB_RETEST_V1')!;
+        it('caps an unreachable level at 3 ATR and records the target R', () => {
+            const c = base();
+            expect(c.evidence.targetKind).toBe('ATR_CAP');
+            expect(c.target).toBeCloseTo(c.referenceEntry + 3 * c.atr);
+            expect(c.evidence.targetR as number).toBeGreaterThanOrEqual(1.5);
+        });
+        it('passes over a minor swing closer than 1.5R and aims at the next level', () => {
+            const b = base(), risk = b.referenceEntry - b.stop, ctx = orb();
+            ctx.levels = [...ctx.levels, { price: b.referenceEntry + 0.5 * risk, knownAt: open - 1, role: 'RESISTANCE', kind: 'CONFIRMED_SWING' }, { price: b.referenceEntry + 2 * risk, knownAt: open - 1, role: 'RESISTANCE', kind: 'CONFIRMED_SWING' }];
+            const c = evaluateFreshStrategies(ctx).candidates.find(x => x.strategy === 'NEW_ORB_RETEST_V1')!;
+            expect(c.target).toBeCloseTo(b.referenceEntry + 2 * risk);
+        });
+        it('refuses when a major level blocks the path before 1.5R', () => {
+            const b = base(), risk = b.referenceEntry - b.stop, ctx = orb();
+            ctx.levels = [...ctx.levels, { price: b.referenceEntry + 0.8 * risk, knownAt: open - 1, role: 'RESISTANCE', kind: 'PDH' }];
+            const r = evaluateFreshStrategies(ctx);
+            expect(r.candidates.some(x => x.strategy === 'NEW_ORB_RETEST_V1')).toBe(false);
+            expect(r.refusals).toContainEqual({ strategy: 'NEW_ORB_RETEST_V1', code: 'TARGET_TOO_CLOSE' });
+        });
+    });
 });

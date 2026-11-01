@@ -179,6 +179,12 @@ export function advanceFreshPosition(p: FreshPaperPosition, e: {
     barsSinceFill: number;
     trail: boolean;
     monitorEpoch?: string;
+    /**
+     * 1.5 (E-03): the last completed 5-minute close of the underlying. When the field is present (even null),
+     * structural invalidation needs a CLOSE beyond the candidate's stop, so a wick through the level no longer exits;
+     * the 75% premium emergency stop still protects intrabar. Absent (older callers/replays): the tick rule applies.
+     */
+    underlyingClose?: { price: number; closedAt: number } | null;
 }): FreshPaperPosition {
     if (p.state === 'CLOSED' || e.at <= p.lastEventAt || !Number.isFinite(e.at))
         return p;
@@ -208,7 +214,11 @@ export function advanceFreshPosition(p: FreshPaperPosition, e: {
     if (n.state === 'OPEN') {
         // A thin book delays the fill, never the trigger: the stop fires on price alone.
         const reachedStop = quoteFresh && q!.bid <= beforeStop;
-        const invalid = underlyingFresh && d * (e.underlying! - n.candidate.stop) <= 0;
+        const closeRule = e.underlyingClose !== undefined;
+        const barClose = e.underlyingClose;
+        const invalid = closeRule
+            ? barClose != null && Number.isFinite(barClose.price) && barClose.price > 0 && barClose.closedAt > p.openedAt && barClose.closedAt <= e.at && d * (barClose.price - n.candidate.stop) <= 0
+            : underlyingFresh && d * (e.underlying! - n.candidate.stop) <= 0;
         const target = underlyingFresh && d * (e.underlying! - n.candidate.target) >= 0;
         const noProgress = e.barsSinceFill >= 3 && n.maxUnderlyingFavorable < .25 * Math.abs(n.candidate.referenceEntry - n.candidate.stop) && underlyingFresh && d * (e.underlying! - n.candidate.referenceEntry) < 0;
         const reason = e.at >= e.cutoff - 600000 ? 'SESSION_CUTOFF' : reachedStop ? 'PREMIUM_STOP' : invalid ? 'STRUCTURAL_INVALIDATION' : target ? 'UNDERLYING_TARGET' : e.barsSinceFill >= 12 ? 'MAX_HOLD' : noProgress ? 'NO_PROGRESS' : null;

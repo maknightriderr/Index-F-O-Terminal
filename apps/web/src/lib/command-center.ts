@@ -56,6 +56,9 @@ export interface PositionView {
   fees: number | null;
   delta: number | null;
   market: string;
+  /** The exit monitor's latest executable bid for a held position (display only), or null. */
+  markBid: number | null;
+  markAt: number | null;
 }
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
@@ -108,6 +111,8 @@ export function toPositionView(row: FreshStartStatus['positions'][number]): Posi
     fees: num(s.estimatedFees),
     delta: num(k.delta),
     market: str(k.market) ?? '—',
+    markBid: null,
+    markAt: null,
   };
 }
 
@@ -115,7 +120,13 @@ export function positionViews(status: FreshStartStatus | null): PositionView[] {
   if (!status) return [];
   return status.positions.flatMap((p) => {
     const v = toPositionView(p);
-    return v ? [v] : [];
+    if (!v) return [];
+    const m = v.status !== 'CLOSED' ? status.feedQualification?.marks?.[v.id] : undefined;
+    if (m && Number.isFinite(m.bid) && m.bid > 0) {
+      v.markBid = m.bid;
+      v.markAt = m.at;
+    }
+    return [v];
   });
 }
 
@@ -173,7 +184,8 @@ export function stopToTarget(p: PositionView): { stop: number; target: number; m
   const target = p.entry + 1.5 * perUnitRisk;
   const span = target - p.currentStop;
   const clamp = (x: number) => (span > 0 ? Math.max(0, Math.min(1, (x - p.currentStop) / span)) : 0);
-  return { stop: p.currentStop, target, mark: p.highBid, markAt: clamp(p.highBid), entryAt: clamp(p.entry) };
+  const mark = p.markBid ?? p.highBid;
+  return { stop: p.currentStop, target, mark, markAt: clamp(mark), entryAt: clamp(p.entry) };
 }
 
 export interface EquityPoint { at: number; equity: number; drawdown: number }

@@ -1,6 +1,13 @@
 # Fresh-start implementation and operational history
 
-Current checkpoint (1 November 2026): NEW-INTRADAY-1.4 (audit fixes below; 1.3 before them) is configured for approved forward paper research with INR500,000 virtual capital. Actual entry eligibility remains source/contract/event/risk/monitor gated. Missing complete macro coverage is allowed only under the labeled paper policy; MCX depth-unit qualification and observed market-session evidence remain unresolved where absent. The phase notes below preserve earlier states, including initial disablement. See [the current operational handoff](activation-handoff.md).
+Current checkpoint (1 November 2026): NEW-INTRADAY-1.5 (target and invalidation fixes below; 1.4 audit fixes before them) is configured for approved forward paper research with INR500,000 virtual capital. Actual entry eligibility remains source/contract/event/risk/monitor gated. Missing complete macro coverage is allowed only under the labeled paper policy; MCX depth-unit qualification and observed market-session evidence remain unresolved where absent. The phase notes below preserve earlier states, including initial disablement. See [the current operational handoff](activation-handoff.md).
+
+## NEW-INTRADAY-1.5 — 1 November 2026 target and invalidation fixes
+
+- **Targets (all four strategies):** the target is the first level paying at least 1.5× the underlying risk. A minor confirmed swing closer than that is passed over; a major level (opening range, previous day, external reference) closer than that refuses the setup with `TARGET_TOO_CLOSE`. A level further than 3 × 5-minute ATR is capped at 3 ATR (`targetKind: ATR_CAP`), or refused with `TARGET_OUT_OF_REACH` when even the cap pays less than 1.5R. Candidate evidence records `targetR`.
+- **Structural invalidation (E-03):** the exit monitor folds underlying prints into 5-minute session buckets and passes the last completed close; invalidation now needs a close beyond the candidate's stop after the fill. A wick through the level no longer exits; the 75% premium emergency stop still protects intrabar. Callers that do not pass bar closes keep the tick rule.
+- **Live mark:** the exit monitor's latest executable bid per held position is published in the status (`feedQualification.marks`) for display only.
+- New version → a new cohort: 1.4 results are not pooled with 1.5.
 
 ## NEW-INTRADAY-1.4 — 1 November 2026 audit fixes
 

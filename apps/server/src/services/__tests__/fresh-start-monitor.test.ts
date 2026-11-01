@@ -55,4 +55,17 @@ describe('paper monitor resilience under bounded shared-feed pressure',()=>{
      expect(saved.exitPrice).toBeCloseTo(99.95);expect(saved.exitTriggeredAt).toBe(at-1000);expect(observe.mock.calls.at(-1)![2].monitorEpoch).toBe(s.feed.sourceEpoch);
    }finally{s.feed.close();}
  });
+ it('passes the last completed 5-minute close (not a wick) and publishes the live bid for display',async()=>{
+   let now=at+1000,price=24890;const observe=vi.fn(async(_a:string,_i:string,_e:any)=>true);
+   const feed={sourceEpoch:'e',underlying:()=>({price,at:now}),quote:()=>({contract:'NSE_FO:2',source:'ANGEL',epoch:'e',eventAt:now,receivedAt:now,bid:120,ask:120.5,bidUnits:25,askUnits:25,tick:.05})};
+   const monitor=new FreshPositionMonitor(feed as any,{observe} as any,()=>now);monitor.watch([row()]);
+   monitor.tick();await vi.waitFor(()=>expect(observe).toHaveBeenCalled());
+   expect(observe.mock.calls.at(-1)![2].underlyingClose).toBeNull();
+   expect(monitor.marks().held).toMatchObject({bid:120,ask:120.5});
+   now=at+200000;price=24950;monitor.tick();
+   now=at+300500;price=24990;monitor.tick();await vi.waitFor(()=>expect(observe.mock.calls.at(-1)![2].at).toBe(at+300500));
+   // The first bucket's last print (24950) is its close; the wick to 24890 earlier in it never counts.
+   expect(observe.mock.calls.at(-1)![2].underlyingClose).toEqual({price:24950,closedAt:at+300000});
+   expect(advanceFreshPosition(row().state as any,observe.mock.calls.at(-1)![2]).exitReason).not.toBe('STRUCTURAL_INVALIDATION');
+ });
 });

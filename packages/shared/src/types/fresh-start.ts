@@ -51,7 +51,9 @@ export interface FreshStartStatus {
     evaluations?:Array<{id:string;at:string;instrument:string;session:string;refusals:unknown}>;
     activationRequested:boolean;
     activationApproved:boolean;
-    feedQualification:{status:string;lastCheckAt:number|null;sourceEpoch:string|null;referenceContracts:number;optionContracts:number;observedExecutableBooks:number;error:string|null;scope?:string[];monitorRunning?:boolean;recovered?:boolean;entriesArmed?:boolean;barCallbacks?:number;lastDecision?:string|null;eventCode?:string};
+    feedQualification:{status:string;lastCheckAt:number|null;sourceEpoch:string|null;referenceContracts:number;optionContracts:number;observedExecutableBooks:number;error:string|null;scope?:string[];monitorRunning?:boolean;recovered?:boolean;entriesArmed?:boolean;barCallbacks?:number;
+    /** Latest executable quote per held position id (display only; exits use the monitor's own observations). */
+    marks?:Record<string,{bid:number;ask:number;at:number;underlying:number|null}>;lastDecision?:string|null;eventCode?:string};
     version: string;
     implementationApproved: boolean;
     enabled: boolean;

@@ -130,3 +130,13 @@ describe('contract picker', () => {
     expect(stale.rejected[0].firstFailure).toMatch(/Quote/);
   });
 });
+
+describe('live mark', () => {
+  it('attaches the exit monitor bid to held positions only and marks the rail with it', () => {
+    const s = status([pos({ id: 'o', state: 'OPEN', netPnl: null, highBid: 130 }), pos({ id: 'c' })], { feedQualification: { marks: { o: { bid: 110, ask: 110.5, at: NOW, underlying: 24810 }, c: { bid: 1, ask: 2, at: NOW, underlying: null } } } } as never);
+    const [open, closed] = positionViews(s);
+    expect(open).toMatchObject({ markBid: 110, markAt: NOW });
+    expect(closed.markBid).toBeNull();
+    expect(stopToTarget(open).mark).toBe(110);
+  });
+});

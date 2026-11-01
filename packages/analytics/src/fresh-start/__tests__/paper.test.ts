@@ -72,3 +72,21 @@ describe('fresh-start exit event reduction', () => {
     it('observes max hold and the adverse no-progress rule', () => { const p = position(); expect(advanceFreshPosition(p, { ...event(at + 1000, 99, null), barsSinceFill: 3 }).exitReason).toBe('NO_PROGRESS'); expect(advanceFreshPosition(p, { ...event(at + 1000, 101, null), barsSinceFill: 12 }).exitReason).toBe('MAX_HOLD'); });
 });
 it('bounds contract work and applies payoff gates before choosing a strike', () => { const r = request(); const one = { strike: 25000, expiry: '2026-11-03', contract: r.contract, quote: r.quote }; expect(selectFreshContract(r, [one]).selected?.admission.ok).toBe(true); expect(selectFreshContract(r, Array(11).fill(one)).refusals[0].code).toBe('SHORTLIST_LIMIT'); const bad = { ...one, contract: { ...r.contract, targetPremiumScenarios: [120, 110] } }; expect(selectFreshContract(r, [bad]).selected).toBeNull(); });
+describe('1.5 structural invalidation on a 5-minute close (E-03)', () => {
+    const event = (t: number, underlying: number, close: { price: number; closedAt: number } | null) => ({ at: t, underlying, underlyingAt: t, quote: q(t, 100), cutoff: candidate.at + 14400000, barsSinceFill: 1, trail: false, underlyingClose: close });
+    it('ignores a wick through the stop while the completed bar closed above it', () => {
+        const p = position(), t = p.openedAt + 300000;
+        expect(advanceFreshPosition(p, event(t, 94.5, { price: 96, closedAt: t - 1000 })).state).toBe('OPEN');
+        expect(advanceFreshPosition(p, event(t, 94.5, null)).state).toBe('OPEN');
+    });
+    it('exits once a completed bar after the fill closes beyond the stop', () => {
+        const p = position(), t = p.openedAt + 300000;
+        expect(advanceFreshPosition(p, event(t, 96, { price: 94.9, closedAt: t - 1000 })).exitReason).toBe('STRUCTURAL_INVALIDATION');
+        // A bar that closed before the fill is not evidence about this trade.
+        expect(advanceFreshPosition(p, event(t, 96, { price: 94.9, closedAt: p.openedAt - 1 })).state).toBe('OPEN');
+    });
+    it('keeps the tick rule for callers that do not supply bar closes', () => {
+        const p = position(), t = p.openedAt + 1000;
+        expect(advanceFreshPosition(p, { ...event(t, 94.5, null), underlyingClose: undefined }).exitReason).toBe('STRUCTURAL_INVALIDATION');
+    });
+});

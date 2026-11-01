@@ -11,19 +11,27 @@ export function completeFreshBarsSinceFill(openedAt:number,now:number,sessionOpe
 /** Each observed exit transition is retained until durable storage acknowledges it. Entry readiness fails closed on persistence errors. */
 export class FreshPositionMonitor {
   private rows=new Map<string,Row>();private projected=new Map<string,FreshPaperPosition>();
-  private queues=new Map<string,Array<{event:Observation;critical:boolean}>>();private busy=new Set<string>();private failures=new Set<string>();private lastSaved=new Map<string,number>();
+  private queues=new Map<string,Array<{event:Observation;critical:boolean}>>();
+  /** Per underlying: the current 5-minute bucket's last observed price, and the last completed bucket's close (E-03). */
+  /** The latest executable quote seen per held position, for the Command Center's live mark (display only). */
+  private latest=new Map<string,{bid:number;ask:number;at:number;underlying:number|null}>();
+  private buckets=new Map<string,{start:number;last:number;closed:{price:number;closedAt:number}|null}>();private busy=new Set<string>();private failures=new Set<string>();private lastSaved=new Map<string,number>();
   constructor(private feed:FreshSharedFeed,private store:FreshPaperStore,private now:()=>number=Date.now){}
   get healthy(){return this.failures.size===0;}
+  /** Last quote per held position (closed positions dropped). */
+  marks(){const out:Record<string,{bid:number;ask:number;at:number;underlying:number|null}>={};for(const [id,m] of this.latest){const p=this.projected.get(id)??this.rows.get(id)?.state;if(p&&p.state!=='CLOSED')out[id]=m;else this.latest.delete(id);}return out;}
   /** Held (not closed) positions and the oldest unresolved exit trigger, for operational alerting. */
   summary(){let open=0,oldestExitPendingAt:number|null=null;for(const [id,row] of this.rows){const p=this.projected.get(id)??row.state;if(p.state==='CLOSED')continue;open++;if(p.state==='EXIT_PENDING'&&p.exitTriggeredAt!=null)oldestExitPendingAt=oldestExitPendingAt==null?p.exitTriggeredAt:Math.min(oldestExitPendingAt,p.exitTriggeredAt);}return {open,oldestExitPendingAt,failures:this.failures.size};}
-  watch(rows:Row[]){for(const row of rows){this.rows.set(row.id,row);if(!this.queues.get(row.id)?.length)this.projected.set(row.id,row.state);}for(const id of this.rows.keys())if(!rows.some(r=>r.id===id)&&!this.queues.get(id)?.length){this.rows.delete(id);this.projected.delete(id);this.failures.delete(id);this.queues.delete(id);this.lastSaved.delete(id);}}
+  watch(rows:Row[]){for(const row of rows){this.rows.set(row.id,row);if(!this.queues.get(row.id)?.length)this.projected.set(row.id,row.state);}for(const id of this.rows.keys())if(!rows.some(r=>r.id===id)&&!this.queues.get(id)?.length){this.rows.delete(id);this.projected.delete(id);this.failures.delete(id);this.queues.delete(id);this.lastSaved.delete(id);this.latest.delete(id);}}
   tick(){
     const now=this.now();
     for(const [id,row] of this.rows){
       const p=this.projected.get(id)??row.state,exchange=(p.contract.id.startsWith('MCX_FO:')?'MCX':p.contract.id.startsWith('BSE_FO:')?'BSE':'NSE') as Exchange,session=getSessionWindow(exchange,p.candidate.session),cutoff=p.sessionCutoff??session?.close;
       if(!session||cutoff==null){this.failures.add(id);continue;}
       const tick=Number(p.contract.evidence?.tickSize),quote=tick>0?this.feed.quote(p.contract.id,tick):null,underlying=this.feed.underlying(p.candidate.instrument);
-      const event:Observation={at:now,underlying:underlying?.price??null,underlyingAt:underlying?.at??null,quote,cutoff,barsSinceFill:completeFreshBarsSinceFill(p.openedAt,now,session.open),trail:false,monitorEpoch:this.feed.sourceEpoch};
+      if(quote&&quote.bid>0)this.latest.set(id,{bid:quote.bid,ask:quote.ask,at:quote.receivedAt,underlying:underlying?.price??null});
+      const underlyingClose=this.closeOf(p.candidate.instrument,session.open,now,underlying);
+      const event:Observation={at:now,underlying:underlying?.price??null,underlyingAt:underlying?.at??null,quote,cutoff,barsSinceFill:completeFreshBarsSinceFill(p.openedAt,now,session.open),trail:false,monitorEpoch:this.feed.sourceEpoch,underlyingClose};
       const n=advanceFreshPosition(p,event),queue=this.queues.get(id)??[];
       const threshold=.25*Math.abs(p.candidate.referenceEntry-p.candidate.stop),critical=n.state!==p.state||n.currentStop!==p.currentStop||(p.maxUnderlyingFavorable<threshold&&n.maxUnderlyingFavorable>=threshold);
       if(n!==p&&(critical||now-(this.lastSaved.get(id)??0)>=1000)){
@@ -32,6 +40,15 @@ export class FreshPositionMonitor {
       }
       void this.drain(id,row.account_id);
     }
+  }
+  /** Folds fresh underlying prints into 5-minute session buckets; returns the last completed bucket's close, or null. */
+  private closeOf(instrument:string,sessionOpen:number,now:number,u:{price:number;at:number}|null|undefined){
+    const start=sessionOpen+Math.floor((now-sessionOpen)/300000)*300000;let b=this.buckets.get(instrument);
+    const fresh=u&&Number.isFinite(u.price)&&u.price>0&&now-u.at<=2000;
+    if(!b){if(!fresh)return null;b={start,last:u!.price,closed:null};this.buckets.set(instrument,b);return null;}
+    if(start>b.start){b.closed=start-b.start===300000?{price:b.last,closedAt:b.start+300000}:null;b.start=start;if(fresh)b.last=u!.price;else{b.closed=null;this.buckets.delete(instrument);}return b.closed;}
+    if(fresh)b.last=u!.price;
+    return b.closed;
   }
   private async drain(id:string,accountId:string){
     if(this.busy.has(id))return;this.busy.add(id);

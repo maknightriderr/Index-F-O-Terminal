@@ -169,14 +169,16 @@ function AccountStrip({ account: a, loading }: { account: ReturnType<typeof acco
 
 function LivePositions({ positions, onOpen }: { positions: PositionView[]; onOpen: (id: string) => void }) {
   return (
-    <Panel title={<>Live positions <small>· {positions.length} open</small></>} meta="Marked at the best bid seen · exits fill bid − 1 tick" bodyClassName="p-3">
+    <Panel title={<>Live positions <small>· {positions.length} open</small></>} meta="Marked at the live bid when the monitor has one, else the best bid seen · exits fill bid − 1 tick" bodyClassName="p-3">
       {positions.length === 0 ? (
         <Empty>No open paper positions. New entries appear here the moment a fill is recorded.</Empty>
       ) : (
         <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(290px, 1fr))' }}>
           {positions.map((p) => {
             const l = stopToTarget(p);
-            const unreal = (p.highBid - p.entry) * p.units;
+            // Live: the exit monitor's latest bid (display only). Otherwise the best bid seen, labelled as a peak.
+            const live = p.markBid != null && p.markAt != null && Date.now() - p.markAt < 60_000;
+            const unreal = ((live ? p.markBid! : p.highBid) - p.entry) * p.units;
             return (
               <button key={p.id} type="button" className="cc-position" onClick={() => onOpen(p.id)} aria-label={`${p.contract}, ${p.strategyLabel}. Open trade detail.`}>
                 <span className="flex items-start justify-between gap-2">
@@ -188,9 +190,9 @@ function LivePositions({ positions, onOpen }: { positions: PositionView[]; onOpe
                 </span>
                 <span className="grid grid-cols-4 gap-2">
                   <Stat label="ENTRY" value={p.entry.toFixed(2)} />
-                  <Stat label="BEST BID" value={p.highBid.toFixed(2)} />
+                  <Stat label={live ? 'BID NOW' : 'BEST BID'} value={(live ? p.markBid! : p.highBid).toFixed(2)} />
                   <Stat label="QTY" value={`${p.units}`} />
-                  <Stat label="PEAK GAIN" value={signedInr(unreal)} className={unreal > 0 ? 'cc-up' : unreal < 0 ? 'cc-down' : ''} />
+                  <Stat label={live ? 'GROSS AT BID' : 'PEAK GAIN'} value={signedInr(unreal)} className={unreal > 0 ? 'cc-up' : unreal < 0 ? 'cc-down' : ''} />
                 </span>
                 <span className="block">
                   <span className="cc-rail block" aria-hidden="true">
