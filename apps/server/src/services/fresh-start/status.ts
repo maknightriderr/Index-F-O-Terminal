@@ -1,4 +1,5 @@
 import {freshIntegrityReport} from './integrity.js';
+import {freshSessionEvidence} from './session-evidence.js';
 import {freshProductionState} from './adapter-state.js';
 import { freshPerformanceFromTotals, FRESH_PACK_VERSION } from '@fno/analytics';
 import { sql } from '../../lib/db.js';
@@ -10,7 +11,7 @@ export async function freshStartStatus() {
     const positions = schemaReady ? await sql<any[]> `SELECT strategy,version,session,status,state,net_pnl FROM fresh_paper_positions ORDER BY opened_at DESC LIMIT 1001` : [];
     const ledgerRows=schemaReady?await sql<any[]>`
       WITH sample AS (
-        SELECT id,strategy,version,status,revision,state,net_pnl,reserved_risk,reserved_premium,opened_at,closed_at
+        SELECT id,strategy,version,session,status,revision,state,net_pnl,reserved_risk,reserved_premium,opened_at,closed_at
         FROM fresh_paper_positions WHERE version=${FRESH_PACK_VERSION} ORDER BY opened_at DESC,id DESC LIMIT 101
       )
       SELECT p.*,entry.kind AS entry_kind,entry.at AS entry_at,entry.evidence AS entry_evidence,
@@ -49,7 +50,7 @@ export async function freshStartStatus() {
     const adapter=freshProductionState(),adapterSchemaReady=schemaFileReady('048_fresh_start_adapter.sql'),calendarSchemaReady=schemaFileReady('049_fresh_start_calendars.sql');
     const adapterDecisions=adapterSchemaReady?await sql<any[]>`SELECT candidate_id,at,strategy,code FROM fresh_adapter_decisions WHERE version=${FRESH_PACK_VERSION} ORDER BY at DESC LIMIT 50`:[];
     const evaluations=adapterSchemaReady?await sql<any[]>`SELECT id,at,instrument,session,result->'refusals' AS refusals FROM fresh_evaluations WHERE version=${FRESH_PACK_VERSION} ORDER BY at DESC LIMIT 20`:[];
-    return { integrity,eventPolicy:FRESH_CONFIG.eventPolicy,eventCohorts,activationRequested:FRESH_CONFIG.activationRequested,activationApproved:FRESH_CONFIG.activationApproved,feedQualification:adapter,eventSources:adapter.eventSources,calendarSchemaReady,marketReadiness:adapter.marketReadiness,discovery:adapter.discovery,requiredEventConfiguration:adapter.requiredEventConfiguration,adapterDecisions,evaluations,engineConfigured:FRESH_CONFIG.enabled,brokeragePerOrder:20,adapterSchemaReady, reviews, version: FRESH_CONFIG.version, implementationApproved: true, enabled: freshEntriesEnabled(), legacyNewEntries: LEGACY_NEW_ENTRIES_ENABLED,
+    return { integrity,sessionEvidence:freshSessionEvidence(ledgerRows),eventPolicy:FRESH_CONFIG.eventPolicy,eventCohorts,activationRequested:FRESH_CONFIG.activationRequested,activationApproved:FRESH_CONFIG.activationApproved,feedQualification:adapter,eventSources:adapter.eventSources,calendarSchemaReady,marketReadiness:adapter.marketReadiness,discovery:adapter.discovery,requiredEventConfiguration:adapter.requiredEventConfiguration,adapterDecisions,evaluations,engineConfigured:FRESH_CONFIG.enabled,brokeragePerOrder:20,adapterSchemaReady, reviews, version: FRESH_CONFIG.version, implementationApproved: true, enabled: freshEntriesEnabled(), legacyNewEntries: LEGACY_NEW_ENTRIES_ENABLED,
         legacyExitsPreserved: true, liveOrdersAllowed: false, schemaReady, capital: FRESH_CONFIG.capital,
         blockers: [...(!schemaReady||!adapterSchemaReady||!calendarSchemaReady ? ['FRESH_SCHEMA_UNAVAILABLE'] : []),...adapter.entryBlockers,...(!adapter.recovered?['QUALIFIED_SHARED_FEED_ADAPTER']:[])],
         capabilities: FRESH_CONFIG.requirements.map(id => ({ id, status: id==='VERIFIED_EVENT_COVERAGE'&&FRESH_CONFIG.eventPolicy.allowMissingMacroCoverage?'WAIVED_FOR_PAPER_RESEARCH':resolved.has(id)?'APPROVED':['CURRENT_EXCHANGE_AND_BROKER_COSTS','PRICING_MODEL_AND_SCENARIOS'].includes(id)?'IMPLEMENTED_NOT_FULLY_QUALIFIED':'NEEDS_VERIFICATION' })),

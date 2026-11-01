@@ -1,4 +1,5 @@
 import {describe,it,expect} from 'vitest';
+import {freshSessionEvidence} from '../fresh-start/session-evidence.js';
 import {inspectFreshLedger,freshIntegrityReport} from '../fresh-start/integrity.js';
 const at=Date.parse('2026-11-02T06:00:00Z');
 function row(closed=false,multiplier=1,quantity=25){
@@ -23,4 +24,38 @@ describe('recorded paper-ledger consistency, not execution certification',()=>{
  it('keeps a pending exit unresolved rather than inventing profit or a completed lifecycle',()=>{const r=row();r.state.state=r.status='EXIT_PENDING';r.state.exitTriggeredAt=at+500;r.last_kind='EXIT_PENDING';r.last_evidence={at:at+1000,quote:null};r.state.lastEventAt=at+1000;r.last_at=new Date(at+1000);r.revision=1;expect(inspectFreshLedger(r)).toMatchObject({verdict:'CONSISTENT',phase:'EXIT_PENDING'});r.net_pnl=0;expect(inspectFreshLedger(r).issues).toContain('UNFINISHED_POSITION_HAS_REALIZED_RESULT');});
  it('detects changed/lost event provenance, treats absent legacy labels as unrecorded, and never mutates evidence',()=>{const r=row();r.state.contract.evidence.eventCalendar.policy.id='changed';expect(inspectFreshLedger(r).issues).toContain('FROZEN_EVENT_POLICY_CHANGED');delete r.state.contract.evidence.eventCalendar.policy;expect(inspectFreshLedger(r).missing).toContain('FROZEN_EVENT_POLICY_EVIDENCE_MISSING');const old=row();delete old.state.contract.evidence;delete old.entry_evidence.request.contract.evidence;const before=JSON.stringify(old);expect(inspectFreshLedger(old).eventEvidenceClass).toBe('EVENT_POLICY_UNRECORDED');expect(JSON.stringify(old)).toBe(before);});
  it('reports malformed/missing history as incomplete and exposes the bounded sample without claiming all history passed',()=>{expect(inspectFreshLedger({})).toMatchObject({verdict:'INCOMPLETE'});expect(freshIntegrityReport([])).toMatchObject({sampled:0,consistent:0});expect(freshIntegrityReport(Array.from({length:101},()=>row()))).toMatchObject({sampled:100,sampleTruncated:true,closedChecked:0});});
+});
+
+
+describe('bounded recorded market-session evidence',()=>{
+ const sessionRow=(closed=false)=>{const r={...row(closed),session:'2026-11-02'};r.state.candidate.session=r.entry_evidence.request.session=r.session;return r;};
+ it('shows all four markets with no completed evidence for empty or entry-only samples',()=>{
+   const empty=freshSessionEvidence([]);expect(empty.markets).toHaveLength(4);expect(empty.markets.every(m=>m.consistentSessionClosed===0)).toBe(true);
+   const r=freshSessionEvidence([sessionRow()]);expect(r.cohorts[0]).toMatchObject({entryOnly:1,closed:0,consistentSessionClosed:0,sessions:[]});
+ });
+ it('separates event classes, policies, strategies and markets; repeated dates are not independent sessions',()=>{
+   const a=sessionRow(true),b=sessionRow(true),c=sessionRow(true),d=sessionRow(true),e=sessionRow(true);
+   c.state.contract.evidence.eventCalendar.coverage.evidenceClass=c.entry_evidence.request.contract.evidence.eventCalendar.coverage.evidenceClass='EVENT_COVERAGE_VERIFIED';
+   d.state.contract.evidence.eventCalendar.policy.id=d.entry_evidence.request.contract.evidence.eventCalendar.policy.id='other-policy';
+   e.strategy=e.state.candidate.strategy='OTHER_STRATEGY';
+   const report=freshSessionEvidence([a,b,c,d,e]);expect(report.cohorts).toHaveLength(4);expect(report.cohorts.find(x=>x.sampled===2)).toMatchObject({consistentSessionClosed:2,sessions:['2026-11-02']});
+   const bse=sessionRow(true);bse.state.contract.market=bse.entry_evidence.request.contract.market='BSE_VERIFIED_OPTIONS';
+   expect(freshSessionEvidence([a,bse]).markets.filter(x=>x.sampled>0)).toHaveLength(2);
+ });
+ it('withholds consistent session counts for corrupt P&L, missing proof and invalid session timing',()=>{
+   const corrupt=sessionRow(true);corrupt.net_pnl=99999;
+   const missing=sessionRow(true);missing.entry_evidence={};
+   for(const day of ['2026-11-01','2026-02-30','2035-11-02','invalid',undefined]){
+     const bad=sessionRow(true);bad.session=day;
+     const result=freshSessionEvidence([corrupt,missing,bad]);expect(result.cohorts[0]).toMatchObject({inconsistent:1,incomplete:1,sessionTimingUnproven:2,consistentSessionClosed:0,sessions:[]});
+   }
+   const late=sessionRow(true);late.state.lastEventAt=Date.parse('2026-11-02T12:00:00Z');
+   expect(freshSessionEvidence([late]).cohorts[0]).toMatchObject({sessionTimingUnproven:1,consistentSessionClosed:0});
+ });
+ it('does not assign unknown markets to NSE, backfill missing labels or count older records',()=>{
+   const unknown=sessionRow(true);delete unknown.state.contract.market;
+   const legacy=sessionRow(true);delete legacy.state.contract.evidence;delete legacy.entry_evidence.request.contract.evidence;
+   const before=JSON.stringify(legacy);const r=freshSessionEvidence([unknown,legacy]);expect(r.unclassified).toBe(1);expect(r.cohorts[0]).toMatchObject({policyId:'LEGACY_EVENT_POLICY_UNRECORDED',evidenceClass:'EVENT_POLICY_UNRECORDED'});expect(JSON.stringify(legacy)).toBe(before);
+   expect(freshSessionEvidence(Array.from({length:101},()=>sessionRow(true)))).toMatchObject({sampled:100,sampleTruncated:true});
+ });
 });
