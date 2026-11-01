@@ -7,7 +7,7 @@ import type {SubscriptionManager,SubscriptionTarget} from '../../lib/subscriptio
 import {sql} from '../../lib/db.js';
 import {redis,scanKeys} from '../../lib/redis.js';
 import {schemaFileReady} from '../ensure-capture-schema.js';
-import {FRESH_CONFIG} from '../../config/fresh-start.js';
+import {FRESH_CONFIG,freshEntriesEnabled} from '../../config/fresh-start.js';
 import {FreshSharedFeed} from './feed.js';
 import {createFreshEventSource} from './event-source.js';
 import {FreshProductionAdapter,type FreshReference} from './adapter.js';
@@ -22,7 +22,7 @@ import {auditFreshAdapter,auditFreshEvaluation,persistFreshCalendarSnapshot} fro
 type History={five:FreshBar[];one:FreshBar[];lastSeen:number};
 export class FreshPaperWorker {
   private operationalReporter=new FreshOperationalReporter(evidence=>logger.info(evidence,'Fresh-start operational evidence; readiness and paper-only blockers observed'));
-  private feed:FreshSharedFeed;private events=createFreshEventSource(persistFreshCalendarSnapshot);private store=new FreshPaperStore();private monitor:FreshPositionMonitor;private runtime:FreshRuntime;
+  private feed:FreshSharedFeed;private events=createFreshEventSource(persistFreshCalendarSnapshot);private store=new FreshPaperStore(undefined,()=>!this.stopped&&freshEntriesEnabled());private monitor:FreshPositionMonitor;private runtime:FreshRuntime;
   private refs=new Map<string,FreshReference>();private master:Instrument[]=[];private masterDay='';private histories=new Map<string,History>();private shortlist:SubscriptionTarget[]=[];
   private positions:Awaited<ReturnType<FreshPaperStore['recover']>>=[];private timers:ReturnType<typeof setInterval>[]=[];private removeObservation:(()=>void)|null=null;private scanning=false;private ready=false;private stopped=false;private lastScan=0;private discovery:ReturnType<typeof discoverFreshMarkets>|null=null;private selectionAt=0;private cursor=0;private selected:FreshReference[]=[];private selectionExchangeKey='';private historyCursor=0;private historyFailures=new Map<string,string>();private subscriptionReady=false;
   constructor(private provider:MarketDataProvider,private subscriptions:SubscriptionManager){

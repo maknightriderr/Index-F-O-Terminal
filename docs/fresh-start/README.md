@@ -209,3 +209,7 @@ The user approved paper research despite unavailable economic-calendar data afte
 ## Exit-monitor resilience qualification — 1 November 2026
 
 [Monitor resilience](monitor-resilience.md) covers a stalled scanner,250 synthetic subscriptions/100,000 ticks with slow storage, retained target/exit events and disconnect/stale/depth recovery. It also fixes a shutdown race that could issue the second history request after a stopped worker's first request completed. These are bounded synthetic engineering checks, not production-load or profitability evidence.
+
+## Entry activation revocation — 1 November 2026
+
+[Transaction activation rechecks](entry-revocation.md) close the reproduced case where an entry passed activation before a database wait and still filled after readiness was withdrawn. Revoked staged fills roll back, and a stopped worker cannot borrow replacement-worker readiness. Held exits remain independent. The document states the boundary for commits already in progress and the remaining quote-aging/market-evidence work.

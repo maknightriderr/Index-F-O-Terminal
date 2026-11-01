@@ -22,6 +22,16 @@ async function count(table: string) {
     }>(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n;
 }
 describe('fresh-start durable account and fills', () => {
+    it.each(['SELECT id FROM fresh_paper_portfolio','INSERT INTO fresh_candidates','INSERT INTO fresh_paper_events'])('rolls back new spending when entry activation is revoked during %s',async(checkpoint)=>{
+        let enabled=true,revoked=false;const c=client(pg);
+        const delayed:FreshDb={...c,begin:fn=>c.begin(tx=>fn({...tx,unsafe:async(q,p)=>{
+            const rows=await tx.unsafe(q,p);if(q.includes(checkpoint)){enabled=false;revoked=true;}return rows;
+        }}))};
+        expect(await new FreshPaperStore(delayed,()=>enabled).enter(request())).toMatchObject({ok:false,code:'PAPER_DISABLED'});
+        expect(revoked).toBe(true);
+        for(const table of ['fresh_paper_accounts','fresh_candidates','fresh_parent_moves','fresh_paper_positions','fresh_paper_events'])expect(await count(table)).toBe(0);
+        expect(await store.enter(request())).toMatchObject({ok:true,code:'FILLED'});
+    });
     it('defaults to disabled with no database calls or broker side effects', async () => { const calls: FreshDb = { unsafe: async () => { throw Error('MUST_NOT_QUERY'); }, begin: async () => { throw Error('MUST_NOT_QUERY'); } }; expect(await new FreshPaperStore(calls).enter(request())).toEqual({ ok: false, code: 'PAPER_DISABLED' }); });
     it('migrates idempotently and commits one fill/reservation despite duplicate entry delivery', async () => { const r = request(); expect(await store.enter(r)).toMatchObject({ ok: true, code: 'FILLED' }); expect(await store.enter(r)).toMatchObject({ ok: true, code: 'ALREADY_FILLED' }); expect(await count('fresh_paper_positions')).toBe(1); expect(await count('fresh_paper_events')).toBe(1); const [p] = await store.recover(); expect(p.state.originalRiskCurrency).toBe(1987.5); });
     it('serializes competing account requests and refuses correlated/underlying stacking', async () => { const r = request(), r2 = request('c2'); r2.marks = { c1: r.quote }; const results = await Promise.all([store.enter(r), store.enter(r2)]); expect(results.filter(x => x.ok)).toHaveLength(1); expect(await count('fresh_paper_positions')).toBe(1); });
