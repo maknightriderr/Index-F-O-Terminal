@@ -92,7 +92,8 @@ export class FreshPaperStore {
                 const exit=Math.max(0,q.bid-q.tick),units=p.quantity*k.multiplier;
                 unrealized+=(exit-p.entry)*units-(k.feePolicy?freshRoundTripFees(p.entry,exit,p.quantity,k.multiplier,k.feePolicy):k.explicitRoundTripCostPerUnit*units);
             }
-            const account = { capital: a.capital, equity: a.capital + a.realized_net + unrealized, dailyNet: a.realized_net + unrealized, reservedRisk, reservedPremium, openPositions: open.length, consecutiveNetLosses: a.paused ? 3 : a.consecutive_losses, marksComplete };
+            const [cohort] = await tx.unsafe('SELECT COALESCE(SUM(realized_net),0) AS net FROM fresh_paper_accounts WHERE version=$1', [c.version]);
+            const account = { cohortNet: Number(cohort?.net ?? NaN) + unrealized, capital: a.capital, equity: a.capital + a.realized_net + unrealized, dailyNet: a.realized_net + unrealized, reservedRisk, reservedPremium, openPositions: open.length, consecutiveNetLosses: a.paused ? 3 : a.consecutive_losses, marksComplete };
             const admission = admitFreshPaper({ ...r, candidate: c, account,
                 parentAlreadyTraded: parents.some(p => p.id === c.parentId && p.traded),
                 correlatedPositionOpen: open.some(x => x.risk_group === r.riskGroup || x.state.candidate.instrument === c.instrument),
@@ -126,7 +127,8 @@ export class FreshPaperStore {
             const exit=Math.max(0,q.bid-q.tick);unrealized+=(exit-p.entry)*units-(k.feePolicy?freshRoundTripFees(p.entry,exit,p.quantity,k.multiplier,k.feePolicy):k.explicitRoundTripCostPerUnit*units);
         }
         const dailyNet=(a?.realized_net??0)+unrealized;
-        return {capital,equity:capital+dailyNet,dailyNet,reservedRisk,reservedPremium,marksComplete,openPositions:rows.length,consecutiveNetLosses:a?.paused?3:a?.consecutive_losses??0};
+        const [cohort]=await this.db.unsafe('SELECT COALESCE(SUM(realized_net),0) AS net FROM fresh_paper_accounts WHERE version=$1',[FRESH_PACK_VERSION]);const cohortNet=Number(cohort?.net??NaN)+unrealized;
+        return {cohortNet,capital,equity:capital+dailyNet,dailyNet,reservedRisk,reservedPremium,marksComplete,openPositions:rows.length,consecutiveNetLosses:a?.paused?3:a?.consecutive_losses??0};
     }
     /** Exit monitoring is deliberately independent of the entry/activation switch. */
     async observe(accountId: string, id: string, e: Parameters<typeof advanceFreshPosition>[1]) {

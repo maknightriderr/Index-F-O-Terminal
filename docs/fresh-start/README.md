@@ -1,6 +1,22 @@
 # Fresh-start implementation and operational history
 
-Current checkpoint (1 November 2026): NEW-INTRADAY-1.3 is configured for approved forward paper research with INR500,000 virtual capital. Actual entry eligibility remains source/contract/event/risk/monitor gated. Missing complete macro coverage is allowed only under the labeled paper policy; MCX depth-unit qualification and observed market-session evidence remain unresolved where absent. The phase notes below preserve earlier states, including initial disablement. See [the current operational handoff](activation-handoff.md).
+Current checkpoint (1 November 2026): NEW-INTRADAY-1.4 (audit fixes below; 1.3 before them) is configured for approved forward paper research with INR500,000 virtual capital. Actual entry eligibility remains source/contract/event/risk/monitor gated. Missing complete macro coverage is allowed only under the labeled paper policy; MCX depth-unit qualification and observed market-session evidence remain unresolved where absent. The phase notes below preserve earlier states, including initial disablement. See [the current operational handoff](activation-handoff.md).
+
+## NEW-INTRADAY-1.4 — 1 November 2026 audit fixes
+
+Deep-audit findings fixed in code (rule geometry now matches the approved spec text; behaviour change ⇒ new pack version and cohort):
+
+- **Premium stop (E-01):** fires on bid ≤ stop regardless of displayed size; depth gates only the fill.
+- **Thin-book exits (E-02):** a fresh two-sided book thinner than the position for 60 s fills displayed units at bid − 1 tick and the remainder 10% below the bid (`+THIN_BOOK_HAIRCUT`). Absent quotes still never fill. Both values are PROPOSED_NOT_APPROVED research parameters.
+- **Cohort drawdown breaker (E-04):** cumulative realized net of the pack across every account-day plus today's marks at −3% of capital refuses new entries (`COHORT_DRAWDOWN_PAUSED`); an unmeasured cohort net refuses.
+- **Sweep reversal (S-01):** only the session's first PDL/PDH breach qualifies; its depth is the deepest extreme from that breach through the reclaim.
+- **VWAP pullback (S-03, S-05):** at least two pullback bars precede confirmation; the impulse must contain no counter close.
+- **First opening pullback (S-04):** retracement measured from the impulse extreme before the first counter close; up to three pullback bars plus the trigger.
+- **Ops (O-01, T-01/T-02):** `freshPaperRecovery` is critical; ops monitor pages on a stopped monitor with held positions, a `BLOCKED_*` worker in session, or an exit pending 10+ minutes, and warns 30 days (pages 7 days) before any hard-coded holiday, fee or MCX calendar ends.
+- **Legacy load (O-02):** `positionalStockScan` and `backgroundBiasEvaluator` only register while legacy entries are allowed.
+- **Hygiene:** migration `051` widens `experiment_events.event` to VARCHAR(64) (D-03); unused `qualification.ts` removed; legacy-retired banner on Dashboard and Setups; research-workflow test timeout raised.
+
+Not changed here (needs data or a decision): 2027 holiday/fee tables and next MCX contract calendars (unpublished/unverified), the event-unverified cohort vs promotion gate (S-02), tick vs 5m-close invalidation (E-03), MCX qualification (O-05), approvals in `config_registry` (O-06), event source refresh/BLS 403 (O-07) and 5m/option-quote archiving (P-DATA-1).
 
 The reviewed master prompt and Phase 1–2 report are preserved beside this file. The user approved implementation on 30 October 2026. The numeric pack remains a research hypothesis. At that initial checkpoint all new strategies/markets were disabled and capital was unset; later approved paper activation is recorded above and in the phase history. There is no live-order integration or activation API.
 

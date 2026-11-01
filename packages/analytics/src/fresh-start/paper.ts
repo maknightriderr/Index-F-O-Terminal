@@ -41,7 +41,11 @@ export interface FreshAccount {
     openPositions: number;
     consecutiveNetLosses: number;
     marksComplete: boolean;
+    /** Cumulative realized net of this pack version across every account-day, plus today's marks. Absent = not measured (refused). */
+    cohortNet?: number;
 }
+/** PROPOSED_NOT_APPROVED: a cumulative cohort loss of this fraction of capital pauses new entries until reviewed. */
+export const FRESH_COHORT_DRAWDOWN_FRACTION = 0.03;
 export type FreshAdmission = {
     ok: false;
     code: string;
@@ -108,6 +112,9 @@ function assessFreshPaper(args: {
         return refuse('EXPOSURE_OR_PARENT');
     if (!a.marksComplete || a.capital <= 0 || a.equity <= 0 || a.reservedRisk < 0 || a.reservedPremium < 0 || a.openPositions >= 2 || a.dailyNet <= -.01 * a.capital || a.consecutiveNetLosses >= 3)
         return refuse('ACCOUNT_PAUSED');
+    // A run of losing days never resets the cohort: each account-day starts fresh, the cumulative drawdown does not.
+    if (a.cohortNet == null || !Number.isFinite(a.cohortNet) || a.cohortNet <= -FRESH_COHORT_DRAWDOWN_FRACTION * a.capital)
+        return refuse('COHORT_DRAWDOWN_PAUSED');
     if (!Number.isSafeInteger(k.lotQuantity) || k.lotQuantity <= 0 || !Number.isFinite(k.multiplier) || k.multiplier <= 0 || Math.abs(k.delta) < .45 || Math.abs(k.delta) > .65 || (d === 1 ? k.delta <= 0 : k.delta >= 0))
         return refuse('INVALID_CONTRACT');
     if ((q.ask - q.bid) / ((q.ask + q.bid) / 2) > ((k.market === 'NSE_STOCK_OPTIONS' || k.market === 'MCX_VERIFIED_FUTURES_OPTIONS') ? .015 : .01))
@@ -159,6 +166,9 @@ export interface FreshPaperPosition {
     sessionCutoff?: number;
     estimatedFees?: number;
 }
+/** PROPOSED_NOT_APPROVED research values: how long a thin two-sided book may hold an exit, and the haircut for undisplayed units. */
+export const FRESH_THIN_BOOK_GRACE_MS = 60_000;
+export const FRESH_THIN_BOOK_HAIRCUT = 0.10;
 /** Immutable observation reduction. Missing quotes never invent a fill or clear an existing pending exit. */
 export function advanceFreshPosition(p: FreshPaperPosition, e: {
     at: number;
@@ -196,7 +206,8 @@ export function advanceFreshPosition(p: FreshPaperPosition, e: {
         }
     }
     if (n.state === 'OPEN') {
-        const reachedStop = quoteFresh && q!.bidUnits >= n.quantity && q!.bid <= beforeStop;
+        // A thin book delays the fill, never the trigger: the stop fires on price alone.
+        const reachedStop = quoteFresh && q!.bid <= beforeStop;
         const invalid = underlyingFresh && d * (e.underlying! - n.candidate.stop) <= 0;
         const target = underlyingFresh && d * (e.underlying! - n.candidate.target) >= 0;
         const noProgress = e.barsSinceFill >= 3 && n.maxUnderlyingFavorable < .25 * Math.abs(n.candidate.referenceEntry - n.candidate.stop) && underlyingFresh && d * (e.underlying! - n.candidate.referenceEntry) < 0;
@@ -207,9 +218,21 @@ export function advanceFreshPosition(p: FreshPaperPosition, e: {
             n.exitReason = reason;
         }
     }
-    if (n.state === 'EXIT_PENDING' && quoteFresh && q!.receivedAt >= n.exitTriggeredAt! + 250 && q!.eventAt >= n.exitTriggeredAt! + 250 && q!.bidUnits >= n.quantity) {
+    const exitQuote = n.state === 'EXIT_PENDING' && quoteFresh && q!.receivedAt >= n.exitTriggeredAt! + 250 && q!.eventAt >= n.exitTriggeredAt! + 250;
+    const fullBook = exitQuote && q!.bidUnits >= n.quantity;
+    // A two-sided book that stays thinner than the position is liquidated conservatively instead of pending forever:
+    // displayed units at bid − 1 tick, the remainder FRESH_THIN_BOOK_HAIRCUT below the bid. Absent quotes still never fill.
+    const thinBook = exitQuote && !fullBook && q!.bid > 0 && e.at - n.exitTriggeredAt! >= FRESH_THIN_BOOK_GRACE_MS;
+    if (fullBook || thinBook) {
+        const top = Math.max(0, q!.bid - q!.tick);
         n.state = 'CLOSED';
-        n.exitPrice = Math.max(0, q!.bid - q!.tick);
+        if (fullBook) n.exitPrice = top;
+        else {
+            const shown = Math.max(0, Math.min(1, q!.bidUnits / n.quantity));
+            const rest = Math.max(0, Math.floor((q!.bid * (1 - FRESH_THIN_BOOK_HAIRCUT)) / q!.tick) * q!.tick);
+            n.exitPrice = shown * top + (1 - shown) * rest;
+            n.exitReason = `${n.exitReason}+THIN_BOOK_HAIRCUT`;
+        }
         n.estimatedFees = n.contract.feePolicy?freshRoundTripFees(n.entry,n.exitPrice,n.quantity,n.contract.multiplier,n.contract.feePolicy):n.contract.explicitRoundTripCostPerUnit*n.quantity*n.contract.multiplier;
         n.netPnl = (n.exitPrice-n.entry)*n.quantity*n.contract.multiplier-n.estimatedFees;
     }

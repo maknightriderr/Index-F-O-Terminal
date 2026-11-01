@@ -138,6 +138,7 @@ export const FILES = [
   '048_fresh_start_adapter.sql',
   '049_fresh_start_calendars.sql',
   '050_fresh_research.sql',
+  '051_experiment_event_width.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */

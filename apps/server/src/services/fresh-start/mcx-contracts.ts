@@ -8,8 +8,17 @@ const ENERGY_SPECS = {
 const GOLD_SOURCE='https://www.mcxindia.com/docs/default-source/options/gold-option-july-2026-contract-onwards8d88befa-a326-4ac6-8de1-4bfec750135e.pdf';
 // Exact annexure dates in the current July specification; older circulars have different dates.
 const GOLD_CALENDAR:Readonly<Record<string,string>>={'2026-07-29':'2026-08','2026-08-31':'2026-10','2026-09-25':'2026-10','2026-10-30':'2026-12','2026-11-27':'2026-12'};
+/** New December option / March 2027 future specifications are not inherited past this bound. */
+const SILVER_LINK_UNTIL='2026-12-01';
 const SILVER_SOURCE='https://www.mcxindia.com/docs/default-source/options/silver-(30-kilograms)-options-february-2026-contract-onwards.pdf';
 const SILVER_FUTURE_SOURCE='https://www.mcxindia.com/docs/default-source/about-us/silver-september-2026-contract-onwards.pdf';
+/** The last session each hard-coded MCX calendar covers (exclusive bound), for expiry alerting. */
+export function freshMcxCalendarHorizons():Array<{id:string;until:string}>{
+  const lastGold=Object.keys(GOLD_CALENDAR).sort().at(-1)!;
+  const dayAfter=(day:string)=>new Date(Date.parse(day+'T00:00:00Z')+86400000).toISOString().slice(0,10);
+  return [{id:'MCX_GOLD_OPTION_CALENDAR',until:dayAfter(lastGold)},{id:'MCX_SILVER_OPTION_LINKS',until:SILVER_LINK_UNTIL},
+    ...Object.entries(ENERGY_SPECS).map(([name,spec])=>({id:`MCX_${name}_SPECIFICATION`,until:spec.until}))];
+}
 export interface FreshMcxLink {optionExpiry:string;futureToken:string;futureExpiry:string;specification:string;source:string;underlyingSource?:string;tenderStart?:string;rule:'TWO_MCX_BUSINESS_DAYS_BEFORE_FUTURE_EXPIRY'|'PUBLISHED_GOLD_LAUNCH_CALENDAR'|'THREE_MCX_BUSINESS_DAYS_BEFORE_TENDER';}
 const validDay=(day:string)=>/^\d{4}-\d{2}-\d{2}$/.test(day)&&Number.isFinite(Date.parse(day+'T00:00:00Z'))&&new Date(day+'T00:00:00Z').toISOString().slice(0,10)===day;
 /** Includes evening-only MCX holidays, excludes fully closed days; unknown calendar years never default to weekdays. */
@@ -35,7 +44,7 @@ function bullionLink(option:Instrument,master:readonly Instrument[]):FreshMcxLin
   }
   // September future specifications shorten tender from five to three trading days.
   // New December option / March 2027 future specifications are deliberately not inherited.
-  if(expiry<'2026-02-01'||expiry>='2026-12-01')return null;
+  if(expiry<'2026-02-01'||expiry>=SILVER_LINK_UNTIL)return null;
   const matches=futures.filter(x=>x.expiry!>='2026-09-01'&&x.expiry!<'2027-03-01').map(future=>({future,tenderStart:previousMcxBusinessDays(future.expiry!,2)})).filter(x=>x.tenderStart&&previousMcxBusinessDays(x.tenderStart,3)===expiry);
   if(matches.length!==1)return null;
   const {future,tenderStart}=matches[0];

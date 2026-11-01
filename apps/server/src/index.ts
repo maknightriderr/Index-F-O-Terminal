@@ -41,6 +41,7 @@ import { createLearningRoutes } from './api/learning.js';
 import { createLossAttributionRoutes } from './api/loss-attribution.js';
 import { createStructureRoutes } from './api/structure.js';
 import { startFreshPaperRecovery } from './services/fresh-start/runtime.js';
+import { legacyEntriesAllowed } from './config/legacy-entry-policy.js';
 import { createFreshStartRoutes } from './api/fresh-start.js';
 import { createPaperTradesRoutes } from './api/paper-trades.js';
 import { orderFlowFeedStatus } from './services/dhan-feed.js';
@@ -408,7 +409,7 @@ for (const spec of [
   timerService('institutionalFlowScanner', () => startInstitutionalFlowScanner(provider), held()),
   timerService('tradeSetupPriceMonitor', () => startTradeSetupPriceMonitor(provider, subscriptionManager), { critical: true, ready: () => recoveryReady }),
   // Isolated paper experiment arms (EXP-2.0): their own positions on the shared tick feed; never read by the baseline.
-  timerService('freshPaperRecovery', () => startFreshPaperRecovery(provider, subscriptionManager), { ready: () => schemaReady }),
+  timerService('freshPaperRecovery', () => startFreshPaperRecovery(provider, subscriptionManager), { critical: true, ready: () => schemaReady }),
   timerService('experimentEngine', () => startExperimentEngine(subscriptionManager), { ready: () => recoveryReady }),
   timerService('marketScanner', () => startMarketScanner(provider), held()),
   timerService('fiiDiiTracker', () => startFiiDiiTracker()),
@@ -416,9 +417,12 @@ for (const spec of [
   timerService('oiCloseSnapshot', () => startOiCloseSnapshot(provider), held()),
   timerService('cacheWarmer', () => startCacheWarmer(provider), held()),
   timerService('strategyTracker', () => startStrategyTracker(provider), held()),
-  timerService('positionalStockScan', () => startPositionalStockScan(provider), held()),
-  // Non-NSE symbols (SENSEX, CRUDEOIL, GOLD, SILVER, NATURALGAS by default) evaluated on a timer — flag BACKGROUND_BIAS.
-  timerService('backgroundBiasEvaluator', () => startBackgroundBiasEvaluator(provider), held()),
+  // Both exist only to mint legacy setups; with legacy new entries retired they would spend broker budget for nothing.
+  ...(legacyEntriesAllowed() ? [
+    timerService('positionalStockScan', () => startPositionalStockScan(provider), held()),
+    // Non-NSE symbols (SENSEX, CRUDEOIL, GOLD, SILVER, NATURALGAS by default) evaluated on a timer — flag BACKGROUND_BIAS.
+    timerService('backgroundBiasEvaluator', () => startBackgroundBiasEvaluator(provider), held()),
+  ] : []),
   timerService('marketStateCapture', () => startMarketStateCapture(provider), held(schemaReady)),
   timerService('missedWinnerAudit', () => startMissedWinnerAudit(provider), held(schemaReady)),
   timerService('setupEventsGrading', () => startSetupEventsGrading(provider), held(schemaReady)),

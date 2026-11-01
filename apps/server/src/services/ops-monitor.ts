@@ -15,6 +15,10 @@
 //   OPEN_PAST_EXPIRY an open trade whose option has expired
 //   RECORD_MISMATCH a trade row that disagrees with its plan (record-
 //                   reconciliation.ts; it alerts itself, so this only reports)
+//   FRESH_PAPER     the fresh-start paper monitor down while positions are held,
+//                   the worker BLOCKED_* in session, or an exit pending 10+ min
+//   CALENDAR_HORIZON a hard-coded holiday/fee/MCX calendar ends within 30 days
+//                   (WARN) or 7 days (pages): the fresh path fails closed after it
 //   ORDER_FLOW_FEED the Dhan order-flow feed not CONNECTED (token rejected,
 //                   data plan inactive, disconnected) or connected but silent
 //                   for 5+ minutes while a market it covers is open: footprints
@@ -42,8 +46,10 @@ import { BACKGROUND_BIAS_SYMBOLS, COVERAGE_LAG_FLAGS } from '../config/trading-f
 import { ORDER_FLOW_SYMBOLS } from '../config/order-flow-flags.js';
 import { orderFlowFeedStatus } from './dhan-feed.js';
 import { dhanConfigured } from './dhan-session.js';
+import { freshProductionState } from './fresh-start/adapter-state.js';
+import { freshCalendarHorizons } from './fresh-start/calendar-horizon.js';
 
-export type OpsCheckId = 'FEED_COVERAGE' | 'FEED_DOWN' | 'FEED_GAP' | 'ENGINE_STALE' | 'OPEN_PAST_EXPIRY' | 'RECORD_MISMATCH' | 'ORDER_FLOW_FEED';
+export type OpsCheckId = 'FEED_COVERAGE' | 'FEED_DOWN' | 'FEED_GAP' | 'ENGINE_STALE' | 'OPEN_PAST_EXPIRY' | 'RECORD_MISMATCH' | 'ORDER_FLOW_FEED' | 'FRESH_PAPER' | 'CALENDAR_HORIZON';
 export type OpsSeverity = 'DEGRADES' | 'WARN';
 
 export interface OpsFinding {
@@ -63,7 +69,26 @@ export const GRACE_MS: Record<OpsCheckId, number> = {
   OPEN_PAST_EXPIRY: 45 * 60_000, // the lost-trade sweep closes these every 30 minutes
   RECORD_MISMATCH: 0,
   ORDER_FLOW_FEED: 5 * 60_000, // a reconnect or the daily token / data-plan check must not page
+  FRESH_PAPER: 2 * 60_000,
+  CALENDAR_HORIZON: 0,
 };
+
+/** A hard-coded calendar ending within this many days is reported; within the second it pages. */
+export const CALENDAR_WARN_DAYS = 30;
+export const CALENDAR_PAGE_DAYS = 7;
+
+/** A fresh-start exit pending longer than this is an incident (a thin or silent book on a held paper position). */
+export const FRESH_EXIT_PENDING_ALERT_MS = 10 * 60_000;
+
+/** The fresh-start paper worker as the ops check sees it (fresh-start/adapter-state.ts). */
+export interface FreshPaperInput {
+  status: string;
+  recovered: boolean;
+  monitorRunning: boolean;
+  heldPositions: number;
+  oldestExitPendingAt: number | null;
+  error: string | null;
+}
 
 /** Connected, but no packet for this long in session, counts as down. */
 export const ORDER_FLOW_SILENT_MS = 5 * 60_000;
@@ -113,6 +138,10 @@ export interface OpsInputs {
   reconciliationMismatches: number | null;
   /** Absent = not checked (e.g. older callers / tests). */
   orderFlow?: OrderFlowFeedInput | null;
+  /** Absent = not checked. */
+  freshPaper?: FreshPaperInput | null;
+  /** Hard-coded calendars and their exclusive end session. Absent = not checked. */
+  calendarHorizons?: ReadonlyArray<{ id: string; until: string }>;
 }
 
 const isoDate = /^\d{4}-\d{2}-\d{2}$/;
@@ -191,6 +220,27 @@ export function evaluateOpsChecks(i: OpsInputs): OpsFinding[] {
 
   if ((i.reconciliationMismatches ?? 0) > 0) {
     out.push({ key: 'RECORD_MISMATCH', check: 'RECORD_MISMATCH', severity: 'WARN', detail: `${i.reconciliationMismatches} trade row(s) disagree with the close their plan recorded (see Diagnostics: reconciliation).` });
+  }
+
+  for (const h of i.calendarHorizons ?? []) {
+    const days = Math.floor((Date.parse(`${h.until}T00:00:00+05:30`) - i.now) / 86_400_000);
+    if (!Number.isFinite(days) || days > CALENDAR_WARN_DAYS) continue;
+    out.push({ key: `CALENDAR_HORIZON:${h.id}`, check: 'CALENDAR_HORIZON', severity: days <= CALENDAR_PAGE_DAYS ? 'DEGRADES' : 'WARN',
+      detail: days < 0 ? `${h.id} ended on ${h.until}: the fresh-start path refuses those sessions until it is updated.` : `${h.id} ends on ${h.until} (${days} day(s)): add the next published calendar or the fresh-start path stops there.` });
+  }
+
+  const fp = i.freshPaper;
+  if (fp) {
+    const anySession = (['NSE', 'BSE', 'MCX'] as const).some((e) => i.inSession(e));
+    if (fp.heldPositions > 0 && (!fp.recovered || !fp.monitorRunning)) {
+      out.push({ key: 'FRESH_PAPER:MONITOR', check: 'FRESH_PAPER', severity: 'DEGRADES', detail: `The fresh-start paper monitor is not running while ${fp.heldPositions} paper position(s) are held (status ${fp.status}).` });
+    }
+    if (anySession && fp.status.startsWith('BLOCKED_')) {
+      out.push({ key: 'FRESH_PAPER:BLOCKED', check: 'FRESH_PAPER', severity: 'DEGRADES', detail: `The fresh-start paper worker is ${fp.status} in session${fp.error ? ` (${fp.error})` : ''}: no new paper entries are evaluated.` });
+    }
+    if (fp.oldestExitPendingAt != null && i.now - fp.oldestExitPendingAt > FRESH_EXIT_PENDING_ALERT_MS) {
+      out.push({ key: 'FRESH_PAPER:EXIT_PENDING', check: 'FRESH_PAPER', severity: 'DEGRADES', detail: `A fresh-start paper exit has been pending for ${Math.round((i.now - fp.oldestExitPendingAt) / 60_000)} minutes with no executable bid.` });
+    }
   }
   return out;
 }
@@ -274,6 +324,11 @@ async function countPastExpiryRows(today: string): Promise<number> {
   return Number(r?.n ?? 0);
 }
 
+function freshPaperInput(): FreshPaperInput {
+  const s = freshProductionState();
+  return { status: s.status, recovered: s.recovered, monitorRunning: s.monitorRunning, heldPositions: s.heldPositions, oldestExitPendingAt: s.oldestExitPendingAt, error: s.error };
+}
+
 function orderFlowInput(): OrderFlowFeedInput {
   const s = orderFlowFeedStatus();
   const exchanges: Exchange[] = [];
@@ -307,6 +362,8 @@ export async function runOpsChecks(subscriptions: SubscriptionManager, now = Dat
     pastExpiryRows,
     reconciliationMismatches: report ? report.mismatches.length : null,
     orderFlow: orderFlowInput(),
+    freshPaper: freshPaperInput(),
+    calendarHorizons: freshCalendarHorizons(),
   });
   const t = stepIncidents(state, findings, now);
   lastRunAt = now;

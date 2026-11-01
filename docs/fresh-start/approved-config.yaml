@@ -1,5 +1,5 @@
 spec_version: FRESH-START-SPEC-1.1
-pack_version: NEW-INTRADAY-1.3
+pack_version: NEW-INTRADAY-1.4
 status: FORWARD_PAPER_APPROVED_OPERATIONALLY_GATED
 approval_record: "User: approved hai; 2026-10-30; paper activation requested 2026-10-31; operational qualification pending"
 execution:

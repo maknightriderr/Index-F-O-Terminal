@@ -19,16 +19,35 @@ describe('fresh-start point-in-time strategy rules', () => {
         }
     });
     it('confirms a first opening pullback without relabeling a later pullback', () => {
-        const c = context([bar(open, 100, 102.2, 99.8, 102), bar(open + 300000, 102, 104.2, 101.8, 104), bar(open + 600000, 104, 106.2, 103.8, 106), bar(open + 900000, 106, 106.1, 103, 104, 200), bar(open + 1200000, 104, 107, 103.5, 106.8, 200)]);
+        const c = context([bar(open, 100, 102.2, 99.8, 102), bar(open + 300000, 102, 104.2, 101.8, 104), bar(open + 600000, 104, 106.2, 103.8, 106), bar(open + 900000, 106, 106.1, 103.4, 104, 200), bar(open + 1200000, 104, 107, 103.5, 106.8, 200)]);
         for (const x of [c, mirrored(c)])
             expect(evaluateFreshStrategies(x).candidates.some(s => s.strategy === 'NEW_FIRST_OPENING_PULLBACK_V1'), JSON.stringify(evaluateFreshStrategies(x))).toBe(true);
     });
+    it('measures the first pullback from the impulse extreme, not the third close', () => {
+        // Low 103 retraces 3.2 of the 6.2-point impulse to its 106.2 high (52%): beyond the 50% limit.
+        const c = context([bar(open, 100, 102.2, 99.8, 102), bar(open + 300000, 102, 104.2, 101.8, 104), bar(open + 600000, 104, 106.2, 103.8, 106), bar(open + 900000, 106, 106.1, 103, 104, 200), bar(open + 1200000, 104, 107, 103.5, 106.8, 200)]);
+        for (const x of [c, mirrored(c)])
+            expect(evaluateFreshStrategies(x).candidates.some(s => s.strategy === 'NEW_FIRST_OPENING_PULLBACK_V1')).toBe(false);
+    });
     it('confirms the VWAP pullback with a known impulse break and preserved swing in both directions', () => {
-        const c = context([bar(open), bar(open + 300000), bar(open + 600000, 100, 101.2, 99.8, 101), bar(open + 900000, 101, 102.2, 100.8, 102), bar(open + 1200000, 102, 104.2, 101.8, 104, 2000), bar(open + 1500000, 104, 104.1, 102, 102.5, 100), bar(open + 1800000, 102.5, 104.8, 102.4, 104.6, 100)]);
+        const c = context([bar(open), bar(open + 300000), bar(open + 600000, 100, 101.2, 99.8, 101), bar(open + 900000, 101, 102.2, 100.8, 102), bar(open + 1200000, 102, 104.2, 101.8, 104, 2000), bar(open + 1500000, 104, 104.1, 102.6, 103, 100), bar(open + 1800000, 103, 103.2, 102, 102.5, 100), bar(open + 2100000, 102.5, 104.8, 102.4, 104.6, 100)]);
         c.bars1 = c.bars1.map(x => ({ ...x, open: 102.2, high: 102.3, low: 102.1, close: 102.2 }));
         c.levels = [...c.levels, { price: 101.5, knownAt: open - 1, role: 'RESISTANCE', kind: 'CONFIRMED_SWING' }, { price: 99.5, knownAt: open - 1, role: 'SUPPORT', kind: 'CONFIRMED_SWING' }];
         for (const x of [c, mirrored(c)])
             expect(evaluateFreshStrategies(x).candidates.some(s => s.strategy === 'NEW_VWAP_PULLBACK_V1'), JSON.stringify(evaluateFreshStrategies(x))).toBe(true);
+    });
+    it('refuses a VWAP pullback confirmed after only one pullback bar', () => {
+        const c = context([bar(open), bar(open + 300000), bar(open + 600000, 100, 101.2, 99.8, 101), bar(open + 900000, 101, 102.2, 100.8, 102), bar(open + 1200000, 102, 104.2, 101.8, 104, 2000), bar(open + 1500000, 104, 104.1, 102, 102.5, 100), bar(open + 1800000, 102.5, 104.8, 102.4, 104.6, 100)]);
+        c.bars1 = c.bars1.map(x => ({ ...x, open: 102.2, high: 102.3, low: 102.1, close: 102.2 }));
+        c.levels = [...c.levels, { price: 101.5, knownAt: open - 1, role: 'RESISTANCE', kind: 'CONFIRMED_SWING' }, { price: 99.5, knownAt: open - 1, role: 'SUPPORT', kind: 'CONFIRMED_SWING' }];
+        for (const x of [c, mirrored(c)])
+            expect(evaluateFreshStrategies(x).candidates.some(s => s.strategy === 'NEW_VWAP_PULLBACK_V1')).toBe(false);
+    });
+    it('measures the sweep from the session\'s first breach, so an earlier expansion breach is refused', () => {
+        // First breach drives 2 points below PDL 95 (beyond 0.75 ATR); a later shallow wick must not hide it.
+        const c = context([...Array.from({ length: 4 }, (_, i) => bar(open + i * 300000)), bar(open + 1200000, 95.5, 96, 93, 94.5), bar(open + 1500000, 95, 96, 94.8, 95.9, 2000), bar(open + 1800000, 95.9, 97.2, 95.6, 97)]);
+        for (const x of [c, mirrored(c)])
+            expect(evaluateFreshStrategies(x).candidates.some(s => s.strategy === 'NEW_PREVIOUS_SESSION_SWEEP_V1')).toBe(false);
     });
     it('requires a reclaim and subsequent momentum trigger for a previous-session sweep', () => {
         const c = context([...Array.from({ length: 5 }, (_, i) => bar(open + i * 300000)), bar(open + 1500000, 95, 96, 94.8, 95.9, 2000), bar(open + 1800000, 95.9, 97.2, 95.6, 97)]);
