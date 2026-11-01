@@ -1,12 +1,12 @@
 import {describe,it,expect,vi,afterEach} from 'vitest';
-const mocks=vi.hoisted(()=>({recover:vi.fn(),sql:vi.fn(),keys:vi.fn(),read:vi.fn(),audit:vi.fn(async()=>{}),eiaRefresh:vi.fn(async()=>{}),officialRefresh:vi.fn(async()=>{})}));
+const mocks=vi.hoisted(()=>({recover:vi.fn(),storeConstruct:vi.fn(),sql:vi.fn(),keys:vi.fn(),read:vi.fn(),audit:vi.fn(async()=>{}),eiaRefresh:vi.fn(async()=>{}),officialRefresh:vi.fn(async()=>{})}));
 vi.mock('../../lib/logger.js',()=>({logger:{info:vi.fn(),warn:vi.fn()}}));
 vi.mock('../fresh-start/free-global-events.js',()=>({FreshFreeGlobalEvents:class{async refresh(){} blockers(){return [];}evidence(){return null;}view(){return null;}}}));
 vi.mock('../fresh-start/official-macro-events.js',()=>({FreshOfficialMacroEvents:class{async refresh(){await mocks.officialRefresh();} blockers(){return [];}evidence(){return [];}view(){return [];}}}));
 vi.mock('../fresh-start/bls-events.js',()=>({FreshBlsEvents:class{async refresh(){} blackout(){return null;}evidence(){return null;}view(){return null;}}}));
 vi.mock('../fresh-start/eia-events.js',()=>({FreshEiaEvents:class{async refresh(){await mocks.eiaRefresh();} blackout(){return null;}evidence(){return null;}view(){return [];}}}));
 vi.mock('../fresh-start/issuer-events.js',()=>({FreshIssuerEvents:class{async refresh(){} clearance(){return 'BLOCKED_ISSUER_RESULTS_COVERAGE';}view(){return null;}evidence(){return null;}}}));
-vi.mock('../fresh-start/store.js',()=>({FreshPaperStore:class{async recover(){return [];}}}));
+vi.mock('../fresh-start/store.js',()=>({FreshPaperStore:class{constructor(_db:any,enabled?:()=>boolean){mocks.storeConstruct(enabled);}async recover(){return [];}}}));
 vi.mock('../fresh-start/runtime.js',()=>({FreshRuntime:class{recover=mocks.recover;}}));
 vi.mock('../../lib/db.js',()=>({sql:mocks.sql}));
 vi.mock('../../lib/redis.js',()=>({redis:{get:mocks.read},scanKeys:mocks.keys}));
@@ -19,6 +19,12 @@ const initialState=structuredClone(state);
 afterEach(()=>vi.useRealTimers());
 function setup(){Object.assign(state,structuredClone(initialState));mocks.eiaRefresh.mockReset().mockResolvedValue(undefined);mocks.officialRefresh.mockReset().mockResolvedValue(undefined);const provider={getInstrumentMaster:vi.fn(),getHistoricalData:vi.fn(),isAuthenticated:vi.fn()},manager={onTick:vi.fn(()=>()=>{}),onRecovering:vi.fn(()=>()=>{}),unsubscribe:vi.fn(),subscribe:vi.fn(async()=>{}),getStatus:()=>({subscriptionCount:0})};return {provider,manager,worker:new FreshPaperWorker(provider as any,manager as any)};}
 describe('production worker lifecycle',()=>{
+ it('keeps a stopped worker entry store disabled when a replacement worker re-arms shared readiness',()=>{
+   const {worker}=setup();const enabled=mocks.storeConstruct.mock.calls.at(-1)![0] as ()=>boolean;
+   state.entriesArmed=state.recovered=state.monitorRunning=true;expect(enabled()).toBe(true);
+   worker.stop();state.entriesArmed=state.recovered=state.monitorRunning=true;expect(enabled()).toBe(false);
+   worker.stop();
+ });
  it('keeps monitoring callbacks running while a history request is stalled, without starting another scanner request',async()=>{
    vi.useFakeTimers();vi.setSystemTime(new Date('2026-10-30T06:00:00Z'));
    mocks.recover.mockResolvedValue(undefined);mocks.sql.mockResolvedValue([{n:0}]);mocks.keys.mockResolvedValue([]);

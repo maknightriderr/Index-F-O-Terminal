@@ -29,6 +29,8 @@ type Stored = {
     state: FreshPaperPosition;
     risk_group: string;
 };
+/** Throw inside the transaction so a revoked entry rolls back every staged write. */
+class FreshEntryRevoked extends Error {}
 export class FreshPaperStore {
     constructor(private db: FreshDb = sql as unknown as FreshDb, private entriesEnabled: () => boolean = freshEntriesEnabled) { }
     /** All account spending, exposure checks, fill and frozen risk are committed under the same account lock. */
@@ -45,6 +47,7 @@ export class FreshPaperStore {
             return { ok: false, code: 'INVALID_ACCOUNT' };
         return this.db.begin(async (tx) => {
             await tx.unsafe("SELECT id FROM fresh_paper_portfolio WHERE id='terminal-paper' FOR UPDATE");
+            if(!this.entriesEnabled())throw new FreshEntryRevoked();
             await tx.unsafe('INSERT INTO fresh_paper_accounts(id,session,version,capital) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING', [r.accountId, r.session, r.candidate.version, r.capital]);
             const [a] = await tx.unsafe('SELECT * FROM fresh_paper_accounts WHERE id=$1 FOR UPDATE', [r.accountId]);
             if (a.session !== r.session || a.version !== r.candidate.version || a.capital !== r.capital)
@@ -96,7 +99,11 @@ export class FreshPaperStore {
             await tx.unsafe('INSERT INTO fresh_parent_moves(account_id,id,instrument,direction,session,origin,traded,evidence) VALUES($1,$2,$3,$4,$5,$6,true,$7::jsonb) ON CONFLICT(account_id,id) DO UPDATE SET traded=true', [r.accountId, c.parentId, c.instrument, c.direction, r.session, c.origin, JSON.stringify(c)]);
             await tx.unsafe("INSERT INTO fresh_paper_positions(id,account_id,version,strategy,instrument,risk_group,parent_id,session,status,reserved_risk,reserved_premium,opened_at,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'OPEN',$9,$10,$11,$12::jsonb)", [c.id, r.accountId, c.version, c.strategy, c.instrument, r.riskGroup, c.parentId, r.session, admission.initialRiskCurrency, admission.premiumCurrency, new Date(r.now), JSON.stringify(p)]);
             await tx.unsafe("INSERT INTO fresh_paper_events(id,position_id,revision,at,kind,evidence) VALUES($1,$2,0,$3,'ENTRY_FILL',$4::jsonb)", [`${c.id}:0`, c.id, new Date(r.now), JSON.stringify({ request: r, admission })]);
+            if(!this.entriesEnabled())throw new FreshEntryRevoked();
             return { ok: true, code: 'FILLED', id: c.id };
+        }).catch(error=>{
+            if(error instanceof FreshEntryRevoked)return {ok:false,code:'PAPER_DISABLED'};
+            throw error;
         });
     }
     async accountView(accountId:string,capital:number,marks:Readonly<Record<string,FreshQuote>>,now:number){
