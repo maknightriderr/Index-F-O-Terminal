@@ -99,7 +99,8 @@ contracts:
   - -2
   model_reference_and_units_status: NEEDS_VERIFICATION
 risk:
-  capital_inr: 500000
+  # 2026-11-01: raised from 500000 at the user's request so a full-size MCX CRUDEOIL (100 bbl) lot fits.
+  capital_inr: 3000000
   # 1.5: 0.25% made one lot unaffordable on most index ATM premiums and every MCX contract at INR 5,00,000.
   risk_fraction_per_trade_proposal: 0.005
   max_open_risk_fraction: 0.01

@@ -4,8 +4,8 @@ import { FRESH_PACK_VERSION, FRESH_STRATEGIES } from '@fno/analytics';
 /** Implementation and forward paper activation requested by the user; execution remains gated by operational qualification. */
 export const FRESH_CONFIG = Object.freeze({
     eventPolicy:FRESH_PAPER_EVENT_POLICY,version: FRESH_PACK_VERSION, spec: 'FRESH-START-SPEC-1.1', implementationApproved: true,
-    approval: 'User requested paper activation and selected INR 500000 virtual capital; 2026-10-31', enabled: true, activationApproved: true, activationRequested: true,
-    liveOrdersAllowed: false, capital: 500000 as number | null, baselineTrailing: false,
+    approval: 'User requested paper activation and selected INR 500000 virtual capital; 2026-10-31. Raised to INR 30,00,000 on 2026-11-01 at the user\'s request so full-size MCX CRUDEOIL (100 bbl) lots fit 0.5% risk and the 5% premium cap', enabled: true, activationApproved: true, activationRequested: true,
+    liveOrdersAllowed: false, capital: 3000000 as number | null, baselineTrailing: false,
     strategies: FRESH_STRATEGIES.map(id => ({ id, enabled: true })),
     primarySource: 'ANGEL_EXACT_REFERENCE', automaticEntryFallback: false,
     markets: ['NSE_INDEX_OPTIONS', 'NSE_STOCK_OPTIONS', 'BSE_VERIFIED_OPTIONS', 'MCX_VERIFIED_FUTURES_OPTIONS'],
