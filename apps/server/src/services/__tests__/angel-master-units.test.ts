@@ -5,4 +5,12 @@ describe('Angel master price and quantity provenance',()=>{
  it('keeps MCX Gold broker quantity separate from premium P&L units and blocks unverified book semantics',()=>{const r=angelMasterUnits('MCX','GOLD','1','50.000000');expect(r.tickSize).toBe(.5);expect(r.contractUnits).toMatchObject({brokerLotQuantity:1,premiumUnitsPerLot:100,quantityVerified:false});expect(angelMasterUnits('MCX','GOLDM','100','50').contractUnits).toMatchObject({brokerLotQuantity:100,premiumUnitsPerLot:10,quantityVerified:false});});
  it.each(['','bad','0','-1'])('never supplies an invented tick when the raw tick is %s',tick=>{expect(angelMasterUnits('NFO','NIFTY','65',tick).tickSize).toBe(0);});
  it('marks unsupported segment units and malformed lot quantities unverified',()=>{expect(angelMasterUnits('CDS','USDINR','1','25000').contractUnits.tickVerified).toBe(false);expect(angelMasterUnits('NFO','NIFTY','25abc','5').contractUnits.quantityVerified).toBe(false);});
+ it('1.5: verifies MCX energy/silver lots only when the master lot equals the published units per lot',()=>{
+   expect(angelMasterUnits('MCX','CRUDEOILM','10','5').contractUnits).toMatchObject({brokerLotQuantity:10,premiumUnitsPerLot:10,quantityVerified:true});
+   expect(angelMasterUnits('MCX','NATGASMINI','250','10').contractUnits.quantityVerified).toBe(true);
+   expect(angelMasterUnits('MCX','CRUDEOIL','100','10').contractUnits.quantityVerified).toBe(true);
+   // A master lot that disagrees with the published contract, or Gold (premium per 10 g), stays unverified.
+   expect(angelMasterUnits('MCX','CRUDEOILM','1','5').contractUnits.quantityVerified).toBe(false);
+   expect(angelMasterUnits('MCX','GOLD','1','50').contractUnits.quantityVerified).toBe(false);
+ });
 });

@@ -18,10 +18,10 @@ export const STRATEGY_NAMES: Record<string, string> = {
 export const STRATEGY_IDS = Object.keys(STRATEGY_NAMES);
 export const strategyName = (id: string) => STRATEGY_NAMES[id] ?? id.replace(/^NEW_|_V\d+$/g, '').replaceAll('_', ' ').toLowerCase();
 
-/** The engine's sizing rule (packages/analytics fresh-start/paper.ts): 0.25% of capital per trade. */
-export const RISK_FRACTION = 0.0025;
-/** The cohort pauses new entries at a 3% cumulative net loss (FRESH_COHORT_DRAWDOWN_FRACTION). */
-export const COHORT_DRAWDOWN_FRACTION = 0.03;
+/** The engine's sizing rule (packages/analytics fresh-start/paper.ts FRESH_RISK_PER_TRADE): 0.5% of capital per trade. */
+export const RISK_FRACTION = 0.005;
+/** The cohort pauses new entries at a 5% cumulative net loss (FRESH_COHORT_DRAWDOWN_FRACTION). */
+export const COHORT_DRAWDOWN_FRACTION = 0.05;
 /** A strategy's statistics are not judged before this many closed trades. */
 export const MIN_SAMPLE = 30;
 
@@ -146,7 +146,7 @@ export interface AccountView {
   todayTrades: number;
   open: number;
   openRisk: number;
-  /** Cumulative loss as a fraction of the 3% pause limit, 0..1 (0 when the cohort is flat or up). */
+  /** Cumulative loss as a fraction of the cohort pause limit, 0..1 (0 when the cohort is flat or up). */
   drawdownUsed: number;
   drawdownPct: number;
 }
@@ -347,7 +347,7 @@ export interface PickerResult {
  * Which contract the fresh-start engine's admission rules would accept on this chain (indicative only; the engine
  * also checks the modelled net payoff, exposure and account state, which the chain alone cannot):
  *   |delta| 0.45–0.65 on the trade's side · spread ≤ 1% of mid (1.5% for stock options) · two-sided book ·
- *   quote ≤ 2 s old · entry = ask + 1 tick · emergency stop 75% of entry · risk 0.25% of capital.
+ *   quote ≤ 2 s old · entry = ask + 1 tick · emergency stop 75% of entry · risk 0.5% of capital.
  */
 export function pickContract(chain: OptionChain, side: 'CE' | 'PE', capital: number | null, now: number, opts: { stockOptions?: boolean; tick?: number } = {}): PickerResult {
   const tick = opts.tick ?? 0.05;

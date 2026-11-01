@@ -139,7 +139,7 @@ export function OptionChainPage() {
                 </ul>
                 {pick.sizing ? (
                   <div className="grid grid-cols-2 gap-2.5 border-t border-dashed border-[var(--border-secondary)] pt-3">
-                    <div><div className="cc-label">Risk budget</div><div className="cc-num">{inr(pick.sizing.riskBudget)} (0.25%)</div></div>
+                    <div><div className="cc-label">Risk budget</div><div className="cc-num">{inr(pick.sizing.riskBudget)} (0.5%)</div></div>
                     <div><div className="cc-label">Entry (ask + tick)</div><div className="cc-num">{pick.sizing.entry.toFixed(2)}</div></div>
                     <div><div className="cc-label">Emergency stop</div><div className="cc-num">{pick.sizing.emergencyStop.toFixed(2)} (75%)</div></div>
                     <div><div className="cc-label">Size at stop</div><div className={`cc-num ${pick.sizing.lots > 0 ? '' : 'cc-down'}`}>{pick.sizing.lots > 0 ? `${pick.sizing.lots} lot · ${pick.sizing.units}` : '0 lots'}</div></div>

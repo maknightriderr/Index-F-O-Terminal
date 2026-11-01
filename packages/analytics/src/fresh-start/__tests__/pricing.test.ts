@@ -1,7 +1,7 @@
 import {describe,it,expect} from 'vitest';
 import {blackScholesPrice} from '../../greeks/index.js';
 import {fitFreshParity,freshPremiumScenarios,freshRoundTripFees,freshPremiumForNet,type FreshFeePolicy} from '../pricing.js';
-import {admitFreshPaper,assessFreshPlan,advanceFreshPosition,type FreshContract} from '../paper.js';
+import {FRESH_RISK_PER_TRADE,admitFreshPaper,assessFreshPlan,advanceFreshPosition,type FreshContract} from '../paper.js';
 import {request,position} from './fixtures.js';
 const now=Date.parse('2026-10-30T06:00:00Z'),expiryAt=now+7*86400000,t=7/365,forward=25020,discount=.999;
 const policy:FreshFeePolicy={version:'test',brokeragePerOrder:20,exchangeFraction:.0003553,sebiFraction:.000001,stampBuyFraction:.00003,sellTaxFraction:.0015,gstFraction:.18};
@@ -14,7 +14,7 @@ describe('observed European parity and explicit pricing scenarios',()=>{
 describe('flat per-order brokerage and actual-quantity net paper results',()=>{
  it('charges flat round-trip brokerage once, regardless of lot count',()=>{const one=freshRoundTripFees(100,110,25,1,policy),three=freshRoundTripFees(100,110,75,1,policy),fixed=40*1.18;expect(three-fixed).toBeCloseTo(3*(one-fixed),8);});
  it('solves net breakeven and one original R after all estimated costs',()=>{for(const net of [0,1250]){const exit=freshPremiumForNet(100,75,1,policy,net);expect((exit-100)*75-freshRoundTripFees(100,exit,75,1,policy)).toBeCloseTo(net,6);}});
- it('includes an exit tick in frozen initial risk and uses quantity-level costs',()=>{const r=request();const contract:FreshContract={...r.contract,feePolicy:policy};const a=admitFreshPaper({...r,contract});expect(a.ok).toBe(true);if(a.ok){expect(a.initialRiskCurrency).toBeCloseTo(25.5*a.quantity+freshRoundTripFees(a.entry,a.entry,a.quantity,1,policy),7);expect(a.initialRiskCurrency).toBeLessThanOrEqual(.0025*r.account.capital);}});
+ it('includes an exit tick in frozen initial risk and uses quantity-level costs',()=>{const r=request();const contract:FreshContract={...r.contract,feePolicy:policy};const a=admitFreshPaper({...r,contract});expect(a.ok).toBe(true);if(a.ok){expect(a.initialRiskCurrency).toBeCloseTo(25.5*a.quantity+freshRoundTripFees(a.entry,a.entry,a.quantity,1,policy),7);expect(a.initialRiskCurrency).toBeLessThanOrEqual(FRESH_RISK_PER_TRADE*r.account.capital);}});
  it('allows indicative prearrival selection but never treats it as a fill',()=>{const r=request();r.quote.eventAt=r.candidate.at;r.quote.receivedAt=r.candidate.at;r.now=r.candidate.at;expect(assessFreshPlan(r).ok).toBe(true);expect(admitFreshPaper(r)).toEqual({ok:false,code:'ENTRY_EXPIRED_OR_EARLY'});});
  it('realized P&L subtracts exact full-quantity fees once',()=>{const p=position();p.contract={...p.contract,feePolicy:policy};const at=p.openedAt+1000;const pending=advanceFreshPosition(p,{at,underlying:115,underlyingAt:at,quote:{...request().quote,eventAt:at,receivedAt:at,bid:150,ask:150.5},cutoff:at+14400000,barsSinceFill:1,trail:false});const closed=advanceFreshPosition(pending,{at:at+300,underlying:115,underlyingAt:at+300,quote:{...request().quote,eventAt:at+300,receivedAt:at+300,bid:150,ask:150.5},cutoff:at+14400000,barsSinceFill:1,trail:false});expect(closed.state).toBe('CLOSED');expect(closed.netPnl).toBeCloseTo((149.5-p.entry)*p.quantity-freshRoundTripFees(p.entry,149.5,p.quantity,1,policy),7);});
 });

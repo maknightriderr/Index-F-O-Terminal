@@ -45,7 +45,16 @@ export interface FreshAccount {
     cohortNet?: number;
 }
 /** PROPOSED_NOT_APPROVED: a cumulative cohort loss of this fraction of capital pauses new entries until reviewed. */
-export const FRESH_COHORT_DRAWDOWN_FRACTION = 0.03;
+/**
+ * 1.5 risk policy for the fixed INR 5,00,000 paper account. At 0.25% (INR 1,250) the 75% emergency stop made one
+ * lot unaffordable on most NSE index ATM premiums and on every MCX contract, so almost every signal was refused
+ * ZERO_PERMITTED_LOTS. Per-trade risk is 0.5%; open risk stays bounded by two positions (1%), the daily loss
+ * limit stays 1%, and the cohort pause keeps the same ~10-loss tolerance (5% at 0.5% per trade, was 3% at 0.25%).
+ */
+export const FRESH_RISK_PER_TRADE = 0.005;
+export const FRESH_MAX_OPEN_RISK = 0.01;
+export const FRESH_DAILY_LOSS_LIMIT = 0.01;
+export const FRESH_COHORT_DRAWDOWN_FRACTION = 0.05;
 export type FreshAdmission = {
     ok: false;
     code: string;
@@ -110,7 +119,7 @@ function assessFreshPaper(args: {
         return refuse('EXTENDED_ENTRY');
     if (args.legacyPositionOpen || args.correlatedPositionOpen || args.parentAlreadyTraded || args.entriesToday >= 2 || (args.barsSinceLastClose != null && args.barsSinceLastClose < 3))
         return refuse('EXPOSURE_OR_PARENT');
-    if (!a.marksComplete || a.capital <= 0 || a.equity <= 0 || a.reservedRisk < 0 || a.reservedPremium < 0 || a.openPositions >= 2 || a.dailyNet <= -.01 * a.capital || a.consecutiveNetLosses >= 3)
+    if (!a.marksComplete || a.capital <= 0 || a.equity <= 0 || a.reservedRisk < 0 || a.reservedPremium < 0 || a.openPositions >= 2 || a.dailyNet <= -FRESH_DAILY_LOSS_LIMIT * a.capital || a.consecutiveNetLosses >= 3)
         return refuse('ACCOUNT_PAUSED');
     // A run of losing days never resets the cohort: each account-day starts fresh, the cumulative drawdown does not.
     if (a.cohortNet == null || !Number.isFinite(a.cohortNet) || a.cohortNet <= -FRESH_COHORT_DRAWDOWN_FRACTION * a.capital)
@@ -126,7 +135,7 @@ function assessFreshPaper(args: {
     // Both adverse exit tick and quantity-level flat brokerage belong in frozen initial R.
     const baseRisk = Math.max(entry - Math.max(0,Math.min(...k.invalidationPremiumScenarios)-q.tick), entry-Math.max(0,emergencyStop-q.tick));
     const targetExit=Math.max(0,Math.min(...k.targetPremiumScenarios)-q.tick),perLot=k.lotQuantity*k.multiplier;
-    const budget=Math.min(.0025*a.capital,.005*a.capital-a.reservedRisk,.01*a.capital+a.dailyNet-a.reservedRisk);
+    const budget=Math.min(FRESH_RISK_PER_TRADE*a.capital,FRESH_MAX_OPEN_RISK*a.capital-a.reservedRisk,FRESH_DAILY_LOSS_LIMIT*a.capital+a.dailyNet-a.reservedRisk);
     let fixed=0,variable=explicit*perLot;
     try { if(k.feePolicy){fixed=2*k.feePolicy.brokeragePerOrder*(1+k.feePolicy.gstFraction);variable=freshRoundTripFees(entry,entry,k.lotQuantity,k.multiplier,k.feePolicy)-fixed;} }
     catch {return refuse('MODEL_OR_COST_UNAVAILABLE');}

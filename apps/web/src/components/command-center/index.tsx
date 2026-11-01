@@ -22,6 +22,7 @@ import {
   istTime,
   inr,
   MIN_SAMPLE,
+  COHORT_DRAWDOWN_FRACTION,
   positionViews,
   setupRadar,
   signedInr,
@@ -149,13 +150,13 @@ function AccountStrip({ account: a, loading }: { account: ReturnType<typeof acco
   const cls = (v: number) => (v > 0 ? 'cc-up' : v < 0 ? 'cc-down' : '');
   return (
     <section aria-label="Paper account" className="cc-strip" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))' }}>
-      <Kpi label="Virtual capital" value={loading ? '…' : inr(a.capital)} sub={a.riskPerTrade != null ? `Risk 0.25% / trade = ${inr(a.riskPerTrade)}` : 'Capital not configured'} />
+      <Kpi label="Virtual capital" value={loading ? '…' : inr(a.capital)} sub={a.riskPerTrade != null ? `Risk 0.5% / trade = ${inr(a.riskPerTrade)}` : 'Capital not configured'} />
       <Kpi label="Today net" value={signedInr(a.todayNet)} valueClass={cls(a.todayNet)} sub={a.capital ? `${a.todayNet >= 0 ? '+' : '−'}${Math.abs((a.todayNet / a.capital) * 100).toFixed(2)}% · closed trades, after costs` : 'Closed trades, after costs'} />
       <Kpi label="Open risk" value={inr(a.openRisk)} sub={`${a.open} position${a.open === 1 ? '' : 's'} · ${a.riskPerTrade ? (a.openRisk / a.riskPerTrade).toFixed(1) : '—'}R at stake`} />
       <Kpi label="Trades today" value={`${a.todayTrades}`} sub={`${a.todayClosed} closed · ${a.todayWins} W · ${a.todayLosses} L`} />
       <div>
         <div className="cc-label">Cohort drawdown</div>
-        <div className="cc-kpi-value">{a.drawdownPct.toFixed(2)}% <span className="text-[12px] font-normal text-[var(--text-muted)]">/ 3.00% pause</span></div>
+        <div className="cc-kpi-value">{a.drawdownPct.toFixed(2)}% <span className="text-[12px] font-normal text-[var(--text-muted)]">/ {(COHORT_DRAWDOWN_FRACTION * 100).toFixed(2)}% pause</span></div>
         <div className="cc-bar mt-1" role="meter" aria-label="Cohort drawdown used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(a.drawdownUsed * 100)}>
           <span style={{ width: `${Math.max(2, a.drawdownUsed * 100)}%`, background: a.drawdownUsed > 0.66 ? 'var(--status-bad)' : 'var(--desk-accent)' }} />
         </div>
