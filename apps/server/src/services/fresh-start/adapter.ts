@@ -18,7 +18,11 @@ export interface FreshAdapterPorts {
   legacyRisk():Promise<boolean>;
   audit:FreshQualifiedAdapter['audit'];refusal(c:FreshCandidate,code:string,evidence?:Record<string,unknown>):Promise<void>;
   watch:FreshQualifiedAdapter['watch'];now?:()=>number;
+  /** IV rank (0–100) of the underlying's ATM IV over its recorded year, or null when the history is too short. */
+  ivRank?(name:string,expiry:string,ivPct:number):Promise<number|null>;
 }
+/** 1.5 IV filter: buying premium at the top of its own year invites IV crush; no entry at or above this rank. */
+export const FRESH_MAX_IV_RANK=80;
 export class FreshProductionAdapter implements FreshQualifiedAdapter {
   readonly qualified=true;
   constructor(private feed:FreshSharedFeed,private events:FreshEventSource,private store:FreshPaperStore,private ports:FreshAdapterPorts){}
@@ -47,7 +51,7 @@ export class FreshProductionAdapter implements FreshQualifiedAdapter {
     const expiries=[...new Set(universe.map(x=>x.expiry!))].filter(d=>{const n=freshExpirySessions(c.session,d,exchange);return n!=null&&n>=(mcx?FRESH_MCX_PAPER_PROPOSAL.minimumExpirySessions:bse?FRESH_BSE_PAPER_PROPOSAL.minimumExpirySessions:market==='NSE_STOCK_OPTIONS'?3:1)&&n<=(mcx?FRESH_MCX_PAPER_PROPOSAL.maximumExpirySessions:bse?FRESH_BSE_PAPER_PROPOSAL.maximumExpirySessions:market==='NSE_STOCK_OPTIONS'?15:10);}).sort().slice(0,2);
     const spotPrice=spot.price;
     const strikes=[...new Set(universe.filter(x=>expiries.includes(x.expiry!)).map(x=>x.strike!))].sort((a,b)=>Math.abs(a-spotPrice)-Math.abs(b-spotPrice)||a-b).slice(0,5);
-    const rows=await this.store.recover(),marks=this.marks(rows),accountId=`${c.version}:${c.session}`,account=await this.store.accountView(accountId,this.ports.capital,marks,now),eligible:{contract:FreshContract;rr:number;spread:number;tick:number}[]=[],refusals:{contract:string;code:string}[]=[];
+    const rows=await this.store.recover(),marks=this.marks(rows),accountId=`${c.version}:${c.session}`,account=await this.store.accountView(accountId,this.ports.capital,marks,now),eligible:{contract:FreshContract;rr:number;spread:number;tick:number;iv:number|null;expiry:string}[]=[],refusals:{contract:string;code:string}[]=[];
     now=(this.ports.now??Date.now)();signal=this.feed.underlying(ref.id);spot=this.feed.underlying(freshReferenceSpotId(ref));if(!signal||!spot||now>c.expiresAt)return reject('STALE_PLAN_INPUTS');
     for(const expiry of expiries){
       const exact=(strike:number,side:string)=>{const xs=universe.filter(x=>x.expiry===expiry&&x.strike===strike&&x.optionType===side);return xs.length===1?xs[0]:null;};
@@ -64,10 +68,14 @@ export class FreshProductionAdapter implements FreshQualifiedAdapter {
         const entry=q.ask+q.tick,explicit=freshRoundTripFees(entry,entry,sizing.lotQuantity,sizing.multiplier,selectedFees.policy)/sizing.premiumUnitsPerLot;
         const contract:FreshContract={id:q.contract,source:q.source,sourceEpoch:q.epoch,lotQuantity:sizing.lotQuantity,multiplier:sizing.multiplier,expiryTradableSessions:freshExpirySessions(c.session,expiry,exchange)!,market,...(mcx?{marketPolicy:FRESH_MCX_PAPER_PROPOSAL.id}:bse?{marketPolicy:FRESH_BSE_PAPER_PROPOSAL.id}:{}),delta:scenarios.delta,metadataVerified:true,modelVerified:true,feesVerified:true,targetPremiumScenarios:scenarios.targetPremiumScenarios,invalidationPremiumScenarios:scenarios.invalidationPremiumScenarios,explicitRoundTripCostPerUnit:explicit,feePolicy:selectedFees.policy,evidence:{...scenarios.evidence,fees:{...selectedFees.evidence,flatPremiumRoundTripEstimate:freshRoundTripFeeBreakdown(entry,entry,sizing.lotQuantity,sizing.multiplier,selectedFees.policy)},masterUnits:units,...(mcx?{optionFuturesLink:resolveFreshMcxLink(instrument,futureMaster)}:{}),sizingUnits:sizing,eventCalendar:this.events.evidence(now,freshEventMarket(market),ref.name),tickSize:instrument.tickSize,expiry,strike,side,underlying:ref.name,signalReference:ref.id,spotReference:freshReferenceSpotId(ref)}};
         const plan=assessFreshPlan({candidate:c,contract,quote:q,account,now,arrivalAt:now+250,currentUnderlying:signal.price,cutoff:session.close,calendarVerified:true,eventClear:true,legacyPositionOpen:false,parentAlreadyTraded:false,correlatedPositionOpen:false,entriesToday:0,barsSinceLastClose:null});
-        if(plan.ok)eligible.push({contract,rr:plan.riskRewardNet,spread:(q.ask-q.bid)/((q.ask+q.bid)/2),tick:q.tick});else refusals.push({contract:contract.id,code:plan.code});
+        if(plan.ok){const iv=(scenarios as {iv?:number}).iv;eligible.push({contract,rr:plan.riskRewardNet,spread:(q.ask-q.bid)/((q.ask+q.bid)/2),tick:q.tick,iv:typeof iv==='number'&&Number.isFinite(iv)&&iv>0?iv:null,expiry});}else refusals.push({contract:contract.id,code:plan.code});
       }
     }
     eligible.sort((a,b)=>b.rr-a.rr||a.spread-b.spread||a.contract.id.localeCompare(b.contract.id));const selected=eligible[0];if(!selected){const code=refusals.length&&refusals.every(r=>r.code===refusals[0].code)?refusals[0].code:'NO_ELIGIBLE_CONTRACT_MODEL_OR_PAYOFF';await this.ports.refusal(c,code,{refusals,strikes,expiries,eventCalendar:this.events.evidence(now,freshEventMarket(ref.market),ref.name)});return null;}
+    // IV filter: the selected contract's own IV (the strikes are near the money) ranked against the underlying's year.
+    const ivPct=selected.iv!=null?selected.iv*100:null,ivRank=ivPct!=null&&this.ports.ivRank?await this.ports.ivRank(ref.name,selected.expiry,ivPct).catch(()=>null):null;
+    if(ivRank!=null&&ivRank>=FRESH_MAX_IV_RANK){await this.ports.refusal(c,'IV_RANK_TOO_HIGH',{ivRank,ivPct,maxIvRank:FRESH_MAX_IV_RANK,contract:selected.contract.id});return null;}
+    selected.contract={...selected.contract,evidence:{...selected.contract.evidence,ivPct,ivRank:ivRank??'UNAVAILABLE'}};
     return {candidate:c,netRR:selected.rr,finish:async()=>{
       const arrivalAt=Math.max(c.at,(this.ports.now??Date.now)())+250,q=await this.feed.firstAsk(selected.contract.id,selected.tick,arrivalAt,c.expiresAt);if(!q)return reject('ENTRY_QUOTE_DEADLINE');
       const underlying=this.feed.underlyingAt(ref.id,q.receivedAt);if(!underlying)return reject('MISSING_ARRIVAL_REFERENCE');

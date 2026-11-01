@@ -13,6 +13,7 @@ import {createFreshEventSource} from './event-source.js';
 import {FreshProductionAdapter,type FreshReference} from './adapter.js';
 import {FreshPaperStore} from './store.js';
 import {FreshPositionMonitor} from './monitor.js';
+import {ivRankFor} from '../fno-scanner.js';
 import {FreshRuntime} from './runtime.js';
 import {FRESH_MARKETS,freshMarketBlockers,freshBookSupportsLot,discoverFreshMarkets,freshDiscoveryWindow,freshReferenceOptions,freshReferenceExchange,freshReferenceSpotId,freshEventMarket,type FreshMarket} from './markets.js';
 import {freshAdapterState as state} from './adapter-state.js';
@@ -28,7 +29,7 @@ export class FreshPaperWorker {
   private positions:Awaited<ReturnType<FreshPaperStore['recover']>>=[];private timers:ReturnType<typeof setInterval>[]=[];private removeObservation:(()=>void)|null=null;private scanning=false;private ready=false;private stopped=false;private lastScan=0;private discovery:ReturnType<typeof discoverFreshMarkets>|null=null;private selectionAt=0;private cursor=0;private selected:FreshReference[]=[];private selectionExchangeKey='';private historyCursor=0;private historyFailures=new Map<string,string>();private subscriptionReady=false;
   constructor(private provider:MarketDataProvider,private subscriptions:SubscriptionManager){
     this.feed=new FreshSharedFeed(subscriptions,Date.now,`fresh-start:production:${randomUUID()}`);this.monitor=new FreshPositionMonitor(this.feed,this.store);
-    const adapter=new FreshProductionAdapter(this.feed,this.events,this.store,{references:()=>this.refs,master:()=>this.master,capital:FRESH_CONFIG.capital??0,legacyRisk:()=>this.legacyRisk(),audit:auditFreshEvaluation,refusal:auditFreshAdapter,watch:async rows=>{this.positions=rows;this.monitor.watch(rows);await this.syncTargets();}});
+    const adapter=new FreshProductionAdapter(this.feed,this.events,this.store,{references:()=>this.refs,master:()=>this.master,capital:FRESH_CONFIG.capital??0,legacyRisk:()=>this.legacyRisk(),audit:auditFreshEvaluation,refusal:auditFreshAdapter,ivRank:(name,expiry,ivPct)=>ivRankFor(name,expiry,ivPct),watch:async rows=>{this.positions=rows;this.monitor.watch(rows);await this.syncTargets();}});
     this.runtime=new FreshRuntime(this.store,adapter,()=>FRESH_CONFIG.activationApproved&&state.entriesArmed);
   }
   start(){
