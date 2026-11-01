@@ -1,43 +1,37 @@
-# Next phase: operational activation qualification
+# Operational activation qualification
 
-31 October 2026. BSE and MCX parameter hypotheses have been accepted in the user's replies to the concrete proposals. Engineering paths exist for the requested NSE index/stock, BSE index and four MCX commodity option scopes. This is not evidence that production entries are occurring or that any strategy is profitable.
+Updated 1 November 2026. This replaces the 31 October operational handoff's mandatory paid-calendar configuration step. It does not rewrite historical evidence or change trading rules.
 
-## Verified starting point
+## Current paper scope
 
-- The corrected shared normal CDF and exact-future MCX model passed independent benchmarks in PR #84.
-- BSE policy: 1–10 trading sessions, no 0DTE, maximum 1% spread.
-- MCX policy: 3–15 trading sessions, exclude final two sessions/expiry day, maximum 1.5% spread.
-- Existing risk, observed quote/latency, immutable held evidence and automatic exit/review paths remain required.
-- A direct production service-config read found no macro/event/calendar/EIA variable names on the service. No secret values were requested or printed.
+The user approved INR500,000 virtual capital and forward paper research in the requested NSE index, NSE F&O stock, BSE index and four MCX commodity option scopes. All four new strategy hypotheses are configured; entry eligibility remains dependent on actual source, contract, event, risk and monitoring checks. This is not evidence that every market is trading or that any strategy is profitable. Live execution remains excluded.
 
-## Input needed: macro-calendar access
+BSE policy is approved at1–10 sessions/no0DTE/max1% spread. MCX policy is approved at3–15 sessions/exclude final2/max1.5% spread. Do not ask for those parameter approvals again or reset account counters.
 
-The implemented macro adapter requires these variables on the existing Railway production backend service:
+`PAPER_EVENT_UNVERIFIED_V1` allows missing complete macro/commodity-calendar coverage for labeled paper research. No paid calendar credential is required for that policy. Known fresh blackouts/uncertain event times, issuer/results/actions, verified units/quotes, risk and exits remain mandatory. Optional paid credentials cannot substitute for verified coverage. Event-unverified, verified and historically unrecorded results stay separate.
 
-| Variable | Meaning |
-|---|---|
-| `FRESH_EVENT_PROVIDER` | `TRADING_ECONOMICS` |
-| `FRESH_EVENT_API_KEY` | Existing entitled API credential, supplied through Railway's secure variables UI |
-| `FRESH_EVENT_COVERAGE_CONFIRMED` | `true` only after the plan's required India/global high-impact calendar coverage is verified |
+## Observing operations automatically
 
-Do not put the credential in chat, source control or logs. Do not set the confirmation flag merely to clear a blocker. No new subscription purchase is authorized by this handoff. If the user has no suitable provider access, establish a separately reviewed public-source coverage policy rather than silently reducing coverage. The previously inspected free replacements were incomplete/stale or had unsuitable automation terms.
+The existing startup calendar preflight records current public-source results. The operational-evidence reporter prepared in the next-phase branch adds change-only readiness observations to existing worker scan callbacks. Platform logs can then show market-session state, recovery/monitor/scanner flags, entry arming, market blockers, observed-book counts and source response codes without logging credentials, quotes, contracts, raw errors or source payloads.
 
-After configuration, the runtime must observe and durably persist fresh covered snapshots before clearing event gates. An empty/truncated/error response is not proof of coverage. NSE stock issuer/action coverage remains a separate public-exchange dependency.
+At most one changed snapshot per worker per minute is emitted. Changes during that interval coalesce to the latest state at the next existing scan; unchanged state is suppressed. This is sampled operational evidence, not a complete transition history. No new timer, database query/write, subscription or broker request is added. Logging failure cannot change trading or exit decisions. Slow/stalled scanning can delay these observations; the existing supervisor/readiness checks remain separate. A reporter log is not an authorization or second source of readiness truth.
 
-## Input needed: MCX broker depth-unit evidence
+Use the authenticated Paper Trades status for the current detailed view. PR90 added recorded first/latest ledger checks; PR91 adds market/strategy/event-cohort session coverage. Both use explicit missing/inconsistent evidence and bounded newest100 samples. Do not bypass authentication to fetch them or claim they were inspected without an authorized session.
 
-[SmartAPI instrument/response documentation](https://smartapi.angelone.in/docs/ResponseStructure) defines lot size and depth quantity generically. The broker's [Crude quantity support thread](https://smartapi.angelone.in/smartapi/forum/topic/806/quantity-is-not-a-multiple-of-lot-size/5?lang=en-GB) advises referring to its instrument dump for order quantity. These establish the importance of the raw master quantity; they do not conclusively specify how each current MCX option's socket depth quantity maps to it.
+## Unresolved MCX unit evidence
 
-Obtain contract/product-specific broker documentation or independently corroborated evidence for the current quote schema. Identify the exact product, effective dates, raw master lot quantity, book quantity basis and premium quote multiplier. Gold's broker quantity and premium multiplier differ. A large book, an integral lot multiple or agreement between two fields from the same feed is insufficient to promote `quantityVerified`.
+Angel's generic instrument/response documentation and official socket decoder describe lot/quantity fields, but do not establish the current product-specific relationship among broker order quantity, premium quotation exposure and socket-depth quantity basis. Quantity layout alone cannot clear `BLOCKED_MCX_BOOK_QUANTITY_UNITS`.
 
-Once evidence exists, qualify only matching exact instrument metadata and reject changed/unknown units. Until then raw MCX master metadata remains unverified, regardless of approved parameter hypotheses.
+Required evidence is current broker-specific documentation or independently corroborated exact-contract observations, recording product/schema/effective dates and reconciling depth units to broker lot quantity and premium multiplier. An integral multiple, large book or matching fields from the same feed is insufficient. Another broker's units cannot establish Angel's units. Raw MCX metadata remains unverified; no flag is promoted by these operational reports.
 
-## Commodity event coverage remains separate
+## Completion evidence still needed
 
-The implemented event adapter still returns `BLOCKED_COMMODITY_EVENT_COVERAGE`. Configuring the index macro key does not establish commodity coverage. Define and verify the required energy/metal scheduled-event sources, publication timing, uncertainty behavior and coverage before replacing that veto. Do not use stock issuer calendars or macro importance alone as a substitute for commodity-specific events.
+During an actual applicable session, verify authenticated current readiness, exact instrument/source epochs, fresh eligible quotes and full-size depth, current event evidence and monitored account/legacy risk. Let the existing engine decide whether a candidate fills. Entry-only, pending and completed lifecycles must stay distinct. Capture newly observed entry/exit records, costs and event cohorts; do not manufacture trades or restore deleted PostgreSQL history.
 
-## Completion evidence
+A supported session date and consistent internal ledger do not prove full tape capture, independent units/model calibration, actual broker execution, actual charges, statistical independence or trading edge. Keep performance unvalidated until the predeclared cohort/holdout evidence criteria are met. Missing external evidence is not solved by another deployment.
 
-Capture a current authenticated readiness report, fresh durable calendar IDs/coverage, exact source epochs/books and verified quantity metadata during an actual applicable exchange session. Let existing gates decide whether an eligible paper candidate can fill. Do not manufacture trades to demonstrate activation or reset account counters. Closed-market health is deployment evidence only. Paper fills must remain newly observed; deleted PostgreSQL history is not reconstructed.
+No local installation, paid purchase, live order or message to broker/support is authorized by this handoff.
 
-The immediate external question is whether the user already has suitable Trading Economics economic-calendar access. No additional local installation, paid purchase, live order or external support message is required or authorized by this document.
+## Next-phase validation
+
+Server suite1,965 passed with5 existing skips; server production build and typecheck passed. Projection/redaction, changed-state coalescing, cooldown, clock rollback, emitter failure and immutability tests pass. Worker lifecycle tests verify automatic closed-market evidence and recovery-failure evidence while retaining the existing two-timer limit, no weekend provider work, held-watch priority and MCX quantity veto. This operational reporter is prepared in a separate draft PR; it is not part of PR91's production release.

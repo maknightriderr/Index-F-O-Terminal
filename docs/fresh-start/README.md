@@ -1,4 +1,6 @@
-# Fresh-start implementation — NEW-INTRADAY-1.0
+# Fresh-start implementation and operational history
+
+Current checkpoint (1 November 2026): NEW-INTRADAY-1.3 is configured for approved forward paper research with INR500,000 virtual capital. Actual entry eligibility remains source/contract/event/risk/monitor gated. Missing complete macro coverage is allowed only under the labeled paper policy; MCX depth-unit qualification and observed market-session evidence remain unresolved where absent. The phase notes below preserve earlier states, including initial disablement. See [the current operational handoff](activation-handoff.md).
 
 The reviewed master prompt and Phase 1–2 report are preserved beside this file. The user approved implementation on 30 October 2026. The numeric pack remains a research hypothesis. All new strategies and markets are disabled, capital is unset, and there is no live-order integration or activation API.
 
@@ -199,3 +201,7 @@ The user approved paper research despite unavailable economic-calendar data afte
 ## Next phase — recorded ledger consistency
 
 [Ledger consistency](ledger-consistency.md) adds a bounded read-only audit of first/latest recorded paper-fill evidence, with explicit entry-only/closed/pending coverage and missing/inconsistent proof. It does not change trading eligibility, risk, exits, historical data or event policy, and does not certify real fills or strategy profitability.
+
+## Recorded session coverage and operational qualification — 1 November 2026
+
+[Session evidence](session-evidence.md) reports bounded recorded lifecycle coverage by market, strategy and immutable event cohort; no evidence does not mean validation passed. [The updated operational handoff](activation-handoff.md) supersedes the old mandatory paid-calendar step and documents the next-phase change-only platform observations. Actual market-session evidence and independent MCX depth-unit qualification remain unresolved where absent; more diagnostics or deployments do not establish trading edge.
