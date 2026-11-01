@@ -24,6 +24,7 @@ export interface FreshStrategyPerformance {
     note: string;
 }
 export interface FreshStartStatus {
+    integrity?:{version:string;scope:'LATEST_100_CURRENT_VERSION';sampled:number;sampleTruncated:boolean;consistent:number;incomplete:number;inconsistent:number;closedChecked:number;note:string;rows:Array<{id:string;contract:string;positionStatus:string;verdict:'CONSISTENT'|'INCOMPLETE'|'INCONSISTENT';phase:'ENTRY_ONLY'|'EXIT_PENDING'|'CLOSED';eventEvidenceClass:string;issues:string[];missing:string[]}>};
     eventPolicy?:{id:string;allowMissingMacroCoverage:boolean;approval?:string;liveOrdersAllowed?:boolean};
     eventCohorts?:Array<{policyId:string;evidenceClass:string;performance:FreshStrategyPerformance[]}>;
     calendarSchemaReady?:boolean;
