@@ -63,6 +63,9 @@ interface CachedWorkspaceData {
   futures: FuturesChainResponse | null;
 }
 const workspaceCache = new Map<string, CachedWorkspaceData>();
+/** Legacy engines are retired (server config/legacy-entry-policy.ts): their setups are not shown. */
+const LEGACY_SETUPS_VISIBLE = false;
+
 function workspaceCacheKey(exchange: string, symbol: string): string {
   return `${exchange}:${symbol}`;
 }
@@ -333,12 +336,15 @@ export function AssetWorkspace() {
                 <OiTrapCard trap={chain.oiTrap} />
                 <PositionMomentumCard momentum={chain.positionMomentum} />
                 <DecayCard decay={chain.decay} />
-                <TradeSetupCard
-                  setup={tradeSetup}
-                  structure={structure}
-                  explainTarget={{ kind: 'decision', symbol: selectedSymbol || 'NIFTY', exchange: (selectedExchange || 'NSE') as 'NSE' | 'BSE' | 'MCX', mode: biasMode }}
-                />
-                {setupWatch.length > 0 && <SetupWatchList rows={setupWatch} />}
+                {/* The legacy engines' trade setup, watch list and rejected-today lifecycle are retired (no new entries). */}
+                {LEGACY_SETUPS_VISIBLE && (
+                  <TradeSetupCard
+                    setup={tradeSetup}
+                    structure={structure}
+                    explainTarget={{ kind: 'decision', symbol: selectedSymbol || 'NIFTY', exchange: (selectedExchange || 'NSE') as 'NSE' | 'BSE' | 'MCX', mode: biasMode }}
+                  />
+                )}
+                {LEGACY_SETUPS_VISIBLE && setupWatch.length > 0 && <SetupWatchList rows={setupWatch} />}
               </div>
               <OiShiftCard strikes={chain.strikes} />
             </div>
@@ -438,7 +444,7 @@ export function AssetWorkspace() {
         </div>
 
         <div className="xl:sticky xl:top-4 space-y-4">
-          {chain && tradeSetup.available && (
+          {LEGACY_SETUPS_VISIBLE && chain && tradeSetup.available && (
             <div>
               <SectionLabel icon="📈">Payoff Diagram</SectionLabel>
               <PayoffDiagram setup={tradeSetup} chain={chain} />
