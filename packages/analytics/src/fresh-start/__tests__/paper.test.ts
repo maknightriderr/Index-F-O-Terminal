@@ -110,3 +110,18 @@ describe('1.5 risk policy', () => {
         expect(admitFreshPaper(r)).toEqual({ ok: false, code: 'COHORT_DRAWDOWN_PAUSED' });
     });
 });
+describe('full-size MCX crude lot (100 bbl) at INR 30 lakh', () => {
+    const crude = (capital: number) => {
+        const r = request();
+        r.account.capital = r.account.equity = capital;
+        r.contract = { ...r.contract, lotQuantity: 100, targetPremiumScenarios: [800, 790], invalidationPremiumScenarios: [400, 390] };
+        r.quote = { ...r.quote, bid: 500, ask: 500.1, tick: .1 };
+        return admitFreshPaper(r);
+    };
+    it('fits one lot at INR 30 lakh (0.5% = 15,000 risk, 5% = 1.5 lakh premium)', () => {
+        const a = crude(3000000);
+        expect(a.ok).toBe(true);
+        if (a.ok) { expect(a.quantity).toBe(100); expect(a.initialRiskCurrency).toBeLessThanOrEqual(15000); expect(a.premiumCurrency).toBeLessThanOrEqual(150000); }
+    });
+    it('is refused at INR 5 lakh', () => { expect(crude(500000)).toEqual({ ok: false, code: 'ZERO_PERMITTED_LOTS' }); });
+});
