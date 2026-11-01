@@ -12,10 +12,11 @@ import { useMarketTicks } from '@/lib/ws';
 import { detectPattern, detectCandlestickPattern } from '@fno/analytics';
 import type { DetectedPattern } from '@fno/analytics';
 import { CM_SEGMENT, FO_SEGMENT, KNOWN_INDEX_TOKENS, isMarketOpen } from '@fno/shared';
-import type { CandleInterval, Exchange } from '@fno/shared';
+import type { Exchange } from '@fno/shared';
 import { buildChartZones, selectChartZones, type ChartZone } from '@/lib/chart-zones';
 import { ChartZonePrimitive } from '@/lib/chart-zone-primitive';
 import type { ChartOverlayLine, OverlayTone } from '@/lib/chart-overlays';
+import { aggregateWeekly, cleanBars, CHART_INTERVALS, INTERVAL_CONFIG, rangesFor, rangeStart, type Bar, type ChartInterval, type ChartRange } from '@/lib/chart-bars';
 
 // Only genuine reversal shapes get marked. detectCandlestickPattern scores
 // Morning/Evening Star at 75, Engulfing at 65, Hammer/Shooting Star at 60,
@@ -30,70 +31,18 @@ import type { ChartOverlayLine, OverlayTone } from '@/lib/chart-overlays';
 // the same sample from 13 marked bars to 2.
 const STRONG_REVERSAL_MIN_CONFIDENCE = 60;
 
-// How often to re-pull candles so newly-CLOSED bars appear. Live ticks
-// (below) already move the current bar in real time; this only exists to
-// roll it over and correct any drift, so it's tied to the bar duration
-// rather than run on a fixed fast timer — a 1-minute chart genuinely needs
-// a new bar each minute, a 1-year chart does not. Floored so no timeframe
-// can hammer the API, which this app has already had one outage from.
-const REFRESH_MS: Record<Timeframe, number> = {
-  '1m': 60_000,
-  '3m': 60_000,
-  '5m': 60_000,
-  '15m': 120_000,
-  '30m': 180_000,
-  '1H': 300_000,
-  '1D': 120_000,
-  '5D': 300_000,
-  '1M': 600_000,
-  '3M': 900_000,
-  '6M': 900_000,
-  '1Y': 900_000,
-};
-
 function formatPatternName(pattern: string): string {
   return pattern.split('_').map((w) => w[0] + w.slice(1).toLowerCase()).join(' ');
 }
 
-type Timeframe = '1m' | '3m' | '5m' | '15m' | '30m' | '1H' | '1D' | '5D' | '1M' | '3M' | '6M' | '1Y';
 type ChartMode = 'SPOT' | 'FUTURES';
-
-const TIMEFRAMES: Timeframe[] = ['1m', '3m', '5m', '15m', '30m', '1H', '1D', '5D', '1M', '3M', '6M', '1Y'];
-
-// Lookback needs a real safety margin, not just "how far back this label
-// implies" — a tight window can land entirely AFTER the last trading
-// session ended (checking after-hours, on a weekend, the morning after a
-// holiday, etc.), in which case the API correctly returns zero candles
-// for that slice even though real recent data exists just outside it.
-// Confirmed live: `days: 1` for '1m' returned empty because "now minus a
-// day" fell after Friday's 15:30 close with no Monday session yet inside
-// the window. These margins are sized to comfortably span at least one
-// full recent session (a 3-4 day holiday weekend included) regardless of
-// when "now" happens to fall, not just the nominal range implied by the
-// button's label — fitContent() shows whatever comes back either way, so
-// a slightly wider window just means a bit more scrollable history, not
-// a wrong-looking chart.
-const TIMEFRAME_CONFIG: Record<Timeframe, { interval: CandleInterval; days: number }> = {
-  '1m': { interval: 'ONE_MINUTE', days: 5 },
-  '3m': { interval: 'THREE_MINUTE', days: 5 },
-  '5m': { interval: 'FIVE_MINUTE', days: 6 },
-  '15m': { interval: 'FIFTEEN_MINUTE', days: 6 },
-  '30m': { interval: 'THIRTY_MINUTE', days: 8 },
-  '1H': { interval: 'ONE_HOUR', days: 12 },
-  '1D': { interval: 'FIFTEEN_MINUTE', days: 6 },
-  '5D': { interval: 'FIFTEEN_MINUTE', days: 10 },
-  '1M': { interval: 'ONE_HOUR', days: 36 },
-  '3M': { interval: 'ONE_DAY', days: 96 },
-  '6M': { interval: 'ONE_DAY', days: 188 },
-  '1Y': { interval: 'ONE_DAY', days: 372 },
-};
 
 // Same positive/negative language as the rest of the app (--positive/
 // --negative tokens in globals.css) — lightweight-charts takes JS color
 // values, not CSS custom properties, so these are kept in sync by hand.
 const CHART_COLORS = {
-  dark: { text: '#9ca3af', grid: 'rgba(255,255,255,0.06)', up: '#26dfcc', down: '#f87171', border: 'rgba(255,255,255,0.08)', support: '#34d399', resistance: '#f87171' },
-  light: { text: '#475569', grid: 'rgba(15,23,42,0.06)', up: '#059669', down: '#dc2626', border: 'rgba(15,23,42,0.1)', support: '#059669', resistance: '#dc2626' },
+  dark: { text: '#919ba8', grid: 'rgba(145,155,168,0.08)', up: '#34d399', down: '#ff6b6b', border: '#232b35', support: '#34d399', resistance: '#ff6b6b' },
+  light: { text: '#56606d', grid: 'rgba(86,96,109,0.08)', up: '#08754a', down: '#b42318', border: '#dde1e6', support: '#08754a', resistance: '#b42318' },
 };
 
 // Overlay line colours by meaning (same hues as the status tokens; JS values because the chart cannot read CSS variables).
@@ -167,7 +116,13 @@ export function InstrumentChart({
   const [resolvedToken, setResolvedToken] = useState<string | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
   const [reversalCount, setReversalCount] = useState(0);
-  const [timeframe, setTimeframe] = useState<Timeframe>('15m');
+  const [interval, setIntervalChoice] = useState<ChartInterval>('15m');
+  const [range, setRange] = useState<ChartRange>(INTERVAL_CONFIG['15m'].defaultRange);
+  const barsRef = useRef<Bar[]>([]);
+  const [legend, setLegend] = useState<Bar | null>(null);
+  const [latestBar, setLatestBar] = useState<Bar | null>(null);
+  // Set by the view helper below; the resize observer and the fetch effect call it.
+  const applyViewRef = useRef<() => void>(() => {});
   const [mode, setMode] = useState<ChartMode>(hasSpot ? 'SPOT' : 'FUTURES');
   const [loading, setLoading] = useState(true);
   const [hasData, setHasData] = useState(false);
@@ -213,11 +168,11 @@ export function InstrumentChart({
     seriesRef.current.update(bar);
   }, [liveTick]);
 
-  // Roll in newly-closed bars. Cadence follows the timeframe (see REFRESH_MS).
+  // Roll in newly-closed bars. Cadence follows the interval (INTERVAL_CONFIG.refreshMs).
   useEffect(() => {
-    const id = setInterval(() => setRefreshTick((n) => n + 1), REFRESH_MS[timeframe]);
+    const id = setInterval(() => setRefreshTick((n) => n + 1), INTERVAL_CONFIG[interval].refreshMs);
     return () => clearInterval(id);
-  }, [timeframe]);
+  }, [interval]);
 
   // Chart instance created once per mount, not per theme/timeframe change —
   // recreating it on every render would drop zoom/scroll state and flicker.
@@ -247,9 +202,25 @@ export function InstrumentChart({
     zonesPrimitive.current = zonePrimitive;
     chartRef.current = chart;
     seriesRef.current = series;
+    // OHLC legend: the hovered candle, or the latest one when the pointer leaves.
+    chart.subscribeCrosshairMove((param) => {
+      const d = param.time != null ? (param.seriesData.get(series) as { open?: number; high?: number; low?: number; close?: number } | undefined) : undefined;
+      if (d && d.open != null && d.high != null && d.low != null && d.close != null) setLegend({ time: param.time as number, open: d.open, high: d.high, low: d.low, close: d.close });
+      else setLegend(null);
+    });
+    // A chart first laid out while hidden (inactive tab, collapsed panel) has width 0, so its view was computed for
+    // nothing; re-apply the view the moment it gets a real width.
+    let lastWidth = containerRef.current.clientWidth;
+    const observer = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width ?? 0;
+      if (lastWidth === 0 && w > 0) applyViewRef.current();
+      lastWidth = w;
+    });
+    observer.observe(containerRef.current);
     setChartReady(true);
 
     return () => {
+      observer.disconnect();
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
@@ -275,6 +246,20 @@ export function InstrumentChart({
     seriesRef.current.applyOptions({ upColor: c.up, downColor: c.down, wickUpColor: c.up, wickDownColor: c.down });
   }, [resolvedTheme]);
 
+  // The view for the selected range: price axis back on auto-scale, time axis on the range (or everything).
+  const applyView = React.useCallback(() => {
+    const chart = chartRef.current, bars = barsRef.current;
+    if (!chart || bars.length === 0) return;
+    chart.priceScale('right').applyOptions({ autoScale: true });
+    const from = rangeStart(bars, range);
+    if (from == null) chart.timeScale().fitContent();
+    else chart.timeScale().setVisibleRange({ from: from as UTCTimestamp, to: (bars[bars.length - 1].time + INTERVAL_CONFIG[interval].seconds) as UTCTimestamp });
+  }, [range, interval]);
+  useEffect(() => {
+    applyViewRef.current = applyView;
+    applyView();
+  }, [applyView]);
+
   // Resolve which token's candles to load — the instrument's own spot/index
   // token, or its current-month futures contract's token.
   useEffect(() => {
@@ -289,7 +274,7 @@ export function InstrumentChart({
     // minute into a session every symbol and timeframe switch was being
     // treated as a refresh and silently skipped fitContent(), which is
     // exactly the "chart doesn't adjust when I switch" symptom.
-    const identity = `${symbol}|${exchange}|${timeframe}|${mode}`;
+    const identity = `${symbol}|${exchange}|${interval}|${mode}`;
     const isRefresh = identityRef.current === identity && seriesRef.current != null && candleTimesRef.current.length > 0;
     identityRef.current = identity;
     if (!isRefresh) setLoading(true);
@@ -307,7 +292,7 @@ export function InstrumentChart({
       }
     };
 
-    const { interval, days } = TIMEFRAME_CONFIG[timeframe];
+    const { broker, days, seconds: intervalSeconds } = INTERVAL_CONFIG[interval];
     const to = new Date();
     const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000);
 
@@ -315,26 +300,25 @@ export function InstrumentChart({
       .then((token) => {
         if (cancelled || !token) throw new Error('no token');
         setResolvedToken(token);
-        return api.getHistoricalData(token, formatForApi(from), formatForApi(to), exchange, interval, mode === 'FUTURES' ? 'FO' : 'CM');
+        return api.getHistoricalData(token, formatForApi(from), formatForApi(to), exchange, broker, mode === 'FUTURES' ? 'FO' : 'CM');
       })
-      .then((candles: any[]) => {
+      .then((rows: Parameters<typeof cleanBars>[0]) => {
         if (cancelled || !seriesRef.current) return;
-        const data = candles.map((c) => ({
-          time: Math.floor(new Date(c.timestamp).getTime() / 1000) as UTCTimestamp,
-          open: c.open,
-          high: c.high,
-          low: c.low,
-          close: c.close,
-        }));
+        // Sorted, de-duplicated candles; weekly candles are built from the daily ones.
+        const clean = cleanBars(rows);
+        const bars = interval === '1W' ? aggregateWeekly(clean) : clean;
+        const candles = bars.map((b) => ({ ...b, volume: b.volume ?? 0, rawVolume: b.volume }));
+        const data = bars.map((b) => ({ time: b.time as UTCTimestamp, open: b.open, high: b.high, low: b.low, close: b.close }));
         seriesRef.current.setData(data);
-        const intervalSeconds = ({ ONE_MINUTE: 60, THREE_MINUTE: 180, FIVE_MINUTE: 300, FIFTEEN_MINUTE: 900, THIRTY_MINUTE: 1800, ONE_HOUR: 3600, ONE_DAY: 86400 } as Record<string, number>)[interval];
+        barsRef.current = bars;
+        setLatestBar(bars.length ? bars[bars.length - 1] : null);
         setZoneData({ identity, ...buildChartZones(data, intervalSeconds, Date.now() / 1000) });
         // Only actual reported candle volume; missing/invalid values are gaps.
         const volumeColors = CHART_COLORS[resolvedTheme];
-        const volumeData = candles.flatMap((c, i) => typeof c.volume === 'number' && Number.isFinite(c.volume) && c.volume >= 0 ? [{ time: data[i].time, value: c.volume, color: `${c.close >= c.open ? volumeColors.up : volumeColors.down}66` }] : []);
+        const volumeData = candles.flatMap((c, i) => typeof c.rawVolume === 'number' && Number.isFinite(c.rawVolume) && c.rawVolume >= 0 ? [{ time: data[i].time, value: c.rawVolume, color: `${c.close >= c.open ? volumeColors.up : volumeColors.down}66` }] : []);
         volumeRef.current?.setData(volumeData);
         setHasVolume(volumeData.some((bar) => bar.value > 0));
-        if (!isRefresh) chartRef.current?.timeScale().fitContent();
+        if (!isRefresh) applyViewRef.current();
         candleTimesRef.current = data.map((d) => d.time);
         lastBarRef.current = data.length > 0 ? { ...data[data.length - 1] } : null;
         setHasData(data.length > 0);
@@ -385,6 +369,8 @@ export function InstrumentChart({
       .catch(() => {
         if (cancelled) return;
         seriesRef.current?.setData([]);
+        barsRef.current = [];
+        setLatestBar(null);
         volumeRef.current?.setData([]);
         setHasVolume(false);
         setHasData(false);
@@ -396,9 +382,9 @@ export function InstrumentChart({
     return () => {
       cancelled = true;
     };
-  }, [symbol, exchange, timeframe, mode, refreshTick, resolvedTheme]);
+  }, [symbol, exchange, interval, mode, refreshTick, resolvedTheme]);
 
-  const chartIdentity = `${symbol}|${exchange}|${timeframe}|${mode}`;
+  const chartIdentity = `${symbol}|${exchange}|${interval}|${mode}`;
   const matchingZones = zoneData.identity === chartIdentity ? zoneData.zones : [];
   const visibleZones = React.useMemo(() => selectChartZones(zoneData.identity === chartIdentity ? zoneData.zones : [], showOb, showFvg, showZoneHistory), [zoneData, chartIdentity, showOb, showFvg, showZoneHistory]);
   useEffect(() => { zonesPrimitive.current?.setZones(visibleZones, resolvedTheme === 'light'); }, [visibleZones, resolvedTheme, chartReady]);
@@ -473,21 +459,35 @@ export function InstrumentChart({
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-        <div className="flex items-center gap-1 overflow-x-auto scrollbar-none">
-          {TIMEFRAMES.map((tf) => (
-            <button
-              key={tf}
-              onClick={() => setTimeframe(tf)}
-              aria-pressed={timeframe === tf}
-              className={`px-2.5 py-1 text-xs font-semibold rounded-md whitespace-nowrap transition-colors ${
-                timeframe === tf
-                  ? 'bg-[var(--desk-accent)]/10 text-[var(--desk-accent)]'
-                  : 'text-gray-400 light:text-slate-600 hover:bg-gray-800/40 light:hover:bg-slate-100'
-              }`}
-            >
-              {tf}
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <div role="group" aria-label="Candle interval" className="flex items-center gap-1 overflow-x-auto scrollbar-none">
+            {CHART_INTERVALS.map((tf) => (
+              <button
+                key={tf}
+                type="button"
+                onClick={() => {
+                  setIntervalChoice(tf);
+                  setRange(INTERVAL_CONFIG[tf].defaultRange);
+                }}
+                aria-pressed={interval === tf}
+                title={`${tf} candles`}
+                className={`px-2.5 py-1 text-xs font-semibold rounded-md whitespace-nowrap transition-colors ${interval === tf ? 'bg-[var(--desk-accent)]/10 text-[var(--desk-accent)]' : 'text-[var(--text-muted)] hover:bg-[var(--surface-card-alt)]'}`}
+              >
+                {tf}
+              </button>
+            ))}
+          </div>
+          <span aria-hidden="true" className="h-4 w-px bg-[var(--border-secondary)]" />
+          <div role="group" aria-label="Visible range" className="flex items-center gap-1 overflow-x-auto scrollbar-none">
+            {rangesFor(interval).map((r) => (
+              <button key={r} type="button" onClick={() => setRange(r)} aria-pressed={range === r} title={r === 'ALL' ? 'All loaded history' : `Last ${r}`} className={`px-2 py-1 text-[11px] font-medium rounded-md whitespace-nowrap ${range === r ? 'text-[var(--text-primary)] bg-[var(--surface-card-alt)]' : 'text-[var(--text-muted)] hover:bg-[var(--surface-card-alt)]'}`}>
+                {r === 'ALL' ? 'All' : r}
+              </button>
+            ))}
+            <button type="button" onClick={() => applyView()} title="Reset zoom and price scale" aria-label="Reset chart view" className="px-2 py-1 text-[11px] font-medium rounded-md text-[var(--text-muted)] hover:bg-[var(--surface-card-alt)]">
+              ⟲ Fit
             </button>
-          ))}
+          </div>
         </div>
 
         <div className="flex items-center bg-gray-900/60 light:bg-slate-100 p-0.5 rounded-lg border border-gray-800/40 light:border-slate-200 shrink-0">
@@ -523,9 +523,23 @@ export function InstrumentChart({
             {loading ? 'Loading chart…' : 'No chart data for this range'}
           </div>
         )}
+        {hasData && (legend ?? latestBar) && (() => {
+          const b = (legend ?? latestBar)!;
+          const up = b.close >= b.open;
+          const f = (x: number) => x.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          return (
+            <div className="pointer-events-none absolute top-2 left-2 z-[2] flex flex-wrap gap-x-3 rounded bg-[var(--surface-card)]/80 px-2 py-1 font-mono text-[11px]" aria-live="off">
+              <span className="text-[var(--text-muted)]">{interval}</span>
+              <span>O <b className={up ? 'cc-up' : 'cc-down'}>{f(b.open)}</b></span>
+              <span>H <b className={up ? 'cc-up' : 'cc-down'}>{f(b.high)}</b></span>
+              <span>L <b className={up ? 'cc-up' : 'cc-down'}>{f(b.low)}</b></span>
+              <span>C <b className={up ? 'cc-up' : 'cc-down'}>{f(b.close)}</b></span>
+            </div>
+          );
+        })()}
         {detectedPattern && (
           <div
-            className={`absolute top-2 left-2 px-2.5 py-1.5 rounded-lg badge-glass text-xs font-semibold pointer-events-none ${
+            className={`absolute top-10 left-2 px-2.5 py-1.5 rounded-lg badge-glass text-xs font-semibold pointer-events-none ${
               detectedPattern.direction === 'BULLISH' ? 'bg-emerald-500/15 text-emerald-500 light:text-emerald-700' : 'bg-red-500/15 text-red-500 light:text-red-700'
             }`}
           >
@@ -566,7 +580,7 @@ export function InstrumentChart({
         )}
       </div>
       <details className="mt-2 text-xs text-[var(--text-secondary)]">
-        <summary className="cursor-pointer">Zone details · {timeframe} {mode.toLowerCase()} · {visibleZones.length} shown</summary>
+        <summary className="cursor-pointer">Zone details · {interval} {mode.toLowerCase()} · {visibleZones.length} shown</summary>
         <p className="mt-2">Chart analysis from loaded closed candles using OB-2.0 and touch-based FVG rules. These are chart zones, not confirmed trade entries. Up to six of each type are shown; forming candles are excluded.</p>
         {zoneData.identity !== chartIdentity ? <p>Loading zones for this chart…</p> : zoneData.reason ? <p>{zoneData.reason}</p> : visibleZones.length === 0 ? <p>No zones match these controls in the loaded history.</p> : <ul className="mt-2 space-y-1">{visibleZones.map(z => <li key={z.id}>{z.kind} · {z.direction.toLowerCase()} · {z.bottom.toFixed(2)}–{z.top.toFixed(2)} · {z.state.toLowerCase().replace('_', ' ')}</li>)}</ul>}
       </details>
