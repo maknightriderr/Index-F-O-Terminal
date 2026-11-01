@@ -4,6 +4,8 @@ import {freshFeePolicyFor} from './fees.js';
 import {freshContractUnits} from './contract-units.js';
 import {freshBsePaperPolicyApproved} from './bse-policy.js';
 import {freshMcxPaperPolicyApproved} from './mcx-policy.js';
+/** 1.5: the mini energy contracts fit the INR 5,00,000 account's per-trade risk; the full-size lots never do. */
+export const FRESH_MCX_PRODUCTS:readonly string[]=['CRUDEOIL','CRUDEOILM','GOLD','SILVER','NATURALGAS','NATGASMINI'];
 export const FRESH_MARKETS=['NSE_INDEX_OPTIONS','NSE_STOCK_OPTIONS','BSE_VERIFIED_OPTIONS','MCX_VERIFIED_FUTURES_OPTIONS'] as const;
 export type FreshMarket=typeof FRESH_MARKETS[number];
 export interface FreshReference {
@@ -37,7 +39,7 @@ export function discoverFreshMarkets(master:readonly Instrument[],day:string):Fr
   for(const market of FRESH_MARKETS){
     const exchange=freshMarketExchange(market),optionType=freshOptionType(market),names=[...new Set(master.filter(x=>active(x)&&x.exchange===exchange&&x.instrumentType===optionType).map(x=>x.name))].sort();
     for(const name of names){
-      if(market==='MCX_VERIFIED_FUTURES_OPTIONS'&&!['CRUDEOIL','GOLD','SILVER','NATURALGAS'].includes(name))continue;
+      if(market==='MCX_VERIFIED_FUTURES_OPTIONS'&&!FRESH_MCX_PRODUCTS.includes(name))continue;
       counts[market]++;
       const stock=market==='NSE_STOCK_OPTIONS',commodity=exchange==='MCX';
       const candidates=master.filter(x=>x.exchange===exchange&&x.name===name&&(stock?x.segment==='CM'&&x.instrumentType==='EQ'&&x.symbol===`${name}-EQ`:active(x)&&x.instrumentType===(commodity?'FUTCOM':'FUTIDX'))).sort((a,b)=>(a.expiry??'').localeCompare(b.expiry??'')||a.token.localeCompare(b.token));
@@ -65,7 +67,7 @@ export function discoverFreshMarkets(master:readonly Instrument[],day:string):Fr
 /** Round-robin bounded discovery. All symbols remain in the universe; only a bounded window receives expensive history/options work. */
 export function freshDiscoveryWindow(refs:readonly FreshReference[],cursor:number,limit=20){
   if(!Number.isSafeInteger(limit)||limit<1||limit>20)throw Error('INVALID_DISCOVERY_LIMIT');
-  const limits:Record<FreshMarket,number>={NSE_INDEX_OPTIONS:6,NSE_STOCK_OPTIONS:7,BSE_VERIFIED_OPTIONS:3,MCX_VERIFIED_FUTURES_OPTIONS:4};
+  const limits:Record<FreshMarket,number>={NSE_INDEX_OPTIONS:6,NSE_STOCK_OPTIONS:7,BSE_VERIFIED_OPTIONS:3,MCX_VERIFIED_FUTURES_OPTIONS:6};
   const selected:FreshReference[]=[];
   for(const market of FRESH_MARKETS){const group=refs.filter(r=>r.market===market),n=Math.min(group.length,limits[market],limit-selected.length),start=group.length?((cursor%group.length)+group.length)%group.length:0;
     for(let i=0;i<n;i++)selected.push(group[(start+i)%group.length]);}

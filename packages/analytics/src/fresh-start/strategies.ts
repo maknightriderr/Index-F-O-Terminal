@@ -1,6 +1,9 @@
 // Approved implementation pack; pure functions only. Time, calendars and data provenance are injected.
 import { atr, ema } from '../indicators/index.js';
-export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.4';
+export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.5';
+/** Minimum underlying reward / risk for a target, and the furthest target in 5-minute ATR before it is capped (1.5). */
+export const FRESH_MIN_TARGET_R = 1.5;
+export const FRESH_MAX_TARGET_ATR = 3;
 export const FRESH_STRATEGIES = ['NEW_ORB_RETEST_V1', 'NEW_VWAP_PULLBACK_V1', 'NEW_PREVIOUS_SESSION_SWEEP_V1', 'NEW_FIRST_OPENING_PULLBACK_V1'] as const;
 export type FreshStrategy = typeof FRESH_STRATEGIES[number];
 export type FreshDirection = 'BULLISH' | 'BEARISH';
@@ -241,8 +244,29 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                 out.refusals.push({ strategy, code: 'NO_TARGET' });
                 continue;
             }
+            // 1.5: the target is the first level that pays at least FRESH_MIN_TARGET_R × the underlying risk. A minor
+            // confirmed swing closer than that is passed over; a major level (opening range, previous day, external
+            // reference) closer than that blocks the trade, because price must break it first. A target further than
+            // FRESH_MAX_TARGET_ATR × ATR is not reachable inside the one-hour hold and is refused too.
+            const risk = Math.abs(current.close - stop);
+            const reward = (x: FreshLevel) => d * (x.price - current.close);
+            const blocking = ahead.find(x => x.kind !== 'CONFIRMED_SWING' && reward(x) < FRESH_MIN_TARGET_R * risk);
+            const chosen = ahead.find(x => reward(x) >= FRESH_MIN_TARGET_R * risk);
+            if (blocking || !chosen) {
+                out.refusals.push({ strategy, code: 'TARGET_TOO_CLOSE' });
+                continue;
+            }
+            // A level further than FRESH_MAX_TARGET_ATR × ATR is not reachable inside the one-hour hold: aim at the cap
+            // instead, as long as the cap itself still pays the minimum reward.
+            const cap = FRESH_MAX_TARGET_ATR * a;
+            const capped = reward(chosen) > cap;
+            if (capped && cap < FRESH_MIN_TARGET_R * risk) {
+                out.refusals.push({ strategy, code: 'TARGET_OUT_OF_REACH' });
+                continue;
+            }
+            const targetPrice = capped ? current.close + d * cap : chosen.price, targetKind = capped ? 'ATR_CAP' : chosen.kind;
             const parentId = `${c.instrument}:${c.session}:${direction}:${origin}`;
-            out.candidates.push({ id: `${FRESH_PACK_VERSION}:${c.sourceEpoch}:${parentId}:${strategy}:${current.time}`, parentId, version: FRESH_PACK_VERSION, strategy, direction, instrument: c.instrument, sourceEpoch: c.sourceEpoch, session: c.session, at: decisionAt, referenceEntry: current.close, stop, target: ahead[0].price, atr: a, origin, expiresAt: Math.min(decisionAt + 2000, c.sessionClose - 3600000), evidence: { ...(c.eventEvidence?{eventCalendar:c.eventEvidence}:{}), rvol: finite(rvol(current)) ? rvol(current) : 'UNAVAILABLE', vwap, reference: 'BAR_VWAP_PROXY', targetKind: ahead[0].kind } });
+            out.candidates.push({ id: `${FRESH_PACK_VERSION}:${c.sourceEpoch}:${parentId}:${strategy}:${current.time}`, parentId, version: FRESH_PACK_VERSION, strategy, direction, instrument: c.instrument, sourceEpoch: c.sourceEpoch, session: c.session, at: decisionAt, referenceEntry: current.close, stop, target: targetPrice, atr: a, origin, expiresAt: Math.min(decisionAt + 2000, c.sessionClose - 3600000), evidence: { ...(c.eventEvidence?{eventCalendar:c.eventEvidence}:{}), rvol: finite(rvol(current)) ? rvol(current) : 'UNAVAILABLE', vwap, reference: 'BAR_VWAP_PROXY', targetKind, targetR: d * (targetPrice - current.close) / risk } });
             emitted = true;
         }
         if (!emitted && !out.refusals.some(x => x.strategy === strategy))

@@ -22,6 +22,7 @@ import {
   istTime,
   inr,
   MIN_SAMPLE,
+  COHORT_DRAWDOWN_FRACTION,
   positionViews,
   setupRadar,
   signedInr,
@@ -149,13 +150,13 @@ function AccountStrip({ account: a, loading }: { account: ReturnType<typeof acco
   const cls = (v: number) => (v > 0 ? 'cc-up' : v < 0 ? 'cc-down' : '');
   return (
     <section aria-label="Paper account" className="cc-strip" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))' }}>
-      <Kpi label="Virtual capital" value={loading ? '…' : inr(a.capital)} sub={a.riskPerTrade != null ? `Risk 0.25% / trade = ${inr(a.riskPerTrade)}` : 'Capital not configured'} />
+      <Kpi label="Virtual capital" value={loading ? '…' : inr(a.capital)} sub={a.riskPerTrade != null ? `Risk 0.5% / trade = ${inr(a.riskPerTrade)}` : 'Capital not configured'} />
       <Kpi label="Today net" value={signedInr(a.todayNet)} valueClass={cls(a.todayNet)} sub={a.capital ? `${a.todayNet >= 0 ? '+' : '−'}${Math.abs((a.todayNet / a.capital) * 100).toFixed(2)}% · closed trades, after costs` : 'Closed trades, after costs'} />
       <Kpi label="Open risk" value={inr(a.openRisk)} sub={`${a.open} position${a.open === 1 ? '' : 's'} · ${a.riskPerTrade ? (a.openRisk / a.riskPerTrade).toFixed(1) : '—'}R at stake`} />
       <Kpi label="Trades today" value={`${a.todayTrades}`} sub={`${a.todayClosed} closed · ${a.todayWins} W · ${a.todayLosses} L`} />
       <div>
         <div className="cc-label">Cohort drawdown</div>
-        <div className="cc-kpi-value">{a.drawdownPct.toFixed(2)}% <span className="text-[12px] font-normal text-[var(--text-muted)]">/ 3.00% pause</span></div>
+        <div className="cc-kpi-value">{a.drawdownPct.toFixed(2)}% <span className="text-[12px] font-normal text-[var(--text-muted)]">/ {(COHORT_DRAWDOWN_FRACTION * 100).toFixed(2)}% pause</span></div>
         <div className="cc-bar mt-1" role="meter" aria-label="Cohort drawdown used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(a.drawdownUsed * 100)}>
           <span style={{ width: `${Math.max(2, a.drawdownUsed * 100)}%`, background: a.drawdownUsed > 0.66 ? 'var(--status-bad)' : 'var(--desk-accent)' }} />
         </div>
@@ -169,14 +170,16 @@ function AccountStrip({ account: a, loading }: { account: ReturnType<typeof acco
 
 function LivePositions({ positions, onOpen }: { positions: PositionView[]; onOpen: (id: string) => void }) {
   return (
-    <Panel title={<>Live positions <small>· {positions.length} open</small></>} meta="Marked at the best bid seen · exits fill bid − 1 tick" bodyClassName="p-3">
+    <Panel title={<>Live positions <small>· {positions.length} open</small></>} meta="Marked at the live bid when the monitor has one, else the best bid seen · exits fill bid − 1 tick" bodyClassName="p-3">
       {positions.length === 0 ? (
         <Empty>No open paper positions. New entries appear here the moment a fill is recorded.</Empty>
       ) : (
         <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(290px, 1fr))' }}>
           {positions.map((p) => {
             const l = stopToTarget(p);
-            const unreal = (p.highBid - p.entry) * p.units;
+            // Live: the exit monitor's latest bid (display only). Otherwise the best bid seen, labelled as a peak.
+            const live = p.markBid != null && p.markAt != null && Date.now() - p.markAt < 60_000;
+            const unreal = ((live ? p.markBid! : p.highBid) - p.entry) * p.units;
             return (
               <button key={p.id} type="button" className="cc-position" onClick={() => onOpen(p.id)} aria-label={`${p.contract}, ${p.strategyLabel}. Open trade detail.`}>
                 <span className="flex items-start justify-between gap-2">
@@ -188,9 +191,9 @@ function LivePositions({ positions, onOpen }: { positions: PositionView[]; onOpe
                 </span>
                 <span className="grid grid-cols-4 gap-2">
                   <Stat label="ENTRY" value={p.entry.toFixed(2)} />
-                  <Stat label="BEST BID" value={p.highBid.toFixed(2)} />
+                  <Stat label={live ? 'BID NOW' : 'BEST BID'} value={(live ? p.markBid! : p.highBid).toFixed(2)} />
                   <Stat label="QTY" value={`${p.units}`} />
-                  <Stat label="PEAK GAIN" value={signedInr(unreal)} className={unreal > 0 ? 'cc-up' : unreal < 0 ? 'cc-down' : ''} />
+                  <Stat label={live ? 'GROSS AT BID' : 'PEAK GAIN'} value={signedInr(unreal)} className={unreal > 0 ? 'cc-up' : unreal < 0 ? 'cc-down' : ''} />
                 </span>
                 <span className="block">
                   <span className="cc-rail block" aria-hidden="true">

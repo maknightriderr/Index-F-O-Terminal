@@ -1,5 +1,5 @@
 spec_version: FRESH-START-SPEC-1.1
-pack_version: NEW-INTRADAY-1.4
+pack_version: NEW-INTRADAY-1.5
 status: FORWARD_PAPER_APPROVED_OPERATIONALLY_GATED
 approval_record: "User: approved hai; 2026-10-30; paper activation requested 2026-10-31; operational qualification pending"
 execution:
@@ -100,7 +100,10 @@ contracts:
   model_reference_and_units_status: NEEDS_VERIFICATION
 risk:
   capital_inr: 500000
-  risk_fraction_per_trade_proposal: 0.0025
+  # 1.5: 0.25% made one lot unaffordable on most index ATM premiums and every MCX contract at INR 5,00,000.
+  risk_fraction_per_trade_proposal: 0.005
+  max_open_risk_fraction: 0.01
+  cohort_drawdown_pause_fraction: 0.05
   premium_outlay_fraction_per_trade_proposal: 0.05
   daily_net_loss_fraction_proposal: 0.01
   max_open_positions_proposal: 2

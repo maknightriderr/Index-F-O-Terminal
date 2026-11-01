@@ -4,7 +4,15 @@ import {getSessionWindow,HOLIDAY_CALENDAR_YEARS,type Instrument} from '@fno/shar
 const ENERGY_SPECS = {
   CRUDEOIL:{id:'MCX_CRUDEOIL_MAR2026',tick:.10,from:'2026-03-01',until:'2027-01-01',source:'https://www.mcxindia.com/docs/default-source/products/contract-specification/crude-oil-options/crudeoil-(100-barrels)-options-march-2026-contract-onwards4f4aed50-0f8d-46a4-8f1b-efba7c9b9479.pdf'},
   NATURALGAS:{id:'MCX_NATURALGAS_MAR2026',tick:.05,from:'2026-03-01',until:'2027-01-01',source:'https://www.mcxindia.com/docs/default-source/products/contract-specification/natural-gas-option/natural-gas-(1250-mmbtu)-options-march-2026-contract-onwards.pdf'},
+  // 1.5: mini options (10 bbl / 250 mmBtu), European, on the mini futures; last trading day two MCX business days before
+  // the underlying future's expiry (MCX specification as relayed at the April 2024 launch). The tick is the master's
+  // verified tick (tick:null): published third-party copies disagree, so no tick is hard-coded. The exact link below
+  // still has to match the master, so a wrong rule fails closed.
+  CRUDEOILM:{id:'MCX_CRUDEOILM_OPTIONS',tick:null,from:'2026-01-01',until:'2027-01-01',source:'https://www.mcxindia.com/products/energy/crude-oil'},
+  NATGASMINI:{id:'MCX_NATGASMINI_OPTIONS',tick:null,from:'2026-01-01',until:'2027-01-01',source:'https://www.mcxindia.com/products/energy/natural-gas'},
 } as const;
+type EnergyName=keyof typeof ENERGY_SPECS;
+const isEnergy=(name:string):name is EnergyName=>Object.prototype.hasOwnProperty.call(ENERGY_SPECS,name);
 const GOLD_SOURCE='https://www.mcxindia.com/docs/default-source/options/gold-option-july-2026-contract-onwards8d88befa-a326-4ac6-8de1-4bfec750135e.pdf';
 // Exact annexure dates in the current July specification; older circulars have different dates.
 const GOLD_CALENDAR:Readonly<Record<string,string>>={'2026-07-29':'2026-08','2026-08-31':'2026-10','2026-09-25':'2026-10','2026-10-30':'2026-12','2026-11-27':'2026-12'};
@@ -54,9 +62,9 @@ function bullionLink(option:Instrument,master:readonly Instrument[]):FreshMcxLin
 export function resolveFreshMcxLink(option:Instrument,master:readonly Instrument[]):FreshMcxLink|null {
   if(option.exchange!=='MCX'||option.segment!=='FO'||option.instrumentType!=='OPTFUT'||!['CE','PE'].includes(option.optionType??'')||!option.expiry||!validDay(option.expiry))return null;
   if(option.name==='GOLD'||option.name==='SILVER')return bullionLink(option,master);
-  if(option.name!=='CRUDEOIL'&&option.name!=='NATURALGAS')return null;
-  const spec=ENERGY_SPECS[option.name],expiry=option.expiry;
-  if(expiry<spec.from||expiry>=spec.until||!Number.isFinite(option.tickSize)||Math.abs(option.tickSize-spec.tick)>1e-9)return null;
+  if(!isEnergy(option.name))return null;
+  const spec:{id:string;tick:number|null;from:string;until:string;source:string}=ENERGY_SPECS[option.name],expiry=option.expiry;
+  if(expiry<spec.from||expiry>=spec.until||!Number.isFinite(option.tickSize)||option.tickSize<=0||(spec.tick!=null&&Math.abs(option.tickSize-spec.tick)>1e-9))return null;
   const matches=master.filter(x=>x.exchange==='MCX'&&x.segment==='FO'&&x.instrumentType==='FUTCOM'&&x.name===option.name&&x.token&&x.expiry&&x.expiry>expiry&&freshMcxEnergyOptionExpiry(x.expiry)===expiry);
   if(matches.length!==1)return null;
   const future=matches[0];

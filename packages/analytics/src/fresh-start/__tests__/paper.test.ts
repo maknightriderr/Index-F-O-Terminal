@@ -12,8 +12,9 @@ describe('fresh-start executable paper admission', () => {
         expect(a.entry).toBe(101);
         expect(a.emergencyStop).toBe(76);
         expect(a.initialRiskPerUnit).toBe(26.5);
-        expect(a.quantity).toBe(75);
-        expect(a.initialRiskCurrency).toBe(1987.5);
+        // 0.5% of INR 10,00,000 = INR 5,000 budget; 26.5 per unit × 25 per lot → 7 whole lots.
+        expect(a.quantity).toBe(175);
+        expect(a.initialRiskCurrency).toBe(4637.5);
         expect(a.riskRewardNet).toBeGreaterThan(1.5);
     });
     it.each(['eventClear', 'calendarVerified'] as const)('blocks missing %s', key => { const r = request(); r[key] = false; expect(admitFreshPaper(r)).toEqual({ ok: false, code: 'BLOCKED_REQUIRED_CAPABILITY' }); });
@@ -22,7 +23,7 @@ describe('fresh-start executable paper admission', () => {
     it('does not treat a newly received old quote as a post-latency fill', () => { const r = request(); r.quote.eventAt = at + 100; expect(admitFreshPaper(r)).toEqual({ ok: false, code: 'ENTRY_EXPIRED_OR_EARLY' }); });
     it('rejects a changed source epoch and wrong contract', () => { const r = request(); r.quote.epoch = 'e2'; expect(admitFreshPaper(r).ok).toBe(false); r.quote.epoch = 'e1'; r.quote.contract = 'OTHER'; expect(admitFreshPaper(r).ok).toBe(false); });
     it('never forces one lot when risk, depth or capital cannot afford it', () => {
-        for (const change of [(r: ReturnType<typeof request>) => r.account.capital = 100, (r: ReturnType<typeof request>) => r.quote.askUnits = 24, (r: ReturnType<typeof request>) => r.account.reservedRisk = 5000]) {
+        for (const change of [(r: ReturnType<typeof request>) => r.account.capital = 100, (r: ReturnType<typeof request>) => r.quote.askUnits = 24, (r: ReturnType<typeof request>) => r.account.reservedRisk = 10000]) {
             const r = request();
             change(r);
             expect(admitFreshPaper(r)).toEqual({ ok: false, code: 'ZERO_PERMITTED_LOTS' });
@@ -72,3 +73,40 @@ describe('fresh-start exit event reduction', () => {
     it('observes max hold and the adverse no-progress rule', () => { const p = position(); expect(advanceFreshPosition(p, { ...event(at + 1000, 99, null), barsSinceFill: 3 }).exitReason).toBe('NO_PROGRESS'); expect(advanceFreshPosition(p, { ...event(at + 1000, 101, null), barsSinceFill: 12 }).exitReason).toBe('MAX_HOLD'); });
 });
 it('bounds contract work and applies payoff gates before choosing a strike', () => { const r = request(); const one = { strike: 25000, expiry: '2026-11-03', contract: r.contract, quote: r.quote }; expect(selectFreshContract(r, [one]).selected?.admission.ok).toBe(true); expect(selectFreshContract(r, Array(11).fill(one)).refusals[0].code).toBe('SHORTLIST_LIMIT'); const bad = { ...one, contract: { ...r.contract, targetPremiumScenarios: [120, 110] } }; expect(selectFreshContract(r, [bad]).selected).toBeNull(); });
+describe('1.5 structural invalidation on a 5-minute close (E-03)', () => {
+    const event = (t: number, underlying: number, close: { price: number; closedAt: number } | null) => ({ at: t, underlying, underlyingAt: t, quote: q(t, 100), cutoff: candidate.at + 14400000, barsSinceFill: 1, trail: false, underlyingClose: close });
+    it('ignores a wick through the stop while the completed bar closed above it', () => {
+        const p = position(), t = p.openedAt + 300000;
+        expect(advanceFreshPosition(p, event(t, 94.5, { price: 96, closedAt: t - 1000 })).state).toBe('OPEN');
+        expect(advanceFreshPosition(p, event(t, 94.5, null)).state).toBe('OPEN');
+    });
+    it('exits once a completed bar after the fill closes beyond the stop', () => {
+        const p = position(), t = p.openedAt + 300000;
+        expect(advanceFreshPosition(p, event(t, 96, { price: 94.9, closedAt: t - 1000 })).exitReason).toBe('STRUCTURAL_INVALIDATION');
+        // A bar that closed before the fill is not evidence about this trade.
+        expect(advanceFreshPosition(p, event(t, 96, { price: 94.9, closedAt: p.openedAt - 1 })).state).toBe('OPEN');
+    });
+    it('keeps the tick rule for callers that do not supply bar closes', () => {
+        const p = position(), t = p.openedAt + 1000;
+        expect(advanceFreshPosition(p, { ...event(t, 94.5, null), underlyingClose: undefined }).exitReason).toBe('STRUCTURAL_INVALIDATION');
+    });
+});
+describe('1.5 risk policy', () => {
+    it('sizes 0.5% per trade, keeps 1% open risk and a 1% daily limit', () => {
+        const r = request();
+        r.account.capital = r.account.equity = 500000;
+        const a = admitFreshPaper(r);
+        expect(a.ok && a.initialRiskCurrency).toBeLessThanOrEqual(2500);
+        expect(a.ok && a.quantity).toBe(75); // INR 2,500 / (26.5 × 25) → 3 lots
+        const full = request(); full.account.capital = full.account.equity = 500000; full.account.reservedRisk = 5000;
+        expect(admitFreshPaper(full)).toEqual({ ok: false, code: 'ZERO_PERMITTED_LOTS' });
+        const down = request(); down.account.capital = down.account.equity = 500000; down.account.dailyNet = -5000;
+        expect(admitFreshPaper(down)).toEqual({ ok: false, code: 'ACCOUNT_PAUSED' });
+    });
+    it('pauses the cohort at a 5% cumulative net loss', () => {
+        const r = request(); r.account.capital = r.account.equity = 500000; r.account.cohortNet = -24999;
+        expect(admitFreshPaper(r).ok).toBe(true);
+        r.account.cohortNet = -25000;
+        expect(admitFreshPaper(r)).toEqual({ ok: false, code: 'COHORT_DRAWDOWN_PAUSED' });
+    });
+});

@@ -45,7 +45,16 @@ export interface FreshAccount {
     cohortNet?: number;
 }
 /** PROPOSED_NOT_APPROVED: a cumulative cohort loss of this fraction of capital pauses new entries until reviewed. */
-export const FRESH_COHORT_DRAWDOWN_FRACTION = 0.03;
+/**
+ * 1.5 risk policy for the fixed INR 5,00,000 paper account. At 0.25% (INR 1,250) the 75% emergency stop made one
+ * lot unaffordable on most NSE index ATM premiums and on every MCX contract, so almost every signal was refused
+ * ZERO_PERMITTED_LOTS. Per-trade risk is 0.5%; open risk stays bounded by two positions (1%), the daily loss
+ * limit stays 1%, and the cohort pause keeps the same ~10-loss tolerance (5% at 0.5% per trade, was 3% at 0.25%).
+ */
+export const FRESH_RISK_PER_TRADE = 0.005;
+export const FRESH_MAX_OPEN_RISK = 0.01;
+export const FRESH_DAILY_LOSS_LIMIT = 0.01;
+export const FRESH_COHORT_DRAWDOWN_FRACTION = 0.05;
 export type FreshAdmission = {
     ok: false;
     code: string;
@@ -110,7 +119,7 @@ function assessFreshPaper(args: {
         return refuse('EXTENDED_ENTRY');
     if (args.legacyPositionOpen || args.correlatedPositionOpen || args.parentAlreadyTraded || args.entriesToday >= 2 || (args.barsSinceLastClose != null && args.barsSinceLastClose < 3))
         return refuse('EXPOSURE_OR_PARENT');
-    if (!a.marksComplete || a.capital <= 0 || a.equity <= 0 || a.reservedRisk < 0 || a.reservedPremium < 0 || a.openPositions >= 2 || a.dailyNet <= -.01 * a.capital || a.consecutiveNetLosses >= 3)
+    if (!a.marksComplete || a.capital <= 0 || a.equity <= 0 || a.reservedRisk < 0 || a.reservedPremium < 0 || a.openPositions >= 2 || a.dailyNet <= -FRESH_DAILY_LOSS_LIMIT * a.capital || a.consecutiveNetLosses >= 3)
         return refuse('ACCOUNT_PAUSED');
     // A run of losing days never resets the cohort: each account-day starts fresh, the cumulative drawdown does not.
     if (a.cohortNet == null || !Number.isFinite(a.cohortNet) || a.cohortNet <= -FRESH_COHORT_DRAWDOWN_FRACTION * a.capital)
@@ -126,7 +135,7 @@ function assessFreshPaper(args: {
     // Both adverse exit tick and quantity-level flat brokerage belong in frozen initial R.
     const baseRisk = Math.max(entry - Math.max(0,Math.min(...k.invalidationPremiumScenarios)-q.tick), entry-Math.max(0,emergencyStop-q.tick));
     const targetExit=Math.max(0,Math.min(...k.targetPremiumScenarios)-q.tick),perLot=k.lotQuantity*k.multiplier;
-    const budget=Math.min(.0025*a.capital,.005*a.capital-a.reservedRisk,.01*a.capital+a.dailyNet-a.reservedRisk);
+    const budget=Math.min(FRESH_RISK_PER_TRADE*a.capital,FRESH_MAX_OPEN_RISK*a.capital-a.reservedRisk,FRESH_DAILY_LOSS_LIMIT*a.capital+a.dailyNet-a.reservedRisk);
     let fixed=0,variable=explicit*perLot;
     try { if(k.feePolicy){fixed=2*k.feePolicy.brokeragePerOrder*(1+k.feePolicy.gstFraction);variable=freshRoundTripFees(entry,entry,k.lotQuantity,k.multiplier,k.feePolicy)-fixed;} }
     catch {return refuse('MODEL_OR_COST_UNAVAILABLE');}
@@ -179,6 +188,12 @@ export function advanceFreshPosition(p: FreshPaperPosition, e: {
     barsSinceFill: number;
     trail: boolean;
     monitorEpoch?: string;
+    /**
+     * 1.5 (E-03): the last completed 5-minute close of the underlying. When the field is present (even null),
+     * structural invalidation needs a CLOSE beyond the candidate's stop, so a wick through the level no longer exits;
+     * the 75% premium emergency stop still protects intrabar. Absent (older callers/replays): the tick rule applies.
+     */
+    underlyingClose?: { price: number; closedAt: number } | null;
 }): FreshPaperPosition {
     if (p.state === 'CLOSED' || e.at <= p.lastEventAt || !Number.isFinite(e.at))
         return p;
@@ -208,7 +223,11 @@ export function advanceFreshPosition(p: FreshPaperPosition, e: {
     if (n.state === 'OPEN') {
         // A thin book delays the fill, never the trigger: the stop fires on price alone.
         const reachedStop = quoteFresh && q!.bid <= beforeStop;
-        const invalid = underlyingFresh && d * (e.underlying! - n.candidate.stop) <= 0;
+        const closeRule = e.underlyingClose !== undefined;
+        const barClose = e.underlyingClose;
+        const invalid = closeRule
+            ? barClose != null && Number.isFinite(barClose.price) && barClose.price > 0 && barClose.closedAt > p.openedAt && barClose.closedAt <= e.at && d * (barClose.price - n.candidate.stop) <= 0
+            : underlyingFresh && d * (e.underlying! - n.candidate.stop) <= 0;
         const target = underlyingFresh && d * (e.underlying! - n.candidate.target) >= 0;
         const noProgress = e.barsSinceFill >= 3 && n.maxUnderlyingFavorable < .25 * Math.abs(n.candidate.referenceEntry - n.candidate.stop) && underlyingFresh && d * (e.underlying! - n.candidate.referenceEntry) < 0;
         const reason = e.at >= e.cutoff - 600000 ? 'SESSION_CUTOFF' : reachedStop ? 'PREMIUM_STOP' : invalid ? 'STRUCTURAL_INVALIDATION' : target ? 'UNDERLYING_TARGET' : e.barsSinceFill >= 12 ? 'MAX_HOLD' : noProgress ? 'NO_PROGRESS' : null;

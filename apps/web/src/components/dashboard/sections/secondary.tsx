@@ -22,7 +22,11 @@ import { getPriceHistory } from '@/lib/price-history-store';
 
 const signedCr = (v: number) => `${v > 0 ? '+' : v < 0 ? '-' : ''}₹${Math.abs(v).toFixed(0)} Cr`;
 
-export function FiiDiiPanel({ today, history }: { today: FiiDiiActivity | null; history: FiiDiiActivity[] }) {
+export function FiiDiiPanel({ today: rawToday, history: rawHistory }: { today: FiiDiiActivity | null; history: FiiDiiActivity[] }) {
+  // A malformed or empty payload (e.g. [] or a row without fii/dii) renders as missing, never as a crash.
+  const ok = (h: FiiDiiActivity | null | undefined): h is FiiDiiActivity => !!h && typeof h === 'object' && !!h.fii && !!h.dii;
+  const today = ok(rawToday) ? rawToday : null;
+  const history = Array.isArray(rawHistory) ? rawHistory.filter(ok) : [];
   const maxAbs = Math.max(1, ...history.map((h) => Math.max(Math.abs(h.fii.netValue), Math.abs(h.dii.netValue))));
   return (
     <Section title="FII / DII activity" subtitle={`NSE's daily cash-market activity${today ? `, ${today.date}` : ''}, published after the close.`} collapsible defaultOpen>

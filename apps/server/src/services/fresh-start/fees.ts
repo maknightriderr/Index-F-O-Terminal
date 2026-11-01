@@ -23,7 +23,7 @@ export function freshFeePolicyFor(instrument:FeeInstrument,session:string){
     if(['SENSEX','BANKEX'].includes(instrument.name))policy=BSE_INDEX_FEES;
     else if(instrument.name==='SENSEX50')policy=BSE_SENSEX50_FEES;
     else return null;
-  }else if(instrument.exchange==='MCX'&&instrument.instrumentType==='OPTFUT'&&['CRUDEOIL','NATURALGAS','GOLD','SILVER'].includes(instrument.name)){
+  }else if(instrument.exchange==='MCX'&&instrument.instrumentType==='OPTFUT'&&['CRUDEOIL','CRUDEOILM','NATURALGAS','NATGASMINI','GOLD','SILVER'].includes(instrument.name)){
     policy=MCX_NON_AGRI_FEES;tax='CTT';
   }else return null;
   if(session<from)return null;

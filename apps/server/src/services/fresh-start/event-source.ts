@@ -52,7 +52,8 @@ export class FreshEventSource {
   }
   private rawBlockers(now:number,session:string,market:'INDEX'|'STOCK'|'COMMODITY',issuer:string|null=null):string[]{
     const publicBlackout=this.bls?.blackout(now),officialBlockers=[...(this.official?.blockers(now)??[]),...(this.freeGlobal?.blockers(now)??[])];
-    if(market==='COMMODITY'){const blackout=this.eia?.blackout(now,issuer);return [...officialBlockers,...(publicBlackout?[publicBlackout]:[]),...(blackout?[blackout]:[]),'BLOCKED_COMMODITY_EVENT_COVERAGE'];}
+    // Mini contracts share their parent product's EIA releases.
+    if(market==='COMMODITY'){const product=issuer==='CRUDEOILM'?'CRUDEOIL':issuer==='NATGASMINI'?'NATURALGAS':issuer;const blackout=this.eia?.blackout(now,product);return [...officialBlockers,...(publicBlackout?[publicBlackout]:[]),...(blackout?[blackout]:[]),'BLOCKED_COMMODITY_EVENT_COVERAGE'];}
     const codes:string[]=[...officialBlockers,...(publicBlackout?[publicBlackout]:[])];
     if(market==='STOCK'){
       const results=this.issuer?this.issuer.clearance(now,session,issuer,'RESULTS'):'BLOCKED_ISSUER_RESULTS_COVERAGE';

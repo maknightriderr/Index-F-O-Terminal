@@ -1,4 +1,4 @@
-import {freshQuoteCode,freshRoundTripFees,type FreshQuote,type FreshFeePolicy} from '@fno/analytics';
+import {FRESH_RISK_PER_TRADE,freshQuoteCode,freshRoundTripFees,type FreshQuote,type FreshFeePolicy} from '@fno/analytics';
 const record=(x:unknown):Record<string,any>=>x!=null&&typeof x==='object'&&!Array.isArray(x)?x as Record<string,any>:{};
 const number=(x:unknown):x is number=>typeof x==='number'&&Number.isFinite(x);
 const time=(x:unknown)=>x instanceof Date?x.getTime():number(x)?x:typeof x==='string'?Date.parse(x):NaN;
@@ -37,7 +37,7 @@ export function inspectFreshLedger(input:unknown):FreshIntegrityRow {
   if(number(admission.explicitCostPerUnit)&&admission.explicitCostPerUnit<0)issues.push('NEGATIVE_MODELED_COST');
   if(number(p.currentStop)&&number(p.emergencyStop)&&p.currentStop<p.emergencyStop)issues.push('PREMIUM_STOP_LOOSENED');
   if(sized&&number(p.entry))compare(p.entry*p.quantity*k.multiplier,r.reserved_premium,'RESERVED_PREMIUM_MISMATCH');
-  if(present(number(request.capital)&&request.capital>0&&number(p.originalRiskCurrency)&&p.originalRiskCurrency>0,'RISK_CAP_EVIDENCE_MISSING')&&p.originalRiskCurrency>request.capital*.0025+1e-6)issues.push('PLANNED_RISK_CAP_EXCEEDED');
+  if(present(number(request.capital)&&request.capital>0&&number(p.originalRiskCurrency)&&p.originalRiskCurrency>0,'RISK_CAP_EVIDENCE_MISSING')&&p.originalRiskCurrency>request.capital*FRESH_RISK_PER_TRADE+1e-6)issues.push('PLANNED_RISK_CAP_EXCEEDED');
   compare(p.openedAt,request.now,'ENTRY_DECISION_TIME_MISMATCH');compare(p.openedAt,time(r.entry_at),'ENTRY_EVENT_TIME_MISMATCH');compare(p.openedAt,time(r.opened_at),'ENTRY_ROW_TIME_MISMATCH');
   if(present(number(request.arrivalAt)&&number(c.at),'ENTRY_ARRIVAL_EVIDENCE_MISSING')){
     if(request.arrivalAt<c.at+250||!number(q.eventAt)||!number(q.receivedAt)||q.eventAt<request.arrivalAt||q.receivedAt<request.arrivalAt)issues.push('ENTRY_BEFORE_ALLOWED_ARRIVAL');

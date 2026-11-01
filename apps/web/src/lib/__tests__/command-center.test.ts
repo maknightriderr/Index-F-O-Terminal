@@ -39,12 +39,12 @@ describe('position views', () => {
 });
 
 describe('account', () => {
-  it('counts today, open risk and the drawdown against the 3% pause', () => {
+  it('counts today, open risk and the drawdown against the 5% pause', () => {
     const ps = positionViews(status([pos(), pos({ id: 'p2', netPnl: -1250, exitReason: 'STOP' }), pos({ id: 'p3', state: 'OPEN', netPnl: null })]));
     const a = accountView(status([]), ps, NOW);
-    expect(a).toMatchObject({ capital: 500000, riskPerTrade: 1250, todayNet: 150, todayClosed: 2, todayWins: 1, todayLosses: 1, open: 1, openRisk: 1250 });
+    expect(a).toMatchObject({ capital: 500000, riskPerTrade: 2500, todayNet: 150, todayClosed: 2, todayWins: 1, todayLosses: 1, open: 1, openRisk: 1250 });
     const loss = accountView(status([]), positionViews(status([pos({ netPnl: -7500 })])), NOW);
-    expect(loss.drawdownUsed).toBeCloseTo(0.5);
+    expect(loss.drawdownUsed).toBeCloseTo(0.3);
     expect(loss.drawdownPct).toBeCloseTo(1.5);
   });
   it('uses the IST calendar day', () => {
@@ -111,11 +111,14 @@ describe('contract picker', () => {
   it('mirrors the admission checks and sizes at the 75% emergency stop', () => {
     const r = pickContract(chain, 'CE', 500000, NOW);
     expect(r.selected?.strike).toBe(24850);
-    // 25% of a ₹118.45 entry × 75 units ≈ ₹2,224 > ₹1,250: the engine would refuse ZERO_PERMITTED_LOTS.
-    expect(r.sizing).toMatchObject({ riskBudget: 1250, lots: 0, units: 0 });
+    // 0.5% risk (₹2,500): one lot risks (118.45 − 88.80) × 75 ≈ ₹2,224 at the 75% emergency stop, so it fits.
+    expect(r.sizing).toMatchObject({ riskBudget: 2500, lots: 1, units: 75 });
     expect(r.sizing!.emergencyStop).toBeCloseTo(88.85);
     const cheap = pickContract({ ...chain, strikes: [{ strike: 24850, call: leg(0.5, 50, 50.2), put: null }] } as unknown as OptionChain, 'CE', 500000, NOW);
-    expect(cheap.sizing).toMatchObject({ lots: 1, units: 75 });
+    expect(cheap.sizing).toMatchObject({ lots: 2, units: 150 });
+    // Above ~₹133 premium one NIFTY lot exceeds ₹2,500 at the emergency stop: the engine would refuse ZERO_PERMITTED_LOTS.
+    const dear = pickContract({ ...chain, strikes: [{ strike: 24850, call: leg(0.5, 150, 150.2), put: null }] } as unknown as OptionChain, 'CE', 500000, NOW);
+    expect(dear.sizing).toMatchObject({ lots: 0 });
     const why = Object.fromEntries(r.rejected.map((x) => [x.strike, x.firstFailure]));
     expect(why[24750]).toMatch(/Delta/);
     expect(why[24800]).toMatch(/Depth/);
@@ -128,5 +131,15 @@ describe('contract picker', () => {
     const stale = pickContract({ ...chain, strikes: [{ strike: 24850, call: leg(0.52, 118, 118.4, { timestamp: NOW - 5000 }), put: null }] } as unknown as OptionChain, 'CE', null, NOW);
     expect(stale.selected).toBeNull();
     expect(stale.rejected[0].firstFailure).toMatch(/Quote/);
+  });
+});
+
+describe('live mark', () => {
+  it('attaches the exit monitor bid to held positions only and marks the rail with it', () => {
+    const s = status([pos({ id: 'o', state: 'OPEN', netPnl: null, highBid: 130 }), pos({ id: 'c' })], { feedQualification: { marks: { o: { bid: 110, ask: 110.5, at: NOW, underlying: 24810 }, c: { bid: 1, ask: 2, at: NOW, underlying: null } } } } as never);
+    const [open, closed] = positionViews(s);
+    expect(open).toMatchObject({ markBid: 110, markAt: NOW });
+    expect(closed.markBid).toBeNull();
+    expect(stopToTarget(open).mark).toBe(110);
   });
 });
