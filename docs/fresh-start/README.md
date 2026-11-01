@@ -205,3 +205,7 @@ The user approved paper research despite unavailable economic-calendar data afte
 ## Recorded session coverage and operational qualification — 1 November 2026
 
 [Session evidence](session-evidence.md) reports bounded recorded lifecycle coverage by market, strategy and immutable event cohort; no evidence does not mean validation passed. [The updated operational handoff](activation-handoff.md) supersedes the old mandatory paid-calendar step and documents the next-phase change-only platform observations. Actual market-session evidence and independent MCX depth-unit qualification remain unresolved where absent; more diagnostics or deployments do not establish trading edge.
+
+## Exit-monitor resilience qualification — 1 November 2026
+
+[Monitor resilience](monitor-resilience.md) covers a stalled scanner,250 synthetic subscriptions/100,000 ticks with slow storage, retained target/exit events and disconnect/stale/depth recovery. It also fixes a shutdown race that could issue the second history request after a stopped worker's first request completed. These are bounded synthetic engineering checks, not production-load or profitability evidence.

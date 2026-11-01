@@ -15,9 +15,25 @@ vi.mock('../ensure-capture-schema.js',()=>({schemaFileReady:()=>true}));
 import {FreshPaperWorker} from '../fresh-start/worker.js';
 import {logger} from '../../lib/logger.js';
 import {freshAdapterState as state} from '../fresh-start/adapter-state.js';
+const initialState=structuredClone(state);
 afterEach(()=>vi.useRealTimers());
-function setup(){mocks.eiaRefresh.mockReset().mockResolvedValue(undefined);mocks.officialRefresh.mockReset().mockResolvedValue(undefined);const provider={getInstrumentMaster:vi.fn(),getHistoricalData:vi.fn(),isAuthenticated:vi.fn()},manager={onTick:vi.fn(()=>()=>{}),onRecovering:vi.fn(()=>()=>{}),unsubscribe:vi.fn(),subscribe:vi.fn(async()=>{}),getStatus:()=>({subscriptionCount:0})};return {provider,manager,worker:new FreshPaperWorker(provider as any,manager as any)};}
+function setup(){Object.assign(state,structuredClone(initialState));mocks.eiaRefresh.mockReset().mockResolvedValue(undefined);mocks.officialRefresh.mockReset().mockResolvedValue(undefined);const provider={getInstrumentMaster:vi.fn(),getHistoricalData:vi.fn(),isAuthenticated:vi.fn()},manager={onTick:vi.fn(()=>()=>{}),onRecovering:vi.fn(()=>()=>{}),unsubscribe:vi.fn(),subscribe:vi.fn(async()=>{}),getStatus:()=>({subscriptionCount:0})};return {provider,manager,worker:new FreshPaperWorker(provider as any,manager as any)};}
 describe('production worker lifecycle',()=>{
+ it('keeps monitoring callbacks running while a history request is stalled, without starting another scanner request',async()=>{
+   vi.useFakeTimers();vi.setSystemTime(new Date('2026-10-30T06:00:00Z'));
+   mocks.recover.mockResolvedValue(undefined);mocks.sql.mockResolvedValue([{n:0}]);mocks.keys.mockResolvedValue([]);
+   const {worker,provider}=setup();provider.isAuthenticated.mockReturnValue(true);
+   provider.getInstrumentMaster.mockResolvedValue([{token:'1',name:'NIFTY',symbol:'NIFTYFUT',exchange:'NSE',segment:'FO',instrumentType:'FUTIDX',expiry:'2026-11-24',lotSize:25,tickSize:.05},{token:'2',name:'NIFTY',symbol:'NIFTYCE',exchange:'NSE',segment:'FO',instrumentType:'OPTIDX',expiry:'2026-11-03',lotSize:25,tickSize:.05,strike:25000,optionType:'CE'}]);
+   let release!:(bars:any[])=>void;provider.getHistoricalData.mockImplementationOnce(()=>new Promise<any[]>(resolve=>{release=resolve;}));
+   const monitorTick=vi.spyOn((worker as any).monitor,'tick');
+   try{
+     await worker.start();await vi.waitFor(()=>expect(provider.getHistoricalData).toHaveBeenCalledOnce());
+     const before=monitorTick.mock.calls.length;await vi.advanceTimersByTimeAsync(20000);
+     expect(monitorTick.mock.calls.length-before).toBeGreaterThanOrEqual(80);expect(provider.getHistoricalData).toHaveBeenCalledOnce();expect((worker as any).scanning).toBe(true);
+     worker.stop();expect(vi.getTimerCount()).toBe(0);release([]);await Promise.resolve();await Promise.resolve();expect(provider.getHistoricalData).toHaveBeenCalledOnce();
+     expect(state.monitorRunning).toBe(false);expect(state.entriesArmed).toBe(false);
+   }finally{worker.stop();release?.([]);monitorTick.mockRestore();}
+ });
  it('registers timers synchronously before recovery and does no provider work on a weekend',async()=>{vi.useFakeTimers();vi.setSystemTime(new Date('2026-10-31T06:00:00Z'));let release!:()=>void;mocks.recover.mockImplementation(()=>new Promise<void>(r=>release=r));const {worker,provider}=setup();const started=worker.start();expect(vi.getTimerCount()).toBe(2);expect(state.entriesArmed).toBe(false);release();await started;expect(state.status).toBe('WAITING_FOR_MARKET');await vi.waitFor(()=>expect(logger.info).toHaveBeenCalledWith(expect.objectContaining({event:'freshOperationalEvidence',status:'WAITING_FOR_MARKET',recovered:true,entriesArmed:false,liveOrdersAllowed:false}),expect.any(String)));expect(state.eventCode).toBe('PAPER_EVENT_DATA_UNVERIFIED');expect(mocks.officialRefresh).toHaveBeenCalledOnce();expect(mocks.eiaRefresh).toHaveBeenCalledOnce();expect(provider.getInstrumentMaster).not.toHaveBeenCalled();expect(provider.getHistoricalData).not.toHaveBeenCalled();worker.stop();expect(vi.getTimerCount()).toBe(0);expect(state.monitorRunning).toBe(false);});
  it('keeps activation blocked after a recovery failure',async()=>{mocks.recover.mockRejectedValue(Error('storage unavailable'));const {worker}=setup();await expect(worker.start()).rejects.toThrow('storage unavailable');expect(logger.info).toHaveBeenCalledWith(expect.objectContaining({event:'freshOperationalEvidence',status:'BLOCKED_RECOVERY',entriesArmed:false}),expect.any(String));expect(state.entriesArmed).toBe(false);expect(state.status).toBe('BLOCKED_RECOVERY');worker.stop();});
  it('ignores explicitly inactive Redis placeholders while blocking active or unreadable legacy inventory',async()=>{mocks.sql.mockResolvedValue([{n:0}]);mocks.keys.mockResolvedValue(['trade_setup:NSE:NIFTY:INTRADAY']);const {worker}=setup();mocks.read.mockResolvedValue(JSON.stringify({available:false}));expect(await (worker as any).legacyRisk()).toBe(false);mocks.read.mockResolvedValue(JSON.stringify({available:true}));expect(await (worker as any).legacyRisk()).toBe(true);mocks.read.mockResolvedValue('{bad');expect(await (worker as any).legacyRisk()).toBe(true);mocks.sql.mockRejectedValue(Error('db'));expect(await (worker as any).legacyRisk()).toBe(true);});
