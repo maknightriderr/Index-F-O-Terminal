@@ -213,3 +213,7 @@ The user approved paper research despite unavailable economic-calendar data afte
 ## Entry activation revocation — 1 November 2026
 
 [Transaction activation rechecks](entry-revocation.md) close the reproduced case where an entry passed activation before a database wait and still filled after readiness was withdrawn. Revoked staged fills roll back, and a stopped worker cannot borrow replacement-worker readiness. Held exits remain independent. The document states the boundary for commits already in progress and the remaining quote-aging/market-evidence work.
+
+## Transaction-time freshness — 1 November 2026
+
+[Entry freshness](transaction-freshness.md) checks the current clock after database waits and before commit, retaining the two-second exact-quote limit, setup/cutoff deadlines and held-mark eligibility. Stale staged fills roll back without replacing the original selected quote. Duplicate delivery remains idempotent; historical integration fixtures supply explicit simulated clocks.

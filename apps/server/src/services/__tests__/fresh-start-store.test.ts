@@ -14,7 +14,7 @@ function request(id = 'c1', instrument = 'NIFTY-FUT', group = 'INDEX'): FreshEnt
 }
 let store: FreshPaperStore;
 beforeAll(async () => { pg = new PGlite(); const text = readFileSync(new URL('../../../../../database/init/047_fresh_start_paper.sql', import.meta.url), 'utf8'); await pg.exec(text); await pg.exec(text); }, 30000);
-beforeEach(async () => { await pg.exec('TRUNCATE fresh_paper_events,fresh_paper_positions,fresh_candidates,fresh_parent_moves,fresh_paper_accounts CASCADE'); store = new FreshPaperStore(client(pg), () => true); });
+beforeEach(async () => { await pg.exec('TRUNCATE fresh_paper_events,fresh_paper_positions,fresh_candidates,fresh_parent_moves,fresh_paper_accounts CASCADE'); store = new FreshPaperStore(client(pg), () => true,()=>at+300); });
 afterAll(async () => { await pg.close(); });
 async function count(table: string) {
     return (await pg.query<{
@@ -22,12 +22,47 @@ async function count(table: string) {
     }>(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n;
 }
 describe('fresh-start durable account and fills', () => {
+    it('recognizes an already committed fill on late duplicate delivery without reserving or minting again',async()=>{
+        const r=request();await store.enter(r);
+        expect(await new FreshPaperStore(client(pg),()=>true,()=>at+60000).enter(r)).toMatchObject({ok:true,code:'ALREADY_FILLED'});
+        expect(await count('fresh_paper_positions')).toBe(1);expect(await count('fresh_candidates')).toBe(1);expect(await count('fresh_paper_events')).toBe(1);
+    });
+    it.each(['SELECT id FROM fresh_paper_portfolio','SELECT status,closed_at,strategy','INSERT INTO fresh_paper_events'].flatMap(checkpoint=>['quote','setup','cutoff','backward-clock','invalid-clock'].map(kind=>({checkpoint,kind}))))('rolls back $kind invalidation during $checkpoint',async({checkpoint,kind})=>{
+        const r=request();r.candidate.expiresAt=at+60000;
+        let now=r.now;const c=client(pg);
+        if(kind==='setup')r.candidate.expiresAt=at+500;
+        if(kind==='cutoff')r.cutoff=at+3600000+500;
+        const delayed:FreshDb={...c,begin:fn=>c.begin(tx=>fn({...tx,unsafe:async(q,p)=>{
+            const rows=await tx.unsafe(q,p);
+            if(q.includes(checkpoint))now=kind==='quote'?at+2501:kind==='setup'?at+501:kind==='cutoff'?at+500:kind==='backward-clock'?at+299:NaN;
+            return rows;
+        }}))};
+        const before=JSON.stringify(r),expected=kind==='quote'?'STALE_OR_FUTURE_QUOTE':kind.endsWith('clock')?'ENTRY_CLOCK_UNAVAILABLE':'ENTRY_EXPIRED_OR_EARLY';
+        expect(await new FreshPaperStore(delayed,()=>true,()=>now).enter(r)).toMatchObject({ok:false,code:expected});
+        for(const table of ['fresh_paper_accounts','fresh_candidates','fresh_parent_moves','fresh_paper_positions','fresh_paper_events'])expect(await count(table)).toBe(0);
+        expect(JSON.stringify(r)).toBe(before);
+    });
+    it('records admission time from the current clock without modifying the original request or selected quote',async()=>{
+        const r=request(),before=JSON.stringify(r);
+        expect(await new FreshPaperStore(client(pg),()=>true,()=>at+400).enter(r)).toMatchObject({ok:true,code:'FILLED'});
+        const [p]=await store.recover();expect(p.state.openedAt).toBe(at+400);
+        const event=(await pg.query<any>("SELECT evidence,at FROM fresh_paper_events WHERE kind='ENTRY_FILL'")).rows[0];
+        expect(event.evidence.request.now).toBe(at+400);expect(event.evidence.request.quote).toEqual(r.quote);expect(new Date(event.at).getTime()).toBe(at+400);expect(JSON.stringify(r)).toBe(before);
+    });
+    it('rechecks every held mark before commit and preserves existing exposure if a mark ages while the new quote stays fresh',async()=>{
+        const first=request();await store.enter(first);
+        const r=request('c2','TCS','IT');r.now=at+2000;r.candidate.at=at+1700;r.arrivalAt=at+1950;r.candidate.expiresAt=at+4000;r.quote={...r.quote,eventAt:r.now,receivedAt:r.now};r.marks={c1:first.quote};
+        let now=r.now;const c=client(pg),before=(await pg.query<any>('SELECT state FROM fresh_paper_positions')).rows;
+        const delayed:FreshDb={...c,begin:fn=>c.begin(tx=>fn({...tx,unsafe:async(q,p)=>{const rows=await tx.unsafe(q,p);if(q.includes('INSERT INTO fresh_paper_events'))now=at+2301;return rows;}}))};
+        expect(await new FreshPaperStore(delayed,()=>true,()=>now).enter(r)).toMatchObject({ok:false,code:'ACCOUNT_PAUSED'});
+        expect((await pg.query<any>('SELECT state FROM fresh_paper_positions')).rows).toEqual(before);expect(await count('fresh_candidates')).toBe(1);expect(await count('fresh_paper_events')).toBe(1);
+    });
     it.each(['SELECT id FROM fresh_paper_portfolio','INSERT INTO fresh_candidates','INSERT INTO fresh_paper_events'])('rolls back new spending when entry activation is revoked during %s',async(checkpoint)=>{
         let enabled=true,revoked=false;const c=client(pg);
         const delayed:FreshDb={...c,begin:fn=>c.begin(tx=>fn({...tx,unsafe:async(q,p)=>{
             const rows=await tx.unsafe(q,p);if(q.includes(checkpoint)){enabled=false;revoked=true;}return rows;
         }}))};
-        expect(await new FreshPaperStore(delayed,()=>enabled).enter(request())).toMatchObject({ok:false,code:'PAPER_DISABLED'});
+        expect(await new FreshPaperStore(delayed,()=>enabled,()=>at+300).enter(request())).toMatchObject({ok:false,code:'PAPER_DISABLED'});
         expect(revoked).toBe(true);
         for(const table of ['fresh_paper_accounts','fresh_candidates','fresh_parent_moves','fresh_paper_positions','fresh_paper_events'])expect(await count(table)).toBe(0);
         expect(await store.enter(request())).toMatchObject({ok:true,code:'FILLED'});
@@ -43,7 +78,7 @@ describe('fresh-start durable account and fills', () => {
                         throw Error('storage unavailable');
                     return tx.unsafe(q, p);
                 } })) };
-        await expect(new FreshPaperStore(broken, () => true).enter(request())).rejects.toThrow('storage unavailable');
+        await expect(new FreshPaperStore(broken, () => true,()=>at+300).enter(request())).rejects.toThrow('storage unavailable');
         expect(await count('fresh_paper_accounts')).toBe(0);
         expect(await count('fresh_paper_positions')).toBe(0);
     });
