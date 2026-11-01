@@ -29,10 +29,10 @@ type Stored = {
     state: FreshPaperPosition;
     risk_group: string;
 };
-/** Throw inside the transaction so a revoked entry rolls back every staged write. */
-class FreshEntryRevoked extends Error {}
+/** Abort inside the transaction so invalidated entry work rolls back every staged write. */
+class FreshEntryTransactionRejected extends Error {constructor(readonly code='PAPER_DISABLED'){super(code);}}
 export class FreshPaperStore {
-    constructor(private db: FreshDb = sql as unknown as FreshDb, private entriesEnabled: () => boolean = freshEntriesEnabled) { }
+    constructor(private db: FreshDb = sql as unknown as FreshDb, private entriesEnabled: () => boolean = freshEntriesEnabled, private now:()=>number=Date.now) { }
     /** All account spending, exposure checks, fill and frozen risk are committed under the same account lock. */
     async enter(r: FreshEntryRequest): Promise<{
         ok: boolean;
@@ -47,7 +47,7 @@ export class FreshPaperStore {
             return { ok: false, code: 'INVALID_ACCOUNT' };
         return this.db.begin(async (tx) => {
             await tx.unsafe("SELECT id FROM fresh_paper_portfolio WHERE id='terminal-paper' FOR UPDATE");
-            if(!this.entriesEnabled())throw new FreshEntryRevoked();
+            if(!this.entriesEnabled())throw new FreshEntryTransactionRejected();
             await tx.unsafe('INSERT INTO fresh_paper_accounts(id,session,version,capital) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING', [r.accountId, r.session, r.candidate.version, r.capital]);
             const [a] = await tx.unsafe('SELECT * FROM fresh_paper_accounts WHERE id=$1 FOR UPDATE', [r.accountId]);
             if (a.session !== r.session || a.version !== r.candidate.version || a.capital !== r.capital)
@@ -58,19 +58,16 @@ export class FreshPaperStore {
             const previous = await tx.unsafe('SELECT code FROM fresh_candidates WHERE id=$1', [r.candidate.id]);
             if (previous.length)
                 return { ok: false, code: previous[0].code ?? 'PREVIOUSLY_REFUSED' };
+            const validateTime=()=>{
+                const now=this.now();
+                if(!Number.isFinite(now)||!Number.isFinite(r.now)||now<r.now)throw new FreshEntryTransactionRejected('ENTRY_CLOCK_UNAVAILABLE');
+                const qc=freshQuoteCode(r.quote,r.contract.id,r.contract.source,r.contract.sourceEpoch,now);
+                if(qc)throw new FreshEntryTransactionRejected(qc);
+                if(now>r.candidate.expiresAt||now>=r.cutoff-3600000)throw new FreshEntryTransactionRejected('ENTRY_EXPIRED_OR_EARLY');
+                return now;
+            };
+            r={...r,now:validateTime()};
             const open: Stored[] = await tx.unsafe("SELECT id,revision,state,risk_group FROM fresh_paper_positions WHERE status<>'CLOSED'", []);
-            let unrealized = 0, marksComplete = true, reservedRisk = 0, reservedPremium = 0;
-            for (const row of open) {
-                const p = row.state, k = p.contract, q = r.marks[row.id];
-                reservedRisk += p.originalRiskCurrency;
-                reservedPremium += p.entry * p.quantity * k.multiplier;
-                if (!q || freshQuoteCode(q, k.id, k.source, k.sourceEpoch, r.now) !== null || q.bidUnits < p.quantity) {
-                    marksComplete = false;
-                    continue;
-                }
-                const exit=Math.max(0,q.bid-q.tick),units=p.quantity*k.multiplier;
-                unrealized += (exit-p.entry)*units-(k.feePolicy?freshRoundTripFees(p.entry,exit,p.quantity,k.multiplier,k.feePolicy):k.explicitRoundTripCostPerUnit*units);
-            }
             const parents = await tx.unsafe('SELECT id,instrument,direction,session,origin,ended,traded,evidence FROM fresh_parent_moves WHERE account_id=$1 AND instrument=$2', [r.accountId, r.candidate.instrument]);
             for (const parent of parents) {
                 const c = parent.evidence as FreshCandidate, d = c.direction === 'BULLISH' ? 1 : -1;
@@ -82,6 +79,19 @@ export class FreshPaperStore {
             const c = { ...r.candidate, parentId: canonicalFreshParent(r.candidate, parents) };
             const same = await tx.unsafe('SELECT status,closed_at,strategy FROM fresh_paper_positions WHERE account_id=$1 AND instrument=$2 ORDER BY opened_at DESC', [r.accountId, c.instrument]);
             const lastClose = same.find(x => x.status === 'CLOSED')?.closed_at;
+            r={...r,now:validateTime()};
+            let unrealized = 0, marksComplete = true, reservedRisk = 0, reservedPremium = 0;
+            const validMark=(row:Stored,now:number)=>{
+                const k=row.state.contract,q=r.marks[row.id];
+                return !!q&&freshQuoteCode(q,k.id,k.source,k.sourceEpoch,now)===null&&q.bidUnits>=row.state.quantity;
+            };
+            for(const row of open){
+                const p=row.state,k=p.contract,q=r.marks[row.id];
+                reservedRisk+=p.originalRiskCurrency;reservedPremium+=p.entry*p.quantity*k.multiplier;
+                if(!validMark(row,r.now)){marksComplete=false;continue;}
+                const exit=Math.max(0,q.bid-q.tick),units=p.quantity*k.multiplier;
+                unrealized+=(exit-p.entry)*units-(k.feePolicy?freshRoundTripFees(p.entry,exit,p.quantity,k.multiplier,k.feePolicy):k.explicitRoundTripCostPerUnit*units);
+            }
             const account = { capital: a.capital, equity: a.capital + a.realized_net + unrealized, dailyNet: a.realized_net + unrealized, reservedRisk, reservedPremium, openPositions: open.length, consecutiveNetLosses: a.paused ? 3 : a.consecutive_losses, marksComplete };
             const admission = admitFreshPaper({ ...r, candidate: c, account,
                 parentAlreadyTraded: parents.some(p => p.id === c.parentId && p.traded),
@@ -99,10 +109,12 @@ export class FreshPaperStore {
             await tx.unsafe('INSERT INTO fresh_parent_moves(account_id,id,instrument,direction,session,origin,traded,evidence) VALUES($1,$2,$3,$4,$5,$6,true,$7::jsonb) ON CONFLICT(account_id,id) DO UPDATE SET traded=true', [r.accountId, c.parentId, c.instrument, c.direction, r.session, c.origin, JSON.stringify(c)]);
             await tx.unsafe("INSERT INTO fresh_paper_positions(id,account_id,version,strategy,instrument,risk_group,parent_id,session,status,reserved_risk,reserved_premium,opened_at,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'OPEN',$9,$10,$11,$12::jsonb)", [c.id, r.accountId, c.version, c.strategy, c.instrument, r.riskGroup, c.parentId, r.session, admission.initialRiskCurrency, admission.premiumCurrency, new Date(r.now), JSON.stringify(p)]);
             await tx.unsafe("INSERT INTO fresh_paper_events(id,position_id,revision,at,kind,evidence) VALUES($1,$2,0,$3,'ENTRY_FILL',$4::jsonb)", [`${c.id}:0`, c.id, new Date(r.now), JSON.stringify({ request: r, admission })]);
-            if(!this.entriesEnabled())throw new FreshEntryRevoked();
+            if(!this.entriesEnabled())throw new FreshEntryTransactionRejected();
+            const checkedAt=validateTime();
+            if(open.some(row=>!validMark(row,checkedAt)))throw new FreshEntryTransactionRejected('ACCOUNT_PAUSED');
             return { ok: true, code: 'FILLED', id: c.id };
         }).catch(error=>{
-            if(error instanceof FreshEntryRevoked)return {ok:false,code:'PAPER_DISABLED'};
+            if(error instanceof FreshEntryTransactionRejected)return {ok:false,code:error.code};
             throw error;
         });
     }
