@@ -21,6 +21,26 @@ async function count(table: string) {
         n: number;
     }>(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n;
 }
+describe('fresh-start trade notices (Telegram)', () => {
+    it('announces exactly one entry after commit, one exit after close, and nothing for refusals or plain observations', async () => {
+        const notices: Array<{ kind: string; id: string; state: string }> = [];
+        const s = new FreshPaperStore(client(pg), () => true, () => at + 300, (n) => notices.push({ kind: n.kind, id: n.position.id, state: n.position.state }));
+        const r = request();
+        expect(await s.enter(r)).toMatchObject({ ok: true, code: 'FILLED' });
+        expect(await s.enter(r)).toMatchObject({ ok: true, code: 'ALREADY_FILLED' });
+        expect(await s.enter(request('c2'))).toMatchObject({ ok: false });
+        expect(notices).toEqual([{ kind: 'ENTRY', id: 'c1', state: 'OPEN' }]);
+        const t = at + 1000, e = { at: t, underlying: 116, underlyingAt: t, quote: null, cutoff: r.cutoff, barsSinceFill: 1, trail: false };
+        await s.observe(r.accountId, 'c1', e);
+        expect(notices).toHaveLength(1);
+        await s.observe(r.accountId, 'c1', { ...e, at: t + 300, underlyingAt: t + 300, quote: { ...r.quote, eventAt: t + 300, receivedAt: t + 300, bid: 70, ask: 70.5 } });
+        expect(notices).toEqual([{ kind: 'ENTRY', id: 'c1', state: 'OPEN' }, { kind: 'EXIT', id: 'c1', state: 'CLOSED' }]);
+    });
+    it('a throwing notifier never fails the fill', async () => {
+        const s = new FreshPaperStore(client(pg), () => true, () => at + 300, () => { throw Error('telegram down'); });
+        expect(await s.enter(request())).toMatchObject({ ok: true, code: 'FILLED' });
+    });
+});
 describe('fresh-start durable account and fills', () => {
     it('recognizes an already committed fill on late duplicate delivery without reserving or minting again',async()=>{
         const r=request();await store.enter(r);

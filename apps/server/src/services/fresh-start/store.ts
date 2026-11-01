@@ -1,6 +1,7 @@
 import { freshRoundTripFees, FRESH_PACK_VERSION, admitFreshPaper, advanceFreshPosition, canonicalFreshParent, freshQuoteCode, type FreshCandidate, type FreshContract, type FreshQuote, type FreshPaperPosition } from '@fno/analytics';
 import { sql } from '../../lib/db.js';
 import { freshEntriesEnabled } from '../../config/fresh-start.js';
+import { freshTelegramNotifier, type FreshTradeNotifier } from './notify.js';
 export interface FreshDb {
     unsafe(query: string, params?: any[]): Promise<any[]>;
     begin<T>(run: (tx: FreshDb) => Promise<T>): Promise<T>;
@@ -32,7 +33,9 @@ type Stored = {
 /** Abort inside the transaction so invalidated entry work rolls back every staged write. */
 class FreshEntryTransactionRejected extends Error {constructor(readonly code='PAPER_DISABLED'){super(code);}}
 export class FreshPaperStore {
-    constructor(private db: FreshDb = sql as unknown as FreshDb, private entriesEnabled: () => boolean = freshEntriesEnabled, private now:()=>number=Date.now) { }
+    constructor(private db: FreshDb = sql as unknown as FreshDb, private entriesEnabled: () => boolean = freshEntriesEnabled, private now:()=>number=Date.now, private notify: FreshTradeNotifier = freshTelegramNotifier) { }
+    /** Notices go out only after their transaction commits, and can never fail the paper state. */
+    private announce(kind: 'ENTRY' | 'EXIT', position: FreshPaperPosition) { try { this.notify({ kind, position }); } catch { /* best effort */ } }
     /** All account spending, exposure checks, fill and frozen risk are committed under the same account lock. */
     async enter(r: FreshEntryRequest): Promise<{
         ok: boolean;
@@ -45,7 +48,8 @@ export class FreshPaperStore {
             return { ok: false, code: 'UNAPPROVED_VERSION' };
         if (!r.accountId || !r.riskGroup || r.session !== r.candidate.session || !Number.isFinite(r.capital) || r.capital <= 0)
             return { ok: false, code: 'INVALID_ACCOUNT' };
-        return this.db.begin(async (tx) => {
+        let filled: FreshPaperPosition | null = null;
+        const result = await this.db.begin(async (tx) => {
             await tx.unsafe("SELECT id FROM fresh_paper_portfolio WHERE id='terminal-paper' FOR UPDATE");
             if(!this.entriesEnabled())throw new FreshEntryTransactionRejected();
             await tx.unsafe('INSERT INTO fresh_paper_accounts(id,session,version,capital) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING', [r.accountId, r.session, r.candidate.version, r.capital]);
@@ -113,11 +117,14 @@ export class FreshPaperStore {
             if(!this.entriesEnabled())throw new FreshEntryTransactionRejected();
             const checkedAt=validateTime();
             if(open.some(row=>!validMark(row,checkedAt)))throw new FreshEntryTransactionRejected('ACCOUNT_PAUSED');
+            filled = p;
             return { ok: true, code: 'FILLED', id: c.id };
-        }).catch(error=>{
+        }).catch((error): { ok: boolean; code: string; id?: string } => {
             if(error instanceof FreshEntryTransactionRejected)return {ok:false,code:error.code};
             throw error;
         });
+        if (result.ok && result.code === 'FILLED' && filled) this.announce('ENTRY', filled);
+        return result;
     }
     async accountView(accountId:string,capital:number,marks:Readonly<Record<string,FreshQuote>>,now:number){
         const [a]=await this.db.unsafe('SELECT * FROM fresh_paper_accounts WHERE id=$1',[accountId]);
@@ -132,7 +139,8 @@ export class FreshPaperStore {
     }
     /** Exit monitoring is deliberately independent of the entry/activation switch. */
     async observe(accountId: string, id: string, e: Parameters<typeof advanceFreshPosition>[1]) {
-        return this.db.begin(async (tx) => {
+        let closedState: FreshPaperPosition | null = null;
+        const changed = await this.db.begin(async (tx) => {
             await tx.unsafe("SELECT id FROM fresh_paper_portfolio WHERE id='terminal-paper' FOR UPDATE");
             const [account] = await tx.unsafe('SELECT id FROM fresh_paper_accounts WHERE id=$1 FOR UPDATE', [accountId]);
             if (!account)
@@ -148,8 +156,12 @@ export class FreshPaperStore {
             await tx.unsafe('INSERT INTO fresh_paper_events(id,position_id,revision,at,kind,evidence) VALUES($1,$2,$3,$4,$5,$6::jsonb)', [`${id}:${rev}`, id, rev, new Date(e.at), closed ? 'EXIT_FILL' : n.state === 'EXIT_PENDING' ? 'EXIT_PENDING' : 'OBSERVATION', JSON.stringify(e)]);
             if (closed)
                 await tx.unsafe('UPDATE fresh_paper_accounts SET realized_net=realized_net+$1,consecutive_losses=CASE WHEN $1<0 THEN consecutive_losses+1 ELSE 0 END,paused=paused OR (CASE WHEN $1<0 THEN consecutive_losses+1 ELSE 0 END)>=3 OR realized_net+$1<=-capital*.01 WHERE id=$2', [n.netPnl, accountId]);
+            if (closed)
+                closedState = n;
             return true;
         });
+        if (closedState) this.announce('EXIT', closedState);
+        return changed;
     }
     async recover(): Promise<Array<Stored & {
         account_id: string;
