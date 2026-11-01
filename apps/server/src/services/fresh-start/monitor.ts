@@ -14,6 +14,8 @@ export class FreshPositionMonitor {
   private queues=new Map<string,Array<{event:Observation;critical:boolean}>>();private busy=new Set<string>();private failures=new Set<string>();private lastSaved=new Map<string,number>();
   constructor(private feed:FreshSharedFeed,private store:FreshPaperStore,private now:()=>number=Date.now){}
   get healthy(){return this.failures.size===0;}
+  /** Held (not closed) positions and the oldest unresolved exit trigger, for operational alerting. */
+  summary(){let open=0,oldestExitPendingAt:number|null=null;for(const [id,row] of this.rows){const p=this.projected.get(id)??row.state;if(p.state==='CLOSED')continue;open++;if(p.state==='EXIT_PENDING'&&p.exitTriggeredAt!=null)oldestExitPendingAt=oldestExitPendingAt==null?p.exitTriggeredAt:Math.min(oldestExitPendingAt,p.exitTriggeredAt);}return {open,oldestExitPendingAt,failures:this.failures.size};}
   watch(rows:Row[]){for(const row of rows){this.rows.set(row.id,row);if(!this.queues.get(row.id)?.length)this.projected.set(row.id,row.state);}for(const id of this.rows.keys())if(!rows.some(r=>r.id===id)&&!this.queues.get(id)?.length){this.rows.delete(id);this.projected.delete(id);this.failures.delete(id);this.queues.delete(id);this.lastSaved.delete(id);}}
   tick(){
     const now=this.now();

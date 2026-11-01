@@ -1,6 +1,6 @@
 // Approved implementation pack; pure functions only. Time, calendars and data provenance are injected.
 import { atr, ema } from '../indicators/index.js';
-export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.3';
+export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.4';
 export const FRESH_STRATEGIES = ['NEW_ORB_RETEST_V1', 'NEW_VWAP_PULLBACK_V1', 'NEW_PREVIOUS_SESSION_SWEEP_V1', 'NEW_FIRST_OPENING_PULLBACK_V1'] as const;
 export type FreshStrategy = typeof FRESH_STRATEGIES[number];
 export type FreshDirection = 'BULLISH' | 'BEARISH';
@@ -175,9 +175,12 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                     const pivot = levels.filter(x => x.kind === 'CONFIRMED_SWING' && x.knownAt <= prev.time + 300000 && x.role === (d === 1 ? 'RESISTANCE' : 'SUPPORT')).sort((x, y) => y.knownAt - x.knownAt)[0];
                     const behind = levels.filter(x => x.kind === 'CONFIRMED_SWING' && x.knownAt <= initial.time && x.role === (d === 1 ? 'SUPPORT' : 'RESISTANCE')).sort((x, y) => y.knownAt - x.knownAt)[0];
                     const move = d * (prev.close - impulse[0].open), depth = d * (prev.close - lo(pull));
-                    if (pull.length < 2 || pull.length > 5 || !pivot || !behind || !favorable(prev.close, pivot.price) || move < .75 * a || !impulse.some(x => rvol(x) >= 1.2) || d * (initial.close - prev.close) >= 0)
+                    // The pullback starts at the first counter close after a clean three-bar impulse (no counter close inside it).
+                    const cleanImpulse = impulse.every((x, k) => k === 0 || d * (x.close - impulse[k - 1].close) >= 0);
+                    if (pull.length < 3 || pull.length > 5 || !cleanImpulse || !pivot || !behind || !favorable(prev.close, pivot.price) || move < .75 * a || !impulse.some(x => rvol(x) >= 1.2) || d * (initial.close - prev.close) >= 0)
                         continue;
-                    const firstTrigger = pull.find((x, j) => j > 0 && confirms(x) && favorable(x.close, d === 1 ? pull[j - 1].high : pull[j - 1].low) && favorable(x.close, vw(x)));
+                    // At least two pullback bars precede the confirmation bar.
+                    const firstTrigger = pull.find((x, j) => j >= 2 && confirms(x) && favorable(x.close, d === 1 ? pull[j - 1].high : pull[j - 1].low) && favorable(x.close, vw(x)));
                     const invalid = pull.some((x, i) => i > 0 && d * (x.close - vw(x)) < 0 && d * (pull[i - 1].close - vw(pull[i - 1])) < 0);
                     if (depth <= .6 * move && favorable(lo(pull), behind.price) && pull.some(x => Math.abs((d === 1 ? x.low : x.high) - vw(x)) <= .2 * a)
                         && median(pull.map(x => x.volume)) < .8 * median(impulse.map(x => x.volume)) && !invalid && firstTrigger === current && confirms(current) && favorable(current.close, d === 1 ? today[today.length - 2].high : today[today.length - 2].low) && favorable(current.close, vwap)) {
@@ -189,12 +192,17 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
             }
             if (strategy === 'NEW_PREVIOUS_SESSION_SWEEP_V1' && (range || !strong || (d === 1 ? bull : bear)) && c.now - c.sessionOpen >= 1800000 && c.previousHigh > c.previousLow && c.previousLow > 0) {
                 const level = d === 1 ? c.previousLow : c.previousHigh;
+                // Only the session's first breach of the level qualifies, and its depth is the deepest extreme from that breach through the reclaim.
+                const firstBreach = today.findIndex(x => d * (level - (d === 1 ? x.low : x.high)) > 0);
                 for (let i = Math.max(0, today.length - 5); i < today.length - 1; i++) {
-                    const sweep = today[i], extreme = d === 1 ? sweep.low : sweep.high, depth = d * (level - extreme);
-                    if (depth < .05 * a || depth > .75 * a)
+                    if (i !== firstBreach)
                         continue;
+                    const sweep = today[i];
                     const reclaimIndex = today.findIndex((x, j) => j >= i && j <= i + 2 && favorable(x.close, level) && closeLocation(x, d) >= .7 && rvol(x) >= 1.2);
                     if (reclaimIndex < 0)
+                        continue;
+                    const extreme = lo(today.slice(i, reclaimIndex + 1)), depth = d * (level - extreme);
+                    if (depth < .05 * a || depth > .75 * a)
                         continue;
                     const after = today.slice(reclaimIndex + 1), reclaim = today[reclaimIndex];
                     const trigger = after.find(x => confirms(x) && favorable(x.close, d === 1 ? reclaim.high : reclaim.low));
@@ -210,9 +218,11 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                 const openRange = { ...opening[2], high: orh, low: orl };
                 const first = today.findIndex((x, i) => i >= 3 && d * (x.close - today[i - 1].close) < 0);
                 if (net >= 1.5 * impulseAtr && closeLocation(openRange, d) >= .8 && favorable(opening[2].close, vw(opening[2])) && refs.length >= 15 && vol / median(refs) >= 1.5 && first >= 3) {
-                    const pull = today.slice(first), depth = d * (opening[2].close - lo(pull));
+                    // Retracement is measured from the impulse extreme reached before the first counter close, not the third bar's close.
+                    const pre = today.slice(0, first), peak = d === 1 ? Math.max(...pre.map(x => x.high)) : Math.min(...pre.map(x => x.low));
+                    const span = d * (peak - opening[0].open), pull = today.slice(first), depth = d * (peak - lo(pull));
                     const firstTrigger = pull.find((x, j) => j > 0 && confirms(x) && favorable(x.close, d === 1 ? today[first + j - 1].high : today[first + j - 1].low) && favorable(x.close, vw(x)));
-                    if (pull.length <= 3 && depth >= .2 * net && depth <= .5 * net && median(pull.map(x => x.volume)) < .8 * median(opening.map(x => x.volume)) && firstTrigger === current) {
+                    if (pull.length <= 4 && depth >= .2 * span && depth <= .5 * span && median(pull.map(x => x.volume)) < .8 * median(opening.map(x => x.volume)) && firstTrigger === current) {
                         stop = lo(pull) - d * .1 * a;
                         origin = opening[0].time;
                     }

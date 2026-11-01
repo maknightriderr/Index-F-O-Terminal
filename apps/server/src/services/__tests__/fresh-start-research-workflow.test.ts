@@ -26,7 +26,7 @@ describe('data inventory and durable research inspection',()=>{
    await expect(registerFreshResearchProtocol(client(isolated),Date.parse('2026-11-03T00:00:00+05:30'))).rejects.toThrow('PROTOCOL_NOT_REGISTERED_IN_ADVANCE');
    expect((await isolated.query<any>('SELECT count(*)::int AS n FROM fresh_research_protocols')).rows[0].n).toBe(0);
   }finally{await isolated.close();}
- });
+ }, 30_000); // PGlite schema setup takes ~2.5 s alone and longer under a parallel full run.
  it('exports only a bounded current-version signal window and never touches paper outcome tables',async()=>{
   const db=client(pg),at=Date.parse('2026-11-02T10:00:00+05:30');
   const context={now:at,session:'2026-11-02',sessionOpen:at-2700000,sessionClose:at+19800000,instrument:'NSE_FO:1',sourceEpoch:'epoch',bars5:[],bars15:[],bars1:[],rvolReferences:{},openingVolumeReferences:[],levels:[],previousHigh:0,previousLow:0,referenceVerified:false,eventClear:false,calendarVerified:true};

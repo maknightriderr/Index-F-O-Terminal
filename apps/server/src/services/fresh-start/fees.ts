@@ -9,11 +9,13 @@ const BSE_INDEX_FEES:Readonly<FreshFeePolicy>=Object.freeze({...FRESH_NSE_FEES,v
 const BSE_SENSEX50_FEES:Readonly<FreshFeePolicy>=Object.freeze({...BSE_INDEX_FEES,version:'BSE-SENSEX50-OBSERVED-2026-10-31+PAPER-BROKER20',exchangeFraction:.00005});
 const MCX_NON_AGRI_FEES:Readonly<FreshFeePolicy>=Object.freeze({...FRESH_NSE_FEES,version:'MCX-SCOPED-NONAGRI-OBSERVED-2026-10-31+PAPER-BROKER20',exchangeFraction:.000418,sellTaxFraction:.0005});
 const TARIFF_SOURCE='https://www.angelone.in/exchange-transaction-charges';
+/** Published tariffs are only qualified until this session; later sessions fail closed. */
+export const FRESH_FEE_SCHEDULE_UNTIL='2027-01-01';
 type FeeInstrument=Pick<Instrument,'exchange'|'segment'|'instrumentType'|'name'>;
 /** A dated published-tariff estimate, not a contract note or authorization to trade a market.
  * Product exemptions and unknown tariffs fail closed. MCX premium units must be supplied independently. */
 export function freshFeePolicyFor(instrument:FeeInstrument,session:string){
-  if(!/^\d{4}-\d{2}-\d{2}$/.test(session)||!Number.isFinite(Date.parse(session+'T00:00:00Z'))||new Date(session+'T00:00:00Z').toISOString().slice(0,10)!==session||session>='2027-01-01'||instrument.segment!=='FO')return null;
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(session)||!Number.isFinite(Date.parse(session+'T00:00:00Z'))||new Date(session+'T00:00:00Z').toISOString().slice(0,10)!==session||session>=FRESH_FEE_SCHEDULE_UNTIL||instrument.segment!=='FO')return null;
   let policy:Readonly<FreshFeePolicy>,tax:'STT'|'CTT'='STT',from='2026-10-31';
   if(instrument.exchange==='NSE'&&['OPTIDX','OPTSTK'].includes(instrument.instrumentType)&&instrument.name!=='NIFTYFPI'){
     from='2026-04-01';policy=FRESH_NSE_FEES;

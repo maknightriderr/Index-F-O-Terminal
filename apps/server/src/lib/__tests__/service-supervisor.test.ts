@@ -189,11 +189,13 @@ describe('boot registrations and shutdown order (index.ts)', () => {
       expect(src.split(fn).length - 1, fn).toBe(1);
     }
   });
-  it('critical set: tradeSetupPriceMonitor, signalEngine, setupLifecycle', () => {
+  it('critical set: tradeSetupPriceMonitor, freshPaperRecovery, signalEngine, setupLifecycle', () => {
     expect(src).toMatch(/timerService\('tradeSetupPriceMonitor'[^\n]*critical: true/);
+    // 2026-11-01 audit: the fresh-start worker owns exit monitoring of new paper positions.
+    expect(src).toMatch(/timerService\('freshPaperRecovery'[^\n]*critical: true/);
     expect(src).toMatch(/name: 'signalEngine', critical: true/);
     expect(src).toMatch(/name: 'setupLifecycle', critical: true/);
-    expect((src.match(/critical: true/g) ?? []).length).toBe(3);
+    expect((src.match(/critical: true/g) ?? []).length).toBe(4);
   });
   it('shutdown: supervisor + timers, then server.close, WS disconnect, logout, sql.end, redis.disconnect', () => {
     const body = src.slice(src.indexOf('const shutdown = async'));

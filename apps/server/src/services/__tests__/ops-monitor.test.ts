@@ -122,6 +122,28 @@ describe('ORDER_FLOW_FEED (2026-10-25): the Dhan order-flow feed down while a ma
   });
 });
 
+describe('FRESH_PAPER and CALENDAR_HORIZON (2026-11-01 audit)', () => {
+  const fresh = (o: Partial<import('../ops-monitor.js').FreshPaperInput> = {}) => ({ status: 'FORWARD_PAPER_RUNNING', recovered: true, monitorRunning: true, heldPositions: 0, oldestExitPendingAt: null, error: null, ...o });
+  it('a healthy fresh worker raises nothing', () => expect(checks(base({ freshPaper: fresh() }))).toEqual([]));
+  it('pages when held paper positions have no running monitor', () => {
+    expect(checks(base({ freshPaper: fresh({ heldPositions: 1, monitorRunning: false }) }))).toEqual(['FRESH_PAPER:MONITOR']);
+  });
+  it('pages when the worker is BLOCKED_* in session, never outside it', () => {
+    expect(checks(base({ freshPaper: fresh({ status: 'BLOCKED_ADAPTER', error: 'BLOCKED_BROKER_AUTH' }) }))).toEqual(['FRESH_PAPER:BLOCKED']);
+    expect(checks(base({ inSession: () => false, slots: [], freshPaper: fresh({ status: 'BLOCKED_ADAPTER' }) }))).toEqual([]);
+  });
+  it('pages on an exit pending longer than the alert window', () => {
+    expect(checks(base({ freshPaper: fresh({ heldPositions: 1, oldestExitPendingAt: NOW - O.FRESH_EXIT_PENDING_ALERT_MS - 60_000 }) }))).toEqual(['FRESH_PAPER:EXIT_PENDING']);
+    expect(checks(base({ freshPaper: fresh({ heldPositions: 1, oldestExitPendingAt: NOW - 60_000 }) }))).toEqual([]);
+  });
+  it('warns 30 days before a hard-coded calendar ends and pages inside 7 days', () => {
+    const at = (days: number) => new Date(NOW + days * 86_400_000 + 12 * 3_600_000).toISOString().slice(0, 10);
+    expect(O.evaluateOpsChecks(base({ calendarHorizons: [{ id: 'FEE_SCHEDULE', until: at(60) }] }))).toEqual([]);
+    expect(O.evaluateOpsChecks(base({ calendarHorizons: [{ id: 'FEE_SCHEDULE', until: at(20) }] }))[0]).toMatchObject({ key: 'CALENDAR_HORIZON:FEE_SCHEDULE', severity: 'WARN' });
+    expect(O.evaluateOpsChecks(base({ calendarHorizons: [{ id: 'FEE_SCHEDULE', until: at(3) }] }))[0]).toMatchObject({ severity: 'DEGRADES' });
+  });
+});
+
 describe('stepIncidents (pure): grace periods', () => {
   it('a finding becomes an incident only after its grace period, and resolves when it is gone', () => {
     const st = new Map();
