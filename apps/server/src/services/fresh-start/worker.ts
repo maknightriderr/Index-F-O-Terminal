@@ -17,6 +17,7 @@ import {FreshRuntime} from './runtime.js';
 import {FRESH_MARKETS,freshMarketBlockers,freshBookSupportsLot,discoverFreshMarkets,freshDiscoveryWindow,freshReferenceOptions,freshReferenceExchange,freshReferenceSpotId,freshEventMarket,type FreshMarket} from './markets.js';
 import {freshAdapterState as state} from './adapter-state.js';
 import {FreshOperationalReporter} from './operational-evidence.js';
+import {registerFreshResearchProtocol,freshResearchReadiness} from './research-inventory.js';
 import {freshIstDay,freshBars,mergeFreshBars,buildFreshReferenceContext} from './context.js';
 import {auditFreshAdapter,auditFreshEvaluation,persistFreshCalendarSnapshot} from './audit.js';
 type History={five:FreshBar[];one:FreshBar[];lastSeen:number};
@@ -43,10 +44,11 @@ export class FreshPaperWorker {
     this.ready=true;state.recovered=true;state.monitorRunning=true;state.scannerRunning=true;state.status='DISCOVERY_STARTING';
     // One public-calendar preflight after recovery; never await it or infer entry permission.
     // The source's in-flight/cadence guard coalesces a simultaneous open-session refresh.
-    void this.events.refresh({macro:false,issuer:false,commodity:FRESH_CONFIG.markets.includes('MCX_VERIFIED_FUTURES_OPTIONS'),publicMacro:true}).then(()=>{
+    void this.events.refresh({macro:false,issuer:FRESH_CONFIG.markets.includes('NSE_STOCK_OPTIONS'),commodity:FRESH_CONFIG.markets.includes('MCX_VERIFIED_FUTURES_OPTIONS'),publicMacro:true}).then(()=>{
       if(this.stopped)return;state.eventSources=this.events.view();
-      logger.info({event:'freshPublicCalendarPreflight',paperEventPolicy:FRESH_CONFIG.eventPolicy,freeGlobal:state.eventSources.freeGlobal,commodity:state.eventSources.commodity,publicMacro:state.eventSources.publicMacro,officialMacro:state.eventSources.officialMacro},'Fresh-start public calendar preflight completed; paper event policy recorded');
+      logger.info({event:'freshPublicCalendarPreflight',paperEventPolicy:FRESH_CONFIG.eventPolicy,freeGlobal:state.eventSources.freeGlobal,issuer:state.eventSources.issuer,commodity:state.eventSources.commodity,publicMacro:state.eventSources.publicMacro,officialMacro:state.eventSources.officialMacro},'Fresh-start public calendar preflight completed; paper event policy recorded');
     },()=>{if(!this.stopped)logger.warn({event:'freshPublicCalendarPreflightFailed'},'Fresh-start public calendar preflight failed; missing coverage remains explicitly labeled');});
+    if(schemaFileReady('050_fresh_research.sql'))void registerFreshResearchProtocol().then(()=>freshResearchReadiness()).then(inventory=>{if(!this.stopped&&inventory)logger.info({event:'freshResearchInventory',research:inventory},'Fresh-start research preparation observed; no outcomes read');}).catch(()=>{if(!this.stopped)logger.warn({event:'freshResearchPreparationUnavailable'},'Fresh-start research metadata unavailable; trading and exits unchanged');});
     void this.scan();
   }
   private pollMonitor(){this.monitor.tick();if(!this.monitor.healthy){state.entriesArmed=false;if(!state.entryBlockers.includes('BLOCKED_EXIT_PERSISTENCE'))state.entryBlockers.push('BLOCKED_EXIT_PERSISTENCE');}}
