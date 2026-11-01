@@ -194,3 +194,8 @@ See [EIA calendar intake](eia-calendar-intake.md) for automatic keyless energy-r
 ## Approved paper event-data exception — 1 November 2026
 
 The user approved paper research despite unavailable economic-calendar data after the free-source check. [PAPER_EVENT_UNVERIFIED_V1](paper-event-research-policy.md) supersedes the earlier mandatory complete macro/commodity gate only for that paper scope. Missing provider/complete coverage is a warning; known blackouts, issuer/actions, verified units/quotes, account risk and exits remain mandatory. Every affected fill is labeled EVENT_DATA_UNVERIFIED, source/cohort evidence is frozen, and separate results cannot be pooled into an event-qualified validation claim. Paid calendar credentials are optional. Existing counters, held positions and historical records are preserved.
+
+
+## Next phase — recorded ledger consistency
+
+[Ledger consistency](ledger-consistency.md) adds a bounded read-only audit of first/latest recorded paper-fill evidence, with explicit entry-only/closed/pending coverage and missing/inconsistent proof. It does not change trading eligibility, risk, exits, historical data or event policy, and does not certify real fills or strategy profitability.

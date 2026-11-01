@@ -4,6 +4,7 @@ import type { FreshStartStatus } from '@fno/shared';
 import { api } from '@/lib/api';
 import { Section } from '@/components/ui/card';
 import { formatIstDateTime } from '@/lib/format';
+import {LedgerIntegrity} from './ledger-integrity';
 import {EventResearchPolicy} from './event-research-policy';
 import { PublicCalendarSources } from './public-calendar-sources';
 const names: Record<string, string> = { NEW_ORB_RETEST_V1: 'Opening range retest', NEW_VWAP_PULLBACK_V1: 'VWAP pullback', NEW_PREVIOUS_SESSION_SWEEP_V1: 'Previous-session sweep', NEW_FIRST_OPENING_PULLBACK_V1: 'First opening pullback' };
@@ -37,6 +38,7 @@ export function FreshStartPanel() {
       </div>
       <p className="mt-3 text-sm text-[var(--text-secondary)]">Implementation approved. {data.activationApproved?'Paper activation approved; entries depend on current data and exit-monitor health.':'Paper activation is pending.'} Capital: {money(data.capital)}. A high win rate is an objective to test, with no performance guarantee.</p>
       <EventResearchPolicy data={data} names={names}/>
+      <LedgerIntegrity report={data.integrity}/>
       <div className="mt-4 overflow-x-auto"><table className="w-full text-left text-sm"><caption className="sr-only">Fresh strategy validation and net paper profit and loss</caption><thead><tr className="border-b border-[var(--border)] text-xs text-[var(--text-secondary)]">{['Strategy', 'State', 'Fills / closed', 'Wins / losses / flat', 'Open / pending', 'Net P&L', 'Net R / trade', 'Win rate', 'Sessions', 'Validation'].map(x => <th key={x} scope="col" className="whitespace-nowrap p-2">{x}</th>)}</tr></thead><tbody>{data.performance.map(r => <tr key={r.strategy} className="border-b border-[var(--border)]"><th scope="row" className="p-2 font-medium">{names[r.strategy] ?? r.strategy}</th><td className="p-2">{data.strategies.find(s => s.id === r.strategy)?.enabled ? 'Enabled' : data.engineConfigured ? 'Waiting for data' : 'Disabled'}</td><td className="p-2">{r.filled} / {r.closed}</td><td className="p-2">{r.wins} / {r.losses} / {r.flat}</td><td className="p-2">{r.open} / {r.pending}</td><td className="whitespace-nowrap p-2">{money(r.netPnl)}</td><td className="p-2">{r.expectancyR == null ? '—' : r.expectancyR.toFixed(2)}</td><td className="p-2">{r.winRate == null ? '—' : `${(r.winRate * 100).toFixed(1)}%`}</td><td className="p-2">{r.independentSessions}</td><td className="p-2">Not validated</td></tr>)}</tbody></table></div>
       <p className="mt-2 text-xs text-[var(--text-secondary)]">Shared feed: {data.feedQualification?.status.replaceAll('_',' ')??'Not yet observed'} · {data.feedQualification?.observedExecutableBooks??0} executable option books observed. Old PostgreSQL trade history is not restored from retired Redis slots.</p>
       {data.engineConfigured && <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3" aria-label="Paper operation readiness">

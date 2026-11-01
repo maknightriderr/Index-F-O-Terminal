@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {blackScholesPrice,FRESH_PACK_VERSION,freshRoundTripFees,type FreshCandidate} from '@fno/analytics';
 import {FreshPaperStore,type FreshDb} from '../fresh-start/store.js';
 import {FreshSharedFeed} from '../fresh-start/feed.js';
+import {inspectFreshLedger} from '../fresh-start/integrity.js';
 import {FreshEventSource} from '../fresh-start/event-source.js';
 import {FRESH_PAPER_EVENT_POLICY} from '../../config/fresh-event-policy.js';
 import {FreshProductionAdapter,type FreshReference} from '../fresh-start/adapter.js';
@@ -34,6 +35,6 @@ describe('production contract adapter → durable entry → executable exit',()=
   const [held]=await store.recover();expect(held.state.contract.evidence?.eventCalendar).toMatchObject({policy:{id:'PAPER_EVENT_UNVERIFIED_V1'},coverage:{evidenceClass:'EVENT_DATA_UNVERIFIED',waived:['BLOCKED_EVENT_PROVIDER_CONFIGURATION']}});expect(held.state.originalRiskCurrency).toBeLessThanOrEqual(1250);expect(held.state.sessionCutoff).toBe(request!.cutoff);expect(held.state.contract.feePolicy).toEqual(FRESH_NSE_FEES);expect(held.state.contract.evidence?.fees).toMatchObject({tax:'STT',product:'NIFTY',basis:'PREMIUM_TURNOVER',flatPremiumRoundTripEstimate:{brokerage:40}});
   now+=1000;const event={at:now,underlying:25401,underlyingAt:now,quote:null,cutoff:request!.cutoff,barsSinceFill:1,trail:false};await store.observe(request!.accountId,c.id,event);expect((await store.recover())[0].state.state).toBe('EXIT_PENDING');
   now+=300;const q={...request!.quote,eventAt:now,receivedAt:now,bid:250,ask:250.05};await store.observe(request!.accountId,c.id,{...event,at:now,underlyingAt:now,quote:q});expect(await store.recover()).toEqual([]);
-  const [closed]=await client(pg).unsafe('SELECT state FROM fresh_paper_positions WHERE id=$1',[c.id]);expect(closed.state.netPnl).toBeCloseTo((249.95-held.state.entry)*held.state.quantity-freshRoundTripFees(held.state.entry,249.95,held.state.quantity,1,FRESH_NSE_FEES),6);feed.close();
+  const [closed]=await client(pg).unsafe('SELECT state FROM fresh_paper_positions WHERE id=$1',[c.id]);expect(closed.state.netPnl).toBeCloseTo((249.95-held.state.entry)*held.state.quantity-freshRoundTripFees(held.state.entry,249.95,held.state.quantity,1,FRESH_NSE_FEES),6);const [audit]=await client(pg).unsafe('SELECT p.*,e0.kind AS entry_kind,e0.at AS entry_at,e0.evidence AS entry_evidence,el.kind AS last_kind,el.at AS last_at,el.evidence AS last_evidence FROM fresh_paper_positions p LEFT JOIN fresh_paper_events e0 ON e0.position_id=p.id AND e0.revision=0 LEFT JOIN fresh_paper_events el ON el.position_id=p.id AND el.revision=p.revision WHERE p.id=$1',[c.id]);expect(inspectFreshLedger(audit)).toMatchObject({verdict:'CONSISTENT',phase:'CLOSED',eventEvidenceClass:'EVENT_DATA_UNVERIFIED'});feed.close();
  });
 });
