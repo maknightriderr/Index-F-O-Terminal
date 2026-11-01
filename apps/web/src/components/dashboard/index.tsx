@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { LegacyRetiredBanner } from '@/components/common/legacy-retired-banner';
 import { useLiveIndices } from '@/lib/use-live-indices';
 import { useAllIndices } from '@/lib/use-all-indices';
 import { useFnoScanner } from '@/lib/use-fno-scanner';
@@ -18,8 +17,7 @@ import { Section } from '@/components/ui/card';
 import { WatchlistPanel } from './watchlist-panel';
 import { StatusBar } from './sections/status-bar';
 import { RegimeSummary } from './sections/regime-summary';
-import { PaperTradesPanel } from './sections/paper-trades-panel';
-import { DeskWatchlist, SetupSpotlight, StrategyResearch } from './sections/trading-desk';
+import { DeskWatchlist } from './sections/trading-desk';
 import { ChartSection, INSTRUMENTS } from './sections/chart-section';
 import { FiiDiiPanel, OptionsPanel, TopMoversPanel, RiskSentimentPanel, FnoScreenerPanel } from './sections/secondary';
 
@@ -27,7 +25,7 @@ import { FiiDiiPanel, OptionsPanel, TopMoversPanel, RiskSentimentPanel, FnoScree
 // DASHBOARD — chart-centred trading desk
 // ============================================================
 // Quotes and feed health above a watchlist / chart / setup spotlight workspace.
-// Paper trades sit below; regime and secondary research remain available further down.
+// Legacy setups and paper trades are retired and no longer shown here; regime and secondary research follow below.
 // Everything reads recorded data only: opening or refreshing this page never runs the engine, a scan or a write.
 // ============================================================
 
@@ -74,12 +72,9 @@ export function Dashboard() {
     <div className="trading-desk space-y-3">
       <h1 className="sr-only">Trading desk dashboard</h1>
       <StatusBar compact />
-      <LegacyRetiredBanner />
-      <div className="desk-grid">
+      <div className="desk-grid desk-grid--market">
         <DeskWatchlist instrumentIdx={instrumentIdx} onInstrument={setInstrumentIdx} quotes={[...allIndices, ...indices]} now={feed.now} />
         <div className="desk-chart"><ChartSection compact instrumentIdx={instrumentIdx} onInstrument={setInstrumentIdx} quote={quote} state={state} orderFlowStatus={orderFlowStatus} /></div>
-        <div className="desk-spotlight space-y-3"><SetupSpotlight symbol={instrument.symbol} exchange={instrument.exchange} /><StrategyResearch /></div>
-        <div className="desk-trades"><PaperTradesPanel compact /></div>
       </div>
 
       <RegimeSummary

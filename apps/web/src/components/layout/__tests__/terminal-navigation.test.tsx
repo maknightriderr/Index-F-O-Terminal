@@ -19,9 +19,10 @@ describe('terminal-wide navigation', () => {
     fireEvent.click(screen.getByText('Open directory'));
     const dialog=screen.getByRole('dialog');
     for(const group of NAV_GROUPS) for(const page of group.items) expect(within(dialog).getByText(page.label,{exact:true})).toBeInTheDocument();
-    fireEvent.change(screen.getByRole('searchbox'),{target:{value:'measurement'}});
-    fireEvent.click(within(dialog).getByText('Measurement',{exact:true}));
-    expect(useMarketStore.getState().activeTab).toBe('measurement');
+    expect(within(dialog).queryByText('Best Setups',{exact:true})).toBeNull();
+    fireEvent.change(screen.getByRole('searchbox'),{target:{value:'strategy lab'}});
+    fireEvent.click(within(dialog).getByText('Strategy Lab',{exact:true}));
+    expect(useMarketStore.getState().activeTab).toBe('strategy-lab');
     expect(useAssetTabsStore.getState().tabs).toEqual([]);
     expect(screen.queryByRole('dialog')).toBeNull();
     fireEvent.keyDown(document,{key:'k',ctrlKey:true});
@@ -42,8 +43,9 @@ describe('terminal-wide navigation', () => {
     render(<WorkspaceTabs />);
     const nav=screen.getByRole('navigation',{name:'Trade Desk workspace pages'});
     expect(within(nav).getByRole('button',{name:'Paper Trades'})).toHaveAttribute('aria-current','page');
-    fireEvent.click(within(nav).getByRole('button',{name:'Best Setups'}));
-    expect(useMarketStore.getState().activeTab).toBe('best-setups');
+    fireEvent.click(within(nav).getByRole('button',{name:'Strategy Lab'}));
+    expect(useMarketStore.getState().activeTab).toBe('strategy-lab');
+    expect(within(nav).queryByRole('button',{name:'Best Setups'})).toBeNull();
   });
   it('exposes separate keyboard-reachable open and close asset controls', () => {
     useAssetTabsStore.getState().openTab('NIFTY','NSE');

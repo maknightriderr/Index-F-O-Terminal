@@ -1372,3 +1372,7 @@ html, body {
   .cc-health .cc-pill { font-size: 9px; padding: 1px 6px; }
   #main-content { padding-bottom: 88px; }
 }
+
+/* Market Overview without the retired setup spotlight and legacy trades: watchlist + chart only. */
+.desk-grid.desk-grid--market { grid-template-areas: "watch" "chart"; }
+@media (min-width: 1280px) { .desk-grid.desk-grid--market { grid-template-columns: 220px minmax(0, 1fr); grid-template-areas: "watch chart"; } }
