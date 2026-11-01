@@ -137,6 +137,7 @@ export const FILES = [
   '047_fresh_start_paper.sql',
   '048_fresh_start_adapter.sql',
   '049_fresh_start_calendars.sql',
+  '050_fresh_research.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */
@@ -164,13 +165,31 @@ export function captureSchemaStatus(): SchemaEnsureResult | null {
 }
 
 export function splitStatements(text: string): string[] {
-  return text
-    .split('\n')
-    .filter((line) => !line.trim().startsWith('--'))
-    .join('\n')
-    .split(';')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+  const statements:string[]=[];
+  let current='',quote='',dollar='',block=0,line=false,escaped=false;
+  for(let i=0;i<text.length;i++){
+    const c=text[i],next=text[i+1];
+    if(line){if(c==='\n'){line=false;current+='\n';}continue;}
+    if(block){if(c==='/'&&next==='*'){block++;i++;}else if(c==='*'&&next==='/'){block--;i++;}continue;}
+    if(dollar){if(text.startsWith(dollar,i)){current+=dollar;i+=dollar.length-1;dollar='';}else current+=c;continue;}
+    if(quote){
+      current+=c;
+      if(escaped&&c==='\\'&&next!==undefined){current+=next;i++;continue;}
+      if(c===quote){if(next===quote){current+=next;i++;}else quote='';}
+      continue;
+    }
+    if(c==='-'&&next==='-'){line=true;i++;current+=' ';continue;}
+    if(c==='/'&&next==='*'){block=1;i++;current+=' ';continue;}
+    if(c==="'"||c==='"'){quote=c;escaped=c==="'"&&/(^|[^\w$])[eE]$/.test(current);current+=c;continue;}
+    if(c==='$'){
+      const tag=/^(\$\$|\$[a-zA-Z_][a-zA-Z0-9_]*\$)/.exec(text.slice(i))?.[0];
+      if(tag){dollar=tag;current+=tag;i+=tag.length-1;continue;}
+    }
+    if(c===';'){if(current.trim())statements.push(current.trim());current='';}else current+=c;
+  }
+  if(quote||dollar||block)throw Error('UNTERMINATED_SQL_LITERAL_OR_COMMENT');
+  if(current.trim())statements.push(current.trim());
+  return statements;
 }
 
 function initDir(): string | null {

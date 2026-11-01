@@ -2,7 +2,7 @@
 
 Current checkpoint (1 November 2026): NEW-INTRADAY-1.3 is configured for approved forward paper research with INR500,000 virtual capital. Actual entry eligibility remains source/contract/event/risk/monitor gated. Missing complete macro coverage is allowed only under the labeled paper policy; MCX depth-unit qualification and observed market-session evidence remain unresolved where absent. The phase notes below preserve earlier states, including initial disablement. See [the current operational handoff](activation-handoff.md).
 
-The reviewed master prompt and Phase 1–2 report are preserved beside this file. The user approved implementation on 30 October 2026. The numeric pack remains a research hypothesis. All new strategies and markets are disabled, capital is unset, and there is no live-order integration or activation API.
+The reviewed master prompt and Phase 1–2 report are preserved beside this file. The user approved implementation on 30 October 2026. The numeric pack remains a research hypothesis. At that initial checkpoint all new strategies/markets were disabled and capital was unset; later approved paper activation is recorded above and in the phase history. There is no live-order integration or activation API.
 
 ## Implemented
 
@@ -217,3 +217,8 @@ The user approved paper research despite unavailable economic-calendar data afte
 ## Transaction-time freshness — 1 November 2026
 
 [Entry freshness](transaction-freshness.md) checks the current clock after database waits and before commit, retaining the two-second exact-quote limit, setup/cutoff deadlines and held-mark eligibility. Stale staged fills roll back without replacing the original selected quote. Duplicate delivery remains idempotent; historical integration fixtures supply explicit simulated clocks.
+
+
+## Research preparation completion —1 November2026
+
+[Research workflow](research-workflow.md) adds read-only retained-data inventory, predeclared prospective periods, immutable protocol/inspection metadata, bounded remote signal export/replay and outcome-report tooling. [The requirement completion register](plan-completion.md) separates implemented preparation from empirical data/source/holdout/session/load requirements. The Paper Trades research panel makes these boundaries explicit. No table presence, imported flags, tests or deployment is treated as profitable strategy validation.

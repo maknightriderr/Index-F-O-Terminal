@@ -28,7 +28,13 @@ export interface FreshSessionEvidence {
     markets:Array<{market:string;sampled:number;consistentSessionClosed:number}>;
     cohorts:Array<{market:string;strategy:string;policyId:string;evidenceClass:string;sampled:number;entryOnly:number;pending:number;closed:number;incomplete:number;inconsistent:number;sessionTimingUnproven:number;consistentSessionClosed:number;sessions:string[]}>;
 }
+export interface FreshResearchReadiness {
+    observedAt:number;sources:Array<{table:string;evidence:string;limit:string;available:boolean;hasRows:boolean;estimatedRows:number|null}>;
+    protocol:{id:string;digest:string;version:string;registered:boolean;registeredAt:string|null;captureStart:string;developmentEnd:string;validationEnd:string;holdoutEnd:string;holdoutBlindnessEnforced:boolean;note:string};
+    blockers:string[];note:string;
+}
 export interface FreshStartStatus {
+    research?:FreshResearchReadiness|null;
     sessionEvidence?:FreshSessionEvidence;
     integrity?:{version:string;scope:'LATEST_100_CURRENT_VERSION';sampled:number;sampleTruncated:boolean;consistent:number;incomplete:number;inconsistent:number;closedChecked:number;note:string;rows:Array<{id:string;contract:string;positionStatus:string;verdict:'CONSISTENT'|'INCOMPLETE'|'INCONSISTENT';phase:'ENTRY_ONLY'|'EXIT_PENDING'|'CLOSED';eventEvidenceClass:string;issues:string[];missing:string[]}>};
     eventPolicy?:{id:string;allowMissingMacroCoverage:boolean;approval?:string;liveOrdersAllowed?:boolean};
