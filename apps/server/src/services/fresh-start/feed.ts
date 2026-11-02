@@ -110,6 +110,8 @@ export class FreshSharedFeed {
         for (const f of this.listeners)
             f();
     }
+    /** Milliseconds since the last exchange-stamped tick for this id, or null when none was received (diagnostics only). */
+    tickAge(id: string) { const t = this.latest.get(id); return t?.exchangeTimestamp != null ? Math.max(0, this.now() - t.exchangeTimestamp) : null; }
     underlying(id: string) { const t = this.latest.get(id); return t?.exchangeTimestamp != null && this.now() - t.exchangeTimestamp <= 2000 && t.timestamp <= this.now() ? { price: t.ltp, at: t.exchangeTimestamp } : null; }
     futuresObservation(id:string,tick:number){const value=this.underlying(id),t=this.latest.get(id);return value&&t?{contract:id,price:value.price,tick,source:'ANGEL',epoch:this.sourceEpoch,eventAt:value.at,receivedAt:t.timestamp}:null;}
     quote(id: string, tick: number): FreshQuote | null {
