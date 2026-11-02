@@ -230,3 +230,15 @@ describe('wiring', () => {
     expect(index).toMatch(/timerService\('opsMonitor', \(\) => startOpsMonitor\(subscriptionManager\), \{ ready: \(\) => recoveryReady \}\)/);
   });
 });
+
+describe('expectedEngineSymbols (2026-11-02): no ENGINE_STALE for an evaluator that is retired by design', () => {
+  it('expects only the scanner indices while legacy entries are retired', async () => {
+    const { expectedEngineSymbols } = await import('../ops-monitor.js');
+    expect(expectedEngineSymbols(false).map((e) => e.symbol)).toEqual(['NIFTY', 'BANKNIFTY', 'FINNIFTY']);
+  });
+  it('still expects the background list when the legacy evaluator runs', async () => {
+    const { expectedEngineSymbols } = await import('../ops-monitor.js');
+    const symbols = expectedEngineSymbols(true).map((e) => e.symbol);
+    expect(symbols.slice(0, 3)).toEqual(['NIFTY', 'BANKNIFTY', 'FINNIFTY']);
+  });
+});
