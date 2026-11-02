@@ -16,7 +16,7 @@ import {FreshPositionMonitor} from './monitor.js';
 import {freshContractUnits} from './contract-units.js';
 import {ivRankFor} from '../fno-scanner.js';
 import {FreshRuntime} from './runtime.js';
-import {FRESH_MARKETS,freshMarketBlockers,freshBookSupportsLot,discoverFreshMarkets,freshDiscoveryWindow,freshReferenceOptions,freshReferenceExchange,freshReferenceSpotId,freshEventMarket,type FreshMarket} from './markets.js';
+import {FRESH_MARKETS,freshMarketBlockers,freshBookSupportsLot,discoverFreshMarkets,freshDiscoveryWindow,freshReferenceOptions,freshReferenceExchange,freshReferenceSpotId,freshEventMarket,freshMarketExchange,freshIndexKey,type FreshMarket} from './markets.js';
 import {freshAdapterState as state} from './adapter-state.js';
 import {FreshOperationalReporter} from './operational-evidence.js';
 import {registerFreshResearchProtocol,freshResearchReadiness} from './research-inventory.js';
@@ -83,7 +83,11 @@ export class FreshPaperWorker {
   }
   private async loadMaster(day:string){
     if(day===this.masterDay)return;const master=await this.provider.getInstrumentMaster();if(this.stopped)return;if(!master.length)throw Error('BLOCKED_INSTRUMENT_MASTER');
-    this.discovery=discoverFreshMarkets(master,day);this.master=master;this.refs=new Map(this.discovery.references.map(r=>[r.id,r]));this.masterDay=day;this.histories.clear();this.selectionAt=0;this.cursor=0;
+    this.discovery=discoverFreshMarkets(master,day);this.master=master;
+    // Which option names have no exact pricing reference, and which index rows of that exchange look closest — so a
+    // missing spot (e.g. SENSEX50) can be mapped from the master's own data instead of a guessed token.
+    const pricing=this.discovery.unmapped.filter(u=>u.code==='BLOCKED_EXACT_PRICING_REFERENCE');
+    logger.info({event:'freshDiscoveryUnmapped',unmapped:this.discovery.unmapped.slice(0,40),indexCandidates:pricing.map(u=>{const ex=freshMarketExchange(u.market),key=freshIndexKey(u.name);return {name:u.name,candidates:master.filter(x=>x.exchange===ex&&x.segment==='CM'&&x.instrumentType==='INDEX'&&(freshIndexKey(x.name).slice(0,3)===key.slice(0,3)||freshIndexKey(x.symbol).slice(0,3)===key.slice(0,3))).slice(0,15).map(x=>({token:x.token,name:x.name,symbol:x.symbol}))};})},'Fresh-start discovery: references without an exact mapping');this.refs=new Map(this.discovery.references.map(r=>[r.id,r]));this.masterDay=day;this.histories.clear();this.selectionAt=0;this.cursor=0;
   }
 
   private async context(ref:FreshReference,now:number,open:number){
