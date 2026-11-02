@@ -16,6 +16,7 @@ import {FreshPositionMonitor} from './monitor.js';
 import {freshContractUnits} from './contract-units.js';
 import {ivRankFor} from '../fno-scanner.js';
 import {FreshRuntime} from './runtime.js';
+import {logFreshDecisionSummary} from './decision-summary.js';
 import {FRESH_MARKETS,freshMarketBlockers,freshBookSupportsLot,discoverFreshMarkets,freshDiscoveryWindow,freshReferenceOptions,freshReferenceExchange,freshReferenceSpotId,freshEventMarket,freshMarketExchange,freshIndexKey,type FreshMarket} from './markets.js';
 import {freshAdapterState as state} from './adapter-state.js';
 import {FreshOperationalReporter} from './operational-evidence.js';
@@ -29,6 +30,8 @@ type History={five:FreshBar[];one:FreshBar[];lastSeen:number};
  * ~18 option tokens a minute on the shared WebSocket (2 Nov audit); 2 minutes cuts that churn by 4x while every
  * selected reference still gets its books several times in each 30-minute selection.
  */
+/** How often today's decisions are summarised to the log (decision-summary.ts). */
+export const FRESH_DECISION_SUMMARY_MS=900_000;
 export const FRESH_BOOK_ROTATION_MS=120_000;
 export function freshAngelTime(ms:number):string{
   const d=new Date(ms+19800000),pad=(n:number)=>String(n).padStart(2,'0');
@@ -42,6 +45,8 @@ export const FRESH_HISTORY_SEED_DAYS = 12;
 /** After a failed history fetch a reference waits this long before the next attempt (no hammering a rate limit). */
 export const FRESH_HISTORY_RETRY_MS = 60_000;
 export class FreshPaperWorker {
+  /** First summary ~immediately after start, then every 15 minutes. */
+  private summaryAt=0;
   private operationalReporter=new FreshOperationalReporter(evidence=>logger.info(evidence,'Fresh-start operational evidence; readiness and paper-only blockers observed'));
   private feed:FreshSharedFeed;private events=createFreshEventSource(persistFreshCalendarSnapshot);private store=new FreshPaperStore(undefined,()=>!this.stopped&&freshEntriesEnabled());private monitor:FreshPositionMonitor;private runtime:FreshRuntime;
   private refs=new Map<string,FreshReference>();private master:Instrument[]=[];private masterDay='';private histories=new Map<string,History>();private shortlist:SubscriptionTarget[]=[];
@@ -160,6 +165,6 @@ export class FreshPaperWorker {
         if(state.entriesArmed&&blockers.length===0)state.lastDecision=await this.runtime.onClosedReference(h.context);else{await auditFreshEvaluation(h.context,evaluateFreshStrategies(h.context));state.lastDecision=blockers[0]??'BLOCKED_REQUIRED_CAPABILITY';}
       }
       state.discovery.historyCache=this.histories.size;state.status=state.entriesArmed?'FORWARD_PAPER_RUNNING':'PAPER_ARMED_DATA_BLOCKED';state.error=null;
-    }catch(error){if(this.stopped)return;state.entriesArmed=false;state.status='BLOCKED_ADAPTER';state.error=error instanceof Error&&/^BLOCKED_[A-Z_]+$/.test(error.message)?error.message:'ADAPTER_INPUT_OR_STORAGE_UNAVAILABLE';state.entryBlockers=[state.error];for(const m of state.marketReadiness){m.eligibleReferences=0;m.blockers=[...new Set([...m.blockers,state.error])];}}finally{this.scanning=false;if(!this.stopped)this.operationalReporter.report(state);}
+    }catch(error){if(this.stopped)return;state.entriesArmed=false;state.status='BLOCKED_ADAPTER';state.error=error instanceof Error&&/^BLOCKED_[A-Z_]+$/.test(error.message)?error.message:'ADAPTER_INPUT_OR_STORAGE_UNAVAILABLE';state.entryBlockers=[state.error];for(const m of state.marketReadiness){m.eligibleReferences=0;m.blockers=[...new Set([...m.blockers,state.error])];}}finally{this.scanning=false;if(!this.stopped){this.operationalReporter.report(state);const t=Date.now();if(t-this.summaryAt>=FRESH_DECISION_SUMMARY_MS){this.summaryAt=t;void logFreshDecisionSummary(t);}}}
   }
 }
