@@ -43,7 +43,6 @@ import { lastBiasComputedAt } from './market-bias.js';
 import { watchedSetups } from './trade-setup-monitor.js';
 import { readReconciliationReport } from './record-reconciliation.js';
 import { BACKGROUND_BIAS_SYMBOLS, COVERAGE_LAG_FLAGS } from '../config/trading-flags.js';
-import { legacyEntriesAllowed } from '../config/legacy-entry-policy.js';
 import { ORDER_FLOW_SYMBOLS } from '../config/order-flow-flags.js';
 import { orderFlowFeedStatus } from './dhan-feed.js';
 import { dhanConfigured } from './dhan-session.js';
@@ -293,15 +292,10 @@ export function opsStatus(): { at: number | null; incidents: OpsIncident[] } {
   return { at: lastRunAt, incidents: [...state.values()].flatMap((s) => (s.incident ? [s.incident] : [])) };
 }
 
-/**
- * The symbols the engine is expected to compute in session: the scanner's indices and the background list. The
- * background list is only expected while its evaluator runs: index.ts registers backgroundBiasEvaluator only when
- * legacy entries are allowed, so with the legacy engines retired SENSEX and the MCX symbols are not evaluated by
- * design and must not raise ENGINE_STALE (2 Nov false alarms). The fresh-start engine evaluates its own references.
- */
-export function expectedEngineSymbols(legacy: boolean = legacyEntriesAllowed()): Array<{ symbol: string; exchange: Exchange; mode: TradingMode }> {
+/** The symbols the engine is expected to compute in session: the scanner's indices and the background list. */
+export function expectedEngineSymbols(): Array<{ symbol: string; exchange: Exchange; mode: TradingMode }> {
   const nse = ['NIFTY', 'BANKNIFTY', 'FINNIFTY'].map((symbol) => ({ symbol, exchange: 'NSE' as Exchange, mode: 'INTRADAY' as TradingMode }));
-  const background = legacy && COVERAGE_LAG_FLAGS.BACKGROUND_BIAS ? BACKGROUND_BIAS_SYMBOLS.map((s) => ({ symbol: s.symbol, exchange: s.exchange, mode: 'INTRADAY' as TradingMode })) : [];
+  const background = COVERAGE_LAG_FLAGS.BACKGROUND_BIAS ? BACKGROUND_BIAS_SYMBOLS.map((s) => ({ symbol: s.symbol, exchange: s.exchange, mode: 'INTRADAY' as TradingMode })) : [];
   return [...nse, ...background];
 }
 

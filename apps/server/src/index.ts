@@ -420,12 +420,14 @@ for (const spec of [
   timerService('oiCloseSnapshot', () => startOiCloseSnapshot(provider), held()),
   timerService('cacheWarmer', () => startCacheWarmer(provider), held()),
   timerService('strategyTracker', () => startStrategyTracker(provider), held()),
-  // Both exist only to mint legacy setups; with legacy new entries retired they would spend broker budget for nothing.
-  ...(legacyEntriesAllowed() ? [
-    timerService('positionalStockScan', () => startPositionalStockScan(provider), held()),
-    // Non-NSE symbols (SENSEX, CRUDEOIL, GOLD, SILVER, NATURALGAS by default) evaluated on a timer — flag BACKGROUND_BIAS.
-    timerService('backgroundBiasEvaluator', () => startBackgroundBiasEvaluator(provider), held()),
-  ] : []),
+  // The positional stock scan exists only to mint legacy setups; with legacy new entries retired it would spend broker
+  // budget for nothing.
+  ...(legacyEntriesAllowed() ? [timerService('positionalStockScan', () => startPositionalStockScan(provider), held())] : []),
+  // Non-NSE symbols (SENSEX, CRUDEOIL, GOLD, SILVER, NATURALGAS by default) evaluated on a timer — flag BACKGROUND_BIAS.
+  // Kept running with legacy entries retired (2 Nov): it is the only source of the bias / regime / score / levels shown
+  // in those instruments' workspaces, and ops-monitor expects it (ENGINE_STALE). Legacy setups it computes are vetoed
+  // inside market-bias (RISK_OFF, LEGACY_ENTRY_REASON), so it mints no paper trade.
+  timerService('backgroundBiasEvaluator', () => startBackgroundBiasEvaluator(provider), held()),
   timerService('marketStateCapture', () => startMarketStateCapture(provider), held(schemaReady)),
   timerService('missedWinnerAudit', () => startMissedWinnerAudit(provider), held(schemaReady)),
   timerService('setupEventsGrading', () => startSetupEventsGrading(provider), held(schemaReady)),
