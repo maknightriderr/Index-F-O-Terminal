@@ -2,6 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { freshQuoteCode, type FreshQuote } from '@fno/analytics';
 import type { Tick } from '@fno/shared';
 import type { SubscriptionManager, SubscriptionTarget } from '../../lib/subscription-manager.js';
+/**
+ * MCX book depth unit, inferred per product from the live book (2 Nov: no MCX book ever qualified, because depth was
+ * read as units while the broker appears to report lots). Orders are whole lots, so a depth in UNITS is always a
+ * multiple of the lot: one non-multiple quantity proves LOTS. UNITS needs FRESH_MCX_DEPTH_MIN_SAMPLES observations,
+ * all multiples. Until then the depth is UNKNOWN and reads as zero, so nothing qualifies on an unproven reading.
+ */
+export const FRESH_MCX_DEPTH_MIN_SAMPLES = 40;
+export type FreshMcxDepthMode = 'LOTS' | 'UNITS' | 'UNKNOWN';
 /** One consumer of the existing Angel socket. No independent broker connection or REST quote fallback. */
 export class FreshSharedFeed {
     private epoch = 0;
@@ -12,6 +20,8 @@ export class FreshSharedFeed {
     private latest = new Map<string, Tick>();
     private listeners = new Set<() => void>();
     private targets = new Map<string, SubscriptionTarget>();
+    private mcxContracts = new Map<string, { product: string; lot: number }>();
+    private mcxEvidence = new Map<string, { samples: number; nonMultiple: number }>();
     private removeTick: (() => void) | null = null;
     private removeRecovery: (() => void) | null = null;
     constructor(private subscriptions: SubscriptionManager, private now: () => number = Date.now, private clientId = 'fresh-start:shared-feed') { }
@@ -45,6 +55,21 @@ export class FreshSharedFeed {
         this.targets = combined;
     }
     get subscribedTargets(){return [...this.targets.values()];}
+    /** Declares an MCX option book and its verified lot (in premium units) so its depth unit can be inferred and applied. */
+    registerMcxDepth(id: string, product: string, lot: number) { if (Number.isSafeInteger(lot) && lot > 1) this.mcxContracts.set(id, { product, lot }); }
+    mcxDepthMode(product: string): FreshMcxDepthMode {
+        const e = this.mcxEvidence.get(product);
+        return !e ? 'UNKNOWN' : e.nonMultiple > 0 ? 'LOTS' : e.samples >= FRESH_MCX_DEPTH_MIN_SAMPLES ? 'UNITS' : 'UNKNOWN';
+    }
+    mcxDepthModes() { return Object.fromEntries([...this.mcxEvidence.keys()].map(p => [p, { mode: this.mcxDepthMode(p), ...this.mcxEvidence.get(p)! }])); }
+    /** Multiplier from the reported depth to premium units: 1 outside MCX, the lot for LOTS, 0 while UNKNOWN. */
+    private depthScale(id: string) {
+        const c = this.mcxContracts.get(id);
+        if (!c) return 1;
+        const mode = this.mcxDepthMode(c.product);
+        return mode === 'LOTS' ? c.lot : mode === 'UNITS' ? 1 : 0;
+    }
+    private scaled(q: FreshQuote, tick: number): FreshQuote { const k = this.depthScale(q.contract); return { ...q, tick, bidUnits: q.bidUnits * k, askUnits: q.askUnits * k }; }
     async syncTargets(targets:readonly SubscriptionTarget[],capacity:number){
         const wanted=new Set(targets.map(t=>`${t.exchangeSegment}:${t.token}`));
         for(const [id,t] of this.targets)if(!wanted.has(id)){this.subscriptions.unsubscribe(this.clientId,[t]);this.targets.delete(id);this.books.delete(id);this.latest.delete(id);this.referenceHistory.delete(id);}
@@ -68,6 +93,12 @@ export class FreshSharedFeed {
                 const q: FreshQuote = { contract: id, source: 'ANGEL', epoch: this.sourceEpoch, eventAt: t.exchangeTimestamp, receivedAt: t.timestamp, bid: t.bid, ask: t.ask, bidUnits: t.bidQty, askUnits: t.askQty, tick: 1 };
                 if (freshQuoteCode(q, id, 'ANGEL', this.sourceEpoch, this.now()) !== null)
                     continue;
+                const mcx = this.mcxContracts.get(id);
+                if (mcx) {
+                    const e = this.mcxEvidence.get(mcx.product) ?? { samples: 0, nonMultiple: 0 };
+                    for (const qty of [t.bidQty, t.askQty]) if (Number.isSafeInteger(qty) && qty > 0) { e.samples++; if (qty % mcx.lot !== 0) e.nonMultiple++; }
+                    this.mcxEvidence.set(mcx.product, e);
+                }
                 const series = (this.books.get(id) ?? []).filter(x => this.now() - x.eventAt <= 2500);
                 series.push(q);
                 this.books.set(id, series.slice(-100));
@@ -85,7 +116,7 @@ export class FreshSharedFeed {
         const q = this.books.get(id)?.at(-1);
         if (!q || this.latest.get(id)?.exchangeTimestamp !== q.eventAt)
             return null;
-        const value = { ...q, tick };
+        const value = this.scaled(q, tick);
         return freshQuoteCode(value, id, 'ANGEL', this.sourceEpoch, this.now()) === null ? value : null;
     }
     /** Returns the earliest eligible observed book after simulated arrival, even if the caller finishes work later. */
@@ -100,7 +131,7 @@ export class FreshSharedFeed {
                 }
                 const q = this.books.get(id)?.find(x => x.eventAt >= arrivalAt && x.receivedAt >= arrivalAt && x.receivedAt <= deadline);
                 if (q) {
-                    const value = { ...q, tick };
+                    const value = this.scaled(q, tick);
                     finish(freshQuoteCode(value, id, 'ANGEL', this.sourceEpoch, this.now()) === null ? value : null);
                 }
                 else if (this.now() >= deadline)

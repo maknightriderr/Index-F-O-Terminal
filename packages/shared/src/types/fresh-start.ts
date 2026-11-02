@@ -53,7 +53,9 @@ export interface FreshStartStatus {
     activationApproved:boolean;
     feedQualification:{status:string;lastCheckAt:number|null;sourceEpoch:string|null;referenceContracts:number;optionContracts:number;observedExecutableBooks:number;error:string|null;scope?:string[];monitorRunning?:boolean;recovered?:boolean;entriesArmed?:boolean;barCallbacks?:number;
     /** Latest executable quote per held position id (display only; exits use the monitor's own observations). */
-    marks?:Record<string,{bid:number;ask:number;at:number;underlying:number|null}>;lastDecision?:string|null;eventCode?:string};
+    marks?:Record<string,{bid:number;ask:number;at:number;underlying:number|null}>;
+    /** MCX book depth unit inferred per product from the live book (LOTS / UNITS / UNKNOWN, with its evidence). */
+    mcxDepthUnits?:Record<string,{mode:string;samples:number;nonMultiple:number}>;lastDecision?:string|null;eventCode?:string};
     version: string;
     implementationApproved: boolean;
     enabled: boolean;
