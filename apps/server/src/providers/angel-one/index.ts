@@ -862,6 +862,9 @@ export class AngelOneProvider implements MarketDataProvider {
     if (t === 'OPTIDX') return 'OPTIDX';
     if (t === 'OPTSTK') return 'OPTSTK';
     if (t === 'OPTFUT') return 'OPTFUT'; // MCX commodity options (options on futures)
+    // Angel One's index rows (NIFTY, SENSEX, SENSEX50 ...) carry AMXIDX. They used to fall through to 'EQ', so nothing
+    // filtering on 'INDEX' ever found an index in the master (2 Nov: SENSEX50 had no pricing reference).
+    if (t === 'AMXIDX') return 'INDEX';
     if (exchSeg.includes('fo')) return 'FUTSTK'; // default for F&O
     return 'EQ';
   }
