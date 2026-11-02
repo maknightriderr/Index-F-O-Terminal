@@ -23,6 +23,11 @@ import {registerFreshResearchProtocol,freshResearchReadiness} from './research-i
 import {freshIstDay,freshBars,mergeFreshBars,buildFreshReferenceContext} from './context.js';
 import {auditFreshAdapter,auditFreshEvaluation,persistFreshCalendarSnapshot} from './audit.js';
 type History={five:FreshBar[];one:FreshBar[];lastSeen:number};
+/** Angel One historical API time: "YYYY-MM-DD HH:mm" in IST (the format every other caller uses). */
+export function freshAngelTime(ms:number):string{
+  const d=new Date(ms+19800000),pad=(n:number)=>String(n).padStart(2,'0');
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+}
 export class FreshPaperWorker {
   private operationalReporter=new FreshOperationalReporter(evidence=>logger.info(evidence,'Fresh-start operational evidence; readiness and paper-only blockers observed'));
   private feed:FreshSharedFeed;private events=createFreshEventSource(persistFreshCalendarSnapshot);private store=new FreshPaperStore(undefined,()=>!this.stopped&&freshEntriesEnabled());private monitor:FreshPositionMonitor;private runtime:FreshRuntime;
@@ -69,10 +74,12 @@ export class FreshPaperWorker {
   }
 
   private async context(ref:FreshReference,now:number,open:number){
-    const old=this.histories.get(ref.id),params={exchange:freshReferenceExchange(ref),segment:ref.signal.segment,token:ref.signal.token,toDate:new Date(now).toISOString()};
-    const one=await this.provider.getHistoricalData({...params,interval:'ONE_MINUTE',fromDate:new Date(open).toISOString()});
+    // Angel One's candle API takes "YYYY-MM-DD HH:mm" IST; ISO strings were rejected with HTTP 400 and the provider returned
+    // [] silently, so no fresh-start strategy ever received bars (2 Nov audit).
+    const old=this.histories.get(ref.id),params={exchange:freshReferenceExchange(ref),segment:ref.signal.segment,token:ref.signal.token,toDate:freshAngelTime(now)};
+    const one=await this.provider.getHistoricalData({...params,interval:'ONE_MINUTE',fromDate:freshAngelTime(open)});
     if(this.stopped)throw Error('WORKER_STOPPED');
-    const five=await this.provider.getHistoricalData({...params,interval:'FIVE_MINUTE',fromDate:new Date(old?Math.max(open,old.lastSeen-300000):now-45*86400000).toISOString()});
+    const five=await this.provider.getHistoricalData({...params,interval:'FIVE_MINUTE',fromDate:freshAngelTime(old?Math.max(open,old.lastSeen-300000):now-45*86400000)});
     if(this.stopped)throw Error('WORKER_STOPPED');
     const receivedAt=Date.now(),bars5=mergeFreshBars(old?.five??[],freshBars(five,5,receivedAt),4000),bars1=mergeFreshBars(old?.one??[],freshBars(one,1,receivedAt),1440),lastSeen=bars5.at(-1)?.time??0;
     this.histories.delete(ref.id);this.histories.set(ref.id,{five:bars5,one:bars1,lastSeen});
