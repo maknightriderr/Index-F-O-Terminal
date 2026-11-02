@@ -448,7 +448,9 @@ for (const spec of [
     note: 'Extra: the bias / signal computation (computeMarketBias) runs from browser polls, marketScanner and backgroundBiasEvaluator — no single one of the 18 represents it. Heartbeat = a completed computation.',
   },
   {
-    name: 'setupLifecycle', critical: true, startupTimeoutMs: 5_000, heartbeatIntervalMs: 20 * 60_000, kind: 'COMPONENT' as const, start: () => undefined, activeWhen: (now: number) => isMarketOpen('NSE', now) || isMarketOpen('MCX', now),
+    // Critical only while legacy entries run: it advances the legacy structure lifecycle, which with legacy retired
+    // rarely moves, so it read FAILED every ~80 minutes on 2 Nov and turned /api/health DEGRADED for nothing.
+    name: 'setupLifecycle', critical: legacyEntriesAllowed(), startupTimeoutMs: 5_000, heartbeatIntervalMs: 20 * 60_000, kind: 'COMPONENT' as const, start: () => undefined, activeWhen: (now: number) => isMarketOpen('NSE', now) || isMarketOpen('MCX', now),
     note: 'Extra: the structure lifecycle advance runs inside the signal computation, not as one of the 18. Heartbeat = a completed advance.',
   },
   {

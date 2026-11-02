@@ -55,7 +55,9 @@ export interface FreshStartStatus {
     /** Latest executable quote per held position id (display only; exits use the monitor's own observations). */
     marks?:Record<string,{bid:number;ask:number;at:number;underlying:number|null}>;
     /** MCX book depth unit inferred per product from the live book (LOTS / UNITS / UNKNOWN, with its evidence). */
-    mcxDepthUnits?:Record<string,{mode:string;samples:number;nonMultiple:number}>;lastDecision?:string|null;eventCode?:string};
+    mcxDepthUnits?:Record<string,{mode:string;samples:number;nonMultiple:number}>;
+    /** Each selected reference's own blockers (first 40). */
+    referenceBlockers?:Array<{id:string;name:string;market:string;codes:string[]}>;lastDecision?:string|null;eventCode?:string};
     version: string;
     implementationApproved: boolean;
     enabled: boolean;

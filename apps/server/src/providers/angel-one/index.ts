@@ -12,6 +12,7 @@ import axios, { type AxiosInstance } from 'axios';
 import { authenticator } from 'otplib';
 import { logger } from '../../lib/logger.js';
 import { RateLimiter } from '../../lib/rate-limiter.js';
+import { dhanCandles } from '../dhan/history.js';
 import { isInteractiveRequest } from '../../lib/request-priority.js';
 import { currentCaller, endpointOf, recordBrokerCall } from '../../lib/broker-call-stats.js';
 import { dhanQuotes } from '../dhan/quotes.js';
@@ -505,6 +506,9 @@ export class AngelOneProvider implements MarketDataProvider {
   // --- Historical Data ---
 
   async getHistoricalData(params: HistoricalParams): Promise<OHLCV[]> {
+    // Dhan first (separate rate budget, same exchange candles); Angel One when Dhan cannot or does not serve it.
+    const viaDhan = await dhanCandles(params, () => this.getInstrumentMaster());
+    if (viaDhan) return viaDhan;
     await this.ensureAuthenticated();
 
     try {
