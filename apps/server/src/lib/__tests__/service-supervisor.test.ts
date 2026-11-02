@@ -180,7 +180,7 @@ describe('boot registrations and shutdown order (index.ts)', () => {
     const timer = [...src.matchAll(/timerService\('(\w+)'/g)].map((m) => m[1]);
     expect(timer).toEqual(EXISTING);
     expect(new Set(timer).size).toBe(25);
-    const components = [...src.matchAll(/name: '(\w+)', critical: (true|false)[^\n]*kind: 'COMPONENT'/g)].map((m) => m[1]);
+    const components = [...src.matchAll(/name: '(\w+)', critical: (true|false|legacyEntriesAllowed\(\))[^\n]*kind: 'COMPONENT'/g)].map((m) => m[1]);
     expect(components).toEqual(['signalEngine', 'setupLifecycle', 'orderFlowFeed']);
     expect((src.match(/note: 'Extra:/g) ?? []).length).toBe(3);
     // No start*() is called outside the supervisor any more.
@@ -194,8 +194,9 @@ describe('boot registrations and shutdown order (index.ts)', () => {
     // 2026-11-01 audit: the fresh-start worker owns exit monitoring of new paper positions.
     expect(src).toMatch(/timerService\('freshPaperRecovery'[^\n]*critical: true/);
     expect(src).toMatch(/name: 'signalEngine', critical: true/);
-    expect(src).toMatch(/name: 'setupLifecycle', critical: true/);
-    expect((src.match(/critical: true/g) ?? []).length).toBe(4);
+    // 2 Nov: setupLifecycle is critical only while legacy entries run (it advances the legacy lifecycle).
+    expect(src).toMatch(/name: 'setupLifecycle', critical: legacyEntriesAllowed\(\)/);
+    expect((src.match(/critical: true/g) ?? []).length).toBe(3);
   });
   it('shutdown: supervisor + timers, then server.close, WS disconnect, logout, sql.end, redis.disconnect', () => {
     const body = src.slice(src.indexOf('const shutdown = async'));

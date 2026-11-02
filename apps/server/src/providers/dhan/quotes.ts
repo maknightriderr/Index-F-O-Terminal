@@ -166,6 +166,12 @@ function refreshRoutable(getInstruments: () => Promise<Instrument[]>, now: numbe
   })();
 }
 
+/** Is this exact contract verified identical on Angel One and Dhan today? Starts the daily check when needed. */
+export function dhanRoutable(segment: ExchangeSegment, token: string, getInstruments: () => Promise<Instrument[]>): boolean {
+  refreshRoutable(getInstruments, Date.now());
+  return routable.get(segment)?.has(token) ?? false;
+}
+
 /** Tests only. */
 export function setRoutableForTest(table: Map<ExchangeSegment, Set<string>>, day: string): void {
   routable = table;

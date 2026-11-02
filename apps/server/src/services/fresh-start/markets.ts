@@ -5,6 +5,8 @@ import {freshContractUnits} from './contract-units.js';
 import {freshBsePaperPolicyApproved} from './bse-policy.js';
 import {freshMcxPaperPolicyApproved} from './mcx-policy.js';
 /** 1.5: the mini energy contracts fit the INR 5,00,000 account's per-trade risk; the full-size lots never do. */
+/** Option-chain names whose index token is listed under another key (NSE options say NIFTYNXT50, the index table NIFTYNEXT50). */
+export const FRESH_INDEX_TOKEN_ALIASES:Readonly<Record<string,string>>={NIFTYNXT50:'NIFTYNEXT50'};
 export const FRESH_MCX_PRODUCTS:readonly string[]=['CRUDEOIL','CRUDEOILM','GOLD','SILVER','NATURALGAS','NATGASMINI'];
 export const FRESH_MARKETS=['NSE_INDEX_OPTIONS','NSE_STOCK_OPTIONS','BSE_VERIFIED_OPTIONS','MCX_VERIFIED_FUTURES_OPTIONS'] as const;
 export type FreshMarket=typeof FRESH_MARKETS[number];
@@ -53,7 +55,8 @@ export function discoverFreshMarkets(master:readonly Instrument[],day:string):Fr
       // Each commodity option slice, signal history and pricing reference share its exact linked future.
       const spotCandidates=commodity?[signal]:stock?[signal]:master.filter(x=>x.exchange===exchange&&x.segment==='CM'&&x.instrumentType==='INDEX'&&x.name===name);
       if(spotCandidates.length>1){unmapped.push({name,market,code:'BLOCKED_AMBIGUOUS_PRICING_REFERENCE'});continue;}
-      const spot=spotCandidates.length===1?{token:spotCandidates[0].token,exchangeSegment:CM_SEGMENT[exchange]}:!stock&&!commodity&&KNOWN_INDEX_TOKENS[name]?{token:KNOWN_INDEX_TOKENS[name],exchangeSegment:CM_SEGMENT[exchange]}:null;
+      const indexKey=FRESH_INDEX_TOKEN_ALIASES[name]??name;
+      const spot=spotCandidates.length===1?{token:spotCandidates[0].token,exchangeSegment:CM_SEGMENT[exchange]}:!stock&&!commodity&&KNOWN_INDEX_TOKENS[indexKey]?{token:KNOWN_INDEX_TOKENS[indexKey],exchangeSegment:CM_SEGMENT[exchange]}:null;
       if(!spot){unmapped.push({name,market,code:'BLOCKED_EXACT_PRICING_REFERENCE'});continue;}
       const sector=stock?freshSector(name):null,blockers:string[]=freshMarketBlockers(market);
       if(linkedCommodity){blockers.splice(blockers.indexOf('BLOCKED_MCX_EXACT_OPTION_FUTURES_LINK'),1);if(master.filter(x=>active(x)&&x.exchange==='MCX'&&x.name===name&&x.instrumentType==='OPTFUT').some(x=>freshContractUnits(x)&&resolveFreshMcxLink(x,candidates)?.futureToken===signal.token))blockers.splice(blockers.indexOf('BLOCKED_MCX_BOOK_QUANTITY_UNITS'),1);}
