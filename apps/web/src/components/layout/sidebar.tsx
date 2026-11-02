@@ -19,6 +19,7 @@ function Icon({ d, className = '' }: { d: string; className?: string }) {
 }
 
 const ICONS: Record<string, string> = {
+  workspace: 'M3 4h18v16H3z M3 9h18 M10 9v11 M7 6.5h.01',
   dashboard: 'M3 3h7v9H3z M14 3h7v5h-7z M14 12h7v9h-7z M3 16h7v5H3z',
   'market-overview': 'M3 17l6-6 4 4 8-8 M14 7h7v7',
   'option-chain': 'M4 6h16 M4 12h16 M4 18h16 M12 3v18',
@@ -50,6 +51,7 @@ export function Sidebar() {
   const setActiveTab = useMarketStore(s => s.setActiveTab);
   const openDirectory = useTerminalNavigation();
   const primary = [
+    { id: 'workspace', label: 'Workspace', pages: ['workspace'] },
     { id: 'dashboard', label: 'Command', pages: ['dashboard'] },
     { id: 'option-chain', label: 'Chain', pages: ['option-chain'] },
     { id: 'indices', label: 'Markets', pages: ['market-overview', 'indices', 'fno-explorer', 'corporate-actions', 'institutional-flow'] },
@@ -59,7 +61,7 @@ export function Sidebar() {
   ];
   const items = NAV_GROUPS.flatMap(g => g.items);
   return <aside aria-label="Primary" className="desk-rail terminal-rail">
-    <button type="button" aria-label="Go to dashboard" onClick={() => setActiveTab('dashboard')} className="terminal-brand"><span>F&O</span></button>
+    <button type="button" aria-label="Go to the workspace" onClick={() => setActiveTab('workspace')} className="terminal-brand"><span>F&O</span></button>
     <nav aria-label="Pages" className="terminal-rail-pages">
       {primary.map(link => {
         const item = items.find(i => i.id === link.id)!;

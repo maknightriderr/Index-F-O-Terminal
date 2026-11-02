@@ -9,6 +9,7 @@ import { useFeedSummary } from '@/lib/use-feed-summary';
 import { formatIstDateTime } from '@/lib/format';
 import { FreshnessBadge } from '@/components/ui/status-badge';
 import { AlertBell } from './alert-bell';
+import { CommandBar } from './command-bar';
 import { SignOutButton } from '@/components/auth/sign-out-button';
 
 // ============================================================
@@ -29,13 +30,13 @@ export function TopBar() {
 
   return (
     <header className="relative z-10 flex h-14 shrink-0 items-center gap-2 border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 md:gap-4 md:px-4">
-      <div className="min-w-0">
+      <div className="min-w-0 shrink-0 max-w-[40vw] lg:max-w-none">
         <p className="truncate text-base font-semibold tracking-tight md:text-xl">{title}</p>
         <p className="hidden text-[11px] uppercase tracking-[.1em] text-[var(--text-muted)] lg:block">F&amp;O Terminal · Paper research desk</p>
       </div>
       <span className="rounded border border-[var(--desk-accent)]/40 bg-[var(--desk-accent)]/10 px-2 py-1 text-xs font-semibold tracking-wider text-[var(--desk-accent)]">PAPER</span>
 
-      <div className="flex-1" />
+      <div className="flex min-w-0 flex-1 justify-center"><CommandBar /></div>
 
       <button
         type="button"

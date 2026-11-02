@@ -1376,3 +1376,88 @@ html, body {
 /* Market Overview without the retired setup spotlight and legacy trades: watchlist + chart only. */
 .desk-grid.desk-grid--market { grid-template-areas: "watch" "chart"; }
 @media (min-width: 1280px) { .desk-grid.desk-grid--market { grid-template-columns: 220px minmax(0, 1fr); grid-template-areas: "watch chart"; } }
+
+/* ============================================================
+   WORKSPACE + COMMAND BAR — theme tokens only, so light / dark / system all work
+   ============================================================ */
+.ws-cmd { position: relative; width: 100%; max-width: 560px; min-width: 0; }
+.ws-cmd-form { display: flex; align-items: center; gap: 6px; height: 34px; padding-left: 10px; border: 1px solid var(--desk-accent); border-radius: 6px; background: var(--bg-primary); }
+.ws-cmd-form:focus-within { box-shadow: 0 0 0 2px color-mix(in srgb, var(--desk-accent) 35%, transparent); }
+.ws-cmd-prompt { font: 600 13px var(--font-mono); color: var(--desk-accent); }
+.ws-cmd-input { flex: 1; min-width: 0; height: 100%; background: transparent; border: 0; outline: none; color: var(--text-primary); font: 500 13px var(--font-mono); letter-spacing: .03em; text-transform: uppercase; }
+.ws-cmd-input::placeholder { color: var(--text-muted); text-transform: none; letter-spacing: 0; }
+.ws-cmd-kbd { font: 11px var(--font-mono); color: var(--text-muted); border: 1px solid var(--border-secondary); border-radius: 4px; padding: 0 5px; }
+.ws-cmd-go { height: 100%; padding: 0 14px; border: 0; border-radius: 0 5px 5px 0; background: var(--desk-accent); color: var(--desk-accent-ink); font: 600 12px var(--font-mono); cursor: pointer; }
+.ws-cmd-msg { position: absolute; top: 38px; left: 0; right: 0; z-index: 40; margin: 0; padding: 6px 10px; border: 1px solid var(--status-warn); border-radius: 6px; background: var(--surface-card); color: var(--text-primary); font-size: 12px; }
+.ws-cmd-pop { position: absolute; top: 38px; left: 0; right: 0; z-index: 40; border: 1px solid var(--border-secondary); border-radius: 6px; background: var(--surface-card); box-shadow: 0 8px 24px rgba(0,0,0,.25); overflow: hidden; }
+.ws-cmd-pop ul { list-style: none; margin: 0; padding: 4px; }
+.ws-cmd-pop li button { display: flex; width: 100%; justify-content: space-between; gap: 12px; padding: 6px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--text-primary); font-size: 12px; text-align: left; cursor: pointer; }
+.ws-cmd-pop li button:hover, .ws-cmd-pop li button:focus-visible { background: var(--surface-card-alt); }
+.ws-cmd-pop li button span:last-child { color: var(--text-muted); }
+.ws-cmd-pop-head, .ws-cmd-pop-foot { padding: 6px 12px; font-size: 11px; color: var(--text-muted); }
+.ws-cmd-pop-head { border-bottom: 1px solid var(--border-primary); text-transform: uppercase; letter-spacing: .07em; }
+.ws-cmd-pop-foot { border-top: 1px solid var(--border-primary); font-family: var(--font-mono); }
+@media (max-width: 640px) { .ws-cmd-kbd { display: none; } .ws-cmd-go { padding: 0 10px; } }
+
+.ws-page { display: flex; flex-direction: column; gap: 6px; padding: 6px; min-height: 100%; }
+.ws-banner { margin: 0; padding: 6px 10px; border: 1px solid var(--status-warn); border-radius: 6px; background: var(--warn-bg); font-size: 12px; }
+.ws-grid { display: grid; gap: 6px; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr) minmax(0, .9fr);
+  grid-template-areas: "chart chain quote" "radar radar trades"; }
+.ws-page[data-layout="expiry"] .ws-grid { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.3fr) minmax(0, .9fr); }
+.ws-page[data-layout="review"] .ws-grid { grid-template-areas: "radar radar trades" "chart chain quote"; }
+.ws-area-chart { grid-area: chart; } .ws-area-chain { grid-area: chain; } .ws-area-quote { grid-area: quote; } .ws-area-radar { grid-area: radar; } .ws-area-trades { grid-area: trades; }
+@media (max-width: 1180px) { .ws-grid, .ws-page[data-layout] .ws-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "chart chart" "chain quote" "radar radar" "trades trades"; } }
+@media (max-width: 720px) { .ws-grid, .ws-page[data-layout] .ws-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "chart" "chain" "quote" "radar" "trades"; } }
+
+.ws-panel { background: var(--surface-card); border: 1px solid var(--border-secondary); border-radius: 6px; min-width: 0; display: flex; flex-direction: column; scroll-margin: 8px; }
+.ws-panel[data-focused] { border-color: var(--desk-accent); }
+.ws-panel-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border-primary); min-height: 34px; }
+.ws-link { width: 9px; height: 9px; border-radius: 2px; background: var(--desk-accent); flex: none; }
+.ws-code { margin: 0; font: 600 12px var(--font-mono); letter-spacing: .04em; color: var(--text-primary); }
+.ws-title { font-size: 12px; color: var(--text-secondary); min-width: 0; }
+.ws-title small { color: var(--text-muted); font-size: 11px; }
+.ws-meta { margin-left: auto; font-size: 11px; color: var(--text-muted); }
+.ws-chart { flex: 1; min-height: 360px; padding: 4px; }
+.ws-foot { margin-top: auto; padding: 6px 10px; border-top: 1px solid var(--border-primary); font-size: 11.5px; color: var(--text-secondary); }
+.ws-accent { color: var(--desk-accent); font-weight: 600; }
+.ws-dim { color: var(--text-muted); }
+.ws-sub { padding: 0 10px; }
+
+.ws-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.ws-table th { padding: 5px 6px; font-weight: 500; color: var(--text-muted); text-align: right; white-space: nowrap; }
+.ws-table td { padding: 3px 6px; text-align: right; border-top: 1px solid var(--border-primary); white-space: nowrap; color: var(--text-secondary); }
+.ws-table .ws-strike { text-align: center; color: var(--text-primary); }
+.ws-table tr[data-atm] td { background: var(--surface-card-alt); }
+.ws-table tr[data-atm] .ws-strike { color: var(--desk-accent); font-weight: 600; }
+.ws-leg { min-height: 26px; padding: 1px 6px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--text-primary); font: inherit; cursor: pointer; }
+.ws-leg:hover { background: var(--surface-card-alt); }
+.ws-leg[data-engine] { border-color: var(--desk-accent); }
+.ws-leg[aria-pressed="true"] { background: color-mix(in srgb, var(--desk-accent) 18%, transparent); }
+.ws-radar th, .ws-radar td { text-align: left; }
+.ws-row-link { padding: 2px 0; border: 0; background: transparent; color: var(--text-primary); font: 600 11.5px var(--font-mono); cursor: pointer; text-decoration: underline; text-decoration-color: var(--border-secondary); text-underline-offset: 3px; }
+.ws-row-link:hover { color: var(--desk-accent); }
+
+.ws-quote { padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
+.ws-book { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.ws-book > div:last-child { text-align: right; }
+.ws-big { font-size: 18px; font-weight: 600; }
+.ws-imbalance { height: 6px; border-radius: 3px; background: var(--down-bg); overflow: hidden; }
+.ws-imbalance span { display: block; height: 100%; background: var(--positive); opacity: .6; }
+.ws-dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 11.5px; }
+.ws-dl dt { color: var(--text-muted); }
+.ws-dl dd { margin: 0; text-align: right; color: var(--text-primary); }
+
+.ws-kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 8px 10px; }
+.ws-kpi { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+.ws-positions { list-style: none; margin: 0; padding: 0 10px 8px; display: flex; flex-direction: column; gap: 6px; }
+.ws-position { width: 100%; display: flex; flex-direction: column; gap: 3px; padding: 6px 8px; border: 1px solid var(--border-secondary); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary); text-align: left; font-size: 11.5px; cursor: pointer; }
+.ws-position-top { display: flex; justify-content: space-between; gap: 8px; }
+.ws-alerts { padding: 8px 10px; border-top: 1px solid var(--border-primary); display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; }
+.ws-alerts ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; color: var(--text-secondary); }
+
+.ws-presets { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid var(--border-secondary); border-radius: 6px; background: var(--bg-secondary); }
+.ws-preset { min-height: 32px; padding: 4px 12px; border: 1px solid var(--border-secondary); border-radius: 4px; background: transparent; color: var(--text-secondary); font-size: 12px; cursor: pointer; }
+.ws-preset span { color: var(--text-muted); margin-right: 4px; font-size: 10.5px; }
+.ws-preset[aria-pressed="true"] { background: var(--desk-accent); border-color: var(--desk-accent); color: var(--desk-accent-ink); font-weight: 600; }
+.ws-preset[aria-pressed="true"] span { color: var(--desk-accent-ink); }
+.ws-feed { margin-left: auto; font-size: 11px; color: var(--text-muted); }

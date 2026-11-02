@@ -11,6 +11,7 @@
 // ============================================================
 
 export type PageId =
+  | 'workspace'
   | 'dashboard'
   | 'market-overview'
   | 'option-chain'
@@ -53,6 +54,7 @@ export const NAV_GROUPS: NavGroup[] = [
     id: 'markets',
     title: 'Markets',
     items: [
+      { id: 'workspace', label: 'Workspace', description: 'Command bar and linked panels: chart, option chain, quote, engine radar and the paper account on one screen.', icon: 'workspace' },
       { id: 'dashboard', label: 'Command Center', description: 'System health, the paper account, live positions, the setup radar, the journal and market context.', icon: 'dashboard' },
       { id: 'market-overview', label: 'Market Overview', description: 'Watchlist, the main chart, regime and wider market information.', icon: 'market-overview' },
       { id: 'option-chain', label: 'Option Chain', description: 'Bid/ask, delta, IV and OI by strike, with the contract the fresh-start rules would accept.', icon: 'option-chain' },

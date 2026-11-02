@@ -44,7 +44,7 @@ export const useMarketStore = create<MarketDataState>()(
       selectedSymbol: null,
       selectedExchange: 'NSE',
       selectedExpiry: null,
-      activeTab: 'dashboard',
+      activeTab: 'workspace',
 
       updateQuote: (token, quote) =>
         set((state) => ({ quotes: { ...state.quotes, [token]: quote } })),
@@ -347,3 +347,34 @@ export const useNavStore = create<NavState>()((set) => ({
   explorerView: 'overview',
   setExplorerView: (v) => set({ explorerView: v }),
 }));
+
+// --- Workspace Store ---
+// The Workspace's linked symbol, its layout preset and the panel the last command focused (lib/commands.ts).
+
+import type { WorkspaceExchange, WorkspaceFocus, WorkspaceLayout } from '@/lib/commands';
+
+interface WorkspaceState {
+  symbol: string;
+  exchange: WorkspaceExchange;
+  layout: WorkspaceLayout;
+  focus: WorkspaceFocus;
+  /** Bumped on every command so the same focus can be re-applied (scroll + highlight). */
+  focusSeq: number;
+  open: (symbol: string, exchange: WorkspaceExchange, focus?: WorkspaceFocus) => void;
+  setLayout: (layout: WorkspaceLayout, symbol: string, exchange: WorkspaceExchange) => void;
+}
+
+export const useWorkspaceStore = create<WorkspaceState>()(
+  persist(
+    (set) => ({
+      symbol: 'NIFTY',
+      exchange: 'NSE',
+      layout: 'morning',
+      focus: 'chart',
+      focusSeq: 0,
+      open: (symbol, exchange, focus = 'chart') => set((s) => ({ symbol, exchange, focus, focusSeq: s.focusSeq + 1 })),
+      setLayout: (layout, symbol, exchange) => set((s) => ({ layout, symbol, exchange, focusSeq: s.focusSeq + 1 })),
+    }),
+    { name: 'fno-workspace', partialize: (s) => ({ symbol: s.symbol, exchange: s.exchange, layout: s.layout }) }
+  )
+);

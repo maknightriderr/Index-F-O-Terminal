@@ -6,7 +6,7 @@ import { resolveTab } from '@/lib/nav';
 import { useTerminalNavigation } from './terminal-navigation';
 
 const TABS: Array<{ id: string; label: string; d: string; pages: string[] }> = [
-  { id: 'dashboard', label: 'Home', d: 'M3 3h7v9H3z M14 3h7v5h-7z M14 12h7v9h-7z M3 16h7v5H3z', pages: ['dashboard'] },
+  { id: 'workspace', label: 'Desk', d: 'M3 4h18v16H3z M3 9h18 M10 9v11', pages: ['workspace', 'dashboard'] },
   { id: 'option-chain', label: 'Chain', d: 'M4 6h16 M4 12h16 M4 18h16 M12 3v18', pages: ['option-chain'] },
   { id: 'paper-trades', label: 'Trades', d: 'M4 19l5-6 4 3 7-9', pages: ['paper-trades', 'strategy-lab'] },
   { id: 'system-health', label: 'Ops', d: 'M22 12h-4l-3 9L9 3l-3 9H2', pages: ['system-health', 'alerts', 'system-learning'] },
