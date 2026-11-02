@@ -4,6 +4,7 @@ import React from 'react';
 import { AppShell } from '@/components/layout/app-shell';
 import { Dashboard } from '@/components/dashboard';
 import { CommandCenter } from '@/components/command-center';
+import { WorkspacePage } from '@/components/workspace';
 import { OptionChainPage } from '@/components/option-chain';
 import { StrategyLabPage } from '@/components/strategy-lab';
 import { AssetWorkspace } from '@/components/asset-workspace';
@@ -38,6 +39,8 @@ export function TerminalApp() {
     if (RETIRED_PAGES.some((p) => p.id === activeTab)) return <RetiredPage title={pageMeta(activeTab)?.label ?? 'Retired page'} />;
 
     switch (activeTab) {
+      case 'workspace':
+        return <WorkspacePage />;
       case 'dashboard':
         return <CommandCenter />;
       case 'market-overview':
