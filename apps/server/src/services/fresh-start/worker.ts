@@ -13,6 +13,7 @@ import {createFreshEventSource} from './event-source.js';
 import {FreshProductionAdapter,type FreshReference} from './adapter.js';
 import {FreshPaperStore} from './store.js';
 import {FreshPositionMonitor} from './monitor.js';
+import {freshContractUnits} from './contract-units.js';
 import {ivRankFor} from '../fno-scanner.js';
 import {FreshRuntime} from './runtime.js';
 import {FRESH_MARKETS,freshMarketBlockers,freshBookSupportsLot,discoverFreshMarkets,freshDiscoveryWindow,freshReferenceOptions,freshReferenceExchange,freshReferenceSpotId,freshEventMarket,type FreshMarket} from './markets.js';
@@ -98,6 +99,9 @@ export class FreshPaperWorker {
       for(const market of FRESH_MARKETS){const ref=bookWindow.find(r=>r.market===market);if(ref)bookRefs.push(ref);}
       for(const ref of bookWindow)if(bookRefs.length<8&&!bookRefs.some(r=>r.id===ref.id))bookRefs.push(ref);
       const slices=bookRefs.map(ref=>({ref,options:freshReferenceOptions(this.master,ref,day,this.feed.underlying(freshReferenceSpotId(ref))?.price??null)}));
+      // MCX depth unit inference needs each MCX book's verified lot (feed.ts registerMcxDepth).
+      for(const {ref,options} of slices)if(ref.market==='MCX_VERIFIED_FUTURES_OPTIONS')for(const x of options){const u=freshContractUnits(x);if(u)this.feed.registerMcxDepth(`${FO_SEGMENT.MCX}:${x.token}`,ref.name,u.lotQuantity);}
+      state.mcxDepthUnits=this.feed.mcxDepthModes();
       this.shortlist=[...refs.flatMap(r=>[{token:r.signal.token,exchange:freshReferenceExchange(r),exchangeSegment:r.signal.segment==='FO'?FO_SEGMENT[freshReferenceExchange(r)]:r.spot.exchangeSegment},{token:r.spot.token,exchange:freshReferenceExchange(r),exchangeSegment:r.spot.exchangeSegment}]),...slices.flatMap(({ref,options})=>options.map(x=>({token:x.token,exchange:freshReferenceExchange(ref),exchangeSegment:FO_SEGMENT[freshReferenceExchange(ref)]})))];
       this.positions=await this.store.recover();this.monitor.watch(this.positions);await this.syncTargets();
       state.referenceContracts=refs.length;state.optionContracts=slices.reduce((n,s)=>n+s.options.length,0);state.sourceEpoch=this.feed.sourceEpoch;
