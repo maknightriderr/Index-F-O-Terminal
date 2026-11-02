@@ -142,7 +142,7 @@ export class FreshPaperWorker {
       state.observedExecutableBooks=state.marketReadiness.reduce((n,m)=>n+m.observedExecutableBooks,0);
       state.entryBlockers=[...new Set(state.marketReadiness.flatMap(m=>m.blockers))];state.entriesArmed=state.marketReadiness.some(m=>m.eligibleReferences>0);
       // Per-reference blockers, so a market-wide code (e.g. one product's units) never hides which instrument is stuck.
-      state.referenceBlockers=refs.slice(0,40).map(r=>({id:r.id,name:r.name,market:r.market,codes:blockersFor(r)}));
+      state.referenceBlockers=refs.slice(0,40).map(r=>({id:r.id,name:r.name,market:r.market,codes:blockersFor(r),signalAgeMs:this.feed.tickAge(r.id),spotAgeMs:this.feed.tickAge(freshReferenceSpotId(r))}));
       state.discovery={...state.discovery,at:now,totalReferences:this.refs.size,unmapped:this.discovery!.unmapped.length,selected:refs.length,historyCache:this.histories.size};
       let historyRequests=0;
       const start=refs.length?this.historyCursor%refs.length:0,historyRefs=[...refs.slice(start),...refs.slice(0,start)];

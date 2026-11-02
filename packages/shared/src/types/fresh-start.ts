@@ -57,7 +57,7 @@ export interface FreshStartStatus {
     /** MCX book depth unit inferred per product from the live book (LOTS / UNITS / UNKNOWN, with its evidence). */
     mcxDepthUnits?:Record<string,{mode:string;samples:number;nonMultiple:number}>;
     /** Each selected reference's own blockers (first 40). */
-    referenceBlockers?:Array<{id:string;name:string;market:string;codes:string[]}>;lastDecision?:string|null;eventCode?:string};
+    referenceBlockers?:Array<{id:string;name:string;market:string;codes:string[];signalAgeMs?:number|null;spotAgeMs?:number|null}>;lastDecision?:string|null;eventCode?:string};
     version: string;
     implementationApproved: boolean;
     enabled: boolean;

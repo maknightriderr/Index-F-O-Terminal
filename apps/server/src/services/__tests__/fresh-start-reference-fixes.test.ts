@@ -29,8 +29,8 @@ describe('2 Nov audit follow-ups', () => {
     expect(ref.capabilityBlockers).not.toContain('BLOCKED_SECTOR_MAPPING');
   });
   it('logs which references are waiting and on what', () => {
-    const state = { ...freshAdapterState, referenceBlockers: [{ id: 'a', name: 'NIFTY', market: 'NSE_INDEX_OPTIONS', codes: ['WAITING_FOR_EXACT_REFERENCES'] }, { id: 'b', name: 'TCS', market: 'NSE_STOCK_OPTIONS', codes: [] }] };
-    expect(freshOperationalEvidence(state as never).references).toEqual([{ name: 'NIFTY', market: 'NSE_INDEX_OPTIONS', codes: ['WAITING_FOR_EXACT_REFERENCES'] }]);
+    const state = { ...freshAdapterState, referenceBlockers: [{ id: 'a', name: 'NIFTY', market: 'NSE_INDEX_OPTIONS', codes: ['WAITING_FOR_EXACT_REFERENCES'], signalAgeMs: 4321.4, spotAgeMs: null }, { id: 'b', name: 'TCS', market: 'NSE_STOCK_OPTIONS', codes: [] }] };
+    expect(freshOperationalEvidence(state as never).references).toEqual([{ name: 'NIFTY', market: 'NSE_INDEX_OPTIONS', codes: ['WAITING_FOR_EXACT_REFERENCES'], signalAgeMs: 4321, spotAgeMs: null }]);
   });
   it('rotates option books every 2 minutes, not 30 s', () => {
     expect(FRESH_BOOK_ROTATION_MS).toBe(120_000);
