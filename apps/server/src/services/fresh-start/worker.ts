@@ -21,7 +21,7 @@ import {FRESH_MARKETS,freshMarketBlockers,freshBookSupportsLot,discoverFreshMark
 import {freshAdapterState as state} from './adapter-state.js';
 import {FreshOperationalReporter} from './operational-evidence.js';
 import {registerFreshResearchProtocol,freshResearchReadiness} from './research-inventory.js';
-import {freshIstDay,freshBars,mergeFreshBars,buildFreshReferenceContext} from './context.js';
+import {freshIstDay,freshBars,mergeFreshBars,buildFreshReferenceContext,fillFreshGaps} from './context.js';
 import {auditFreshAdapter,auditFreshEvaluation,persistFreshCalendarSnapshot} from './audit.js';
 type History={five:FreshBar[];one:FreshBar[];lastSeen:number};
 /** Angel One historical API time: "YYYY-MM-DD HH:mm" in IST (the format every other caller uses). */
@@ -108,7 +108,7 @@ export class FreshPaperWorker {
     const receivedAt=Date.now(),bars5=mergeFreshBars(old?.five??[],freshBars(five,5,receivedAt),4000),bars1=mergeFreshBars(old?.one??[],freshBars(one,1,receivedAt),1440),lastSeen=bars5.at(-1)?.time??0;
     this.histories.delete(ref.id);this.histories.set(ref.id,{five:bars5,one:bars1,lastSeen});
     while(this.histories.size>40)this.histories.delete(this.histories.keys().next().value!);
-    const c=buildFreshReferenceContext({now:receivedAt,exchange:freshReferenceExchange(ref),instrument:ref.id,sourceEpoch:this.feed.sourceEpoch,bars5,bars1,eventClear:this.events.clearance(receivedAt,freshIstDay(receivedAt),freshEventMarket(ref.market),ref.name)===null,referenceVerified:!!this.feed.underlying(ref.id)&&!!this.feed.underlying(freshReferenceSpotId(ref))});
+    const ex=freshReferenceExchange(ref),c=buildFreshReferenceContext({now:receivedAt,exchange:ex,instrument:ref.id,sourceEpoch:this.feed.sourceEpoch,bars5:fillFreshGaps(bars5,300000,ex),bars1:fillFreshGaps(bars1,60000,ex),eventClear:this.events.clearance(receivedAt,freshIstDay(receivedAt),freshEventMarket(ref.market),ref.name)===null,referenceVerified:!!this.feed.underlying(ref.id)&&!!this.feed.underlying(freshReferenceSpotId(ref))});
     if(c)c.eventEvidence=this.events.evidence(receivedAt,freshEventMarket(ref.market),ref.name);
     return {context:c,newClose:!!old&&lastSeen>old.lastSeen,lastSeen};
   }
