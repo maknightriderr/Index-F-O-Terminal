@@ -15,6 +15,33 @@ export function freshBars(rows:readonly OHLCV[],minutes:number,receivedAt:number
 export function mergeFreshBars(old:readonly FreshBar[],incoming:readonly FreshBar[],limit:number):FreshBar[]{
   const map=new Map(old.map(x=>[x.time,x]));for(const b of incoming){const prior=map.get(b.time),same=prior&&['open','high','low','close','volume'].every(k=>prior[k as keyof FreshBar]===b[k as keyof FreshBar]);map.set(b.time,same?{...b,availableAt:prior.availableAt}:b);}return [...map.values()].sort((a,b)=>a.time-b.time).slice(-limit);
 }
+/** Longest run of no-trade bars filled per gap: 5 one-minute bars, 2 five-minute bars. Longer gaps stay gaps (an outage). */
+export const FRESH_GAP_FILL_LIMIT:Readonly<Record<number,number>>=Object.freeze({60000:5,300000:2});
+/**
+ * Broker candle APIs omit a minute in which nothing traded, and the strategies require a contiguous session (MISSING_BARS
+ * was the top refusal on 2 Nov: 318 of ~1,000 evaluations, mostly quiet MCX contracts). A short gap between two real
+ * bars of the same session is filled with flat bars at the previous close and zero volume — what a no-trade interval is.
+ * A filled bar becomes available only when the next real bar did (no lookahead). A short gap at the session open is
+ * filled from the previous real close (or, with no earlier bar loaded, the first traded price). Gaps longer than the limit and the tail after the last real bar are never filled.
+ */
+export function fillFreshGaps(bars:readonly FreshBar[],stepMs:number,exchange:Exchange='NSE'):FreshBar[]{
+  const limit=FRESH_GAP_FILL_LIMIT[stepMs]??0;if(!limit||bars.length===0)return [...bars];
+  const out:FreshBar[]=[];
+  for(let i=0;i<bars.length;i++){
+    const b=bars[i],prev=out.at(-1),s=getSessionWindow(exchange,freshIstDay(b.time));
+    if(prev&&s&&b.time>=s.open&&b.time+stepMs<=s.close){
+      // Within the session: start from the previous bar of the same session, or from the open when this is the first one.
+      const start=prev.time>=s.open?prev.time+stepMs:s.open,missing=(b.time-start)/stepMs;
+      if(Number.isInteger(missing)&&missing>0&&missing<=limit)for(let t=start;t<b.time;t+=stepMs)out.push({time:t,availableAt:b.availableAt,open:prev.close,high:prev.close,low:prev.close,close:prev.close,volume:0});
+    }else if(!prev&&s&&b.time>s.open&&b.time+stepMs<=s.close){
+      // No earlier bar loaded (the minute history starts at today's open): the first traded price is the only known level.
+      const missing=(b.time-s.open)/stepMs;
+      if(Number.isInteger(missing)&&missing<=limit)for(let t=s.open;t<b.time;t+=stepMs)out.push({time:t,availableAt:b.availableAt,open:b.open,high:b.open,low:b.open,close:b.open,volume:0});
+    }
+    out.push(b);
+  }
+  return out;
+}
 export function freshTrendBars(bars:readonly FreshBar[],exchange:Exchange='NSE'):FreshBar[]{
   const groups=new Map<number,FreshBar[]>();for(const b of bars){const s=getSessionWindow(exchange,freshIstDay(b.time));if(!s||b.time<s.open||b.time+300000>s.close)continue;const t=s.open+Math.floor((b.time-s.open)/900000)*900000;groups.set(t,[...(groups.get(t)??[]),b]);}
   return [...groups.entries()].sort((a,b)=>a[0]-b[0]).filter(([t,a])=>a.length===3&&a.every((b,i)=>b.time===t+i*300000)).map(([time,a])=>({time,availableAt:Math.max(...a.map(x=>x.availableAt)),open:a[0].open,high:Math.max(...a.map(x=>x.high)),low:Math.min(...a.map(x=>x.low)),close:a[2].close,volume:a.reduce((s,x)=>s+x.volume,0)}));
