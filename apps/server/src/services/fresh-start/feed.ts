@@ -11,8 +11,13 @@ import type { SubscriptionManager, SubscriptionTarget } from '../../lib/subscrip
 export const FRESH_MCX_DEPTH_MIN_SAMPLES = 40;
 export type FreshMcxDepthMode = 'LOTS' | 'UNITS' | 'UNKNOWN';
 /** One consumer of the existing Angel socket. No independent broker connection or REST quote fallback. */
+/** How old a reference's last trade may be (exchange time) while the feed is live. Was 2 s (2 Nov). */
+export const FRESH_REFERENCE_MAX_AGE_MS = 5000;
+/** The feed counts as live when any tick arrived within this window. */
+export const FRESH_FEED_ALIVE_MS = 2000;
 export class FreshSharedFeed {
     private epoch = 0;
+    private lastTickAt = 0;
     private closed = false;
     private readonly connectionId = randomUUID();
     private books = new Map<string, FreshQuote[]>();
@@ -75,7 +80,7 @@ export class FreshSharedFeed {
         for(const [id,t] of this.targets)if(!wanted.has(id)){this.subscriptions.unsubscribe(this.clientId,[t]);this.targets.delete(id);this.books.delete(id);this.latest.delete(id);this.referenceHistory.delete(id);}
         if(targets.length)await this.reserve(targets,capacity);
     }
-    underlyingAt(id:string,at:number){const t=this.referenceHistory.get(id)?.filter(x=>x.timestamp<=at&&x.exchangeTimestamp!=null&&x.exchangeTimestamp<=at&&at-x.exchangeTimestamp<=2000).at(-1);return t?{price:t.ltp,at:t.exchangeTimestamp!}:null;}
+    underlyingAt(id:string,at:number){const t=this.referenceHistory.get(id)?.filter(x=>x.timestamp<=at&&x.exchangeTimestamp!=null&&x.exchangeTimestamp<=at&&at-x.exchangeTimestamp<=FRESH_REFERENCE_MAX_AGE_MS).at(-1);return t?{price:t.ltp,at:t.exchangeTimestamp!}:null;}
     private receive(ticks: readonly Tick[]) {
         for (const t of ticks) {
             if (t.exchangeTimestamp == null || ![t.exchangeTimestamp, t.timestamp, t.ltp].every(Number.isFinite) || t.ltp <= 0 || t.exchangeTimestamp > t.timestamp || t.timestamp > this.now() || this.now() - t.exchangeTimestamp > 2000)
@@ -86,7 +91,7 @@ export class FreshSharedFeed {
                 if (t.exchangeTimestamp == null || t.exchangeTimestamp <= 0 || (old?.exchangeTimestamp != null && t.exchangeTimestamp <= old.exchangeTimestamp))
                     continue;
                 this.latest.set(id, t);
-                this.referenceHistory.set(id,[...(this.referenceHistory.get(id)??[]).filter(x=>this.now()-x.timestamp<=2500),t].slice(-100));
+                this.referenceHistory.set(id,[...(this.referenceHistory.get(id)??[]).filter(x=>this.now()-x.timestamp<=FRESH_REFERENCE_MAX_AGE_MS+500),t].slice(-100));
                 if (t.bid == null || t.ask == null || t.bidQty == null || t.askQty == null)
                     continue;
                 // Tick size is added only from a verified exact contract at read time, never inferred from LTP.
@@ -104,15 +109,24 @@ export class FreshSharedFeed {
                 this.books.set(id, series.slice(-100));
             }
         }
+        if (ticks.some(t => t.exchangeTimestamp != null && Number.isFinite(t.timestamp) && t.timestamp <= this.now())) this.lastTickAt = Math.max(this.lastTickAt, ...ticks.map(t => Number.isFinite(t.timestamp) && t.timestamp <= this.now() ? t.timestamp : 0));
         this.notify();
     }
+    /** True while any tick reached this consumer in the last FRESH_FEED_ALIVE_MS: the connection itself is live. */
+    feedAlive() { return this.lastTickAt > 0 && this.now() - this.lastTickAt <= FRESH_FEED_ALIVE_MS; }
     private notify() {
         for (const f of this.listeners)
             f();
     }
     /** Milliseconds since the last exchange-stamped tick for this id, or null when none was received (diagnostics only). */
     tickAge(id: string) { const t = this.latest.get(id); return t?.exchangeTimestamp != null ? Math.max(0, this.now() - t.exchangeTimestamp) : null; }
-    underlying(id: string) { const t = this.latest.get(id); return t?.exchangeTimestamp != null && this.now() - t.exchangeTimestamp <= 2000 && t.timestamp <= this.now() ? { price: t.ltp, at: t.exchangeTimestamp } : null; }
+    /**
+     * The reference's last trade, if recent enough to act on. Angel One sends a tick only when the contract trades, so a
+     * quiet contract (CRUDEOIL ~3 s, NATGASMINI ~5 s, BSE futures, some stocks on 2 Nov) went stale under the old 2 s
+     * limit and kept its market WAITING_FOR_EXACT_REFERENCES. The last trade now counts for up to 5 s, but only while the
+     * feed itself is live (some tick in the last 2 s), so a dropped connection never reads as a quiet market.
+     */
+    underlying(id: string) { const t = this.latest.get(id); return t?.exchangeTimestamp != null && this.now() - t.exchangeTimestamp <= FRESH_REFERENCE_MAX_AGE_MS && this.feedAlive() && t.timestamp <= this.now() ? { price: t.ltp, at: t.exchangeTimestamp } : null; }
     futuresObservation(id:string,tick:number){const value=this.underlying(id),t=this.latest.get(id);return value&&t?{contract:id,price:value.price,tick,source:'ANGEL',epoch:this.sourceEpoch,eventAt:value.at,receivedAt:t.timestamp}:null;}
     quote(id: string, tick: number): FreshQuote | null {
         const q = this.books.get(id)?.at(-1);
