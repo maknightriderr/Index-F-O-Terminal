@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Instrument } from '@fno/shared';
-import { discoverFreshMarkets, freshIndexKey } from '../fresh-start/markets.js';
+import { discoverFreshMarkets, freshIndexKey, FRESH_EXCLUDED_INDEX_NAMES } from '../fresh-start/markets.js';
 import { freshOperationalEvidence } from '../fresh-start/operational-evidence.js';
 import { freshAdapterState } from '../fresh-start/adapter-state.js';
 import { FRESH_BOOK_ROTATION_MS } from '../fresh-start/worker.js';
@@ -9,15 +9,26 @@ const day = '2026-10-30';
 const ins = (o: Partial<Instrument>): Instrument => ({ token: '1', symbol: 'X', name: 'X', exchange: 'NSE', segment: 'FO', instrumentType: 'FUTIDX', expiry: '2026-11-24', lotSize: 20, tickSize: 0.05, isFnO: true, ...o });
 
 describe('2 Nov audit follow-ups', () => {
-  it('finds a BSE index spot whose master name differs only by spacing (SENSEX50 vs "SENSEX 50")', () => {
+  it('finds a BSE index spot whose master name differs only by spacing (BSEFOO vs "BSE FOO")', () => {
     expect(freshIndexKey('SENSEX 50')).toBe('SENSEX50');
+    const master = [
+      ins({ token: '10', name: 'BSEFOO', symbol: 'BSEFOOFUT', exchange: 'BSE' }),
+      ins({ token: '11', name: 'BSEFOO', symbol: 'BSEFOOCE', exchange: 'BSE', instrumentType: 'OPTIDX', optionType: 'CE', strike: 25000, expiry: '2026-11-03' }),
+      ins({ token: '99919999', name: 'BSE FOO', symbol: 'BSE FOO', exchange: 'BSE', segment: 'CM', instrumentType: 'INDEX', expiry: undefined, lotSize: 1 }),
+    ];
+    const ref = discoverFreshMarkets(master, day).references.find((r) => r.name === 'BSEFOO');
+    expect(ref?.spot).toEqual({ token: '99919999', exchangeSegment: 'BSE_CM' });
+  });
+  it('leaves SENSEX50, NIFTYFPI and FOCIT out of scope entirely (not counted, not unmapped)', () => {
+    expect(FRESH_EXCLUDED_INDEX_NAMES).toEqual(['SENSEX50', 'NIFTYFPI', 'FOCIT']);
     const master = [
       ins({ token: '10', name: 'SENSEX50', symbol: 'SENSEX50FUT', exchange: 'BSE' }),
       ins({ token: '11', name: 'SENSEX50', symbol: 'SENSEX50CE', exchange: 'BSE', instrumentType: 'OPTIDX', optionType: 'CE', strike: 25000, expiry: '2026-11-03' }),
-      ins({ token: '99919999', name: 'SENSEX 50', symbol: 'SENSEX 50', exchange: 'BSE', segment: 'CM', instrumentType: 'INDEX', expiry: undefined, lotSize: 1 }),
     ];
-    const ref = discoverFreshMarkets(master, day).references.find((r) => r.name === 'SENSEX50');
-    expect(ref?.spot).toEqual({ token: '99919999', exchangeSegment: 'BSE_CM' });
+    const d = discoverFreshMarkets(master, day);
+    expect(d.counts.BSE_VERIFIED_OPTIONS).toBe(0);
+    expect(d.references).toEqual([]);
+    expect(d.unmapped).toEqual([]);
   });
   it('admits an unmapped stock into one shared conservative risk group instead of blocking it', () => {
     const master = [

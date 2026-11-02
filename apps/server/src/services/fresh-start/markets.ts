@@ -9,6 +9,8 @@ import {freshMcxPaperPolicyApproved} from './mcx-policy.js';
 /** Index name comparison key: upper case, letters and digits only. */
 export const freshIndexKey=(s:string|null|undefined)=>(s??'').toUpperCase().replace(/[^A-Z0-9]/g,'');
 export const FRESH_INDEX_TOKEN_ALIASES:Readonly<Record<string,string>>={NIFTYNXT50:'NIFTYNEXT50'};
+/** Index option names the owner left out of scope (2 Nov): no Angel One spot row exists for them, and only SENSEX is wanted on BSE. */
+export const FRESH_EXCLUDED_INDEX_NAMES:readonly string[]=['SENSEX50','NIFTYFPI','FOCIT'];
 export const FRESH_MCX_PRODUCTS:readonly string[]=['CRUDEOIL','CRUDEOILM','GOLD','SILVER','NATURALGAS','NATGASMINI'];
 export const FRESH_MARKETS=['NSE_INDEX_OPTIONS','NSE_STOCK_OPTIONS','BSE_VERIFIED_OPTIONS','MCX_VERIFIED_FUTURES_OPTIONS'] as const;
 export type FreshMarket=typeof FRESH_MARKETS[number];
@@ -44,6 +46,7 @@ export function discoverFreshMarkets(master:readonly Instrument[],day:string):Fr
     const exchange=freshMarketExchange(market),optionType=freshOptionType(market),names=[...new Set(master.filter(x=>active(x)&&x.exchange===exchange&&x.instrumentType===optionType).map(x=>x.name))].sort();
     for(const name of names){
       if(market==='MCX_VERIFIED_FUTURES_OPTIONS'&&!FRESH_MCX_PRODUCTS.includes(name))continue;
+      if(FRESH_EXCLUDED_INDEX_NAMES.includes(name))continue;
       counts[market]++;
       const stock=market==='NSE_STOCK_OPTIONS',commodity=exchange==='MCX';
       const candidates=master.filter(x=>x.exchange===exchange&&x.name===name&&(stock?x.segment==='CM'&&x.instrumentType==='EQ'&&x.symbol===`${name}-EQ`:active(x)&&x.instrumentType===(commodity?'FUTCOM':'FUTIDX'))).sort((a,b)=>(a.expiry??'').localeCompare(b.expiry??'')||a.token.localeCompare(b.token));
