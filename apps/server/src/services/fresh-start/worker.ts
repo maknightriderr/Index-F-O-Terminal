@@ -24,6 +24,12 @@ import {freshIstDay,freshBars,mergeFreshBars,buildFreshReferenceContext} from '.
 import {auditFreshAdapter,auditFreshEvaluation,persistFreshCalendarSnapshot} from './audit.js';
 type History={five:FreshBar[];one:FreshBar[];lastSeen:number};
 /** Angel One historical API time: "YYYY-MM-DD HH:mm" in IST (the format every other caller uses). */
+/**
+ * How long one set of option books stays subscribed before the window moves on. It was 30 s, which re-subscribed
+ * ~18 option tokens a minute on the shared WebSocket (2 Nov audit); 2 minutes cuts that churn by 4x while every
+ * selected reference still gets its books several times in each 30-minute selection.
+ */
+export const FRESH_BOOK_ROTATION_MS=120_000;
 export function freshAngelTime(ms:number):string{
   const d=new Date(ms+19800000),pad=(n:number)=>String(n).padStart(2,'0');
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
@@ -111,7 +117,7 @@ export class FreshPaperWorker {
       if(!this.selectionAt||now-this.selectionAt>=1800000||exchangeKey!==this.selectionExchangeKey){const window=freshDiscoveryWindow(this.discovery!.references.filter(r=>openExchanges.has(freshReferenceExchange(r))),this.cursor);this.selected=window.selected;this.cursor=window.nextCursor;this.selectionAt=now;this.selectionExchangeKey=exchangeKey;}
       const refs=this.selected.filter(r=>openExchanges.has(freshReferenceExchange(r)));
       // Eight simultaneous option slices (<=160 books) plus <=40 reference interests fit this consumer's 250-token cap.
-      const bookWindow=freshDiscoveryWindow(refs,Math.floor(now/30000),20).selected,bookRefs:FreshReference[]=[];
+      const bookWindow=freshDiscoveryWindow(refs,Math.floor(now/FRESH_BOOK_ROTATION_MS),20).selected,bookRefs:FreshReference[]=[];
       for(const market of FRESH_MARKETS){const ref=bookWindow.find(r=>r.market===market);if(ref)bookRefs.push(ref);}
       for(const ref of bookWindow)if(bookRefs.length<8&&!bookRefs.some(r=>r.id===ref.id))bookRefs.push(ref);
       const slices=bookRefs.map(ref=>({ref,options:freshReferenceOptions(this.master,ref,day,this.feed.underlying(freshReferenceSpotId(ref))?.price??null)}));
