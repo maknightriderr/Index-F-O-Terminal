@@ -55,13 +55,19 @@ export function discoverFreshMarkets(master:readonly Instrument[],day:string):Fr
       if(linkedCommodity&&!signal){unmapped.push({name,market,code:'BLOCKED_MCX_EXACT_OPTION_FUTURES_LINK'});continue;}
       if(!signal||(stock&&candidates.length!==1)||(!stock&&candidates.filter(x=>x.expiry===signal.expiry).length!==1)){unmapped.push({name,market,code:'BLOCKED_EXACT_SIGNAL_REFERENCE'});continue;}
       // Each commodity option slice, signal history and pricing reference share its exact linked future.
-      // Exact master name first; else a unique index whose name/symbol matches once spaces and punctuation are
-      // removed (the master lists e.g. "SENSEX 50" for options named SENSEX50). Never a guessed token.
-      const exactSpot=commodity||stock?[signal]:master.filter(x=>x.exchange===exchange&&x.segment==='CM'&&x.instrumentType==='INDEX'&&x.name===name);
-      const spotCandidates=exactSpot.length?exactSpot:master.filter(x=>x.exchange===exchange&&x.segment==='CM'&&x.instrumentType==='INDEX'&&(freshIndexKey(x.name)===freshIndexKey(name)||freshIndexKey(x.symbol)===freshIndexKey(name)));
-      if(spotCandidates.length>1){unmapped.push({name,market,code:'BLOCKED_AMBIGUOUS_PRICING_REFERENCE'});continue;}
+      // Pricing reference, most trusted first: the verified KNOWN_INDEX_TOKENS table, then a unique master index row
+      // with the same name, then a unique one whose name/symbol matches once spaces and punctuation are removed (the
+      // master may list e.g. "SENSEX 50" for options named SENSEX50). Never a guessed token.
       const indexKey=FRESH_INDEX_TOKEN_ALIASES[name]??name;
-      const spot=spotCandidates.length===1?{token:spotCandidates[0].token,exchangeSegment:CM_SEGMENT[exchange]}:!stock&&!commodity&&KNOWN_INDEX_TOKENS[indexKey]?{token:KNOWN_INDEX_TOKENS[indexKey],exchangeSegment:CM_SEGMENT[exchange]}:null;
+      const masterIndex=(match:(x:Instrument)=>boolean)=>master.filter(x=>x.exchange===exchange&&x.segment==='CM'&&x.instrumentType==='INDEX'&&match(x));
+      let spot:{token:string;exchangeSegment:ExchangeSegment}|null=null;
+      if(commodity||stock)spot={token:signal.token,exchangeSegment:CM_SEGMENT[exchange]};
+      else if(KNOWN_INDEX_TOKENS[indexKey])spot={token:KNOWN_INDEX_TOKENS[indexKey],exchangeSegment:CM_SEGMENT[exchange]};
+      else{
+        const exact=masterIndex(x=>x.name===name),loose=exact.length?exact:masterIndex(x=>freshIndexKey(x.name)===freshIndexKey(name)||freshIndexKey(x.symbol)===freshIndexKey(name));
+        if(loose.length>1){unmapped.push({name,market,code:'BLOCKED_AMBIGUOUS_PRICING_REFERENCE'});continue;}
+        if(loose.length===1)spot={token:loose[0].token,exchangeSegment:CM_SEGMENT[exchange]};
+      }
       if(!spot){unmapped.push({name,market,code:'BLOCKED_EXACT_PRICING_REFERENCE'});continue;}
       const sector=stock?freshSector(name):null,blockers:string[]=freshMarketBlockers(market);
       if(linkedCommodity){blockers.splice(blockers.indexOf('BLOCKED_MCX_EXACT_OPTION_FUTURES_LINK'),1);if(master.filter(x=>active(x)&&x.exchange==='MCX'&&x.name===name&&x.instrumentType==='OPTFUT').some(x=>freshContractUnits(x)&&resolveFreshMcxLink(x,candidates)?.futureToken===signal.token))blockers.splice(blockers.indexOf('BLOCKED_MCX_BOOK_QUANTITY_UNITS'),1);}
