@@ -100,6 +100,27 @@ export function verifiedDhanTokens(csv: string, instruments: readonly Instrument
   return out;
 }
 
+/**
+ * Pure: Dhan security ids of NSE/BSE indices (scrip master segment "I"), keyed by trading symbol. Used only as the
+ * underlying of Dhan's option chain (Greeks); index quotes are never routed to Dhan.
+ */
+export function dhanIndexIds(csv: string): Map<string, string> {
+  const lines = csv.split(/\r?\n/);
+  const head = lines[0].split(',');
+  const [ex, seg, id, ts] = ['SEM_EXM_EXCH_ID', 'SEM_SEGMENT', 'SEM_SMST_SECURITY_ID', 'SEM_TRADING_SYMBOL'].map((n) => head.indexOf(n));
+  const out = new Map<string, string>(), dup = new Set<string>();
+  if ([ex, seg, id, ts].some((c) => c < 0)) return out;
+  for (let k = 1; k < lines.length; k++) {
+    const r = lines[k].split(',');
+    if (r[seg] !== 'I' || (r[ex] !== 'NSE' && r[ex] !== 'BSE') || !r[ts] || !/^\d+$/.test(r[id] ?? '')) continue;
+    const key = r[ts].toUpperCase();
+    if (out.has(key) && out.get(key) !== r[id]) dup.add(key);
+    out.set(key, r[id]);
+  }
+  for (const k of dup) out.delete(k); // ambiguous symbol: never guess
+  return out;
+}
+
 /** Pure: Dhan's "dd/MM/yyyy HH:mm:ss" (IST) last trade time, epoch ms; its 1980 placeholder and junk → undefined. */
 export function parseDhanTradeTime(raw: unknown): number | undefined {
   const m = typeof raw === 'string' ? /^(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2}):(\d{2})$/.exec(raw.trim()) : null;
@@ -145,6 +166,7 @@ export function quoteFromDhan(token: string, item: any, now: number): ProviderQu
 // ---------------- routing table (refreshed daily) ----------------
 
 let routable: Map<ExchangeSegment, Set<string>> = new Map();
+let indexIds: Map<string, string> = new Map();
 let routableOn: string | null = null;
 let routableLoading: Promise<void> | null = null;
 const istDate = (t: number) => new Date(t).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
@@ -156,6 +178,7 @@ function refreshRoutable(getInstruments: () => Promise<Instrument[]>, now: numbe
     try {
       const [res, instruments] = await Promise.all([axios.get<string>(DHAN_SCRIP_MASTER_URL, { responseType: 'text', timeout: 60_000 }), getInstruments()]);
       routable = verifiedDhanTokens(res.data, instruments);
+      indexIds = dhanIndexIds(res.data);
       routableOn = istDate(now);
       logger.info({ segments: Object.fromEntries([...routable].map(([s, set]) => [s, set.size])) }, 'Dhan quotes: contracts verified against both instrument masters');
     } catch (err: any) {
@@ -171,6 +194,15 @@ export function dhanRoutable(segment: ExchangeSegment, token: string, getInstrum
   refreshRoutable(getInstruments, Date.now());
   return routable.get(segment)?.has(token) ?? false;
 }
+
+/** Dhan's security id for an NSE/BSE index (option-chain underlying), or null when unknown or not loaded yet. */
+export function dhanIndexId(name: string, getInstruments: () => Promise<Instrument[]>): string | null {
+  refreshRoutable(getInstruments, Date.now());
+  return indexIds.get(name.toUpperCase()) ?? null;
+}
+
+/** Tests only. */
+export function setIndexIdsForTest(table: Map<string, string>): void { indexIds = table; }
 
 /** Tests only. */
 export function setRoutableForTest(table: Map<ExchangeSegment, Set<string>>, day: string): void {

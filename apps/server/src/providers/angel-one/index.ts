@@ -13,6 +13,7 @@ import { authenticator } from 'otplib';
 import { logger } from '../../lib/logger.js';
 import { RateLimiter } from '../../lib/rate-limiter.js';
 import { dhanCandles } from '../dhan/history.js';
+import { dhanGreeks } from '../dhan/greeks.js';
 import { isInteractiveRequest } from '../../lib/request-priority.js';
 import { currentCaller, endpointOf, recordBrokerCall } from '../../lib/broker-call-stats.js';
 import { dhanQuotes } from '../dhan/quotes.js';
@@ -561,6 +562,9 @@ export class AngelOneProvider implements MarketDataProvider {
   // --- Option Greeks ---
 
   async getOptionGreeks(name: string, expiry: string): Promise<ProviderGreeksData[]> {
+    // Dhan's option chain first for indices it lists (separate rate budget); null → Angel One as before.
+    const viaDhan = await dhanGreeks(name, expiry.slice(0, 10), () => this.getInstrumentMaster());
+    if (viaDhan) return viaDhan;
     await this.ensureAuthenticated();
 
     try {
