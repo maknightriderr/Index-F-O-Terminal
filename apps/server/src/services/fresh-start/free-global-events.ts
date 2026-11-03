@@ -11,6 +11,13 @@ export const FREE_GLOBAL_UNCERTAIN_WINDOW_MS=7200000;
  * the schedule and the log; only real releases, decisions and speeches block entries.
  */
 export const FREE_GLOBAL_NON_RELEASE=/\b(elections?|vote|voting|referendum|bank holiday|holiday)\b/i;
+/**
+ * Which currencies' releases move each market (3 Nov 2026: a Canadian central-bank governor's speech, CAD, blacked
+ * out MCX gold, silver, crude and natural gas for 30 minutes). MCX contracts are priced off dollar benchmarks
+ * (USD) with China the marginal metals/energy buyer (CNY); NSE/BSE indices and stocks take global risk through USD.
+ * Every other currency's event stays in the schedule and the log but blocks nothing.
+ */
+export const FREE_GLOBAL_MARKET_CURRENCIES:Readonly<Record<'INDEX'|'STOCK'|'COMMODITY',readonly string[]>>=Object.freeze({INDEX:['USD'],STOCK:['USD'],COMMODITY:['USD','CNY']});
 export const freeGlobalIsRelease=(title:string)=>!FREE_GLOBAL_NON_RELEASE.test(title);
 export const FREE_GLOBAL_CALENDAR_URL='https://showmytrades.com/api/public/calendar/v1';
 const istDay=(at:number)=>new Date(at).toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'});
@@ -55,8 +62,8 @@ export class FreshFreeGlobalEvents {
   }
   evidence(now:number){const s=this.snapshot;return s&&this.qualifiedAt!=null&&this.qualifiedAt<=now&&s.fetchedAt<=now&&now<=s.expiresAt?{...s,qualifiedAt:this.qualifiedAt,events:s.events.map(e=>({...e})),uncertainDays:[...s.uncertainDays]}:null;}
   /** Events whose window covers `now`: ±2 h for an uncertain time, ±15 min for a confirmed one (old and new time for a move). */
-  blocking(now:number){const s=this.evidence(now);if(!s)return [];const near=(t:number|null,w:number)=>t!=null&&Math.abs(t-now)<=w;
-    return s.events.filter(e=>{if(!freeGlobalIsRelease(e.title))return false;const w=e.uncertain?FREE_GLOBAL_UNCERTAIN_WINDOW_MS:FREE_GLOBAL_BLACKOUT_MS;return near(e.at,w)||near(e.movedFrom,w);});}
-  blockers(now:number){const hits=this.blocking(now);if(hits.some(e=>e.uncertain))return ['FREE_GLOBAL_EVENT_TIME_UNCERTAIN'];return hits.length?['FREE_GLOBAL_RELEASE_BLACKOUT']:[];}
+  blocking(now:number,market?:'INDEX'|'STOCK'|'COMMODITY'){const s=this.evidence(now);if(!s)return [];const near=(t:number|null,w:number)=>t!=null&&Math.abs(t-now)<=w;
+    return s.events.filter(e=>{if(!freeGlobalIsRelease(e.title)||market&&!FREE_GLOBAL_MARKET_CURRENCIES[market].includes(e.currency))return false;const w=e.uncertain?FREE_GLOBAL_UNCERTAIN_WINDOW_MS:FREE_GLOBAL_BLACKOUT_MS;return near(e.at,w)||near(e.movedFrom,w);});}
+  blockers(now:number,market?:'INDEX'|'STOCK'|'COMMODITY'){const hits=this.blocking(now,market);if(hits.some(e=>e.uncertain))return ['FREE_GLOBAL_EVENT_TIME_UNCERTAIN'];return hits.length?['FREE_GLOBAL_RELEASE_BLACKOUT']:[];}
   view(){const s=this.evidence(this.now());return {source:'SHOWMYTRADES_PUBLIC_V1',status:s?'PARTIAL_THIRD_PARTY_SCHEDULE_OBSERVED':this.snapshot&&this.now()>this.snapshot.expiresAt?'FREE_GLOBAL_SCHEDULE_STALE':this.failureCode?'FREE_GLOBAL_SOURCE_UNAVAILABLE':'FREE_GLOBAL_NOT_OBSERVED',failureCode:this.failureCode,snapshotId:s?.id??null,fetchedAt:s?.fetchedAt??null,expiresAt:s?.expiresAt??null,nextAttemptAt:this.nextAttempt,nextReleaseAt:s?.events.find(e=>e.at>this.now())?.at??null,eventCount:s?.events.length??null,completeMacroCoverage:false};}
 }

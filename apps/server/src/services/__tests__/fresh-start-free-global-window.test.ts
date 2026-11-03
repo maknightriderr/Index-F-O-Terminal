@@ -31,6 +31,15 @@ describe('free global events: uncertain time blocks a window, not the whole day 
     expect(s.blockers(now)).toEqual([]);
     expect(s.evidence(now)!.events).toHaveLength(2);
   });
+  it('blocks a market only for its own currencies (BoC speech, CAD, 3 Nov 21:30 IST)', async () => {
+    const s = await source([ev('BoC speech', now + 5 * 60000, { currency: 'CAD' }), ev('China PMI', now + 600000, { currency: 'CNY' })]);
+    expect(s.blockers(now, 'INDEX')).toEqual([]);
+    expect(s.blockers(now, 'COMMODITY')).toEqual(['FREE_GLOBAL_RELEASE_BLACKOUT']);
+    expect(s.blocking(now, 'COMMODITY').map((e) => e.currency)).toEqual(['CNY']);
+    const usd = await source([ev('JOLTS', now + 600000)]);
+    expect(usd.blockers(now, 'INDEX')).toEqual(['FREE_GLOBAL_RELEASE_BLACKOUT']);
+    expect(usd.blockers(now, 'COMMODITY')).toEqual(['FREE_GLOBAL_RELEASE_BLACKOUT']);
+  });
   it('treats disputed sources as uncertain and checks both the old and new time of a moved release', async () => {
     const s = await source([ev('disputed', now + 90 * 60000, { confidence: 'sources_disagree' })]);
     expect(s.blockers(now)).toEqual(['FREE_GLOBAL_EVENT_TIME_UNCERTAIN']);
