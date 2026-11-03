@@ -38,10 +38,13 @@ export function freshAngelTime(ms:number):string{
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
 /**
- * Five-minute history seeded per reference: 12 calendar days (~8 sessions) covers the strategies' warm-up (100
- * five-minute and 75 fifteen-minute bars) with margin; 45 days fetched ~3,400 bars per reference per seed.
+ * Five-minute history seeded per reference. It must hold at least FRESH_MIN_VOLUME_SESSIONS (15) earlier sessions:
+ * every strategy needs relative volume (rvol: this bar's volume against the same slot on the last 15–20 sessions)
+ * and the opening-pullback needs 15 opening-volume references. 2 Nov–3 Nov the seed was 12 calendar days (~8
+ * sessions), so rvol was never available and no setup could ever qualify — zero candidates on two full days.
+ * 35 calendar days ≈ 24 NSE sessions (≥ 20 after holidays); one Dhan/Angel call per reference per day.
  */
-export const FRESH_HISTORY_SEED_DAYS = 12;
+export const FRESH_HISTORY_SEED_DAYS = 35;
 /** After a failed history fetch a reference waits this long before the next attempt (no hammering a rate limit). */
 export const FRESH_HISTORY_RETRY_MS = 60_000;
 export class FreshPaperWorker {
