@@ -26,6 +26,11 @@ describe('free global events: uncertain time blocks a window, not the whole day 
     const c = await source([ev('confirmed', now + 10 * 60000)]);
     expect(c.blockers(now)).toEqual(['FREE_GLOBAL_RELEASE_BLACKOUT']);
   });
+  it('never blocks on a day-long non-release listed with a placeholder time (US Midterm Elections, 3 Nov)', async () => {
+    const s = await source([ev('election', now + 30 * 60000, { title: 'US Midterm Elections', confidence: 'single_source' }), ev('holiday', now, { title: 'Bank Holiday' })]);
+    expect(s.blockers(now)).toEqual([]);
+    expect(s.evidence(now)!.events).toHaveLength(2);
+  });
   it('treats disputed sources as uncertain and checks both the old and new time of a moved release', async () => {
     const s = await source([ev('disputed', now + 90 * 60000, { confidence: 'sources_disagree' })]);
     expect(s.blockers(now)).toEqual(['FREE_GLOBAL_EVENT_TIME_UNCERTAIN']);

@@ -5,6 +5,13 @@ import {logger} from '../../lib/logger.js';
  * reported time (3 Nov 2026: one uncertain US event used to block the WHOLE IST day, every market, from 9:15). */
 export const FREE_GLOBAL_BLACKOUT_MS=900000;
 export const FREE_GLOBAL_UNCERTAIN_WINDOW_MS=7200000;
+/**
+ * Day-long happenings listed with a placeholder time (3 Nov 2026: "US Midterm Elections" at 10:30 IST, flagged
+ * uncertain): no figure is released at that instant, so there is no release window to stand aside for. They stay in
+ * the schedule and the log; only real releases, decisions and speeches block entries.
+ */
+export const FREE_GLOBAL_NON_RELEASE=/\b(elections?|vote|voting|referendum|bank holiday|holiday)\b/i;
+export const freeGlobalIsRelease=(title:string)=>!FREE_GLOBAL_NON_RELEASE.test(title);
 export const FREE_GLOBAL_CALENDAR_URL='https://showmytrades.com/api/public/calendar/v1';
 const istDay=(at:number)=>new Date(at).toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'});
 function utc(value:unknown){
@@ -43,13 +50,13 @@ export class FreshFreeGlobalEvents {
       const r=await this.get(FREE_GLOBAL_CALENDAR_URL,{params:{impact:'high',days:2},headers:{'User-Agent':'FNO-PaperCalendar/1.0 (+https://github.com/maknightriderr/Index-F-O-Terminal)',Accept:'application/json'},timeout:10000,maxRedirects:0,maxContentLength:1048576});if(r.status!==200)throw Error('FREE_GLOBAL_HTTP_UNAVAILABLE');
       const s=parseFreeGlobalCalendar(r.data,requestedAt,this.now());try{await this.persist(s);}catch{throw Error('FREE_GLOBAL_PERSISTENCE_FAILED');}
       const at=this.now();if(at<s.fetchedAt||at>s.expiresAt)throw Error('FREE_GLOBAL_PERSISTENCE_TIME_INVALID');this.snapshot=s;this.qualifiedAt=at;this.failureCode=null;
-      if(s.events.length)logger.info({event:'freshFreeGlobalSchedule',events:s.events.slice(0,30).map(e=>({at:new Date(e.at).toISOString(),currency:e.currency,title:e.title.slice(0,120),status:e.status,uncertain:e.uncertain}))},'Fresh-start global event schedule: confirmed releases block ±15 min, uncertain times ±2 h');
+      if(s.events.length)logger.info({event:'freshFreeGlobalSchedule',events:s.events.slice(0,30).map(e=>({at:new Date(e.at).toISOString(),currency:e.currency,title:e.title.slice(0,120),status:e.status,uncertain:e.uncertain,blocks:freeGlobalIsRelease(e.title)}))},'Fresh-start global event schedule: confirmed releases block ±15 min, uncertain times ±2 h');
     }catch(error){this.snapshot=null;this.qualifiedAt=null;this.failureCode=axios.isAxiosError(error)?error.response?.status?`FREE_GLOBAL_HTTP_${error.response.status}`:error.code==='ECONNABORTED'?'FREE_GLOBAL_TIMEOUT':'FREE_GLOBAL_NETWORK_UNAVAILABLE':error instanceof Error&&/^FREE_GLOBAL_[A-Z_]+$/.test(error.message)?error.message:'FREE_GLOBAL_SOURCE_UNAVAILABLE';}})().finally(()=>{this.nextAttempt=this.snapshot?Math.min(this.now()+900000,Math.max(this.now()+60000,this.snapshot.expiresAt-60000)):this.now()+900000;this.inFlight=null;});return this.inFlight;
   }
   evidence(now:number){const s=this.snapshot;return s&&this.qualifiedAt!=null&&this.qualifiedAt<=now&&s.fetchedAt<=now&&now<=s.expiresAt?{...s,qualifiedAt:this.qualifiedAt,events:s.events.map(e=>({...e})),uncertainDays:[...s.uncertainDays]}:null;}
   /** Events whose window covers `now`: ±2 h for an uncertain time, ±15 min for a confirmed one (old and new time for a move). */
   blocking(now:number){const s=this.evidence(now);if(!s)return [];const near=(t:number|null,w:number)=>t!=null&&Math.abs(t-now)<=w;
-    return s.events.filter(e=>{const w=e.uncertain?FREE_GLOBAL_UNCERTAIN_WINDOW_MS:FREE_GLOBAL_BLACKOUT_MS;return near(e.at,w)||near(e.movedFrom,w);});}
+    return s.events.filter(e=>{if(!freeGlobalIsRelease(e.title))return false;const w=e.uncertain?FREE_GLOBAL_UNCERTAIN_WINDOW_MS:FREE_GLOBAL_BLACKOUT_MS;return near(e.at,w)||near(e.movedFrom,w);});}
   blockers(now:number){const hits=this.blocking(now);if(hits.some(e=>e.uncertain))return ['FREE_GLOBAL_EVENT_TIME_UNCERTAIN'];return hits.length?['FREE_GLOBAL_RELEASE_BLACKOUT']:[];}
   view(){const s=this.evidence(this.now());return {source:'SHOWMYTRADES_PUBLIC_V1',status:s?'PARTIAL_THIRD_PARTY_SCHEDULE_OBSERVED':this.snapshot&&this.now()>this.snapshot.expiresAt?'FREE_GLOBAL_SCHEDULE_STALE':this.failureCode?'FREE_GLOBAL_SOURCE_UNAVAILABLE':'FREE_GLOBAL_NOT_OBSERVED',failureCode:this.failureCode,snapshotId:s?.id??null,fetchedAt:s?.fetchedAt??null,expiresAt:s?.expiresAt??null,nextAttemptAt:this.nextAttempt,nextReleaseAt:s?.events.find(e=>e.at>this.now())?.at??null,eventCount:s?.events.length??null,completeMacroCoverage:false};}
 }
