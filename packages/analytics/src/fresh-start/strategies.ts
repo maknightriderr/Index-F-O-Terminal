@@ -9,6 +9,8 @@ export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.5';
  */
 export const FRESH_MIN_EFFICIENCY = 0.3;
 export const FRESH_EFFICIENCY_BARS = 12;
+/** Earlier sessions needed for relative volume (rvol) at a slot and for the opening-volume reference. */
+export const FRESH_MIN_VOLUME_SESSIONS = 15;
 /** VWAP pullback runs only from 75 minutes after the open (10:30 on NSE), after the ORB and opening-pullback window. */
 export const FRESH_VWAP_START_MS = 75 * 60000;
 export const FRESH_MIN_TARGET_R = 1.5;
@@ -147,10 +149,13 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
     const bull = last(h).close > last(e20) && last(e20) > last(e50), bear = last(h).close < last(e20) && last(e20) < last(e50);
     const strong = (bull || bear) && Math.abs(last(e20) - last(e50)) >= .25 * ah && Math.abs(last(e20) - e20[e20.length - 4]) >= .1 * ah;
     function vwapAt(at: number): number { const xs = minute.filter(x => x.time + 60000 <= at), v = xs.reduce((s, x) => s + x.volume, 0); return v > 0 ? xs.reduce((s, x) => s + (x.high + x.low + x.close) / 3 * x.volume, 0) / v : NaN; }
-    function rvol(bar: FreshBar): number { const refs = c.rvolReferences[(bar.time - c.sessionOpen) / 300000] ?? []; const usable = refs.filter(x => finite(x) && x > 0).slice(-20); return usable.length >= 15 ? bar.volume / median(usable) : NaN; }
+    function rvol(bar: FreshBar): number { const refs = c.rvolReferences[(bar.time - c.sessionOpen) / 300000] ?? []; const usable = refs.filter(x => finite(x) && x > 0).slice(-20); return usable.length >= FRESH_MIN_VOLUME_SESSIONS ? bar.volume / median(usable) : NaN; }
     const vwap = vwapAt(current.time + 300000);
     if (!finite(vwap))
         return refuseAll('NO_VOLUME');
+    // Every setup needs relative volume; without enough earlier sessions say so instead of a generic "no setup".
+    if (!finite(rvol(current)))
+        return refuseAll('RVOL_HISTORY_INSUFFICIENT');
     const signs = today.slice(-6).map(x => Math.sign(x.close - vwapAt(x.time + 300000)));
     const crosses = signs.reduce((n, x, i) => n + (i > 0 && x !== 0 && signs[i - 1] !== 0 && x !== signs[i - 1] ? 1 : 0), 0), range = !strong && crosses >= 2;
     const levels = [...c.levels, ...freshSwingLevels(b, c.now)].filter(x => finite(x.price) && x.price > 0 && x.knownAt <= decisionAt);
@@ -236,7 +241,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                 const net = d * (opening[2].close - opening[0].open), refs = c.openingVolumeReferences.filter(x => finite(x) && x > 0).slice(-20), vol = opening.reduce((s, x) => s + x.volume, 0);
                 const openRange = { ...opening[2], high: orh, low: orl };
                 const first = today.findIndex((x, i) => i >= 3 && d * (x.close - today[i - 1].close) < 0);
-                if (net >= 1.5 * impulseAtr && closeLocation(openRange, d) >= .8 && favorable(opening[2].close, vw(opening[2])) && refs.length >= 15 && vol / median(refs) >= 1.5 && first >= 3) {
+                if (net >= 1.5 * impulseAtr && closeLocation(openRange, d) >= .8 && favorable(opening[2].close, vw(opening[2])) && refs.length >= FRESH_MIN_VOLUME_SESSIONS && vol / median(refs) >= 1.5 && first >= 3) {
                     // Retracement is measured from the impulse extreme reached before the first counter close, not the third bar's close.
                     const pre = today.slice(0, first), peak = d === 1 ? Math.max(...pre.map(x => x.high)) : Math.min(...pre.map(x => x.low));
                     const span = d * (peak - opening[0].open), pull = today.slice(first), depth = d * (peak - lo(pull));
