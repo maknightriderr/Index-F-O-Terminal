@@ -75,8 +75,17 @@ export function WorkspacePage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [setLayout]);
 
-  const pick = useMemo(() => (chain ? pickContract(chain, 'CE', status?.capital ?? null, now, { stockOptions: exchange === 'NSE' && !['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTYNXT50'].includes(symbol) }) : null), [chain, status?.capital, now, exchange, symbol]);
-  const quoteLeg = useMemo(() => findLeg(chain, pickedToken) ?? (pick?.selected ? { strike: pick.selected.strike, side: 'CE' as const, leg: pick.selected.leg } : null), [chain, pickedToken, pick]);
+  // The picker's "quote ≤ 2 s old" rule is judged at the chain's own snapshot time (as the Option Chain page does).
+  // Judged against the ticking clock, the pick existed for ~2 s after each 15 s poll and then vanished: QT flickered.
+  const pick = useMemo(() => (chain ? pickContract(chain, 'CE', status?.capital ?? null, chain.timestamp, { stockOptions: exchange === 'NSE' && !['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTYNXT50'].includes(symbol) }) : null), [chain, status?.capital, exchange, symbol]);
+  // QT shows: the contract clicked in OC, else the engine pick, else the ATM call — never an empty panel while a chain exists.
+  const quoteLeg = useMemo(() => {
+    const clicked = findLeg(chain, pickedToken);
+    if (clicked) return { ...clicked, source: 'CLICKED' as const };
+    if (pick?.selected) return { strike: pick.selected.strike, side: 'CE' as const, leg: pick.selected.leg, source: 'ENGINE' as const };
+    const atm = chain?.strikes.find((x) => x.strike === chain.atmStrike);
+    return atm?.call ? { strike: atm.strike, side: 'CE' as const, leg: atm.call, source: 'ATM' as const } : null;
+  }, [chain, pickedToken, pick]);
 
   return (
     <div className="ws-page" data-layout={layout}>
@@ -104,7 +113,7 @@ export function WorkspacePage() {
           </div>
         </WsPanel>
 
-        <WsPanel id="quote" code="QT" focused={focus === 'quote'} className="ws-area-quote" title={quoteLeg ? <>{symbol} {quoteLeg.strike} {quoteLeg.side}</> : 'Top of book'} meta={quoteLeg?.leg.timestamp ? <span className="cc-num">{Math.max(0, (now - quoteLeg.leg.timestamp) / 1000).toFixed(0)} s old</span> : null}>
+        <WsPanel id="quote" code="QT" focused={focus === 'quote'} className="ws-area-quote" title={quoteLeg ? <>Best bid/ask · {symbol} {quoteLeg.strike} {quoteLeg.side} <small>{quoteLeg.source === 'ENGINE' ? 'engine pick' : quoteLeg.source === 'ATM' ? 'ATM call' : 'your pick'}</small></> : 'Best bid/ask'} meta={quoteLeg ? <span className="cc-num">{Math.max(0, (now - (quoteLeg.leg.exchangeTimestamp ?? quoteLeg.leg.timestamp)) / 1000).toFixed(0)} s old</span> : null}>
           <QuoteView q={quoteLeg?.leg ?? null} lot={chain?.lotSize ?? null} />
         </WsPanel>
 
@@ -184,7 +193,7 @@ function MiniChain({ chain, error, pickedToken, engineToken, onPick }: { chain: 
 }
 
 function QuoteView({ q, lot }: { q: OptionChainLeg | null; lot: number | null }) {
-  if (!q) return <Empty>Pick a contract in OC, or wait for the engine pick.</Empty>;
+  if (!q) return <Empty>Waiting for the option chain. Click any bid/ask in OC to see it here.</Empty>;
   const mid = (q.bid + q.ask) / 2;
   const spread = q.ask - q.bid;
   const total = (q.bidQty ?? 0) + (q.askQty ?? 0);
