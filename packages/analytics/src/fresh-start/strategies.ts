@@ -1,6 +1,6 @@
 // Approved implementation pack; pure functions only. Time, calendars and data provenance are injected.
 import { atr, ema } from '../indicators/index.js';
-export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.6';
+export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.7';
 /** Minimum underlying reward / risk for a target, and the furthest target in 5-minute ATR before it is capped (1.5). */
 /**
  * 1.5 regime filter: the trend strategies (ORB, VWAP pullback, opening pullback) stand aside on a choppy day, where a
@@ -48,6 +48,8 @@ export interface FreshContext {
     /** Historical volumes from the same elapsed-session slot; point-in-time builder supplies prior sessions only. */
     rvolReferences: Readonly<Record<number, readonly number[]>>;
     openingVolumeReferences: readonly number[];
+    /** Opening-range anchors: the session open, plus MCX's evening anchor (NYMEX/COMEX open). Default: session open. */
+    openingAnchors?: ReadonlyArray<{ at: number; volumeReferences: readonly number[] }>;
     levels: readonly FreshLevel[];
     previousHigh: number;
     previousLow: number;
@@ -139,13 +141,18 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
         || minute[0].time !== c.sessionOpen || minute.some((x, i) => i > 0 && x.time - minute[i - 1].time !== 60000))
         return refuseAll('MISSING_BARS');
     const current = last(today), decisionAt = Math.max(current.time + 300000, current.availableAt);
+    // The opening range belongs to the latest anchor that has started: the session open, or for MCX the evening open of
+    // the US energy/metals session (1.7). ORB retest and the first opening pullback run in the two hours after it.
+    const anchors = c.openingAnchors?.length ? c.openingAnchors : [{ at: c.sessionOpen, volumeReferences: c.openingVolumeReferences }];
+    const anchor = [...anchors].filter(x => x.at <= c.now).sort((x, y) => y.at - x.at)[0] ?? anchors[0];
+    const day = today.filter(x => x.time >= anchor.at), sinceAnchor = c.now - anchor.at;
     if (c.now - decisionAt > 2000)
         return refuseAll('LATE_DECISION');
     if (last(minute).time + 60000 < current.time + 300000)
         return refuseAll('MISSING_MINUTE_COVERAGE');
     const atrSeries = atr(b.map(x => x.high), b.map(x => x.low), b.map(x => x.close), 14);
     const a = last(atrSeries);
-    const impulseAtr = atrSeries[b.findIndex(x => x.time === today[Math.min(2, today.length - 1)].time) - 14];
+    const impulseBase = day.length ? day : today, impulseAtr = atrSeries[b.findIndex(x => x.time === impulseBase[Math.min(2, impulseBase.length - 1)].time) - 14];
     const ah = last(atr(h.map(x => x.high), h.map(x => x.low), h.map(x => x.close), 14));
     if (!(a > 0 && ah > 0))
         return refuseAll('INVALID_ATR');
@@ -163,9 +170,12 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
     const signs = today.slice(-6).map(x => Math.sign(x.close - vwapAt(x.time + 300000)));
     const crosses = signs.reduce((n, x, i) => n + (i > 0 && x !== 0 && signs[i - 1] !== 0 && x !== signs[i - 1] ? 1 : 0), 0), range = !strong && crosses >= 2;
     const levels = [...c.levels, ...freshSwingLevels(b, c.now)].filter(x => finite(x.price) && x.price > 0 && x.knownAt <= decisionAt);
-    const opening = today.slice(0, 3), orh = Math.max(...opening.map(x => x.high)), orl = Math.min(...opening.map(x => x.low));
-    if (opening.length === 3)
-        levels.push({ price: orh, role: 'RESISTANCE', kind: 'ORH', knownAt: opening[2].availableAt }, { price: orl, role: 'SUPPORT', kind: 'ORL', knownAt: opening[2].availableAt });
+    const sessionOpening = today.slice(0, 3);
+    if (sessionOpening.length === 3)
+        levels.push({ price: Math.max(...sessionOpening.map(x => x.high)), role: 'RESISTANCE', kind: 'ORH', knownAt: sessionOpening[2].availableAt }, { price: Math.min(...sessionOpening.map(x => x.low)), role: 'SUPPORT', kind: 'ORL', knownAt: sessionOpening[2].availableAt });
+    const opening = day[0]?.time === anchor.at ? day.slice(0, 3) : [], orh = Math.max(...opening.map(x => x.high)), orl = Math.min(...opening.map(x => x.low));
+    if (anchor.at !== c.sessionOpen && opening.length === 3)
+        levels.push({ price: orh, role: 'RESISTANCE', kind: 'EVENING_ORH', knownAt: opening[2].availableAt }, { price: orl, role: 'SUPPORT', kind: 'EVENING_ORL', knownAt: opening[2].availableAt });
     if (c.previousHigh > c.previousLow && c.previousLow > 0)
         levels.push({ price: c.previousHigh, role: 'RESISTANCE', kind: 'PDH', knownAt: c.sessionOpen }, { price: c.previousLow, role: 'SUPPORT', kind: 'PDL', knownAt: c.sessionOpen });
     const recent = today.slice(-FRESH_EFFICIENCY_BARS), path = recent.reduce((sum, x, i) => sum + (i > 0 ? Math.abs(x.close - recent[i - 1].close) : 0), 0);
@@ -187,13 +197,13 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
             const confirms = (x: FreshBar, min = .5) => d * (x.close - x.open) > 0 && body(x) >= min;
             const lo = (xs: readonly FreshBar[]) => d === 1 ? Math.min(...xs.map(x => x.low)) : Math.max(...xs.map(x => x.high));
             let stop: number | undefined, origin: number | undefined;
-            if (strategy === 'NEW_ORB_RETEST_V1') reach(0, opening.length === 3 && today.length >= 5 && c.now - c.sessionOpen <= 7200000 ? 'ORB_NO_TREND' : 'ORB_OUTSIDE_WINDOW');
-            if (strategy === 'NEW_ORB_RETEST_V1' && directional && opening.length === 3 && c.now - c.sessionOpen <= 7200000 && today.length >= 5) {
+            if (strategy === 'NEW_ORB_RETEST_V1') reach(0, opening.length === 3 && day.length >= 5 && sinceAnchor <= 7200000 ? 'ORB_NO_TREND' : 'ORB_OUTSIDE_WINDOW');
+            if (strategy === 'NEW_ORB_RETEST_V1' && directional && opening.length === 3 && sinceAnchor <= 7200000 && day.length >= 5) {
                 const level = d === 1 ? orh : orl, width = orh - orl;
                 reach(1, 'ORB_RANGE_WIDTH');
                 if (width >= .5 * impulseAtr && width <= 3 * impulseAtr)
-                    for (let i = Math.max(3, today.length - 4); i < today.length - 1; i++) {
-                        const breakout = today[i], retests = today.slice(i + 1), first = retests.find(x => (d === 1 ? x.low : x.high) >= level - .15 * a && (d === 1 ? x.low : x.high) <= level + .15 * a && favorable(x.close, level) && confirms(x) && closeLocation(x, d) >= .7);
+                    for (let i = Math.max(3, day.length - 4); i < day.length - 1; i++) {
+                        const breakout = day[i], retests = day.slice(i + 1), first = retests.find(x => (d === 1 ? x.low : x.high) >= level - .15 * a && (d === 1 ? x.low : x.high) <= level + .15 * a && favorable(x.close, level) && confirms(x) && closeLocation(x, d) >= .7);
                         reach(2, 'ORB_NO_BREAKOUT');
                         if (!favorable(breakout.close, level + d * .05 * a)) continue;
                         reach(3, 'ORB_BREAKOUT_QUALITY');
@@ -271,20 +281,20 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                     }
                 }
             }
-            if (strategy === 'NEW_FIRST_OPENING_PULLBACK_V1') reach(0, opening.length === 3 && today.length >= 5 && c.now - c.sessionOpen <= 7200000 ? 'OPEN_NO_TREND' : 'OPEN_OUTSIDE_WINDOW');
-            if (strategy === 'NEW_FIRST_OPENING_PULLBACK_V1' && directional && opening.length === 3 && today.length >= 5 && c.now - c.sessionOpen <= 7200000) {
-                const net = d * (opening[2].close - opening[0].open), refs = c.openingVolumeReferences.filter(x => finite(x) && x > 0).slice(-20), vol = opening.reduce((s, x) => s + x.volume, 0);
+            if (strategy === 'NEW_FIRST_OPENING_PULLBACK_V1') reach(0, opening.length === 3 && day.length >= 5 && sinceAnchor <= 7200000 ? 'OPEN_NO_TREND' : 'OPEN_OUTSIDE_WINDOW');
+            if (strategy === 'NEW_FIRST_OPENING_PULLBACK_V1' && directional && opening.length === 3 && day.length >= 5 && sinceAnchor <= 7200000) {
+                const net = d * (opening[2].close - opening[0].open), refs = anchor.volumeReferences.filter(x => finite(x) && x > 0).slice(-20), vol = opening.reduce((s, x) => s + x.volume, 0);
                 const openRange = { ...opening[2], high: orh, low: orl };
-                const first = today.findIndex((x, i) => i >= 3 && d * (x.close - today[i - 1].close) < 0);
+                const first = day.findIndex((x, i) => i >= 3 && d * (x.close - day[i - 1].close) < 0);
                 reach(1, 'OPEN_IMPULSE_WEAK');
                 if (net >= 1.5 * impulseAtr && closeLocation(openRange, d) >= .8 && favorable(opening[2].close, vw(opening[2]))) reach(2, 'OPEN_VOLUME');
                 if (net >= 1.5 * impulseAtr && closeLocation(openRange, d) >= .8 && favorable(opening[2].close, vw(opening[2])) && refs.length >= FRESH_MIN_VOLUME_SESSIONS && vol / median(refs) >= 1.5) reach(3, 'OPEN_NO_PULLBACK');
                 if (net >= 1.5 * impulseAtr && closeLocation(openRange, d) >= .8 && favorable(opening[2].close, vw(opening[2])) && refs.length >= FRESH_MIN_VOLUME_SESSIONS && vol / median(refs) >= 1.5 && first >= 3) {
                     reach(4, 'OPEN_PULLBACK_SHAPE');
                     // Retracement is measured from the impulse extreme reached before the first counter close, not the third bar's close.
-                    const pre = today.slice(0, first), peak = d === 1 ? Math.max(...pre.map(x => x.high)) : Math.min(...pre.map(x => x.low));
-                    const span = d * (peak - opening[0].open), pull = today.slice(first), depth = d * (peak - lo(pull));
-                    const firstTrigger = pull.find((x, j) => j > 0 && confirms(x) && favorable(x.close, d === 1 ? today[first + j - 1].high : today[first + j - 1].low) && favorable(x.close, vw(x)));
+                    const pre = day.slice(0, first), peak = d === 1 ? Math.max(...pre.map(x => x.high)) : Math.min(...pre.map(x => x.low));
+                    const span = d * (peak - opening[0].open), pull = day.slice(first), depth = d * (peak - lo(pull));
+                    const firstTrigger = pull.find((x, j) => j > 0 && confirms(x) && favorable(x.close, d === 1 ? day[first + j - 1].high : day[first + j - 1].low) && favorable(x.close, vw(x)));
                     if (pull.length <= 4 && depth >= .2 * span && depth <= .5 * span && median(pull.map(x => x.volume)) < .8 * median(opening.map(x => x.volume))) reach(5, 'OPEN_NO_TRIGGER');
                     if (pull.length <= 4 && depth >= .2 * span && depth <= .5 * span && median(pull.map(x => x.volume)) < .8 * median(opening.map(x => x.volume)) && firstTrigger === current) {
                         stop = lo(pull) - d * .1 * a;

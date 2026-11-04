@@ -58,13 +58,26 @@ export function freshPreviousSessionUsable(bars:readonly FreshBar[],s:{open:numb
   if(!s||!bars.length)return false;const slots=(s.close-s.open)/300000,inside=bars.filter(x=>x.time>=s.open&&x.time+300000<=s.close&&(x.time-s.open)%300000===0);
   return inside.length>=FRESH_PREVIOUS_SESSION_COVERAGE*slots&&inside[0].time-s.open<=1800000&&s.close-(inside[inside.length-1].time+300000)<=1800000;
 }
+/**
+ * MCX's evening opening anchor: 09:00 New York (NYMEX/COMEX regular open) on the same calendar date, in epoch ms —
+ * 19:30 IST under US standard time, 18:30 IST under US daylight time. MCX's morning is thin; the energy and metals
+ * move when the US session opens, so the ORB retest and first opening pullback also run from here (1.7).
+ */
+export function freshMcxEveningAnchor(date:string):number{
+  const guess=Date.parse(`${date}T14:00:00Z`),hour=Number(new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour:'2-digit',hourCycle:'h23'}).format(new Date(guess)));
+  return guess-(hour-9)*3600000;
+}
 export function buildFreshReferenceContext(args:{now:number;instrument:string;sourceEpoch:string;bars5:readonly FreshBar[];bars1:readonly FreshBar[];eventClear:boolean;referenceVerified:boolean;exchange?:Exchange}):FreshContext|null {
   const exchange=args.exchange??'NSE',date=freshIstDay(args.now),session=getSessionWindow(exchange,date);if(!session||!HOLIDAY_CALENDAR_YEARS.includes(Number(date.slice(0,4))))return null;
   const five=args.bars5.filter(x=>{const d=freshIstDay(x.time),s=getSessionWindow(exchange,d);return HOLIDAY_CALENDAR_YEARS.includes(Number(d.slice(0,4)))&&s!=null&&x.time>=s.open&&x.time+300000<=s.close&&(x.time-s.open)%300000===0;});
   const historical=five.filter(x=>x.time<session.open&&x.availableAt<=args.now),byDay=new Map<string,FreshBar[]>();for(const b of historical){const d=freshIstDay(b.time);byDay.set(d,[...(byDay.get(d)??[]),b]);}
   const dates=[...byDay.keys()].sort().slice(-20),rvol:Record<number,number[]>={},opening:number[]=[];
   for(const day of dates){const s=getSessionWindow(exchange,day);if(!s)continue;const bars=byDay.get(day)!;for(const b of bars){const slot=(b.time-s.open)/300000;if(Number.isInteger(slot))(rvol[slot]??=[]).push(b.volume);}const first=bars.filter(x=>x.time<s.open+900000);if(first.length===3&&first.every((x,i)=>x.time===s.open+i*300000))opening.push(first.reduce((n,x)=>n+x.volume,0));}
+  // MCX evening anchor and its opening-volume references (the three bars from each earlier day's own anchor).
+  const evening:number[]=[];
+  if(exchange==='MCX')for(const day of dates){const at=freshMcxEveningAnchor(day),bars=(byDay.get(day)??[]).filter(x=>x.time>=at&&x.time<at+900000);if(bars.length===3&&bars.every((x,i)=>x.time===at+i*300000))evening.push(bars.reduce((n,x)=>n+x.volume,0));}
+  const eveningAt=exchange==='MCX'?freshMcxEveningAnchor(date):null;
   let previous:string|null=null;for(let i=1;i<=14;i++){const d=freshIstDay(Date.parse(date+'T12:00:00+05:30')-i*86400000);if(getSessionWindow(exchange,d)){previous=d;break;}}
   const ps=previous?getSessionWindow(exchange,previous):null,pd=previous?byDay.get(previous)??[]:[],complete=freshPreviousSessionUsable(pd,ps);
-  return {now:args.now,session:date,sessionOpen:session.open,sessionClose:session.close,instrument:args.instrument,sourceEpoch:args.sourceEpoch,bars5:five.slice(-300),bars15:freshTrendBars(five,exchange).slice(-300),bars1:args.bars1.filter(x=>x.time>=session.open&&x.time+60000<=session.close),rvolReferences:rvol,openingVolumeReferences:opening,previousHigh:complete?Math.max(...pd.map(x=>x.high)):0,previousLow:complete?Math.min(...pd.map(x=>x.low)):0,levels:[],referenceVerified:args.referenceVerified,eventClear:args.eventClear,calendarVerified:true};
+  return {now:args.now,session:date,sessionOpen:session.open,sessionClose:session.close,instrument:args.instrument,sourceEpoch:args.sourceEpoch,bars5:five.slice(-300),bars15:freshTrendBars(five,exchange).slice(-300),bars1:args.bars1.filter(x=>x.time>=session.open&&x.time+60000<=session.close),rvolReferences:rvol,openingVolumeReferences:opening,openingAnchors:[{at:session.open,volumeReferences:opening},...(eveningAt!=null&&eveningAt>session.open&&eveningAt+2*3600000<=session.close?[{at:eveningAt,volumeReferences:evening}]:[])],previousHigh:complete?Math.max(...pd.map(x=>x.high)):0,previousLow:complete?Math.min(...pd.map(x=>x.low)):0,levels:[],referenceVerified:args.referenceVerified,eventClear:args.eventClear,calendarVerified:true};
 }
