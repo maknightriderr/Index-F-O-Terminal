@@ -46,6 +46,18 @@ export function freshTrendBars(bars:readonly FreshBar[],exchange:Exchange='NSE')
   const groups=new Map<number,FreshBar[]>();for(const b of bars){const s=getSessionWindow(exchange,freshIstDay(b.time));if(!s||b.time<s.open||b.time+300000>s.close)continue;const t=s.open+Math.floor((b.time-s.open)/900000)*900000;groups.set(t,[...(groups.get(t)??[]),b]);}
   return [...groups.entries()].sort((a,b)=>a[0]-b[0]).filter(([t,a])=>a.length===3&&a.every((b,i)=>b.time===t+i*300000)).map(([time,a])=>({time,availableAt:Math.max(...a.map(x=>x.availableAt)),open:a[0].open,high:Math.max(...a.map(x=>x.high)),low:Math.min(...a.map(x=>x.low)),close:a[2].close,volume:a.reduce((s,x)=>s+x.volume,0)}));
 }
+/** Share of a session's five-minute bars the previous-day high/low needs (sweep strategy's PDH/PDL). */
+export const FRESH_PREVIOUS_SESSION_COVERAGE=0.9;
+/**
+ * The previous session's high/low is usable when its bars cover >= 90% of the session and reach within 30 minutes of
+ * both the open and the close. It used to require EVERY bar, so a quiet contract with a few no-trade intervals (or a
+ * gap longer than the fill limit) lost its PDH/PDL for the whole day: SWEEP_NO_PREVIOUS_SESSION on 37% of 4 Nov sweep
+ * evaluations after 12:30.
+ */
+export function freshPreviousSessionUsable(bars:readonly FreshBar[],s:{open:number;close:number}|null):boolean{
+  if(!s||!bars.length)return false;const slots=(s.close-s.open)/300000,inside=bars.filter(x=>x.time>=s.open&&x.time+300000<=s.close&&(x.time-s.open)%300000===0);
+  return inside.length>=FRESH_PREVIOUS_SESSION_COVERAGE*slots&&inside[0].time-s.open<=1800000&&s.close-(inside[inside.length-1].time+300000)<=1800000;
+}
 export function buildFreshReferenceContext(args:{now:number;instrument:string;sourceEpoch:string;bars5:readonly FreshBar[];bars1:readonly FreshBar[];eventClear:boolean;referenceVerified:boolean;exchange?:Exchange}):FreshContext|null {
   const exchange=args.exchange??'NSE',date=freshIstDay(args.now),session=getSessionWindow(exchange,date);if(!session||!HOLIDAY_CALENDAR_YEARS.includes(Number(date.slice(0,4))))return null;
   const five=args.bars5.filter(x=>{const d=freshIstDay(x.time),s=getSessionWindow(exchange,d);return HOLIDAY_CALENDAR_YEARS.includes(Number(d.slice(0,4)))&&s!=null&&x.time>=s.open&&x.time+300000<=s.close&&(x.time-s.open)%300000===0;});
@@ -53,6 +65,6 @@ export function buildFreshReferenceContext(args:{now:number;instrument:string;so
   const dates=[...byDay.keys()].sort().slice(-20),rvol:Record<number,number[]>={},opening:number[]=[];
   for(const day of dates){const s=getSessionWindow(exchange,day);if(!s)continue;const bars=byDay.get(day)!;for(const b of bars){const slot=(b.time-s.open)/300000;if(Number.isInteger(slot))(rvol[slot]??=[]).push(b.volume);}const first=bars.filter(x=>x.time<s.open+900000);if(first.length===3&&first.every((x,i)=>x.time===s.open+i*300000))opening.push(first.reduce((n,x)=>n+x.volume,0));}
   let previous:string|null=null;for(let i=1;i<=14;i++){const d=freshIstDay(Date.parse(date+'T12:00:00+05:30')-i*86400000);if(getSessionWindow(exchange,d)){previous=d;break;}}
-  const ps=previous?getSessionWindow(exchange,previous):null,pd=previous?byDay.get(previous)??[]:[],complete=ps!=null&&pd.length===(ps.close-ps.open)/300000&&pd.every((x,i)=>x.time===ps.open+i*300000);
+  const ps=previous?getSessionWindow(exchange,previous):null,pd=previous?byDay.get(previous)??[]:[],complete=freshPreviousSessionUsable(pd,ps);
   return {now:args.now,session:date,sessionOpen:session.open,sessionClose:session.close,instrument:args.instrument,sourceEpoch:args.sourceEpoch,bars5:five.slice(-300),bars15:freshTrendBars(five,exchange).slice(-300),bars1:args.bars1.filter(x=>x.time>=session.open&&x.time+60000<=session.close),rvolReferences:rvol,openingVolumeReferences:opening,previousHigh:complete?Math.max(...pd.map(x=>x.high)):0,previousLow:complete?Math.min(...pd.map(x=>x.low)):0,levels:[],referenceVerified:args.referenceVerified,eventClear:args.eventClear,calendarVerified:true};
 }
