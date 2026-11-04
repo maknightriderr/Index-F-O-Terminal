@@ -18,7 +18,9 @@ describe('MCX evening opening anchor (1.7)', () => {
     const mcx = buildFreshReferenceContext({ now, instrument: 'MCX_FO:1', sourceEpoch: 'e', bars5: bars, bars1: [], eventClear: true, referenceVerified: true, exchange: 'MCX' })!;
     expect(mcx.openingAnchors!.map((a) => a.at)).toEqual([mcx.sessionOpen, Date.parse('2026-11-05T19:30:00+05:30')]);
     expect(mcx.openingAnchors![1].volumeReferences.length).toBeGreaterThanOrEqual(15);
-    expect(mcx.openingAnchors![1].volumeReferences[0]).toBe(30);
+    // Level-normalised (5 Nov): ~30 = three 10-lot bars, scaled to the latest session's total (its close varies with US DST).
+    expect(mcx.openingAnchors![1].volumeReferences[0]).toBeGreaterThan(28);
+    expect(mcx.openingAnchors![1].volumeReferences[0]).toBeLessThan(32);
     const nse = buildFreshReferenceContext({ now: Date.parse('2026-11-05T11:00:00+05:30'), instrument: 'NSE_FO:1', sourceEpoch: 'e', bars5: [], bars1: [], eventClear: true, referenceVerified: true, exchange: 'NSE' })!;
     expect(nse.openingAnchors!.map((a) => a.at)).toEqual([nse.sessionOpen]);
   });

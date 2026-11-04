@@ -67,15 +67,43 @@ export function freshMcxEveningAnchor(date:string):number{
   const guess=Date.parse(`${date}T14:00:00Z`),hour=Number(new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour:'2-digit',hourCycle:'h23'}).format(new Date(guess)));
   return guess-(hour-9)*3600000;
 }
+/** A reference day's bars must cover this share of its session for its intraday volume profile to be used. */
+export const FRESH_VOLUME_DAY_COVERAGE=0.75;
+/**
+ * Relative-volume references that survive futures rollover and contract-level changes (5 Nov audit).
+ *
+ * Index and MCX signals are the nearest futures contract, whose 35-day history includes weeks when it was the next
+ * month and traded a fraction of today's volume: raw same-slot medians then made ordinary bars look like 3-5x volume
+ * spikes. Each reference day now contributes its intraday SHAPE (a slot's share of that day's total volume), and the
+ * shapes are scaled by one LEVEL: the total of the most recent well-covered session of the same contract. The
+ * strategies' rvol (bar volume / median reference) therefore compares a bar with what that slot normally carries at
+ * the contract's current liquidity. Shares are within-day ratios, so a day's units cancel out as well.
+ * Days covering < 75% of their session are skipped (a gappy day's total understates it); with no well-covered day
+ * there is no level and the strategies refuse with RVOL_HISTORY_INSUFFICIENT rather than guess.
+ */
+export function freshVolumeReferences(byDay:ReadonlyMap<string,readonly FreshBar[]>,dates:readonly string[],exchange:Exchange):{slots:Record<number,number[]>;opening:number[];evening:number[];level:number|null}{
+  const days:Array<{day:string;s:{open:number;close:number};bars:readonly FreshBar[];total:number}>=[];
+  for(const day of dates){
+    const s=getSessionWindow(exchange,day),bars=byDay.get(day)??[];if(!s)continue;
+    const inside=bars.filter(x=>x.time>=s.open&&x.time+300000<=s.close&&(x.time-s.open)%300000===0),total=inside.reduce((n,x)=>n+(Number.isFinite(x.volume)&&x.volume>0?x.volume:0),0);
+    if(total>0&&inside.length>=FRESH_VOLUME_DAY_COVERAGE*((s.close-s.open)/300000))days.push({day,s,bars:inside,total});
+  }
+  const latest=days[days.length-1],level=latest?latest.total:null,slots:Record<number,number[]>={},opening:number[]=[],evening:number[]=[];
+  if(level==null)return {slots,opening,evening,level};
+  const share=(v:number,total:number)=>Number.isFinite(v)&&v>0?v/total*level:0;
+  for(const {day,s,bars,total} of days){
+    for(const b of bars)(slots[(b.time-s.open)/300000]??=[]).push(share(b.volume,total));
+    const first=bars.filter(x=>x.time<s.open+900000);if(first.length===3&&first.every((x,i)=>x.time===s.open+i*300000))opening.push(share(first.reduce((n,x)=>n+x.volume,0),total));
+    if(exchange==='MCX'){const at=freshMcxEveningAnchor(day),eve=bars.filter(x=>x.time>=at&&x.time<at+900000);if(eve.length===3&&eve.every((x,i)=>x.time===at+i*300000))evening.push(share(eve.reduce((n,x)=>n+x.volume,0),total));}
+  }
+  return {slots,opening,evening,level};
+}
 export function buildFreshReferenceContext(args:{now:number;instrument:string;sourceEpoch:string;bars5:readonly FreshBar[];bars1:readonly FreshBar[];eventClear:boolean;referenceVerified:boolean;exchange?:Exchange;recentReleases?:readonly number[]}):FreshContext|null {
   const exchange=args.exchange??'NSE',date=freshIstDay(args.now),session=getSessionWindow(exchange,date);if(!session||!HOLIDAY_CALENDAR_YEARS.includes(Number(date.slice(0,4))))return null;
   const five=args.bars5.filter(x=>{const d=freshIstDay(x.time),s=getSessionWindow(exchange,d);return HOLIDAY_CALENDAR_YEARS.includes(Number(d.slice(0,4)))&&s!=null&&x.time>=s.open&&x.time+300000<=s.close&&(x.time-s.open)%300000===0;});
   const historical=five.filter(x=>x.time<session.open&&x.availableAt<=args.now),byDay=new Map<string,FreshBar[]>();for(const b of historical){const d=freshIstDay(b.time);byDay.set(d,[...(byDay.get(d)??[]),b]);}
-  const dates=[...byDay.keys()].sort().slice(-20),rvol:Record<number,number[]>={},opening:number[]=[];
-  for(const day of dates){const s=getSessionWindow(exchange,day);if(!s)continue;const bars=byDay.get(day)!;for(const b of bars){const slot=(b.time-s.open)/300000;if(Number.isInteger(slot))(rvol[slot]??=[]).push(b.volume);}const first=bars.filter(x=>x.time<s.open+900000);if(first.length===3&&first.every((x,i)=>x.time===s.open+i*300000))opening.push(first.reduce((n,x)=>n+x.volume,0));}
-  // MCX evening anchor and its opening-volume references (the three bars from each earlier day's own anchor).
-  const evening:number[]=[];
-  if(exchange==='MCX')for(const day of dates){const at=freshMcxEveningAnchor(day),bars=(byDay.get(day)??[]).filter(x=>x.time>=at&&x.time<at+900000);if(bars.length===3&&bars.every((x,i)=>x.time===at+i*300000))evening.push(bars.reduce((n,x)=>n+x.volume,0));}
+  const dates=[...byDay.keys()].sort().slice(-20);
+  const {slots:rvol,opening,evening}=freshVolumeReferences(byDay,dates,exchange);
   const eveningAt=exchange==='MCX'?freshMcxEveningAnchor(date):null;
   let previous:string|null=null;for(let i=1;i<=14;i++){const d=freshIstDay(Date.parse(date+'T12:00:00+05:30')-i*86400000);if(getSessionWindow(exchange,d)){previous=d;break;}}
   const ps=previous?getSessionWindow(exchange,previous):null,pd=previous?byDay.get(previous)??[]:[],complete=freshPreviousSessionUsable(pd,ps);
