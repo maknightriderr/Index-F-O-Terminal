@@ -143,3 +143,17 @@ describe('live mark', () => {
     expect(stopToTarget(open).mark).toBe(110);
   });
 });
+
+describe('order-flow shadow', () => {
+  it('reads the entry tag and groups closed trades by it', async () => {
+    const { orderFlowShadow } = await import('../command-center');
+    const tagged = (id: string, alignment: string | null, net: number) => pos({ id, netPnl: net, candidate: { strategy: 'NEW_MOMENTUM_BREAKOUT_V1', direction: 'BULLISH', instrument: 'NIFTY', referenceEntry: 24800, stop: 24760, target: 24900, at: at('09:59'), evidence: alignment ? { orderFlow: { alignment } } : {} } });
+    const views = positionViews(status([tagged('a', 'ALIGNED', 1250), tagged('b', 'ALIGNED', -625), tagged('c', 'OPPOSED', -1250), tagged('d', null, 100)]));
+    expect(views.map((v) => v.orderFlow)).toEqual(['ALIGNED', 'ALIGNED', 'OPPOSED', 'UNTAGGED']);
+    const rows = Object.fromEntries(orderFlowShadow(views).map((r) => [r.tag, r]));
+    expect(rows.ALIGNED).toMatchObject({ trades: 2, wins: 1, net: 625 });
+    expect(rows.ALIGNED.avgR).toBeCloseTo(0.25);
+    expect(rows.OPPOSED).toMatchObject({ trades: 1, wins: 0, avgR: -1 });
+    expect(rows.UNTAGGED.trades).toBe(1);
+  });
+});

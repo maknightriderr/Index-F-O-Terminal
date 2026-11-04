@@ -9,7 +9,7 @@
 
 import React, { useMemo, useState } from 'react';
 import { useFreshStart } from '@/lib/use-fresh-start';
-import { exitReasons, MIN_SAMPLE, positionViews, promotionGate, rHistogram, signedInr, signedR, STRATEGY_IDS, strategyName, timeHeatmap, TIME_SLOTS } from '@/lib/command-center';
+import { exitReasons, MIN_SAMPLE, orderFlowShadow, positionViews, promotionGate, rHistogram, signedInr, signedR, STRATEGY_IDS, strategyName, timeHeatmap, TIME_SLOTS } from '@/lib/command-center';
 import { Empty, Kpi, Panel, Pill } from '@/components/command-center/panel';
 import { EquityPanel } from '@/components/command-center';
 
@@ -138,6 +138,26 @@ export function StrategyLabPage() {
               </div>
             ))
           )}
+        </Panel>
+
+        <Panel title="Order flow (shadow)" meta="Tag at entry · no trade gated" bodyClassName="cc-panel-body cc-scroll">
+          <table className="cc-table cc-num">
+            <thead>
+              <tr><th className="text-left">Flow at entry</th><th>Trades</th><th>Win rate</th><th>Avg R</th><th>Net</th></tr>
+            </thead>
+            <tbody>
+              {orderFlowShadow(positions).map((x) => (
+                <tr key={x.tag}>
+                  <td className="text-left">{x.tag}</td>
+                  <td>{x.trades}</td>
+                  <td>{x.winRate == null ? '—' : `${(x.winRate * 100).toFixed(0)}%`}</td>
+                  <td className={(x.avgR ?? 0) > 0 ? 'cc-up' : (x.avgR ?? 0) < 0 ? 'cc-down' : ''}>{signedR(x.avgR)}</td>
+                  <td className={x.net > 0 ? 'cc-up' : x.net < 0 ? 'cc-down' : ''}>{signedInr(x.net)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="cc-note mt-2">ALIGNED: the entry bar&apos;s inferred buy/sell delta was ≥ 15% in the trade&apos;s direction; OPPOSED: ≥ 15% against it. Dhan flow covers NIFTY, BANKNIFTY and MCX futures; other trades read UNAVAILABLE. Decide on a gate only after enough trades in each row.</p>
         </Panel>
 
         <EquityPanel positions={positions} capital={status?.capital ?? null} />

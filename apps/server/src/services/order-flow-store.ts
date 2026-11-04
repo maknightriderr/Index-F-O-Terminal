@@ -63,6 +63,40 @@ export function recordFlowTrade(symbol: string, trade: FlowTrade): void {
   const f = flows.get(symbol);
   if (!f || !(trade.qty > 0)) return;
   f.trades.push(trade);
+  recordFiveMinute(symbol, f.instrument, trade);
+}
+
+// ---------------- five-minute delta bars (fresh-start order-flow shadow evidence, 5 Nov) ----------------
+// The fresh-start strategies decide on five-minute closes, so their order-flow evidence needs five-minute buy / sell
+// volume, kept in memory alongside the 15-minute footprints. Sides are INFERRED by the feed (quote rule, then tick
+// rule); an unclassified trade stays unclassified. A contract change starts a fresh series (never mixed).
+
+export const FLOW_FIVE_MS = 5 * 60_000;
+const KEEP_FIVE = 400;
+export interface FlowFiveMinuteBar { time: number; buy: number; sell: number; unclassified: number; trades: number }
+const five = new Map<string, { instrument: string | null; bars: Map<number, FlowFiveMinuteBar> }>();
+
+function recordFiveMinute(symbol: string, instrument: string | null, t: FlowTrade): void {
+  if (!Number.isFinite(t.time) || !(t.qty > 0)) return;
+  let s = five.get(symbol);
+  if (!s || s.instrument !== instrument) five.set(symbol, (s = { instrument, bars: new Map() }));
+  const start = Math.floor(t.time / FLOW_FIVE_MS) * FLOW_FIVE_MS;
+  let b = s.bars.get(start);
+  if (!b) {
+    s.bars.set(start, (b = { time: start, buy: 0, sell: 0, unclassified: 0, trades: 0 }));
+    if (s.bars.size > KEEP_FIVE) s.bars.delete(Math.min(...s.bars.keys()));
+  }
+  if (t.side === 'BUY') b.buy += t.qty;
+  else if (t.side === 'SELL') b.sell += t.qty;
+  else b.unclassified += t.qty;
+  b.trades++;
+}
+
+/** Five-minute buy / sell volume for a flow symbol between two instants (bar start in [from, to)), oldest first. */
+export function flowFiveMinuteBars(symbol: string, from: number, to: number): { instrument: string | null; bars: FlowFiveMinuteBar[] } | null {
+  const s = five.get(symbol);
+  if (!s) return null;
+  return { instrument: s.instrument, bars: [...s.bars.values()].filter((b) => b.time >= from && b.time < to).sort((a, b) => a.time - b.time).map((b) => ({ ...b })) };
 }
 
 /**
@@ -151,5 +185,6 @@ export function flowStoreStatus(): Array<{ symbol: string; instrument: string | 
 
 /** Tests only. */
 export function resetFlowStore(): void {
+  five.clear();
   flows.clear();
 }

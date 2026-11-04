@@ -129,3 +129,16 @@ describe('5 Nov: no daily entry cap per instrument', () => {
         expect(admitFreshPaper({ ...request(), entriesToday: 5, correlatedPositionOpen: true })).toMatchObject({ ok: false, code: 'EXPOSURE_OR_PARENT' });
     });
 });
+
+describe('order flow is shadow evidence only', () => {
+    it('tags a candidate with the flow, and the same candidate is emitted with or without it', () => {
+        const bars = [{ time: open + 6 * 300000, buy: 900, sell: 100, unclassified: 0, trades: 50 }];
+        const withFlow = find(context(momentumDay, { orderFlow: { source: 'DHAN', instrument: 'X', proxy: false, bars } }), 'NEW_MOMENTUM_BREAKOUT_V1')!;
+        const without = find(context(momentumDay), 'NEW_MOMENTUM_BREAKOUT_V1')!;
+        expect((withFlow.evidence.orderFlow as { alignment: string }).alignment).toBe('ALIGNED');
+        expect((without.evidence.orderFlow as { alignment: string }).alignment).toBe('UNAVAILABLE');
+        expect({ ...withFlow, evidence: {} }).toEqual({ ...without, evidence: {} });
+        const opposed = find(context(momentumDay, { orderFlow: { source: 'DHAN', instrument: 'X', proxy: false, bars: [{ ...bars[0], buy: 100, sell: 900 }] } }), 'NEW_MOMENTUM_BREAKOUT_V1')!;
+        expect((opposed.evidence.orderFlow as { alignment: string }).alignment).toBe('OPPOSED');
+    });
+});
