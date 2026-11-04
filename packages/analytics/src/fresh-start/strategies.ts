@@ -1,13 +1,15 @@
 // Approved implementation pack; pure functions only. Time, calendars and data provenance are injected.
 import { atr, ema } from '../indicators/index.js';
-export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.5';
+export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.6';
 /** Minimum underlying reward / risk for a target, and the furthest target in 5-minute ATR before it is capped (1.5). */
 /**
  * 1.5 regime filter: the trend strategies (ORB, VWAP pullback, opening pullback) stand aside on a choppy day, where a
  * naked option buyer loses most. Choppy = repeated VWAP crosses without a strong 15-minute trend, or a 5-minute
  * Kaufman efficiency ratio (|net move| ÷ path length) below FRESH_MIN_EFFICIENCY over the last FRESH_EFFICIENCY_BARS.
  */
-export const FRESH_MIN_EFFICIENCY = 0.3;
+/** 5 Nov: lowered from 0.3. On 4 Nov the filter stood the trend strategies aside on >50% of evaluations; 0.2-0.3
+ * (moderate trend) now reaches the setup rules, below 0.2 (a real see-saw) is still refused. */
+export const FRESH_MIN_EFFICIENCY = 0.2;
 export const FRESH_EFFICIENCY_BARS = 12;
 /** Earlier sessions needed for relative volume (rvol) at a slot and for the opening-volume reference. */
 export const FRESH_MIN_VOLUME_SESSIONS = 15;
@@ -214,8 +216,10 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                     const pivot = levels.filter(x => x.kind === 'CONFIRMED_SWING' && x.knownAt <= prev.time + 300000 && x.role === (d === 1 ? 'RESISTANCE' : 'SUPPORT')).sort((x, y) => y.knownAt - x.knownAt)[0];
                     const behind = levels.filter(x => x.kind === 'CONFIRMED_SWING' && x.knownAt <= initial.time && x.role === (d === 1 ? 'SUPPORT' : 'RESISTANCE')).sort((x, y) => y.knownAt - x.knownAt)[0];
                     const move = d * (prev.close - impulse[0].open), depth = d * (prev.close - lo(pull));
-                    // The pullback starts at the first counter close after a clean three-bar impulse (no counter close inside it).
-                    const cleanImpulse = impulse.every((x, k) => k === 0 || d * (x.close - impulse[k - 1].close) >= 0);
+                    // The pullback starts at the first counter close after a three-bar impulse in which at least two of the
+                    // three bars close in the trade's direction (5 Nov: was "no counter close at all", which refused 159 of
+                    // 4 Nov's VWAP evaluations at VWAP_NO_IMPULSE). Its size (>= 0.75 ATR) and volume (rvol >= 1.2) stay.
+                    const cleanImpulse = impulse.filter(x => d * (x.close - x.open) > 0).length >= 2;
                     if (pull.length < 3 || pull.length > 5 || !cleanImpulse || move < .75 * a || d * (initial.close - prev.close) >= 0)
                         continue;
                     reach(2, 'VWAP_NO_SWING_PIVOT');

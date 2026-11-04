@@ -82,6 +82,16 @@ export function discoverFreshMarkets(master:readonly Instrument[],day:string):Fr
   }
   return {references:references.sort((a,b)=>FRESH_MARKETS.indexOf(a.market)-FRESH_MARKETS.indexOf(b.market)||a.name.localeCompare(b.name)),unmapped,counts};
 }
+/**
+ * NSE stock references ordered by today's activity, most active first: the absolute % move from the previous close,
+ * ties broken by traded value. Only references with a live quote (volume > 0) are ranked; the rest keep their order
+ * after them. 4 Nov: round-robin gave each of ~200 F&O stocks about one hour a day, mostly not when it moved.
+ */
+export function freshRankStocks(refs:readonly FreshReference[],quotes:ReadonlyMap<string,{ltp:number;close:number;volume:number;percentChange?:number}>):FreshReference[]{
+  const score=(r:FreshReference)=>{const q=quotes.get(r.signal.token);if(!q||!(q.volume>0)||!(q.ltp>0))return null;const pct=Number.isFinite(q.percentChange)?Math.abs(q.percentChange!):q.close>0?Math.abs((q.ltp-q.close)/q.close*100):0;return {pct,value:q.ltp*q.volume};};
+  const scored=refs.map((r,i)=>({r,i,s:score(r)}));
+  return scored.sort((a,b)=>a.s&&b.s?b.s.pct-a.s.pct||b.s.value-a.s.value:a.s?-1:b.s?1:a.i-b.i).map(x=>x.r);
+}
 /** Round-robin bounded discovery. All symbols remain in the universe; only a bounded window receives expensive history/options work. */
 export function freshDiscoveryWindow(refs:readonly FreshReference[],cursor:number,limit=20){
   if(!Number.isSafeInteger(limit)||limit<1||limit>20)throw Error('INVALID_DISCOVERY_LIMIT');
