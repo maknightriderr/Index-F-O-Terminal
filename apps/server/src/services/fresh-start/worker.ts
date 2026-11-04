@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {logger} from '../../lib/logger.js';
-import {getSessionWindow,HOLIDAY_CALENDAR_YEARS,FO_SEGMENT,type Exchange,type Instrument} from '@fno/shared';
+import {getSessionWindow,HOLIDAY_CALENDAR_YEARS,FO_SEGMENT,CM_SEGMENT,type Exchange,type Instrument} from '@fno/shared';
 import {evaluateFreshStrategies,type FreshBar} from '@fno/analytics';
 import type {MarketDataProvider} from '../../providers/interface.js';
 import type {SubscriptionManager,SubscriptionTarget} from '../../lib/subscription-manager.js';
@@ -17,7 +17,7 @@ import {freshContractUnits} from './contract-units.js';
 import {ivRankFor} from '../fno-scanner.js';
 import {FreshRuntime} from './runtime.js';
 import {logFreshDecisionSummary} from './decision-summary.js';
-import {FRESH_MARKETS,freshMarketBlockers,freshBookSupportsLot,discoverFreshMarkets,freshDiscoveryWindow,freshReferenceOptions,freshReferenceExchange,freshReferenceSpotId,freshEventMarket,freshMarketExchange,freshIndexKey,type FreshMarket} from './markets.js';
+import {freshRankStocks,FRESH_MARKETS,freshMarketBlockers,freshBookSupportsLot,discoverFreshMarkets,freshDiscoveryWindow,freshReferenceOptions,freshReferenceExchange,freshReferenceSpotId,freshEventMarket,freshMarketExchange,freshIndexKey,type FreshMarket} from './markets.js';
 import {freshAdapterState as state} from './adapter-state.js';
 import {FreshOperationalReporter} from './operational-evidence.js';
 import {registerFreshResearchProtocol,freshResearchReadiness} from './research-inventory.js';
@@ -98,6 +98,18 @@ export class FreshPaperWorker {
     logger.info({event:'freshDiscoveryUnmapped',unmapped:this.discovery.unmapped.slice(0,40),indexCandidates:pricing.map(u=>{const ex=freshMarketExchange(u.market),key=freshIndexKey(u.name);return {name:u.name,candidates:master.filter(x=>x.exchange===ex&&x.segment==='CM'&&x.instrumentType==='INDEX'&&(freshIndexKey(x.name).slice(0,3)===key.slice(0,3)||freshIndexKey(x.symbol).slice(0,3)===key.slice(0,3))).slice(0,15).map(x=>({token:x.token,name:x.name,symbol:x.symbol}))};})},'Fresh-start discovery: references without an exact mapping');this.refs=new Map(this.discovery.references.map(r=>[r.id,r]));this.masterDay=day;this.histories.clear();this.selectionAt=0;this.cursor=0;
   }
 
+  /** Swaps the window's round-robin stocks for the same number of the most active F&O stocks (one quote call). */
+  private async activeStocks(selected:FreshReference[]):Promise<FreshReference[]>{
+    const slots=selected.filter(r=>r.market==='NSE_STOCK_OPTIONS').length,stocks=this.discovery!.references.filter(r=>r.market==='NSE_STOCK_OPTIONS');
+    if(!slots||!stocks.length)return selected;
+    try{
+      const quotes=await this.provider.getQuote(CM_SEGMENT.NSE,stocks.map(r=>r.signal.token),'FULL');
+      const ranked=freshRankStocks(stocks,new Map(quotes.map(q=>[q.token,q])));
+      if(!quotes.length)return selected;
+      state.activeStocks=ranked.slice(0,slots).map(r=>r.name);
+      return [...selected.filter(r=>r.market!=='NSE_STOCK_OPTIONS'),...ranked.slice(0,slots)];
+    }catch{return selected;}
+  }
   private async context(ref:FreshReference,now:number,open:number){
     // Angel One's candle API takes "YYYY-MM-DD HH:mm" IST; ISO strings were rejected with HTTP 400 and the provider returned
     // [] silently, so no fresh-start strategy ever received bars (2 Nov audit).
@@ -126,7 +138,7 @@ export class FreshPaperWorker {
       if(!this.provider.isAuthenticated())throw Error('BLOCKED_BROKER_AUTH');
       await this.loadMaster(day);if(this.stopped)return;void this.events.refresh({macro:openExchanges.has('NSE')||openExchanges.has('BSE'),issuer:openExchanges.has('NSE')&&this.discovery!.counts.NSE_STOCK_OPTIONS>0,commodity:openExchanges.has('MCX')&&this.discovery!.counts.MCX_VERIFIED_FUTURES_OPTIONS>0}).then(()=>{if(!this.stopped)state.eventSources=this.events.view();},()=>{if(!this.stopped){state.entriesArmed=false;state.eventCode='BLOCKED_EVENT_REFRESH';state.entryBlockers=[...new Set([...state.entryBlockers,'BLOCKED_EVENT_REFRESH'])];}});state.eventSources=this.events.view();
       const exchangeKey=[...openExchanges].sort().join(',');
-      if(!this.selectionAt||now-this.selectionAt>=1800000||exchangeKey!==this.selectionExchangeKey){const window=freshDiscoveryWindow(this.discovery!.references.filter(r=>openExchanges.has(freshReferenceExchange(r))),this.cursor);this.selected=window.selected;this.cursor=window.nextCursor;this.selectionAt=now;this.selectionExchangeKey=exchangeKey;}
+      if(!this.selectionAt||now-this.selectionAt>=1800000||exchangeKey!==this.selectionExchangeKey){const window=freshDiscoveryWindow(this.discovery!.references.filter(r=>openExchanges.has(freshReferenceExchange(r))),this.cursor);this.selected=openExchanges.has('NSE')?await this.activeStocks(window.selected):window.selected;this.cursor=window.nextCursor;this.selectionAt=now;this.selectionExchangeKey=exchangeKey;}
       const refs=this.selected.filter(r=>openExchanges.has(freshReferenceExchange(r)));
       // Eight simultaneous option slices (<=160 books) plus <=40 reference interests fit this consumer's 250-token cap.
       const bookWindow=freshDiscoveryWindow(refs,Math.floor(now/FRESH_BOOK_ROTATION_MS),20).selected,bookRefs:FreshReference[]=[];
