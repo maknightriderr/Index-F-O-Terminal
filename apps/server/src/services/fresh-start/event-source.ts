@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {FreshFreeGlobalEvents,type FreeGlobalSnapshot} from './free-global-events.js';
+import {FreshFreeGlobalEvents,FREE_GLOBAL_MARKET_CURRENCIES,freeGlobalIsRelease,type FreeGlobalSnapshot} from './free-global-events.js';
 import {FRESH_PAPER_EVENT_POLICY,STRICT_FRESH_EVENT_POLICY,WAIVABLE_PAPER_EVENT_GAPS,type FreshEventPolicy} from '../../config/fresh-event-policy.js';
 import {FreshIssuerEvents,type IssuerCalendarSnapshot} from './issuer-events.js';
 import {FreshEiaEvents,type EiaCalendarSnapshot} from './eia-events.js';
@@ -66,6 +66,19 @@ export class FreshEventSource {
     const raw=this.rawBlockers(now,session,market,issuer),missing=raw.filter(code=>WAIVABLE_PAPER_EVENT_GAPS.includes(code)||['BLOCKED_ISSUER_RESULTS_COVERAGE','BLOCKED_CORPORATE_ACTION_COVERAGE'].includes(code));
     const waived=this.policy.allowMissingMacroCoverage?missing.filter(code=>WAIVABLE_PAPER_EVENT_GAPS.includes(code)):[];
     return {policy:{...this.policy},coverage:{evidenceClass:missing.length?'EVENT_DATA_UNVERIFIED' as const:'EVENT_COVERAGE_VERIFIED' as const,missing:[...missing],waived:[...waived]},blockers:raw.filter(code=>!waived.includes(code))};
+  }
+  /**
+   * 1.8 event breakout: confirmed release instants (epoch ms) relevant to this market in the last two hours, newest
+   * last. Free-calendar releases in the market's currencies (never uncertain or day-long ones), US BLS and BEA
+   * releases, and for MCX the instrument's own EIA report (mini contracts share their parent's).
+   */
+  releases(now:number,market:'INDEX'|'STOCK'|'COMMODITY',issuer:string|null=null):number[]{
+    const recent=(t:number)=>Number.isFinite(t)&&t<=now&&now-t<=7200000,out=new Set<number>();
+    for(const e of this.freeGlobal?.evidence(now)?.events??[])if(!e.uncertain&&freeGlobalIsRelease(e.title)&&FREE_GLOBAL_MARKET_CURRENCIES[market].includes(e.currency)&&recent(e.at))out.add(e.at);
+    for(const e of this.bls?.evidence(now)?.events??[])if(recent(e.at))out.add(e.at);
+    for(const s of this.official?.evidence(now)??[])for(const e of s.events)if(e.precision==='INSTANT'&&e.at!=null&&recent(e.at))out.add(e.at);
+    if(market==='COMMODITY'){const product=issuer==='CRUDEOILM'?'CRUDEOIL':issuer==='NATGASMINI'?'NATURALGAS':issuer;for(const e of this.eia?.evidence(now,product)?.events??[])if(recent(e.at))out.add(e.at);}
+    return [...out].sort((a,b)=>a-b);
   }
   blockers(now:number,session:string,market:'INDEX'|'STOCK'|'COMMODITY',issuer:string|null=null){return this.assessment(now,session,market,issuer).blockers;}
   clearance(now:number,session:string,market:'INDEX'|'STOCK'|'COMMODITY',issuer:string|null=null){return this.blockers(now,session,market,issuer)[0]??null;}

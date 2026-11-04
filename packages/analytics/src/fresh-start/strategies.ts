@@ -1,6 +1,6 @@
 // Approved implementation pack; pure functions only. Time, calendars and data provenance are injected.
 import { atr, ema } from '../indicators/index.js';
-export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.7';
+export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.8';
 /** Minimum underlying reward / risk for a target, and the furthest target in 5-minute ATR before it is capped (1.5). */
 /**
  * 1.5 regime filter: the trend strategies (ORB, VWAP pullback, opening pullback) stand aside on a choppy day, where a
@@ -17,7 +17,27 @@ export const FRESH_MIN_VOLUME_SESSIONS = 15;
 export const FRESH_VWAP_START_MS = 75 * 60000;
 export const FRESH_MIN_TARGET_R = 1.5;
 export const FRESH_MAX_TARGET_ATR = 3;
-export const FRESH_STRATEGIES = ['NEW_ORB_RETEST_V1', 'NEW_VWAP_PULLBACK_V1', 'NEW_PREVIOUS_SESSION_SWEEP_V1', 'NEW_FIRST_OPENING_PULLBACK_V1'] as const;
+export const FRESH_STRATEGIES = ['NEW_ORB_RETEST_V1', 'NEW_VWAP_PULLBACK_V1', 'NEW_PREVIOUS_SESSION_SWEEP_V1', 'NEW_FIRST_OPENING_PULLBACK_V1', 'NEW_MOMENTUM_BREAKOUT_V1', 'NEW_TREND_FLAG_V1', 'NEW_EVENT_BREAKOUT_V1'] as const;
+/**
+ * 1.8 trend-following pack (owner request, 5 Nov 2026: a 740-point CRUDEOIL fall that none of the four pullback /
+ * reversal strategies could take). These three ride a move instead of waiting for a retest, so they exit on a
+ * trailing stop rather than a fixed target (exitProfile 'TREND', see paper.ts advanceFreshPosition).
+ */
+export const FRESH_TREND_STRATEGIES: readonly string[] = ['NEW_MOMENTUM_BREAKOUT_V1', 'NEW_TREND_FLAG_V1', 'NEW_EVENT_BREAKOUT_V1'];
+/** Momentum breakout: efficiency over the last FRESH_EFFICIENCY_BARS needed (a trend day, not a drift). */
+export const FRESH_MOMENTUM_MIN_EFFICIENCY = 0.4;
+/** Momentum breakout: breakout bar volume against the same slot on earlier sessions. */
+export const FRESH_MOMENTUM_MIN_RVOL = 2;
+/** Trend strategies: the widest initial underlying risk accepted, in 5-minute ATRs (a wider stop only buys fewer lots). */
+export const FRESH_TREND_MAX_RISK_ATR = 2;
+/** Event breakout: the post-release range is the first 15 minutes; entries until 90 minutes after the release. */
+export const FRESH_EVENT_RANGE_MS = 15 * 60000;
+export const FRESH_EVENT_WINDOW_MS = 90 * 60000;
+/** Trend exits: trailing distance behind the best underlying price (ATRs) and the nominal admission target (R). */
+export const FRESH_TREND_TRAIL_ATR = 2;
+export const FRESH_TREND_NOMINAL_R = 2.5;
+/** A major level (opening range, previous day) closer than this many R ahead blocks a trend entry outright. */
+export const FRESH_TREND_MIN_ROOM_R = 0.5;
 export type FreshStrategy = typeof FRESH_STRATEGIES[number];
 export type FreshDirection = 'BULLISH' | 'BEARISH';
 export interface FreshBar {
@@ -50,6 +70,8 @@ export interface FreshContext {
     openingVolumeReferences: readonly number[];
     /** Opening-range anchors: the session open, plus MCX's evening anchor (NYMEX/COMEX open). Default: session open. */
     openingAnchors?: ReadonlyArray<{ at: number; volumeReferences: readonly number[] }>;
+    /** 1.8: release instants (epoch ms, confirmed times) of scheduled events relevant to this instrument's market. */
+    recentReleases?: readonly number[];
     levels: readonly FreshLevel[];
     previousHigh: number;
     previousLow: number;
@@ -74,6 +96,9 @@ export interface FreshCandidate {
     target: number;
     atr: number;
     expiresAt: number;
+    /** 'TREND' (1.8): no fixed-target exit; a trailing stop trailAtr ATRs behind the best underlying price instead. */
+    exitProfile?: 'TARGET' | 'TREND';
+    trailAtr?: number;
     origin: number;
     evidence: Record<string, unknown>;
 }
@@ -187,7 +212,9 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
         // Furthest gate reached by this strategy in either direction: the funnel behind "no setup" (diagnostics only).
         let gate = -1, gateName = 'NOT_REACHED';
         const reach = (n: number, name: string) => { if (n > gate) { gate = n; gateName = name; } };
-        if (choppy && strategy !== 'NEW_PREVIOUS_SESSION_SWEEP_V1') {
+        // The sweep is a reversal and the momentum / event breakouts carry their own regime rules, so only the
+        // pullback-style trend strategies (and the flag) stand aside on a choppy tape.
+        if (choppy && strategy !== 'NEW_PREVIOUS_SESSION_SWEEP_V1' && strategy !== 'NEW_MOMENTUM_BREAKOUT_V1' && strategy !== 'NEW_EVENT_BREAKOUT_V1') {
             out.refusals.push({ strategy, code: 'CHOPPY_REGIME', detail: range ? 'VWAP_RANGE' : `EFFICIENCY_${Math.min(9, Math.floor(efficiency * 10))}0PCT` });
             continue;
         }
@@ -196,7 +223,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
             const favorable = (x: number, y: number) => d * (x - y) > 0, vw = (x: FreshBar) => vwapAt(x.time + 300000);
             const confirms = (x: FreshBar, min = .5) => d * (x.close - x.open) > 0 && body(x) >= min;
             const lo = (xs: readonly FreshBar[]) => d === 1 ? Math.min(...xs.map(x => x.low)) : Math.max(...xs.map(x => x.high));
-            let stop: number | undefined, origin: number | undefined;
+            let stop: number | undefined, origin: number | undefined, profile: 'TARGET' | 'TREND' = 'TARGET';
             if (strategy === 'NEW_ORB_RETEST_V1') reach(0, opening.length === 3 && day.length >= 5 && sinceAnchor <= 7200000 ? 'ORB_NO_TREND' : 'ORB_OUTSIDE_WINDOW');
             if (strategy === 'NEW_ORB_RETEST_V1' && directional && opening.length === 3 && sinceAnchor <= 7200000 && day.length >= 5) {
                 const level = d === 1 ? orh : orl, width = orh - orl;
@@ -302,8 +329,120 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                     }
                 }
             }
+            // ---- 1.8 MOMENTUM BREAKOUT: a strong close through the session extreme on expanding range and volume ----
+            if (strategy === 'NEW_MOMENTUM_BREAKOUT_V1') reach(0, c.now - c.sessionOpen >= 1800000 ? 'MOM_NO_TREND' : 'MOM_FIRST_30_MIN');
+            if (strategy === 'NEW_MOMENTUM_BREAKOUT_V1' && directional && c.now - c.sessionOpen >= 1800000 && today.length >= 7) {
+                reach(1, 'MOM_LOW_EFFICIENCY');
+                if (efficiency >= FRESH_MOMENTUM_MIN_EFFICIENCY) {
+                    const prior = today.slice(0, -1), extreme = d === 1 ? Math.max(...prior.map(x => x.high)) : Math.min(...prior.map(x => x.low));
+                    reach(2, 'MOM_NO_NEW_EXTREME');
+                    if (favorable(current.close, extreme + d * .05 * a)) {
+                        // Not a chase: at most one earlier bar in the last half hour already closed at a new session extreme.
+                        let chased = 0;
+                        for (let j = Math.max(1, today.length - 7); j < today.length - 1; j++) {
+                            const before = today.slice(0, j), ext = d === 1 ? Math.max(...before.map(x => x.high)) : Math.min(...before.map(x => x.low));
+                            if (favorable(today[j].close, ext)) chased++;
+                        }
+                        reach(3, 'MOM_BAR_QUALITY');
+                        if (current.high - current.low >= 1.2 * a && body(current) >= .6 && closeLocation(current, d) >= .7) {
+                            reach(4, 'MOM_VOLUME');
+                            if (rvol(current) >= FRESH_MOMENTUM_MIN_RVOL) {
+                                reach(5, 'MOM_EXTENDED_OR_CHASED');
+                                if (favorable(current.close, vwap) && Math.abs(current.close - vwap) <= 3 * a && chased <= 1) {
+                                    reach(6, 'MOM_RISK_TOO_WIDE');
+                                    // Beyond the breakout bar itself: if price comes back through it, the breakout failed.
+                                    const s = (d === 1 ? current.low : current.high) - d * .1 * a;
+                                    if (d * (current.close - s) > 0 && d * (current.close - s) <= FRESH_TREND_MAX_RISK_ATR * a) {
+                                        stop = s;
+                                        origin = current.time;
+                                        profile = 'TREND';
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // ---- 1.8 TREND FLAG: a tight pause after a strong pole, entered on the break in the trend's direction ----
+            if (strategy === 'NEW_TREND_FLAG_V1') reach(0, c.now - c.sessionOpen >= 2700000 ? 'FLAG_NO_STRONG_TREND' : 'FLAG_FIRST_45_MIN');
+            if (strategy === 'NEW_TREND_FLAG_V1' && directional && strong && c.now - c.sessionOpen >= 2700000 && today.length >= 9) {
+                reach(1, 'FLAG_NO_POLE');
+                for (let len = 3; len <= 8 && stop == null; len++) {
+                    const end = today.length - 2 - len; // last bar of the pole; the flag is the len bars after it, then the current bar
+                    if (end < 2) break;
+                    const flag = today.slice(end + 1, today.length - 1);
+                    for (let k = 3; k <= 6 && stop == null; k++) {
+                        const start = end - k + 1;
+                        if (start < 0) break;
+                        const pole = today.slice(start, end + 1), move = d * (pole[pole.length - 1].close - pole[0].open);
+                        const top = d === 1 ? Math.max(...pole.map(x => x.high)) : Math.min(...pole.map(x => x.low));
+                        if (move < 2 * a || pole.filter(x => d * (x.close - x.open) > 0).length < Math.ceil(.6 * k)) continue;
+                        reach(2, 'FLAG_SHAPE');
+                        const fHi = Math.max(...flag.map(x => x.high)), fLo = Math.min(...flag.map(x => x.low));
+                        const flagEdge = d === 1 ? fHi : fLo, flagFloor = d === 1 ? fLo : fHi;
+                        if (fHi - fLo > Math.min(.5 * move, 1.5 * a) || d * (top - flagFloor) > .5 * move || d * (flagEdge - top) > .1 * a || flag.some(x => !favorable(x.close, vw(x)))) continue;
+                        reach(3, 'FLAG_VOLUME');
+                        if (!(median(flag.map(x => x.volume)) < median(pole.map(x => x.volume)))) continue;
+                        reach(4, 'FLAG_NO_TRIGGER');
+                        if (favorable(current.close, flagEdge + d * .05 * a) && body(current) >= .5 && closeLocation(current, d) >= .7 && rvol(current) >= 1.2 && favorable(current.close, vwap)) {
+                            reach(5, 'FLAG_RISK_TOO_WIDE');
+                            const s = flagFloor - d * .1 * a;
+                            if (d * (current.close - s) > 0 && d * (current.close - s) <= FRESH_TREND_MAX_RISK_ATR * a) {
+                                stop = s;
+                                origin = pole[0].time;
+                                profile = 'TREND';
+                            }
+                        }
+                    }
+                }
+            }
+            // ---- 1.8 EVENT BREAKOUT: the first close out of the 15-minute range after a scheduled release ----
+            if (strategy === 'NEW_EVENT_BREAKOUT_V1') {
+                const release = (c.recentReleases ?? []).filter(t => finite(t) && t >= c.sessionOpen && c.now - t >= FRESH_EVENT_RANGE_MS && c.now - t <= FRESH_EVENT_WINDOW_MS).sort((x, y) => y - x)[0];
+                reach(0, release == null ? 'EVENT_NO_RECENT_RELEASE' : 'EVENT_RANGE_INCOMPLETE');
+                if (release != null) {
+                    const rs = release - (((release - c.sessionOpen) % 300000) + 300000) % 300000, range = today.filter(x => x.time >= rs && x.time < rs + FRESH_EVENT_RANGE_MS);
+                    if (range.length === 3 && range.every((x, i) => x.time === rs + i * 300000)) {
+                        const rHi = Math.max(...range.map(x => x.high)), rLo = Math.min(...range.map(x => x.low)), width = rHi - rLo;
+                        reach(1, 'EVENT_RANGE_WIDTH');
+                        if (width >= .5 * a && width <= 4 * a) {
+                            const after = today.filter(x => x.time >= rs + FRESH_EVENT_RANGE_MS), edge = d === 1 ? rHi : rLo;
+                            const firstOut = after.find(x => x.close > rHi + .05 * a || x.close < rLo - .05 * a);
+                            reach(2, 'EVENT_NO_BREAKOUT');
+                            if (firstOut === current && favorable(current.close, edge + d * .05 * a)) {
+                                reach(3, 'EVENT_BAR_QUALITY');
+                                if (body(current) >= .5 && closeLocation(current, d) >= .7 && rvol(current) >= 1.5 && favorable(current.close, vwap)) {
+                                    reach(4, 'EVENT_RISK_TOO_WIDE');
+                                    const far = (d === 1 ? rLo : rHi) - d * .1 * a, mid = (rHi + rLo) / 2 - d * .1 * a;
+                                    const fits = (x: number) => d * (current.close - x) > 0 && d * (current.close - x) <= FRESH_TREND_MAX_RISK_ATR * a;
+                                    const s = fits(far) ? far : fits(mid) ? mid : null;
+                                    if (s != null) {
+                                        stop = s;
+                                        origin = release;
+                                        profile = 'TREND';
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             if (stop == null || origin == null || !favorable(current.close, stop))
                 continue;
+            if (profile === 'TREND') {
+                // Trend entries ride the move: no fixed objective, only a sanity check that a major level is not right in
+                // front of the entry. The nominal target exists for the admission payoff check; the exit trails.
+                const risk = Math.abs(current.close - stop);
+                const wall = levels.find(x => x.kind !== 'CONFIRMED_SWING' && x.role === (d === 1 ? 'RESISTANCE' : 'SUPPORT') && favorable(x.price, current.close) && d * (x.price - current.close) < FRESH_TREND_MIN_ROOM_R * risk);
+                if (wall) {
+                    out.refusals.push({ strategy, code: 'TARGET_TOO_CLOSE', detail: `${wall.kind}_WITHIN_0_5R` });
+                    continue;
+                }
+                const targetPrice = current.close + d * FRESH_TREND_NOMINAL_R * risk, parentId = `${c.instrument}:${c.session}:${direction}:${origin}`;
+                out.candidates.push({ id: `${FRESH_PACK_VERSION}:${c.sourceEpoch}:${parentId}:${strategy}:${current.time}`, parentId, version: FRESH_PACK_VERSION, strategy, direction, instrument: c.instrument, sourceEpoch: c.sourceEpoch, session: c.session, at: decisionAt, referenceEntry: current.close, stop, target: targetPrice, atr: a, origin, expiresAt: Math.min(decisionAt + 2000, c.sessionClose - 3600000), exitProfile: 'TREND', trailAtr: FRESH_TREND_TRAIL_ATR, evidence: { ...(c.eventEvidence ? { eventCalendar: c.eventEvidence } : {}), rvol: finite(rvol(current)) ? rvol(current) : 'UNAVAILABLE', vwap, reference: 'BAR_VWAP_PROXY', efficiency, targetKind: 'TRAILING_STOP', targetR: FRESH_TREND_NOMINAL_R, trailAtr: FRESH_TREND_TRAIL_ATR } });
+                emitted = true;
+                continue;
+            }
             const ahead = levels.filter(x => x.role === (d === 1 ? 'RESISTANCE' : 'SUPPORT') && favorable(x.price, current.close));
             if (strategy === 'NEW_PREVIOUS_SESSION_SWEEP_V1') {
                 const price = (c.previousHigh + c.previousLow) / 2;

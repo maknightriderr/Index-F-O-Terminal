@@ -178,6 +178,22 @@ export interface FreshPaperPosition {
 /** PROPOSED_NOT_APPROVED research values: how long a thin two-sided book may hold an exit, and the haircut for undisplayed units. */
 export const FRESH_THIN_BOOK_GRACE_MS = 60_000;
 export const FRESH_THIN_BOOK_HAIRCUT = 0.10;
+/** 1.8 trend exits: the longest hold in completed five-minute bars (4 hours; the session cutoff still applies). */
+export const FRESH_TREND_MAX_HOLD_BARS = 48;
+/**
+ * 1.8: the underlying level a TREND position exits at on a five-minute close — the candidate's structural stop until
+ * the best price reached is more than trailAtr ATRs beyond entry, then trailAtr ATRs behind that best price. It only
+ * ever tightens (the best price is monotone), and it is null for non-trend positions.
+ */
+export function freshTrailingStop(p: Pick<FreshPaperPosition, 'candidate' | 'maxUnderlyingFavorable'>): number | null {
+    const c = p.candidate;
+    if (c.exitProfile !== 'TREND' || !(c.trailAtr! > 0) || !(c.atr > 0)) return null;
+    const d = c.direction === 'BULLISH' ? 1 : -1, distance = c.trailAtr! * c.atr;
+    // Inactive until the move has paid trailAtr ATRs, so the trail starts at breakeven and never sits inside entry noise.
+    if (!(p.maxUnderlyingFavorable >= distance)) return null;
+    const trail = c.referenceEntry + d * (p.maxUnderlyingFavorable - distance);
+    return d * (trail - c.stop) > 0 ? trail : null;
+}
 /** Immutable observation reduction. Missing quotes never invent a fill or clear an existing pending exit. */
 export function advanceFreshPosition(p: FreshPaperPosition, e: {
     at: number;
@@ -199,7 +215,7 @@ export function advanceFreshPosition(p: FreshPaperPosition, e: {
         return p;
     if (!Number.isFinite(e.cutoff) || !Number.isSafeInteger(e.barsSinceFill) || e.barsSinceFill < 0)
         return p;
-    const n = { ...p, lastEventAt: e.at }, d = p.candidate.direction === 'BULLISH' ? 1 : -1;
+    const n = { ...p, lastEventAt: e.at }, d = p.candidate.direction === 'BULLISH' ? 1 : -1, trend = p.candidate.exitProfile === 'TREND';
     const underlyingFresh = e.underlying != null && Number.isFinite(e.underlying) && e.underlying > 0 && e.underlyingAt != null && e.underlyingAt <= e.at && e.at - e.underlyingAt <= 2000;
     const q = e.quote, quoteFresh = q && freshQuoteCode(q, p.contract.id, p.contract.source, e.monitorEpoch ?? p.contract.sourceEpoch, e.at) === null;
     if (underlyingFresh)
@@ -209,7 +225,8 @@ export function advanceFreshPosition(p: FreshPaperPosition, e: {
         // Trailing requires a credible liquidation quote for the full held quantity.
         if (q!.bidUnits >= n.quantity) {
             n.highBid = Math.max(n.highBid, q!.bid);
-            if (e.trail) {
+            // Trend positions always ratchet the premium stop (breakeven at 1R, +1R at 2R): the move is meant to run.
+            if (e.trail || trend) {
                 const perUnitR = n.originalRiskCurrency / (n.quantity * n.contract.multiplier), fee = n.contract.explicitRoundTripCostPerUnit;
                 const policy=n.contract.feePolicy,units=n.quantity*n.contract.multiplier;
                 const r = policy?((Math.max(0,q!.bid-q!.tick)-n.entry)*units-freshRoundTripFees(n.entry,Math.max(0,q!.bid-q!.tick),n.quantity,n.contract.multiplier,policy))/n.originalRiskCurrency:(q!.bid-n.entry-fee)/perUnitR;
@@ -225,12 +242,15 @@ export function advanceFreshPosition(p: FreshPaperPosition, e: {
         const reachedStop = quoteFresh && q!.bid <= beforeStop;
         const closeRule = e.underlyingClose !== undefined;
         const barClose = e.underlyingClose;
+        const trailing = freshTrailingStop(n), exitLevel = trailing ?? n.candidate.stop;
         const invalid = closeRule
-            ? barClose != null && Number.isFinite(barClose.price) && barClose.price > 0 && barClose.closedAt > p.openedAt && barClose.closedAt <= e.at && d * (barClose.price - n.candidate.stop) <= 0
-            : underlyingFresh && d * (e.underlying! - n.candidate.stop) <= 0;
-        const target = underlyingFresh && d * (e.underlying! - n.candidate.target) >= 0;
+            ? barClose != null && Number.isFinite(barClose.price) && barClose.price > 0 && barClose.closedAt > p.openedAt && barClose.closedAt <= e.at && d * (barClose.price - exitLevel) <= 0
+            : underlyingFresh && d * (e.underlying! - exitLevel) <= 0;
+        // A trend position has no fixed objective: its nominal target only sized the admission payoff check.
+        const target = !trend && underlyingFresh && d * (e.underlying! - n.candidate.target) >= 0;
         const noProgress = e.barsSinceFill >= 3 && n.maxUnderlyingFavorable < .25 * Math.abs(n.candidate.referenceEntry - n.candidate.stop) && underlyingFresh && d * (e.underlying! - n.candidate.referenceEntry) < 0;
-        const reason = e.at >= e.cutoff - 600000 ? 'SESSION_CUTOFF' : reachedStop ? 'PREMIUM_STOP' : invalid ? 'STRUCTURAL_INVALIDATION' : target ? 'UNDERLYING_TARGET' : e.barsSinceFill >= 12 ? 'MAX_HOLD' : noProgress ? 'NO_PROGRESS' : null;
+        const maxHold = trend ? FRESH_TREND_MAX_HOLD_BARS : 12;
+        const reason = e.at >= e.cutoff - 600000 ? 'SESSION_CUTOFF' : reachedStop ? 'PREMIUM_STOP' : invalid ? (trailing != null ? 'TRAILING_STOP' : 'STRUCTURAL_INVALIDATION') : target ? 'UNDERLYING_TARGET' : e.barsSinceFill >= maxHold ? 'MAX_HOLD' : noProgress ? 'NO_PROGRESS' : null;
         if (reason) {
             n.state = 'EXIT_PENDING';
             n.exitTriggeredAt = e.at;
