@@ -40,6 +40,14 @@ describe('1.8 momentum breakout', () => {
         const early = momentumDay.slice(2).map((b, i) => ({ ...b, time: open + i * 300000, availableAt: open + (i + 1) * 300000 }));
         expect(refusal(context(early), 'NEW_MOMENTUM_BREAKOUT_V1')?.detail).toBe('MOM_FIRST_30_MIN');
     });
+    it('trades a reversal day against the 15-minute EMA stack once price is through the 15-minute EMA20', () => {
+        // A long rising 15-minute history (EMA20 above EMA50), then the last 15-minute close collapses below EMA20.
+        const c = mirror(context(momentumDay));
+        // Rising 15-minute history in the mirrored price region (~140 → ~148: EMA20 above EMA50), last close back at 145.
+        const h = c.bars15.map((x, i) => ({ ...x, open: 140 + i * .1, high: 141 + i * .1, low: 139 + i * .1, close: 140 + i * .1 }));
+        const reversal = { ...c, bars15: [...h.slice(0, -1), { ...h[h.length - 1], open: 148, high: 148.2, low: 144.8, close: 145 }] };
+        expect(find(reversal, 'NEW_MOMENTUM_BREAKOUT_V1'), JSON.stringify(evaluateFreshStrategies(reversal).refusals)).toMatchObject({ direction: 'BEARISH' });
+    });
     it('does not chase a move that already closed at new highs repeatedly', () => {
         const chase = [bar(0, 100, 100.6, 99.8, 100.4), bar(1, 100.4, 101.2, 100.3, 101.1), bar(2, 101.1, 101.9, 101, 101.8), bar(3, 101.8, 102.6, 101.7, 102.5), bar(4, 102.5, 103.3, 102.4, 103.2), bar(5, 103.2, 104, 103.1, 103.9), bar(6, 103.9, 106.6, 103.8, 106.4, 2500)];
         expect(find(context(chase), 'NEW_MOMENTUM_BREAKOUT_V1')).toBeUndefined();

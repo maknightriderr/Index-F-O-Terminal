@@ -330,8 +330,11 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                 }
             }
             // ---- 1.8 MOMENTUM BREAKOUT: a strong close through the session extreme on expanding range and volume ----
-            if (strategy === 'NEW_MOMENTUM_BREAKOUT_V1') reach(0, c.now - c.sessionOpen >= 1800000 ? 'MOM_NO_TREND' : 'MOM_FIRST_30_MIN');
-            if (strategy === 'NEW_MOMENTUM_BREAKOUT_V1' && directional && c.now - c.sessionOpen >= 1800000 && today.length >= 7) {
+            // The breakout is itself the trend signal, so it needs only the last 15-minute close on its side of the 15-minute
+            // EMA20, not the full EMA20/EMA50 stack: on a reversal day the stack lags the move by hours (review, 5 Nov).
+            const momentumSide = d * (last(h).close - last(e20)) > 0;
+            if (strategy === 'NEW_MOMENTUM_BREAKOUT_V1') reach(0, c.now - c.sessionOpen >= 1800000 ? 'MOM_AGAINST_15M_EMA20' : 'MOM_FIRST_30_MIN');
+            if (strategy === 'NEW_MOMENTUM_BREAKOUT_V1' && momentumSide && c.now - c.sessionOpen >= 1800000 && today.length >= 7) {
                 reach(1, 'MOM_LOW_EFFICIENCY');
                 if (efficiency >= FRESH_MOMENTUM_MIN_EFFICIENCY) {
                     const prior = today.slice(0, -1), extreme = d === 1 ? Math.max(...prior.map(x => x.high)) : Math.min(...prior.map(x => x.low));
