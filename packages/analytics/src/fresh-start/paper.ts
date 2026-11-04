@@ -93,6 +93,7 @@ function assessFreshPaper(args: {
     legacyPositionOpen: boolean;
     parentAlreadyTraded: boolean;
     correlatedPositionOpen: boolean;
+    /** Entries on this instrument today (recorded for evidence; no longer capped, 5 Nov). */
     entriesToday: number;
     barsSinceLastClose: number | null;
 }, planning = false): FreshAdmission {
@@ -117,7 +118,9 @@ function assessFreshPaper(args: {
         return refuse('ENTRY_EXPIRED_OR_EARLY');
     if (d * (args.currentUnderlying - c.referenceEntry) > .25 * c.atr)
         return refuse('EXTENDED_ENTRY');
-    if (args.legacyPositionOpen || args.correlatedPositionOpen || args.parentAlreadyTraded || args.entriesToday >= 2 || (args.barsSinceLastClose != null && args.barsSinceLastClose < 3))
+    // 5 Nov (owner): no cap on entries per instrument per day. Still one position per instrument / risk group at a
+    // time, one trade per parent setup, a 3-bar pause after a close, and the account-level open-risk and daily limits.
+    if (args.legacyPositionOpen || args.correlatedPositionOpen || args.parentAlreadyTraded || (args.barsSinceLastClose != null && args.barsSinceLastClose < 3))
         return refuse('EXPOSURE_OR_PARENT');
     if (!a.marksComplete || a.capital <= 0 || a.equity <= 0 || a.reservedRisk < 0 || a.reservedPremium < 0 || a.openPositions >= 2 || a.dailyNet <= -FRESH_DAILY_LOSS_LIMIT * a.capital || a.consecutiveNetLosses >= 3)
         return refuse('ACCOUNT_PAUSED');
