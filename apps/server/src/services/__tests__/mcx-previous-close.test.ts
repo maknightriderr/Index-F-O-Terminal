@@ -8,6 +8,9 @@ describe('MCX previous close from candles (5 Nov: CRUDEOIL ~740 down shown as ~1
     expect(thu.date).toBe('2026-11-04');
     const mon = mcxPreviousSession(Date.parse('2026-11-09T10:00:00+05:30'))!;
     expect(mon.date).toBe('2026-11-06');
+    // After midnight the price is still the 4 Nov session's: its reference is 3 Nov, not 4 Nov (the 5 Nov bug).
+    expect(mcxPreviousSession(Date.parse('2026-11-05T01:30:00+05:30'))!.date).toBe('2026-11-03');
+    expect(mcxPreviousSession(Date.parse('2026-11-05T08:30:00+05:30'))!.date).toBe('2026-11-03');
   });
   it('takes the close of the last candle inside the session', () => {
     const s = { open: Date.parse('2026-11-04T09:00:00+05:30'), close: Date.parse('2026-11-04T23:30:00+05:30') };
