@@ -119,3 +119,13 @@ describe('1.8 trailing exit (paper engine)', () => {
         expect(advanceFreshPosition(position(), { ...ev(at + 1000, 101, 101, 12) })).toMatchObject({ exitReason: 'MAX_HOLD' });
     });
 });
+
+describe('5 Nov: no daily entry cap per instrument', () => {
+    it('admits a third entry on the same instrument when every other exposure rule passes', async () => {
+        const { admitFreshPaper } = await import('../paper.js');
+        const { request } = await import('./fixtures.js');
+        expect(admitFreshPaper({ ...request(), entriesToday: 5 }).ok).toBe(true);
+        expect(admitFreshPaper({ ...request(), entriesToday: 5, barsSinceLastClose: 1 })).toMatchObject({ ok: false, code: 'EXPOSURE_OR_PARENT' });
+        expect(admitFreshPaper({ ...request(), entriesToday: 5, correlatedPositionOpen: true })).toMatchObject({ ok: false, code: 'EXPOSURE_OR_PARENT' });
+    });
+});
