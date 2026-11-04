@@ -16,6 +16,8 @@ import {FreshPositionMonitor} from './monitor.js';
 import {freshContractUnits} from './contract-units.js';
 import {ivRankFor} from '../fno-scanner.js';
 import {FreshRuntime} from './runtime.js';
+import {flowFiveMinuteBars} from '../order-flow-store.js';
+import type {FreshContext} from '@fno/analytics';
 import {logFreshDecisionSummary} from './decision-summary.js';
 import {freshRankStocks,FRESH_MARKETS,freshMarketBlockers,freshBookSupportsLot,discoverFreshMarkets,freshDiscoveryWindow,freshReferenceOptions,freshReferenceExchange,freshReferenceSpotId,freshEventMarket,freshMarketExchange,freshIndexKey,type FreshMarket} from './markets.js';
 import {freshAdapterState as state} from './adapter-state.js';
@@ -49,6 +51,14 @@ export const FRESH_HISTORY_SEED_DAYS = 35;
 /** After a failed history fetch a reference waits this long before the next attempt (no hammering a rate limit). */
 /** Consecutive empty candle answers from a reference's pinned feed before its history is dropped and reseeded. */
 export const FRESH_PINNED_EMPTY_LIMIT=3;
+/** A mini MCX contract the feed does not carry reads its parent product's order flow (marked proxy). */
+export const FRESH_FLOW_PROXY:Readonly<Record<string,string>>=Object.freeze({CRUDEOILM:'CRUDEOIL',NATGASMINI:'NATURALGAS'});
+/** 1.8 shadow: today's five-minute inferred order flow for a reference, from the Dhan feed (undefined when not covered). */
+export function freshOrderFlowFor(name:string,from:number,to:number):FreshContext['orderFlow']{
+  // The reference's own contract when the feed carries it, else the parent product's (marked proxy).
+  for(const symbol of [name,FRESH_FLOW_PROXY[name]].filter((x):x is string=>!!x)){const f=flowFiveMinuteBars(symbol,from,to+1);if(f)return {source:'DHAN_INFERRED',instrument:f.instrument,proxy:symbol!==name,bars:f.bars};}
+  return undefined;
+}
 export const FRESH_HISTORY_RETRY_MS = 60_000;
 export class FreshPaperWorker {
   /** First summary ~immediately after start, then every 15 minutes. */
@@ -135,7 +145,7 @@ export class FreshPaperWorker {
     const receivedAt=Date.now(),bars5=mergeFreshBars(old?.five??[],freshBars(five,5,receivedAt),4000),bars1=mergeFreshBars(old?.one??[],freshBars(one,1,receivedAt),1440),lastSeen=bars5.at(-1)?.time??0;
     this.histories.delete(ref.id);this.histories.set(ref.id,{five:bars5,one:bars1,lastSeen,source,emptyFetches});
     while(this.histories.size>40)this.histories.delete(this.histories.keys().next().value!);
-    const ex=freshReferenceExchange(ref),c=buildFreshReferenceContext({now:receivedAt,exchange:ex,instrument:ref.id,sourceEpoch:this.feed.sourceEpoch,bars5:fillFreshGaps(bars5,300000,ex),bars1:fillFreshGaps(bars1,60000,ex),eventClear:this.events.clearance(receivedAt,freshIstDay(receivedAt),freshEventMarket(ref.market),ref.name)===null,referenceVerified:!!this.feed.underlying(ref.id)&&!!this.feed.underlying(freshReferenceSpotId(ref)),recentReleases:this.events.releases(receivedAt,freshEventMarket(ref.market),ref.name)});
+    const ex=freshReferenceExchange(ref),c=buildFreshReferenceContext({now:receivedAt,exchange:ex,instrument:ref.id,sourceEpoch:this.feed.sourceEpoch,bars5:fillFreshGaps(bars5,300000,ex),bars1:fillFreshGaps(bars1,60000,ex),eventClear:this.events.clearance(receivedAt,freshIstDay(receivedAt),freshEventMarket(ref.market),ref.name)===null,referenceVerified:!!this.feed.underlying(ref.id)&&!!this.feed.underlying(freshReferenceSpotId(ref)),recentReleases:this.events.releases(receivedAt,freshEventMarket(ref.market),ref.name),orderFlow:freshOrderFlowFor(ref.name,open,receivedAt)});
     if(c)c.eventEvidence=this.events.evidence(receivedAt,freshEventMarket(ref.market),ref.name);
     return {context:c,newClose:!!old&&lastSeen>old.lastSeen,lastSeen};
   }

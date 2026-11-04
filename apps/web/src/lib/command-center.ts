@@ -62,6 +62,8 @@ export interface PositionView {
   /** The exit monitor's latest executable bid for a held position (display only), or null. */
   markBid: number | null;
   markAt: number | null;
+  /** Order-flow SHADOW tag recorded at entry (1.8): ALIGNED / NEUTRAL / OPPOSED / UNAVAILABLE; UNTAGGED before 1.8. */
+  orderFlow: string;
 }
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
@@ -116,6 +118,7 @@ export function toPositionView(row: FreshStartStatus['positions'][number]): Posi
     market: str(k.market) ?? '—',
     markBid: null,
     markAt: null,
+    orderFlow: str(obj(obj(c.evidence).orderFlow).alignment) ?? 'UNTAGGED',
   };
 }
 
@@ -401,3 +404,14 @@ export const signedR = (v: number | null | undefined) => (v == null || !Number.i
 export const istTime = (ms: number | null | undefined) =>
   ms == null ? '—' : new Date(ms).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
 export const tone = (v: number | null | undefined): 'up' | 'down' | 'flat' => (v == null || v === 0 ? 'flat' : v > 0 ? 'up' : 'down');
+
+/** Closed trades grouped by their order-flow shadow tag: does ALIGNED beat OPPOSED? (Shadow only: no trade was gated.) */
+export const ORDER_FLOW_TAGS = ['ALIGNED', 'NEUTRAL', 'OPPOSED', 'UNAVAILABLE', 'UNTAGGED'] as const;
+export function orderFlowShadow(positions: PositionView[]): Array<{ tag: string; trades: number; wins: number; winRate: number | null; avgR: number | null; net: number }> {
+  return ORDER_FLOW_TAGS.map((tag) => {
+    const closed = positions.filter((p) => p.status === 'CLOSED' && p.orderFlow === tag);
+    const rs = closed.map((p) => p.r).filter((r): r is number => r != null);
+    const wins = closed.filter((p) => (p.netPnl ?? 0) > 0).length;
+    return { tag, trades: closed.length, wins, winRate: closed.length ? wins / closed.length : null, avgR: rs.length ? rs.reduce((a, b) => a + b, 0) / rs.length : null, net: closed.reduce((a, p) => a + (p.netPnl ?? 0), 0) };
+  }).filter((x) => x.trades > 0 || x.tag !== 'UNTAGGED');
+}

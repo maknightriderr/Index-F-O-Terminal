@@ -1,5 +1,6 @@
 // Approved implementation pack; pure functions only. Time, calendars and data provenance are injected.
 import { atr, ema } from '../indicators/index.js';
+import { freshOrderFlowEvidence, type FreshOrderFlowInput } from './order-flow-evidence.js';
 export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.8';
 /** Minimum underlying reward / risk for a target, and the furthest target in 5-minute ATR before it is capped (1.5). */
 /**
@@ -72,6 +73,8 @@ export interface FreshContext {
     openingAnchors?: ReadonlyArray<{ at: number; volumeReferences: readonly number[] }>;
     /** 1.8: release instants (epoch ms, confirmed times) of scheduled events relevant to this instrument's market. */
     recentReleases?: readonly number[];
+    /** 1.8 shadow: five-minute inferred buy/sell volume of the instrument's flow contract (tags candidates only). */
+    orderFlow?: FreshOrderFlowInput;
     levels: readonly FreshLevel[];
     previousHigh: number;
     previousLow: number;
@@ -442,7 +445,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                     continue;
                 }
                 const targetPrice = current.close + d * FRESH_TREND_NOMINAL_R * risk, parentId = `${c.instrument}:${c.session}:${direction}:${origin}`;
-                out.candidates.push({ id: `${FRESH_PACK_VERSION}:${c.sourceEpoch}:${parentId}:${strategy}:${current.time}`, parentId, version: FRESH_PACK_VERSION, strategy, direction, instrument: c.instrument, sourceEpoch: c.sourceEpoch, session: c.session, at: decisionAt, referenceEntry: current.close, stop, target: targetPrice, atr: a, origin, expiresAt: Math.min(decisionAt + 2000, c.sessionClose - 3600000), exitProfile: 'TREND', trailAtr: FRESH_TREND_TRAIL_ATR, evidence: { ...(c.eventEvidence ? { eventCalendar: c.eventEvidence } : {}), rvol: finite(rvol(current)) ? rvol(current) : 'UNAVAILABLE', vwap, reference: 'BAR_VWAP_PROXY', efficiency, targetKind: 'TRAILING_STOP', targetR: FRESH_TREND_NOMINAL_R, trailAtr: FRESH_TREND_TRAIL_ATR } });
+                out.candidates.push({ id: `${FRESH_PACK_VERSION}:${c.sourceEpoch}:${parentId}:${strategy}:${current.time}`, parentId, version: FRESH_PACK_VERSION, strategy, direction, instrument: c.instrument, sourceEpoch: c.sourceEpoch, session: c.session, at: decisionAt, referenceEntry: current.close, stop, target: targetPrice, atr: a, origin, expiresAt: Math.min(decisionAt + 2000, c.sessionClose - 3600000), exitProfile: 'TREND', trailAtr: FRESH_TREND_TRAIL_ATR, evidence: { ...(c.eventEvidence ? { eventCalendar: c.eventEvidence } : {}), orderFlow: freshOrderFlowEvidence(c.orderFlow, direction, current.time, origin), rvol: finite(rvol(current)) ? rvol(current) : 'UNAVAILABLE', vwap, reference: 'BAR_VWAP_PROXY', efficiency, targetKind: 'TRAILING_STOP', targetR: FRESH_TREND_NOMINAL_R, trailAtr: FRESH_TREND_TRAIL_ATR } });
                 emitted = true;
                 continue;
             }
@@ -479,7 +482,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
             }
             const targetPrice = capped ? current.close + d * cap : chosen.price, targetKind = capped ? 'ATR_CAP' : chosen.kind;
             const parentId = `${c.instrument}:${c.session}:${direction}:${origin}`;
-            out.candidates.push({ id: `${FRESH_PACK_VERSION}:${c.sourceEpoch}:${parentId}:${strategy}:${current.time}`, parentId, version: FRESH_PACK_VERSION, strategy, direction, instrument: c.instrument, sourceEpoch: c.sourceEpoch, session: c.session, at: decisionAt, referenceEntry: current.close, stop, target: targetPrice, atr: a, origin, expiresAt: Math.min(decisionAt + 2000, c.sessionClose - 3600000), evidence: { ...(c.eventEvidence?{eventCalendar:c.eventEvidence}:{}), rvol: finite(rvol(current)) ? rvol(current) : 'UNAVAILABLE', vwap, reference: 'BAR_VWAP_PROXY', efficiency, targetKind, targetR: d * (targetPrice - current.close) / risk } });
+            out.candidates.push({ id: `${FRESH_PACK_VERSION}:${c.sourceEpoch}:${parentId}:${strategy}:${current.time}`, parentId, version: FRESH_PACK_VERSION, strategy, direction, instrument: c.instrument, sourceEpoch: c.sourceEpoch, session: c.session, at: decisionAt, referenceEntry: current.close, stop, target: targetPrice, atr: a, origin, expiresAt: Math.min(decisionAt + 2000, c.sessionClose - 3600000), evidence: { ...(c.eventEvidence?{eventCalendar:c.eventEvidence}:{}), orderFlow: freshOrderFlowEvidence(c.orderFlow, direction, current.time, origin), rvol: finite(rvol(current)) ? rvol(current) : 'UNAVAILABLE', vwap, reference: 'BAR_VWAP_PROXY', efficiency, targetKind, targetR: d * (targetPrice - current.close) / risk } });
             emitted = true;
         }
         if (!emitted && !out.refusals.some(x => x.strategy === strategy))

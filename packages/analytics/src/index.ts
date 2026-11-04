@@ -51,6 +51,7 @@ export {
 export * from './event-engine/index.js';
 // Approved fresh-start research functions: never read IO or activate strategies.
 export * from './fresh-start/strategies.js';
+export * from './fresh-start/order-flow-evidence.js';
 export * from './fresh-start/paper.js';
 export * from './fresh-start/report.js';
 export * from './fresh-start/source.js';

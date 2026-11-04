@@ -18,7 +18,7 @@
 //                     candidate source in the slot arbitration; false = shadow
 //                     only (rollback without a deploy). Paper only: nothing
 //                     here, or anywhere in the terminal, places a broker order.
-//   ORDER_FLOW_SYMBOLS  NIFTY,BANKNIFTY,CRUDEOIL,GOLD,SILVER,NATURALGAS
+//   ORDER_FLOW_SYMBOLS  NIFTY,BANKNIFTY,FINNIFTY,MIDCPNIFTY,CRUDEOIL,CRUDEOILM,GOLD,SILVER,NATURALGAS,NATGASMINI
 //                     (default; MCX added 2026-10-09 at the user's request). Each
 //                     symbol's flow is read from its nearest-expiry future on
 //                     Dhan (NSE_FNO / MCX_COMM). Symbols outside the supported
@@ -81,7 +81,8 @@ export function orderFlowLogicSuffix(ob1: boolean = OB1_TRADING, of1: boolean = 
   return `${ob1 ? '+ob1-paper.1' : ''}${of1 ? '+of1-paper.2' : ''}`;
 }
 
-export const ORDER_FLOW_DEFAULT_SYMBOLS = ['NIFTY', 'BANKNIFTY', 'CRUDEOIL', 'GOLD', 'SILVER', 'NATURALGAS'] as const;
+// 5 Nov: FINNIFTY, MIDCPNIFTY and the MCX minis added so the fresh-start order-flow shadow tag covers more references.
+export const ORDER_FLOW_DEFAULT_SYMBOLS = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'CRUDEOIL', 'CRUDEOILM', 'GOLD', 'SILVER', 'NATURALGAS', 'NATGASMINI'] as const;
 /** Symbols with a Dhan futures mapping, and their exchange (NSE index futures, MCX commodity futures). */
 export const ORDER_FLOW_SUPPORTED: Readonly<Record<string, 'NSE' | 'MCX'>> = Object.freeze({
   NIFTY: 'NSE', BANKNIFTY: 'NSE', FINNIFTY: 'NSE', MIDCPNIFTY: 'NSE',

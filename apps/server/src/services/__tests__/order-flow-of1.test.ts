@@ -155,7 +155,7 @@ describe('OF1: paper trading switch and hypothesis', () => {
     expect(flags.orderFlowLogicSuffix(true, true)).toBe('+ob1-paper.1+of1-paper.2');
     expect(flags.orderFlowLogicSuffix(false, false)).toBe('');
     expect(flags.parseOrderFlowSymbols('NIFTY,CRUDEOIL,banknifty,RELIANCE')).toEqual({ symbols: ['NIFTY', 'CRUDEOIL', 'BANKNIFTY'], rejected: ['RELIANCE'] });
-    expect(flags.parseOrderFlowSymbols(undefined).symbols).toEqual(['NIFTY', 'BANKNIFTY', 'CRUDEOIL', 'GOLD', 'SILVER', 'NATURALGAS']);
+    expect(flags.parseOrderFlowSymbols(undefined).symbols).toEqual(['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'CRUDEOIL', 'CRUDEOILM', 'GOLD', 'SILVER', 'NATURALGAS', 'NATGASMINI']);
     expect(flags.ORDER_FLOW_SUPPORTED.CRUDEOIL).toBe('MCX');
   });
 });
