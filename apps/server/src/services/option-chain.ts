@@ -40,6 +40,7 @@ import { computeChangeOiDetailed } from '../lib/oi-baseline.js';
 import type { ChangeOiResult } from '../lib/oi-baseline.js';
 import { cached } from '../lib/cache.js';
 import { logger } from '../lib/logger.js';
+import { mcxPreviousClose, noteMcxCloseMismatch } from './mcx-previous-close.js';
 import { tapedInput } from '../lib/io-tape.js';
 
 export interface BuildOptionChainOptions {
@@ -558,7 +559,10 @@ export async function getSpotQuote(
   return cached(cacheKey, SPOT_QUOTE_CACHE_TTL_SECONDS, async () => {
     const spotToken = await resolveSpotToken(provider, underlying, exchange);
     const [quote] = await provider.getQuote(CM_SEGMENT[exchange], [spotToken], 'OHLC');
-    return { token: spotToken, ltp: quote?.ltp ?? 0, close: quote?.close ?? 0 };
+    // MCX: the previous close comes from the previous session's last candle (mcx-previous-close.ts).
+    const candleClose = exchange === 'MCX' ? await mcxPreviousClose(provider, spotToken) : null;
+    if (candleClose != null && quote) noteMcxCloseMismatch(underlying, quote.close, quote.netChange, candleClose, quote.ltp);
+    return { token: spotToken, ltp: quote?.ltp ?? 0, close: candleClose ?? quote?.close ?? 0 };
   });
 }
 
