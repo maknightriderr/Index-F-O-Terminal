@@ -8,7 +8,7 @@
 // own figure is logged when it disagrees, so the source of a mismatch stays visible. Null → callers keep the old path.
 // ============================================================
 
-import { getSessionWindow } from '@fno/shared';
+import { getLatestSessionWindow, getSessionWindow } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { cached } from '../lib/cache.js';
 import { logger } from '../lib/logger.js';
@@ -21,11 +21,18 @@ export function istMinute(ms: number): string {
   return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
 }
 
-/** The most recent MCX session that ended before today's IST date (skips weekends and holidays). */
+/**
+ * The session before the one the current price belongs to. The price belongs to the latest MCX session that has
+ * OPENED (still running, or the last to close — e.g. at 01:30 IST the 23:55 close of the previous evening), so the
+ * reference is the session before that one. 5 Nov: keying on the calendar date compared a closed session's last price
+ * with its own close after midnight (CRUDEOIL showed ~17 up instead of ~740 down).
+ */
 export function mcxPreviousSession(now: number): { date: string; open: number; close: number } | null {
+  const current = getLatestSessionWindow('MCX', now);
+  if (!current) return null;
   for (let i = 1; i <= 14; i++) {
-    const date = istDay(now - i * 86_400_000), s = getSessionWindow('MCX', date);
-    if (s && s.close <= now) return { date, open: s.open, close: s.close };
+    const date = istDay(current.open - i * 86_400_000), s = getSessionWindow('MCX', date);
+    if (s && s.close <= current.open) return { date, open: s.open, close: s.close };
   }
   return null;
 }
