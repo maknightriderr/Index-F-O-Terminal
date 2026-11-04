@@ -14,6 +14,9 @@ export const STRATEGY_NAMES: Record<string, string> = {
   NEW_VWAP_PULLBACK_V1: 'VWAP pullback',
   NEW_PREVIOUS_SESSION_SWEEP_V1: 'PDH/PDL sweep',
   NEW_FIRST_OPENING_PULLBACK_V1: 'Opening pullback',
+  NEW_MOMENTUM_BREAKOUT_V1: 'Momentum breakout',
+  NEW_TREND_FLAG_V1: 'Trend flag',
+  NEW_EVENT_BREAKOUT_V1: 'Event breakout',
 };
 export const STRATEGY_IDS = Object.keys(STRATEGY_NAMES);
 export const strategyName = (id: string) => STRATEGY_NAMES[id] ?? id.replace(/^NEW_|_V\d+$/g, '').replaceAll('_', ' ').toLowerCase();
