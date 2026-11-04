@@ -508,8 +508,11 @@ export class AngelOneProvider implements MarketDataProvider {
 
   async getHistoricalData(params: HistoricalParams): Promise<OHLCV[]> {
     // Dhan first (separate rate budget, same exchange candles); Angel One when Dhan cannot or does not serve it.
-    const viaDhan = await dhanCandles(params, () => this.getInstrumentMaster());
-    if (viaDhan) return viaDhan;
+    if (params.source !== 'ANGEL') {
+      const viaDhan = await dhanCandles(params, () => this.getInstrumentMaster());
+      if (viaDhan) return viaDhan;
+      if (params.source === 'DHAN') return []; // pinned: never mix in another feed's bars
+    }
     await this.ensureAuthenticated();
 
     try {

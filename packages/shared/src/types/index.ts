@@ -1446,6 +1446,12 @@ export interface HistoricalParams {
   interval: CandleInterval;
   fromDate: string;
   toDate: string;
+  /**
+   * Pin the candle source (5 Nov volume audit): 'DHAN' returns [] instead of falling back to Angel One, 'ANGEL' skips
+   * Dhan. Unset keeps the default (Dhan first, Angel One on failure). A series whose volume is compared across bars
+   * must not mix two feeds' volume conventions.
+   */
+  source?: 'DHAN' | 'ANGEL';
 }
 
 // --- Institutional Flow ---

@@ -23,7 +23,8 @@ import {FreshOperationalReporter} from './operational-evidence.js';
 import {registerFreshResearchProtocol,freshResearchReadiness} from './research-inventory.js';
 import {freshIstDay,freshBars,mergeFreshBars,buildFreshReferenceContext,fillFreshGaps} from './context.js';
 import {auditFreshAdapter,auditFreshEvaluation,persistFreshCalendarSnapshot} from './audit.js';
-type History={five:FreshBar[];one:FreshBar[];lastSeen:number};
+/** One reference's candle history; every bar comes from `source` so volumes are comparable (5 Nov volume audit). */
+type History={five:FreshBar[];one:FreshBar[];lastSeen:number;source:'DHAN'|'ANGEL';emptyFetches:number};
 /** Angel One historical API time: "YYYY-MM-DD HH:mm" in IST (the format every other caller uses). */
 /**
  * How long one set of option books stays subscribed before the window moves on. It was 30 s, which re-subscribed
@@ -46,6 +47,8 @@ export function freshAngelTime(ms:number):string{
  */
 export const FRESH_HISTORY_SEED_DAYS = 35;
 /** After a failed history fetch a reference waits this long before the next attempt (no hammering a rate limit). */
+/** Consecutive empty candle answers from a reference's pinned feed before its history is dropped and reseeded. */
+export const FRESH_PINNED_EMPTY_LIMIT=3;
 export const FRESH_HISTORY_RETRY_MS = 60_000;
 export class FreshPaperWorker {
   /** First summary ~immediately after start, then every 15 minutes. */
@@ -114,14 +117,23 @@ export class FreshPaperWorker {
     // Angel One's candle API takes "YYYY-MM-DD HH:mm" IST; ISO strings were rejected with HTTP 400 and the provider returned
     // [] silently, so no fresh-start strategy ever received bars (2 Nov audit).
     const old=this.histories.get(ref.id),params={exchange:freshReferenceExchange(ref),segment:ref.signal.segment,token:ref.signal.token,toDate:freshAngelTime(now)};
-    const one=await this.provider.getHistoricalData({...params,interval:'ONE_MINUTE',fromDate:freshAngelTime(open)});
+    // Every bar of a reference comes from ONE feed (Dhan when it serves the contract, else Angel One): relative volume
+    // compares bars with each other, and two feeds' volume conventions must never mix inside one series.
+    const fiveFrom=freshAngelTime(old?Math.max(open,old.lastSeen-300000):now-FRESH_HISTORY_SEED_DAYS*86400000);
+    let source:'DHAN'|'ANGEL'=old?.source??'DHAN';
+    let five=await this.provider.getHistoricalData({...params,interval:'FIVE_MINUTE',fromDate:fiveFrom,source});
     if(this.stopped)throw Error('WORKER_STOPPED');
-    const five=await this.provider.getHistoricalData({...params,interval:'FIVE_MINUTE',fromDate:freshAngelTime(old?Math.max(open,old.lastSeen-300000):now-FRESH_HISTORY_SEED_DAYS*86400000)});
-    if(this.stopped)throw Error('WORKER_STOPPED');
+    if(!old&&(!Array.isArray(five)||five.length===0)){source='ANGEL';five=await this.provider.getHistoricalData({...params,interval:'FIVE_MINUTE',fromDate:fiveFrom,source});if(this.stopped)throw Error('WORKER_STOPPED');}
     // The provider returns [] on a failed call; an empty seed is a failure, not an empty market.
     if(!old&&(!Array.isArray(five)||five.length===0))throw Error('REFERENCE_HISTORY_UNAVAILABLE');
+    const one=await this.provider.getHistoricalData({...params,interval:'ONE_MINUTE',fromDate:freshAngelTime(open),source});
+    if(this.stopped)throw Error('WORKER_STOPPED');
+    // A pinned feed that keeps answering nothing is dropped after FRESH_PINNED_EMPTY_LIMIT calls: the next scan reseeds
+    // the whole series (again Dhan first, else Angel One), so the switch never mixes feeds inside the history.
+    const empty=(!Array.isArray(five)||five.length===0)&&(!Array.isArray(one)||one.length===0),emptyFetches=old&&empty?old.emptyFetches+1:0;
+    if(old&&emptyFetches>=FRESH_PINNED_EMPTY_LIMIT){this.histories.delete(ref.id);throw Error('REFERENCE_HISTORY_UNAVAILABLE');}
     const receivedAt=Date.now(),bars5=mergeFreshBars(old?.five??[],freshBars(five,5,receivedAt),4000),bars1=mergeFreshBars(old?.one??[],freshBars(one,1,receivedAt),1440),lastSeen=bars5.at(-1)?.time??0;
-    this.histories.delete(ref.id);this.histories.set(ref.id,{five:bars5,one:bars1,lastSeen});
+    this.histories.delete(ref.id);this.histories.set(ref.id,{five:bars5,one:bars1,lastSeen,source,emptyFetches});
     while(this.histories.size>40)this.histories.delete(this.histories.keys().next().value!);
     const ex=freshReferenceExchange(ref),c=buildFreshReferenceContext({now:receivedAt,exchange:ex,instrument:ref.id,sourceEpoch:this.feed.sourceEpoch,bars5:fillFreshGaps(bars5,300000,ex),bars1:fillFreshGaps(bars1,60000,ex),eventClear:this.events.clearance(receivedAt,freshIstDay(receivedAt),freshEventMarket(ref.market),ref.name)===null,referenceVerified:!!this.feed.underlying(ref.id)&&!!this.feed.underlying(freshReferenceSpotId(ref)),recentReleases:this.events.releases(receivedAt,freshEventMarket(ref.market),ref.name)});
     if(c)c.eventEvidence=this.events.evidence(receivedAt,freshEventMarket(ref.market),ref.name);

@@ -60,3 +60,32 @@ await vi.advanceTimersByTimeAsync(60000);expect(provider.getHistoricalData.mock.
  it('does not delay recovery or monitoring for a slow public-calendar preflight, and ignores completion after stop',async()=>{vi.useFakeTimers();vi.setSystemTime(new Date('2026-10-31T06:00:00Z'));mocks.recover.mockResolvedValue(undefined);const {worker,provider}=setup();let release!:()=>void;mocks.eiaRefresh.mockImplementation(()=>new Promise<void>(r=>release=r));await worker.start();expect(state.recovered).toBe(true);expect(state.monitorRunning).toBe(true);expect(state.status).toBe('WAITING_FOR_MARKET');expect(provider.getInstrumentMaster).not.toHaveBeenCalled();expect(mocks.eiaRefresh).toHaveBeenCalledOnce();worker.stop();release();await Promise.resolve();await Promise.resolve();expect(state.monitorRunning).toBe(false);expect(state.entriesArmed).toBe(false);expect(vi.getTimerCount()).toBe(0);});
 
 });
+describe('one candle feed per reference (5 Nov volume audit)',()=>{
+ const ref={id:'NSE_FO:1',name:'NIFTY',market:'NSE_INDEX_OPTIONS',exchange:'NSE',signal:{token:'1',segment:'FO'},spot:{token:'99926000',exchangeSegment:'NSE_CM'}};
+ const now=Date.parse('2026-10-30T06:00:00Z'),open=Date.parse('2026-10-30T03:45:00Z');
+ const bars=(n:number)=>Array.from({length:n},(_,i)=>({timestamp:new Date(open-86400000+i*300000).toISOString(),open:1,high:1,low:1,close:1,volume:10}));
+ function wire(worker:any){worker.feed={sourceEpoch:'e',underlying:()=>null,close:()=>{}};worker.events={clearance:()=>null,evidence:()=>({}),releases:()=>[]};}
+ it('pins Dhan when it serves the seed, and asks Dhan only from then on',async()=>{
+   const {worker,provider}=setup();wire(worker);provider.getHistoricalData.mockImplementation(async(p:any)=>p.source==='DHAN'?bars(3):[]);
+   await (worker as any).context(ref,now,open);
+   expect(provider.getHistoricalData.mock.calls.every(([p]:any)=>p.source==='DHAN')).toBe(true);
+   expect((worker as any).histories.get(ref.id).source).toBe('DHAN');
+   worker.stop();
+ });
+ it('falls back to Angel One for the whole series when Dhan cannot seed it',async()=>{
+   const {worker,provider}=setup();wire(worker);provider.getHistoricalData.mockImplementation(async(p:any)=>p.source==='ANGEL'?bars(3):[]);
+   await (worker as any).context(ref,now,open);
+   expect(provider.getHistoricalData.mock.calls.map(([p]:any)=>`${p.interval}:${p.source}`)).toEqual(['FIVE_MINUTE:DHAN','FIVE_MINUTE:ANGEL','ONE_MINUTE:ANGEL']);
+   expect((worker as any).histories.get(ref.id).source).toBe('ANGEL');
+   worker.stop();
+ });
+ it('drops a history whose pinned feed keeps answering nothing, so the next scan reseeds it whole',async()=>{
+   const {worker,provider}=setup();wire(worker);provider.getHistoricalData.mockImplementation(async(p:any)=>p.source==='DHAN'?bars(3):[]);
+   await (worker as any).context(ref,now,open);
+   provider.getHistoricalData.mockImplementation(async()=>[]);
+   await (worker as any).context(ref,now+1000,open);await (worker as any).context(ref,now+2000,open);
+   await expect((worker as any).context(ref,now+3000,open)).rejects.toThrow('REFERENCE_HISTORY_UNAVAILABLE');
+   expect((worker as any).histories.has(ref.id)).toBe(false);
+   worker.stop();
+ });
+});
