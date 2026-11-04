@@ -17,7 +17,7 @@ export async function logFreshDecisionSummary(now = Date.now()): Promise<void> {
   try {
     const [evaluations, refusals, candidates, adapter, positions] = await Promise.all([
       sql<any[]>`SELECT instrument, count(*)::int AS n FROM fresh_evaluations WHERE version=${FRESH_PACK_VERSION} AND at >= ${since} GROUP BY 1 ORDER BY 2 DESC LIMIT 30`,
-      sql<any[]>`SELECT r->>'strategy' AS strategy, r->>'code' AS code, count(*)::int AS n FROM fresh_evaluations e, jsonb_array_elements(coalesce(e.result->'refusals','[]'::jsonb)) r WHERE e.version=${FRESH_PACK_VERSION} AND e.at >= ${since} GROUP BY 1,2 ORDER BY 3 DESC LIMIT 40`,
+      sql<any[]>`SELECT r->>'strategy' AS strategy, r->>'code' AS code, r->>'detail' AS detail, count(*)::int AS n FROM fresh_evaluations e, jsonb_array_elements(coalesce(e.result->'refusals','[]'::jsonb)) r WHERE e.version=${FRESH_PACK_VERSION} AND e.at >= ${since} GROUP BY 1,2,3 ORDER BY 4 DESC LIMIT 80`,
       sql<any[]>`SELECT strategy, decision, code, count(*)::int AS n FROM fresh_candidates WHERE version=${FRESH_PACK_VERSION} AND at >= ${since} GROUP BY 1,2,3 ORDER BY 4 DESC LIMIT 40`,
       sql<any[]>`SELECT strategy, code, count(*)::int AS n FROM fresh_adapter_decisions WHERE version=${FRESH_PACK_VERSION} AND at >= ${since} GROUP BY 1,2 ORDER BY 3 DESC LIMIT 40`,
       sql<any[]>`SELECT count(*)::int AS n FROM fresh_paper_positions WHERE version=${FRESH_PACK_VERSION} AND opened_at >= ${since}`,

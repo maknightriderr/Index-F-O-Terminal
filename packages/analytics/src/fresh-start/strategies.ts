@@ -78,6 +78,8 @@ export interface FreshEvaluation {
     refusals: Array<{
         strategy: FreshStrategy;
         code: string;
+        /** For SETUP_CONDITIONS_NOT_MET / CHOPPY_REGIME: the furthest gate the setup reached (diagnostics only). */
+        detail?: string;
     }>;
 }
 const finite = (x: number) => Number.isFinite(x);
@@ -170,8 +172,11 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
     const directions = [1, -1] as const;
     for (const strategy of FRESH_STRATEGIES) {
         let emitted = false;
+        // Furthest gate reached by this strategy in either direction: the funnel behind "no setup" (diagnostics only).
+        let gate = -1, gateName = 'NOT_REACHED';
+        const reach = (n: number, name: string) => { if (n > gate) { gate = n; gateName = name; } };
         if (choppy && strategy !== 'NEW_PREVIOUS_SESSION_SWEEP_V1') {
-            out.refusals.push({ strategy, code: 'CHOPPY_REGIME' });
+            out.refusals.push({ strategy, code: 'CHOPPY_REGIME', detail: range ? 'VWAP_RANGE' : `EFFICIENCY_${Math.min(9, Math.floor(efficiency * 10))}0PCT` });
             continue;
         }
         for (const d of directions) {
@@ -180,20 +185,30 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
             const confirms = (x: FreshBar, min = .5) => d * (x.close - x.open) > 0 && body(x) >= min;
             const lo = (xs: readonly FreshBar[]) => d === 1 ? Math.min(...xs.map(x => x.low)) : Math.max(...xs.map(x => x.high));
             let stop: number | undefined, origin: number | undefined;
+            if (strategy === 'NEW_ORB_RETEST_V1') reach(0, opening.length === 3 && today.length >= 5 && c.now - c.sessionOpen <= 7200000 ? 'ORB_NO_TREND' : 'ORB_OUTSIDE_WINDOW');
             if (strategy === 'NEW_ORB_RETEST_V1' && directional && opening.length === 3 && c.now - c.sessionOpen <= 7200000 && today.length >= 5) {
                 const level = d === 1 ? orh : orl, width = orh - orl;
+                reach(1, 'ORB_RANGE_WIDTH');
                 if (width >= .5 * impulseAtr && width <= 3 * impulseAtr)
                     for (let i = Math.max(3, today.length - 4); i < today.length - 1; i++) {
                         const breakout = today[i], retests = today.slice(i + 1), first = retests.find(x => (d === 1 ? x.low : x.high) >= level - .15 * a && (d === 1 ? x.low : x.high) <= level + .15 * a && favorable(x.close, level) && confirms(x) && closeLocation(x, d) >= .7);
-                        if (favorable(breakout.close, level + d * .05 * a) && body(breakout) >= .6 && closeLocation(breakout, d) >= .75 && rvol(breakout) >= 1.5 && favorable(breakout.close, vw(breakout))
-                            && retests.length <= 3 && first === current && !retests.some(x => d * (x.close - level) < -.15 * a)) {
+                        reach(2, 'ORB_NO_BREAKOUT');
+                        if (!favorable(breakout.close, level + d * .05 * a)) continue;
+                        reach(3, 'ORB_BREAKOUT_QUALITY');
+                        if (!(body(breakout) >= .6 && closeLocation(breakout, d) >= .75 && favorable(breakout.close, vw(breakout)))) continue;
+                        reach(4, 'ORB_BREAKOUT_RVOL');
+                        if (!(rvol(breakout) >= 1.5)) continue;
+                        reach(5, 'ORB_NO_RETEST_TRIGGER');
+                        if (retests.length <= 3 && first === current && !retests.some(x => d * (x.close - level) < -.15 * a)) {
                             stop = lo(retests) - d * .1 * a;
                             origin = opening[0].time;
                             break;
                         }
                     }
             }
+            if (strategy === 'NEW_VWAP_PULLBACK_V1') reach(0, c.now - c.sessionOpen >= FRESH_VWAP_START_MS ? 'VWAP_NO_TREND' : 'VWAP_BEFORE_10_30');
             if (strategy === 'NEW_VWAP_PULLBACK_V1' && directional && c.now - c.sessionOpen >= FRESH_VWAP_START_MS) {
+                reach(1, 'VWAP_NO_IMPULSE');
                 for (let start = Math.max(3, today.length - 5); start <= today.length - 2; start++) {
                     const impulse = today.slice(start - 3, start), pull = today.slice(start), prev = today[start - 1], initial = today[start];
                     const pivot = levels.filter(x => x.kind === 'CONFIRMED_SWING' && x.knownAt <= prev.time + 300000 && x.role === (d === 1 ? 'RESISTANCE' : 'SUPPORT')).sort((x, y) => y.knownAt - x.knownAt)[0];
@@ -201,11 +216,20 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                     const move = d * (prev.close - impulse[0].open), depth = d * (prev.close - lo(pull));
                     // The pullback starts at the first counter close after a clean three-bar impulse (no counter close inside it).
                     const cleanImpulse = impulse.every((x, k) => k === 0 || d * (x.close - impulse[k - 1].close) >= 0);
-                    if (pull.length < 3 || pull.length > 5 || !cleanImpulse || !pivot || !behind || !favorable(prev.close, pivot.price) || move < .75 * a || !impulse.some(x => rvol(x) >= 1.2) || d * (initial.close - prev.close) >= 0)
+                    if (pull.length < 3 || pull.length > 5 || !cleanImpulse || move < .75 * a || d * (initial.close - prev.close) >= 0)
                         continue;
+                    reach(2, 'VWAP_NO_SWING_PIVOT');
+                    if (!pivot || !behind || !favorable(prev.close, pivot.price))
+                        continue;
+                    reach(3, 'VWAP_IMPULSE_RVOL');
+                    if (!impulse.some(x => rvol(x) >= 1.2))
+                        continue;
+                    reach(4, 'VWAP_PULLBACK_SHAPE');
                     // At least two pullback bars precede the confirmation bar.
                     const firstTrigger = pull.find((x, j) => j >= 2 && confirms(x) && favorable(x.close, d === 1 ? pull[j - 1].high : pull[j - 1].low) && favorable(x.close, vw(x)));
                     const invalid = pull.some((x, i) => i > 0 && d * (x.close - vw(x)) < 0 && d * (pull[i - 1].close - vw(pull[i - 1])) < 0);
+                    if (depth <= .6 * move && favorable(lo(pull), behind.price) && pull.some(x => Math.abs((d === 1 ? x.low : x.high) - vw(x)) <= .2 * a)
+                        && median(pull.map(x => x.volume)) < .8 * median(impulse.map(x => x.volume)) && !invalid) reach(5, 'VWAP_NO_TRIGGER');
                     if (depth <= .6 * move && favorable(lo(pull), behind.price) && pull.some(x => Math.abs((d === 1 ? x.low : x.high) - vw(x)) <= .2 * a)
                         && median(pull.map(x => x.volume)) < .8 * median(impulse.map(x => x.volume)) && !invalid && firstTrigger === current && confirms(current) && favorable(current.close, d === 1 ? today[today.length - 2].high : today[today.length - 2].low) && favorable(current.close, vwap)) {
                         stop = lo(pull) - d * .1 * a;
@@ -214,20 +238,26 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                     }
                 }
             }
+            if (strategy === 'NEW_PREVIOUS_SESSION_SWEEP_V1') reach(0, c.previousHigh > c.previousLow && c.previousLow > 0 ? (c.now - c.sessionOpen >= 1800000 ? 'SWEEP_AGAINST_TREND' : 'SWEEP_FIRST_30_MIN') : 'SWEEP_NO_PREVIOUS_SESSION');
             if (strategy === 'NEW_PREVIOUS_SESSION_SWEEP_V1' && (range || !strong || (d === 1 ? bull : bear)) && c.now - c.sessionOpen >= 1800000 && c.previousHigh > c.previousLow && c.previousLow > 0) {
                 const level = d === 1 ? c.previousLow : c.previousHigh;
                 // Only the session's first breach of the level qualifies, and its depth is the deepest extreme from that breach through the reclaim.
                 const firstBreach = today.findIndex(x => d * (level - (d === 1 ? x.low : x.high)) > 0);
+                reach(1, firstBreach < 0 ? 'SWEEP_LEVEL_NOT_BREACHED' : 'SWEEP_BREACH_NOT_RECENT');
                 for (let i = Math.max(0, today.length - 5); i < today.length - 1; i++) {
                     if (i !== firstBreach)
                         continue;
                     const sweep = today[i];
+                    reach(2, 'SWEEP_NO_RECLAIM');
+                    if (today.findIndex((x, j) => j >= i && j <= i + 2 && favorable(x.close, level) && closeLocation(x, d) >= .7) >= 0) reach(3, 'SWEEP_RECLAIM_RVOL');
                     const reclaimIndex = today.findIndex((x, j) => j >= i && j <= i + 2 && favorable(x.close, level) && closeLocation(x, d) >= .7 && rvol(x) >= 1.2);
                     if (reclaimIndex < 0)
                         continue;
                     const extreme = lo(today.slice(i, reclaimIndex + 1)), depth = d * (level - extreme);
+                    reach(4, 'SWEEP_DEPTH');
                     if (depth < .05 * a || depth > .75 * a)
                         continue;
+                    reach(5, 'SWEEP_NO_TRIGGER');
                     const after = today.slice(reclaimIndex + 1), reclaim = today[reclaimIndex];
                     const trigger = after.find(x => confirms(x) && favorable(x.close, d === 1 ? reclaim.high : reclaim.low));
                     if (after.length >= 1 && after.length <= 2 && trigger === current && favorable(lo(today.slice(i)), extreme - d * 1e-9)) {
@@ -237,15 +267,21 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                     }
                 }
             }
+            if (strategy === 'NEW_FIRST_OPENING_PULLBACK_V1') reach(0, opening.length === 3 && today.length >= 5 && c.now - c.sessionOpen <= 7200000 ? 'OPEN_NO_TREND' : 'OPEN_OUTSIDE_WINDOW');
             if (strategy === 'NEW_FIRST_OPENING_PULLBACK_V1' && directional && opening.length === 3 && today.length >= 5 && c.now - c.sessionOpen <= 7200000) {
                 const net = d * (opening[2].close - opening[0].open), refs = c.openingVolumeReferences.filter(x => finite(x) && x > 0).slice(-20), vol = opening.reduce((s, x) => s + x.volume, 0);
                 const openRange = { ...opening[2], high: orh, low: orl };
                 const first = today.findIndex((x, i) => i >= 3 && d * (x.close - today[i - 1].close) < 0);
+                reach(1, 'OPEN_IMPULSE_WEAK');
+                if (net >= 1.5 * impulseAtr && closeLocation(openRange, d) >= .8 && favorable(opening[2].close, vw(opening[2]))) reach(2, 'OPEN_VOLUME');
+                if (net >= 1.5 * impulseAtr && closeLocation(openRange, d) >= .8 && favorable(opening[2].close, vw(opening[2])) && refs.length >= FRESH_MIN_VOLUME_SESSIONS && vol / median(refs) >= 1.5) reach(3, 'OPEN_NO_PULLBACK');
                 if (net >= 1.5 * impulseAtr && closeLocation(openRange, d) >= .8 && favorable(opening[2].close, vw(opening[2])) && refs.length >= FRESH_MIN_VOLUME_SESSIONS && vol / median(refs) >= 1.5 && first >= 3) {
+                    reach(4, 'OPEN_PULLBACK_SHAPE');
                     // Retracement is measured from the impulse extreme reached before the first counter close, not the third bar's close.
                     const pre = today.slice(0, first), peak = d === 1 ? Math.max(...pre.map(x => x.high)) : Math.min(...pre.map(x => x.low));
                     const span = d * (peak - opening[0].open), pull = today.slice(first), depth = d * (peak - lo(pull));
                     const firstTrigger = pull.find((x, j) => j > 0 && confirms(x) && favorable(x.close, d === 1 ? today[first + j - 1].high : today[first + j - 1].low) && favorable(x.close, vw(x)));
+                    if (pull.length <= 4 && depth >= .2 * span && depth <= .5 * span && median(pull.map(x => x.volume)) < .8 * median(opening.map(x => x.volume))) reach(5, 'OPEN_NO_TRIGGER');
                     if (pull.length <= 4 && depth >= .2 * span && depth <= .5 * span && median(pull.map(x => x.volume)) < .8 * median(opening.map(x => x.volume)) && firstTrigger === current) {
                         stop = lo(pull) - d * .1 * a;
                         origin = opening[0].time;
@@ -291,7 +327,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
             emitted = true;
         }
         if (!emitted && !out.refusals.some(x => x.strategy === strategy))
-            out.refusals.push({ strategy, code: 'SETUP_CONDITIONS_NOT_MET' });
+            out.refusals.push({ strategy, code: 'SETUP_CONDITIONS_NOT_MET', detail: gateName });
     }
     return out;
 }
