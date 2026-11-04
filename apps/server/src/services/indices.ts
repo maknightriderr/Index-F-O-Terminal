@@ -11,6 +11,7 @@ import type { Exchange, MarketQuote } from '@fno/shared';
 import type { MarketDataProvider } from '../providers/interface.js';
 import { resolveNearestFuturesContract } from './option-chain.js';
 import { logger } from '../lib/logger.js';
+import { mcxPreviousClose, noteMcxCloseMismatch } from './mcx-previous-close.js';
 
 export const INDEX_LIST: Array<{ symbol: string; exchange: Exchange }> = [
   { symbol: 'NIFTY', exchange: 'NSE' },
@@ -156,8 +157,13 @@ export async function getMcxCommodityQuotes(provider: MarketDataProvider): Promi
       continue;
     }
 
-    const change = q.netChange ?? q.ltp - q.close;
-    const changePercent = q.percentChange ?? (q.close > 0 ? (change / q.close) * 100 : 0);
+    // The day change is measured from the previous session's last candle (mcx-previous-close.ts): the broker quote's
+    // close / net change did not reflect it on MCX (5 Nov: CRUDEOIL ~740 down shown as ~17 up).
+    const candleClose = await mcxPreviousClose(provider, entry.token);
+    if (candleClose != null) noteMcxCloseMismatch(entry.symbol, q.close, q.netChange, candleClose, q.ltp);
+    const prevClose = candleClose ?? q.close;
+    const change = candleClose != null ? q.ltp - candleClose : q.netChange ?? q.ltp - q.close;
+    const changePercent = candleClose != null ? (change / candleClose) * 100 : q.percentChange ?? (q.close > 0 ? (change / q.close) * 100 : 0);
 
     results.push({
       token: entry.token,
@@ -169,7 +175,7 @@ export async function getMcxCommodityQuotes(provider: MarketDataProvider): Promi
       open: q.open,
       high: q.high,
       low: q.low,
-      close: q.close,
+      close: prevClose,
       volume: q.volume,
       timestamp: now,
       // The exchange's own time (FULL mode, audit 2026-10-18): after the close it is the last close, not this fetch.
