@@ -1,7 +1,7 @@
 // Approved implementation pack; pure functions only. Time, calendars and data provenance are injected.
 import { atr, ema } from '../indicators/index.js';
 import { freshOrderFlowEvidence, type FreshOrderFlowInput } from './order-flow-evidence.js';
-export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.9';
+export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.10';
 /** Minimum underlying reward / risk for a target, and the furthest target in 5-minute ATR before it is capped (1.5). */
 /**
  * 1.5 regime filter: the trend strategies (ORB, VWAP pullback, opening pullback) stand aside on a choppy day, where a
@@ -27,6 +27,13 @@ export const FRESH_STRATEGIES = ['NEW_ORB_RETEST_V1', 'NEW_VWAP_PULLBACK_V1', 'N
 export const FRESH_TREND_STRATEGIES: readonly string[] = ['NEW_MOMENTUM_BREAKOUT_V1', 'NEW_TREND_FLAG_V1', 'NEW_EVENT_BREAKOUT_V1'];
 /** Momentum breakout: efficiency over the last FRESH_EFFICIENCY_BARS needed (a trend day, not a drift). */
 export const FRESH_MOMENTUM_MIN_EFFICIENCY = 0.4;
+/**
+ * ORB retest (1.10, 5 Nov): a breakout of the opening range is taken all session (up to the entry cutoff), not only in
+ * the first two hours after the anchor - a range that holds for hours and then breaks and runs was never captured.
+ * After FRESH_ORB_EARLY_WINDOW_MS the breakout must be the FIRST close beyond the level since the range formed: a late
+ * break of a range that already broke and failed earlier in the day is chop, not a range expansion.
+ */
+export const FRESH_ORB_EARLY_WINDOW_MS = 7200000;
 /**
  * Momentum breakout bar (1.9, 5 Nov): range >= 0.9 ATR, body >= 50% of range, close in the outer 35%. Was 1.2 ATR / 60% /
  * 70%: NIFTY's breakouts of the day's high on 5 Nov were refused MOM_BAR_QUALITY four times in an hour. Owner-approved
@@ -243,8 +250,8 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
             const confirms = (x: FreshBar, min = .5) => d * (x.close - x.open) > 0 && body(x) >= min;
             const lo = (xs: readonly FreshBar[]) => d === 1 ? Math.min(...xs.map(x => x.low)) : Math.max(...xs.map(x => x.high));
             let stop: number | undefined, origin: number | undefined, profile: 'TARGET' | 'TREND' = 'TARGET';
-            if (strategy === 'NEW_ORB_RETEST_V1') reach(0, opening.length === 3 && day.length >= 5 && sinceAnchor <= 7200000 ? 'ORB_NO_TREND' : 'ORB_OUTSIDE_WINDOW');
-            if (strategy === 'NEW_ORB_RETEST_V1' && directional && opening.length === 3 && sinceAnchor <= 7200000 && day.length >= 5) {
+            if (strategy === 'NEW_ORB_RETEST_V1') reach(0, opening.length === 3 && day.length >= 5 ? 'ORB_NO_TREND' : 'ORB_OUTSIDE_WINDOW');
+            if (strategy === 'NEW_ORB_RETEST_V1' && directional && opening.length === 3 && day.length >= 5) {
                 const level = d === 1 ? orh : orl, width = orh - orl;
                 reach(1, 'ORB_RANGE_WIDTH');
                 if (width >= .5 * impulseAtr && width <= 3 * impulseAtr)
@@ -252,6 +259,8 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                         const breakout = day[i], retests = day.slice(i + 1), first = retests.find(x => (d === 1 ? x.low : x.high) >= level - .15 * a && (d === 1 ? x.low : x.high) <= level + .15 * a && favorable(x.close, level) && confirms(x) && closeLocation(x, d) >= .7);
                         reach(2, 'ORB_NO_BREAKOUT');
                         if (!favorable(breakout.close, level + d * .05 * a)) continue;
+                        reach(2.5, 'ORB_LATE_LEVEL_ALREADY_BROKEN');
+                        if (breakout.time - anchor.at >= FRESH_ORB_EARLY_WINDOW_MS && day.slice(3, i).some(x => favorable(x.close, level))) continue;
                         reach(3, 'ORB_BREAKOUT_QUALITY');
                         if (!(body(breakout) >= .6 && closeLocation(breakout, d) >= .75 && favorable(breakout.close, vw(breakout)))) continue;
                         reach(4, 'ORB_BREAKOUT_RVOL');

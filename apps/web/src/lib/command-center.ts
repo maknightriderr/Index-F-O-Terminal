@@ -287,7 +287,7 @@ export interface RadarCell { state: RadarState; code: string | null; at: number 
 
 /** Short plain-English reasons for the engine's refusal codes and gate details (Radar cells). */
 const RADAR_REASONS: Readonly<Record<string, string>> = Object.freeze({
-  ORB_OUTSIDE_WINDOW: 'Outside ORB window', ORB_NO_TREND: 'No 15m trend', ORB_RANGE_WIDTH: 'Opening range too narrow/wide', ORB_NO_BREAKOUT: 'No range breakout',
+  ORB_OUTSIDE_WINDOW: 'Opening range not formed', ORB_LATE_LEVEL_ALREADY_BROKEN: 'Range already broke earlier', ORB_NO_TREND: 'No 15m trend', ORB_RANGE_WIDTH: 'Opening range too narrow/wide', ORB_NO_BREAKOUT: 'No range breakout',
   ORB_BREAKOUT_QUALITY: 'Weak breakout bar', ORB_BREAKOUT_RVOL: 'Breakout volume low', ORB_NO_RETEST_TRIGGER: 'Waiting for retest',
   VWAP_BEFORE_10_30: 'Starts 10:30', VWAP_NO_TREND: 'No 15m trend', VWAP_NO_IMPULSE: 'No impulse leg', VWAP_PULLBACK_SHAPE: 'Pullback shape off',
   SWEEP_FIRST_30_MIN: 'First 30 min', SWEEP_LEVEL_NOT_BREACHED: 'PDH/PDL not swept', SWEEP_BREACH_NOT_RECENT: 'Sweep too old',
