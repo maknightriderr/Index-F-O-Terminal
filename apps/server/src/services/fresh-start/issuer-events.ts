@@ -50,6 +50,14 @@ export function parseIssuerCalendar(input:{events:unknown;meetings:unknown;actio
   const body={source:'NSE_PUBLIC_RANGE_V1' as const,requestedAt,fetchedAt,expiresAt:requestedAt+300000,...range,results:sort([...results.values()]),uncertain:sort([...uncertain.values()]),actions:sort([...mappedActions.values()]),responseCounts:{events:events.length,meetings:meetings.length,actions:actions.length}};
   return {id:createHash('sha256').update(JSON.stringify(body)).digest('hex'),...body};
 }
+/**
+ * After a snapshot's 5-minute freshness, the last good snapshot of the SAME IST day stays usable for this long while the
+ * source fails transiently (timeout, network, HTTP status). Listed companies must announce a results board meeting at
+ * least two working days ahead (SEBI LODR Reg. 29), so today's results list does not change intraday; 5 Nov: one NSE
+ * timeout blocked every stock (BLOCKED_ISSUER_RESULTS_COVERAGE) until the next good refresh. A malformed response or a
+ * failed durable write still discards the snapshot.
+ */
+export const FRESH_ISSUER_GRACE_MS=45*60000;
 export interface IssuerSourceView {qualifiedAt:number|null;failureCode:string|null;source:string;status:string;fetchedAt:number|null;expiresAt:number|null;snapshotId:string|null;nextAttemptAt:number;responseCounts:IssuerCalendarSnapshot['responseCounts']|null;}
 /** Public exchange metadata only. No broker credentials, paid source, challenge solving or stale-success fallback. */
 export class FreshIssuerEvents {
@@ -68,10 +76,10 @@ export class FreshIssuerEvents {
       // Sequential requests keep source pressure bounded; one range request per endpoint, no per-stock fan-out.
       const events=await request('event-calendar',range.eventFrom,range.eventTo),meetings=await request('corporate-board-meetings',range.eventFrom,range.eventTo),actions=await request('corporates-corporateActions',range.actionFrom,range.actionTo);
       const snapshot=parseIssuerCalendar({events,meetings,actions},range,this.now(),now);try{await this.persist(snapshot);}catch{throw Error('ISSUER_SNAPSHOT_PERSISTENCE_FAILED');}this.failureCode=null;this.qualifiedAt=this.now();this.snapshot=snapshot;this.status='ISSUER_RANGE_OBSERVED';this.nextAttempt=Math.min(this.now()+180000,snapshot.expiresAt-60000);
-    }catch(error){this.failureCode=axios.isAxiosError(error)?error.response?.status?`HTTP_${error.response.status}`:error.code==='ECONNABORTED'?'SOURCE_TIMEOUT':'SOURCE_NETWORK_UNAVAILABLE':error instanceof Error&&/^[A-Z_]+$/.test(error.message)?error.message:'SOURCE_RESPONSE_UNAVAILABLE';this.snapshot=null;this.qualifiedAt=null;this.cookie='';this.status='BLOCKED_ISSUER_SOURCE_RESPONSE';this.nextAttempt=this.now()+60000;}finally{this.inFlight=null;}})();return this.inFlight;
+    }catch(error){const transient=axios.isAxiosError(error)||(error instanceof Error&&error.message==='NSE_SESSION_UNAVAILABLE');this.failureCode=axios.isAxiosError(error)?error.response?.status?`HTTP_${error.response.status}`:error.code==='ECONNABORTED'?'SOURCE_TIMEOUT':'SOURCE_NETWORK_UNAVAILABLE':error instanceof Error&&/^[A-Z_]+$/.test(error.message)?error.message:'SOURCE_RESPONSE_UNAVAILABLE';if(!transient){this.snapshot=null;this.qualifiedAt=null;}this.cookie='';this.status='BLOCKED_ISSUER_SOURCE_RESPONSE';this.nextAttempt=this.now()+60000;}finally{this.inFlight=null;}})();return this.inFlight;
   }
   clearance(now:number,day:string,issuer:string|null,kind:'RESULTS'|'ACTIONS'|'ALL'='ALL'):string|null{
-    const s=this.snapshot;if(!issuer||!s||now<s.fetchedAt||this.qualifiedAt==null||now<this.qualifiedAt||now>s.expiresAt||day!==freshIstDay(now)||day<s.eventFrom||day>s.eventTo||day<s.actionFrom||day>s.actionTo)return 'BLOCKED_ISSUER_RESULTS_COVERAGE';
+    const s=this.usable(now);if(!issuer||!s||day!==freshIstDay(now)||day<s.eventFrom||day>s.eventTo||day<s.actionFrom||day>s.actionTo)return 'BLOCKED_ISSUER_RESULTS_COVERAGE';
     if(kind!=='ACTIONS'){
       if(s.results.some(x=>x.issuer===issuer&&x.day===day))return 'ISSUER_RESULTS_DAY';
       if(s.uncertain.some(x=>x.issuer===issuer&&x.day===day))return 'BLOCKED_ISSUER_EVENT_PURPOSE';
@@ -82,6 +90,10 @@ export class FreshIssuerEvents {
     }
     return null;
   }
-  evidence(now:number){const s=this.snapshot;return s&&this.qualifiedAt!=null&&this.qualifiedAt<=now&&s.fetchedAt<=now&&now<=s.expiresAt?{id:s.id,source:s.source,qualifiedAt:this.qualifiedAt,fetchedAt:s.fetchedAt,expiresAt:s.expiresAt,eventFrom:s.eventFrom,eventTo:s.eventTo,actionFrom:s.actionFrom,actionTo:s.actionTo}:null;}
-  view():IssuerSourceView{const s=this.snapshot;return {source:'NSE_PUBLIC_RANGE_V1',qualifiedAt:this.qualifiedAt,failureCode:this.failureCode,status:s&&this.now()<s.fetchedAt?'BLOCKED_ISSUER_SOURCE_CLOCK':s&&this.now()>s.expiresAt?'BLOCKED_ISSUER_SOURCE_STALE':this.status,fetchedAt:s?.fetchedAt??null,expiresAt:s?.expiresAt??null,snapshotId:s?.id??null,nextAttemptAt:this.nextAttempt,responseCounts:s?.responseCounts??null};}
+  /** The snapshot usable at `now`: fresh, or within the grace after expiry on the day it was fetched. */
+  private usable(now:number):IssuerCalendarSnapshot|null{
+    const s=this.snapshot;if(!s||this.qualifiedAt==null||now<this.qualifiedAt||now<s.fetchedAt||now>s.expiresAt+FRESH_ISSUER_GRACE_MS||freshIstDay(s.requestedAt)!==freshIstDay(now))return null;return s;
+  }
+  evidence(now:number){const s=this.usable(now);return s&&this.qualifiedAt!=null?{...(now>s.expiresAt?{graceMs:now-s.expiresAt}:{}),id:s.id,source:s.source,qualifiedAt:this.qualifiedAt,fetchedAt:s.fetchedAt,expiresAt:s.expiresAt,eventFrom:s.eventFrom,eventTo:s.eventTo,actionFrom:s.actionFrom,actionTo:s.actionTo}:null;}
+  view():IssuerSourceView{const s=this.snapshot;return {source:'NSE_PUBLIC_RANGE_V1',qualifiedAt:this.qualifiedAt,failureCode:this.failureCode,status:s&&this.now()<s.fetchedAt?'BLOCKED_ISSUER_SOURCE_CLOCK':s&&this.now()>s.expiresAt?(this.usable(this.now())?'ISSUER_RANGE_OBSERVED_GRACE':'BLOCKED_ISSUER_SOURCE_STALE'):this.status,fetchedAt:s?.fetchedAt??null,expiresAt:s?.expiresAt??null,snapshotId:s?.id??null,nextAttemptAt:this.nextAttempt,responseCounts:s?.responseCounts??null};}
 }
