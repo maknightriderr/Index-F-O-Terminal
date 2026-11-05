@@ -13,19 +13,29 @@ function late(bars: FreshBar[]): FreshBar[] { const pad = Array.from({ length: 9
 function orb() { return context([bar(open, 100, 101, 99, 100.5), bar(open + 300000, 100.5, 101, 99.5, 100.5), bar(open + 600000, 100.5, 101, 99.5, 100.5), bar(open + 900000, 100.5, 104.5, 100.4, 104, 2000), bar(open + 1200000, 101.2, 103, 100.9, 102.8)]); }
 function mirrored(c: FreshContext): FreshContext { const map = (b: FreshBar) => ({ ...b, open: 250 - b.open, high: 250 - b.low, low: 250 - b.high, close: 250 - b.close }); return { ...c, bars5: c.bars5.map(map), bars15: c.bars15.map(map), bars1: c.bars1.map(map), previousHigh: 250 - c.previousLow, previousLow: 250 - c.previousHigh, levels: c.levels.map(x => ({ ...x, price: 250 - x.price, role: x.role === 'RESISTANCE' ? 'SUPPORT' : 'RESISTANCE' })) }; }
 describe('fresh-start point-in-time strategy rules', () => {
-    it('1.7: runs ORB from an evening opening anchor (MCX) and stays outside the window without it', () => {
+    it('1.7: runs ORB from an evening opening anchor (MCX); 1.10: without it, a late first break of the session range', () => {
         const shift = 24 * 300000; // the pattern starts two hours after the session open
         const pattern = orb().bars5.slice(105);
         const pad = Array.from({ length: 24 }, (_, i) => bar(open + i * 300000, 100.5, 101, 100, 100.5));
         const moved = pattern.map(x => ({ ...x, time: x.time + shift, availableAt: x.availableAt + shift }));
         const base = context([...pad, ...moved]);
         const plain = evaluateFreshStrategies(base);
-        expect(plain.candidates.some(x => x.strategy === 'NEW_ORB_RETEST_V1')).toBe(false);
-        expect(plain.refusals.find(x => x.strategy === 'NEW_ORB_RETEST_V1')?.detail ?? plain.refusals.find(x => x.strategy === 'NEW_ORB_RETEST_V1')?.code).toMatch(/ORB_OUTSIDE_WINDOW|CHOPPY_REGIME/);
+        // 1.10: without an evening anchor the session-open range (100-101) held for two hours and this is its first
+        // close beyond, so the late break is taken from the session open's range.
+        const late = plain.candidates.find(x => x.strategy === 'NEW_ORB_RETEST_V1');
+        expect(late, JSON.stringify(plain.refusals.filter(x => x.strategy === 'NEW_ORB_RETEST_V1'))).toBeTruthy();
+        expect(late!.origin).toBe(open);
         const evening = { ...base, openingAnchors: [{ at: open, volumeReferences: base.openingVolumeReferences }, { at: open + shift, volumeReferences: base.openingVolumeReferences }] };
         const found = evaluateFreshStrategies(evening).candidates.find(x => x.strategy === 'NEW_ORB_RETEST_V1');
         expect(found, JSON.stringify(evaluateFreshStrategies(evening).refusals)).toBeTruthy();
         expect(found!.origin).toBe(open + shift);
+    });
+    it('1.10: refuses a late re-break of an opening range that already broke and failed earlier', () => {
+        const shift = 24 * 300000, pattern = orb().bars5.slice(105).map(x => ({ ...x, time: x.time + shift, availableAt: x.availableAt + shift }));
+        const pad = Array.from({ length: 24 }, (_, i) => i === 10 ? bar(open + i * 300000, 100.5, 101.8, 100.4, 101.6) : bar(open + i * 300000, 100.5, 101, 100, 100.5));
+        const r = evaluateFreshStrategies(context([...pad, ...pattern]));
+        expect(r.candidates.some(x => x.strategy === 'NEW_ORB_RETEST_V1')).toBe(false);
+        expect(r.refusals.find(x => x.strategy === 'NEW_ORB_RETEST_V1')).toMatchObject({ code: 'SETUP_CONDITIONS_NOT_MET', detail: 'ORB_LATE_LEVEL_ALREADY_BROKEN' });
     });
     it('names the furthest gate behind every "no setup" and every choppy refusal (4 Nov diagnostics)', () => {
         const c = orb();
