@@ -30,12 +30,17 @@ describe('fresh-start point-in-time strategy rules', () => {
         expect(found, JSON.stringify(evaluateFreshStrategies(evening).refusals)).toBeTruthy();
         expect(found!.origin).toBe(open + shift);
     });
-    it('1.10: refuses a late re-break of an opening range that already broke and failed earlier', () => {
+    it('1.11: takes a late stop-hunt re-break beyond the failed break\'s extreme, refuses one that stays below it', () => {
         const shift = 24 * 300000, pattern = orb().bars5.slice(105).map(x => ({ ...x, time: x.time + shift, availableAt: x.availableAt + shift }));
-        const pad = Array.from({ length: 24 }, (_, i) => i === 10 ? bar(open + i * 300000, 100.5, 101.8, 100.4, 101.6) : bar(open + i * 300000, 100.5, 101, 100, 100.5));
-        const r = evaluateFreshStrategies(context([...pad, ...pattern]));
-        expect(r.candidates.some(x => x.strategy === 'NEW_ORB_RETEST_V1')).toBe(false);
-        expect(r.refusals.find(x => x.strategy === 'NEW_ORB_RETEST_V1')).toMatchObject({ code: 'SETUP_CONDITIONS_NOT_MET', detail: 'ORB_LATE_LEVEL_ALREADY_BROKEN' });
+        // An earlier break (bar 10) closed beyond the range high 101 and fell back inside: a failed breakout, a trap.
+        const pad = (trapHigh: number) => Array.from({ length: 24 }, (_, i) => i === 10 ? bar(open + i * 300000, 100.5, trapHigh, 100.4, 101.6) : bar(open + i * 300000, 100.5, 101, 100, 100.5));
+        // The re-break bar closes at 104 on rvol 2: beyond a trap at 101.8, so the trapped traders' stops are gone.
+        const taken = evaluateFreshStrategies(context([...pad(101.8), ...pattern]));
+        expect(taken.candidates.find(x => x.strategy === 'NEW_ORB_RETEST_V1'), JSON.stringify(taken.refusals.find(x => x.strategy === 'NEW_ORB_RETEST_V1'))).toBeTruthy();
+        // A trap that reached 105 is not cleared by a close at 104.
+        const refused = evaluateFreshStrategies(context([...pad(105), ...pattern]));
+        expect(refused.candidates.some(x => x.strategy === 'NEW_ORB_RETEST_V1')).toBe(false);
+        expect(refused.refusals.find(x => x.strategy === 'NEW_ORB_RETEST_V1')).toMatchObject({ code: 'SETUP_CONDITIONS_NOT_MET', detail: 'ORB_REBREAK_NOT_BEYOND_TRAP' });
     });
     it('names the furthest gate behind every "no setup" and every choppy refusal (4 Nov diagnostics)', () => {
         const c = orb();
