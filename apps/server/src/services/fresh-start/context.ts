@@ -15,8 +15,16 @@ export function freshBars(rows:readonly OHLCV[],minutes:number,receivedAt:number
 export function mergeFreshBars(old:readonly FreshBar[],incoming:readonly FreshBar[],limit:number):FreshBar[]{
   const map=new Map(old.map(x=>[x.time,x]));for(const b of incoming){const prior=map.get(b.time),same=prior&&['open','high','low','close','volume'].every(k=>prior[k as keyof FreshBar]===b[k as keyof FreshBar]);map.set(b.time,same?{...b,availableAt:prior.availableAt}:b);}return [...map.values()].sort((a,b)=>a.time-b.time).slice(-limit);
 }
-/** Longest run of no-trade bars filled per gap: 5 one-minute bars, 2 five-minute bars. Longer gaps stay gaps (an outage). */
+/** Longest run of no-trade bars always filled per gap: 5 one-minute bars, 2 five-minute bars. */
 export const FRESH_GAP_FILL_LIMIT:Readonly<Record<number,number>>=Object.freeze({60000:5,300000:2});
+/**
+ * Longest QUIET gap filled: up to an hour (60 one-minute / 12 five-minute bars), but only when the next real bar opens
+ * within FRESH_QUIET_GAP_MAX_JUMP of the previous close. A thin futures contract (BANKEX, FINNIFTY, NIFTYNXT50 on 5 Nov)
+ * goes 10-40 minutes without a trade at an unchanged price, so the short limit left WARMUP / RVOL_HISTORY_INSUFFICIENT
+ * all day; a data outage in a moving market leaves a price jump across the gap and stays a gap.
+ */
+export const FRESH_QUIET_GAP_FILL_LIMIT:Readonly<Record<number,number>>=Object.freeze({60000:60,300000:12});
+export const FRESH_QUIET_GAP_MAX_JUMP=0.005;
 /**
  * Broker candle APIs omit a minute in which nothing traded, and the strategies require a contiguous session (MISSING_BARS
  * was the top refusal on 2 Nov: 318 of ~1,000 evaluations, mostly quiet MCX contracts). A short gap between two real
@@ -25,14 +33,15 @@ export const FRESH_GAP_FILL_LIMIT:Readonly<Record<number,number>>=Object.freeze(
  * filled from the previous real close (or, with no earlier bar loaded, the first traded price). Gaps longer than the limit and the tail after the last real bar are never filled.
  */
 export function fillFreshGaps(bars:readonly FreshBar[],stepMs:number,exchange:Exchange='NSE'):FreshBar[]{
-  const limit=FRESH_GAP_FILL_LIMIT[stepMs]??0;if(!limit||bars.length===0)return [...bars];
+  const limit=FRESH_GAP_FILL_LIMIT[stepMs]??0,quiet=FRESH_QUIET_GAP_FILL_LIMIT[stepMs]??limit;if(!limit||bars.length===0)return [...bars];
   const out:FreshBar[]=[];
   for(let i=0;i<bars.length;i++){
     const b=bars[i],prev=out.at(-1),s=getSessionWindow(exchange,freshIstDay(b.time));
     if(prev&&s&&b.time>=s.open&&b.time+stepMs<=s.close){
       // Within the session: start from the previous bar of the same session, or from the open when this is the first one.
       const start=prev.time>=s.open?prev.time+stepMs:s.open,missing=(b.time-start)/stepMs;
-      if(Number.isInteger(missing)&&missing>0&&missing<=limit)for(let t=start;t<b.time;t+=stepMs)out.push({time:t,availableAt:b.availableAt,open:prev.close,high:prev.close,low:prev.close,close:prev.close,volume:0});
+      const fill=missing<=limit||(missing<=quiet&&Math.abs(b.open-prev.close)<=FRESH_QUIET_GAP_MAX_JUMP*prev.close);
+      if(Number.isInteger(missing)&&missing>0&&fill)for(let t=start;t<b.time;t+=stepMs)out.push({time:t,availableAt:b.availableAt,open:prev.close,high:prev.close,low:prev.close,close:prev.close,volume:0});
     }else if(!prev&&s&&b.time>s.open&&b.time+stepMs<=s.close){
       // No earlier bar loaded (the minute history starts at today's open): the first traded price is the only known level.
       const missing=(b.time-s.open)/stepMs;

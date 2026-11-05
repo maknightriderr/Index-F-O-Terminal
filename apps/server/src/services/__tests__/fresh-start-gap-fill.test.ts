@@ -11,9 +11,17 @@ describe('no-trade gap filling (2 Nov: MISSING_BARS was the top refusal)', () =>
     expect(out.map((b) => (b.time - open) / 60000)).toEqual([0, 1, 2, 3]);
     expect(out[1]).toMatchObject({ open: 100, high: 100, low: 100, close: 100, volume: 0, availableAt: bar(3, 105).availableAt });
   });
-  it('leaves an outage-sized gap and the tail unfilled', () => {
+  it('leaves a gap with a price jump (an outage) and the tail unfilled', () => {
     const out = fillFreshGaps([bar(0, 100), bar(10, 105)], 60000, 'MCX');
     expect(out).toHaveLength(2);
+  });
+  it('fills a long quiet gap (thin futures, 5 Nov) only while the price did not jump across it, up to an hour', () => {
+    expect(fillFreshGaps([bar(0, 100), bar(30, 100.2)], 60000, 'MCX')).toHaveLength(31);
+    expect(fillFreshGaps([bar(0, 100), bar(61, 100)], 60000, 'MCX')).toHaveLength(62);
+    expect(fillFreshGaps([bar(0, 100), bar(62, 100)], 60000, 'MCX')).toHaveLength(2);
+    const five = (k: number, c: number): FreshBar => ({ time: open + k * 300000, availableAt: open + (k + 1) * 300000, open: c, high: c, low: c, close: c, volume: 1 });
+    expect(fillFreshGaps([five(0, 100), five(8, 100.3)], 300000, 'MCX')).toHaveLength(9);
+    expect(fillFreshGaps([five(0, 100), five(8, 101)], 300000, 'MCX')).toHaveLength(2);
   });
   it('fills a quiet opening minute from the first traded price when nothing earlier is loaded', () => {
     const out = fillFreshGaps([bar(2, 101)], 60000, 'MCX');
@@ -23,6 +31,6 @@ describe('no-trade gap filling (2 Nov: MISSING_BARS was the top refusal)', () =>
   it('allows at most 2 missing five-minute bars', () => {
     const five = (k: number, c: number): FreshBar => ({ time: open + k * 300000, availableAt: open + (k + 1) * 300000, open: c, high: c, low: c, close: c, volume: 1 });
     expect(fillFreshGaps([five(0, 1), five(3, 2)], 300000, 'MCX')).toHaveLength(4);
-    expect(fillFreshGaps([five(0, 1), five(4, 2)], 300000, 'MCX')).toHaveLength(2);
+    expect(fillFreshGaps([five(0, 1), five(4, 2)], 300000, 'MCX')).toHaveLength(2); // a 100% jump: not quiet
   });
 });

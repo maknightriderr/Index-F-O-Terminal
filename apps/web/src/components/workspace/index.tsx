@@ -20,7 +20,7 @@ import { useAlerts } from '@/lib/use-alerts';
 import { useFeedSummary } from '@/lib/use-feed-summary';
 import { useMarketStore, useWorkspaceStore } from '@/stores';
 import { exchangeFor, WORKSPACE_PRESETS, type WorkspaceFocus } from '@/lib/commands';
-import { accountView, inr, istTime, pickContract, positionViews, setupRadar, signedInr, signedR, STRATEGY_IDS, strategyName, type RadarCell } from '@/lib/command-center';
+import { accountView, inr, istTime, pickContract, positionViews, radarReason, setupRadar, signedInr, signedR, STRATEGY_IDS, strategyName, type RadarCell } from '@/lib/command-center';
 import { Empty, Pill, type Tone } from '@/components/command-center/panel';
 
 const fmt = (v: number | null | undefined, d = 2) => (v == null || !Number.isFinite(v) ? '—' : v.toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d }));
@@ -228,7 +228,8 @@ function referenceNames(status: ReturnType<typeof useFreshStart>['data']): Map<s
 }
 
 const CELL_TONE: Record<RadarCell['state'], Tone> = { IN_TRADE: 'ok', FILLED: 'ok', REFUSED: 'warn', NO_SETUP: 'off', NOT_EVALUATED: 'off' };
-const cellText = (c: RadarCell) => (c.state === 'IN_TRADE' ? 'IN TRADE' : c.state === 'FILLED' ? 'FILLED' : c.state === 'NOT_EVALUATED' ? '—' : (c.code ?? c.state).replaceAll('_', ' '));
+const cellText = (c: RadarCell) => (c.state === 'IN_TRADE' ? 'IN TRADE' : c.state === 'FILLED' ? 'FILLED' : c.state === 'NOT_EVALUATED' ? '—' : c.code ? radarReason(c) : c.state.replaceAll('_', ' '));
+const cellTitle = (c: RadarCell) => [c.code, c.detail].filter(Boolean).join(' · ') || undefined;
 
 function Radar({ rows, names, onOpen, loading }: { rows: ReturnType<typeof setupRadar>; names: Map<string, { name: string; age: number | null }>; onOpen: (name: string) => void; loading: boolean }) {
   if (loading) return <Empty>Loading the engine status…</Empty>;
@@ -254,7 +255,7 @@ function Radar({ rows, names, onOpen, loading }: { rows: ReturnType<typeof setup
                 </td>
                 {STRATEGY_IDS.map((s) => {
                   const c = r.cells[s];
-                  return <td key={s}>{c.state === 'NOT_EVALUATED' || c.state === 'NO_SETUP' ? <span className="ws-dim">{cellText(c)}</span> : <Pill tone={CELL_TONE[c.state]}>{cellText(c)}</Pill>}</td>;
+                  return <td key={s} title={cellTitle(c)}>{c.state === 'NOT_EVALUATED' || c.state === 'NO_SETUP' ? <span className="ws-dim">{cellText(c)}</span> : <Pill tone={CELL_TONE[c.state]}>{cellText(c)}</Pill>}</td>;
                 })}
                 <td className="cc-num ws-dim">{r.at ? istTime(r.at) : '—'}</td>
               </tr>

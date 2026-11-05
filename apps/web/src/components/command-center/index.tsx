@@ -24,6 +24,7 @@ import {
   MIN_SAMPLE,
   COHORT_DRAWDOWN_FRACTION,
   positionViews,
+  radarReason,
   setupRadar,
   signedInr,
   signedR,
@@ -248,9 +249,9 @@ export function SetupRadar({ rows }: { rows: ReturnType<typeof setupRadar> }) {
                   const c = r.cells[s];
                   return (
                     <td key={s}>
-                      <div className="cc-cell" data-state={c.state} title={c.code ?? undefined}>
+                      <div className="cc-cell" data-state={c.state} title={[c.code, c.detail].filter(Boolean).join(' · ') || undefined}>
                         <b>{RADAR_LABEL[c.state]}</b>
-                        <span>{c.code ? (c.state === 'IN_TRADE' ? c.code : c.code.replaceAll('_', ' ').toLowerCase()) : '—'}</span>
+                        <span>{c.code ? (c.state === 'IN_TRADE' ? c.code : radarReason(c)) : '—'}</span>
                       </div>
                     </td>
                   );
