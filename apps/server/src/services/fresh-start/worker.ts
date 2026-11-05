@@ -117,6 +117,13 @@ export class FreshPaperWorker {
   }
 
   /** Swaps the window's round-robin stocks for the same number of the most active F&O stocks (one quote call). */
+  /** Process memory and the worker's in-memory caches, every 15 minutes (5 Nov cost review: backend RSS 2-8 GB). */
+  private logMemory(){
+    try{
+      const m=process.memoryUsage(),mb=(x:number)=>Math.round(x/1_048_576);let five=0,one=0;for(const h of this.histories.values()){five+=h.five.length;one+=h.one.length;}
+      logger.info({event:'freshMemory',rssMb:mb(m.rss),heapUsedMb:mb(m.heapUsed),heapTotalMb:mb(m.heapTotal),externalMb:mb(m.external),arrayBuffersMb:mb(m.arrayBuffers),histories:{references:this.histories.size,fiveMinuteBars:five,oneMinuteBars:one},master:this.master.length,references:this.refs.size,feed:this.feed.sizes()},'Fresh-start memory');
+    }catch{/* diagnostics only */}
+  }
   private async activeStocks(selected:FreshReference[]):Promise<FreshReference[]>{
     const slots=selected.filter(r=>r.market==='NSE_STOCK_OPTIONS').length,stocks=this.discovery!.references.filter(r=>r.market==='NSE_STOCK_OPTIONS');
     if(!slots||!stocks.length)return selected;
@@ -216,6 +223,6 @@ export class FreshPaperWorker {
         if(state.entriesArmed&&blockers.length===0)state.lastDecision=await this.runtime.onClosedReference(h.context);else{await auditFreshEvaluation(h.context,evaluateFreshStrategies(h.context));state.lastDecision=blockers[0]??'BLOCKED_REQUIRED_CAPABILITY';}
       }
       state.discovery.historyCache=this.histories.size;state.status=state.entriesArmed?'FORWARD_PAPER_RUNNING':'PAPER_ARMED_DATA_BLOCKED';state.error=null;
-    }catch(error){if(this.stopped)return;state.entriesArmed=false;state.status='BLOCKED_ADAPTER';state.error=error instanceof Error&&/^BLOCKED_[A-Z_]+$/.test(error.message)?error.message:'ADAPTER_INPUT_OR_STORAGE_UNAVAILABLE';state.entryBlockers=[state.error];for(const m of state.marketReadiness){m.eligibleReferences=0;m.blockers=[...new Set([...m.blockers,state.error])];}}finally{this.scanning=false;if(!this.stopped){this.operationalReporter.report(state);const t=Date.now();if(t-this.summaryAt>=FRESH_DECISION_SUMMARY_MS){this.summaryAt=t;void logFreshDecisionSummary(t);}}}
+    }catch(error){if(this.stopped)return;state.entriesArmed=false;state.status='BLOCKED_ADAPTER';state.error=error instanceof Error&&/^BLOCKED_[A-Z_]+$/.test(error.message)?error.message:'ADAPTER_INPUT_OR_STORAGE_UNAVAILABLE';state.entryBlockers=[state.error];for(const m of state.marketReadiness){m.eligibleReferences=0;m.blockers=[...new Set([...m.blockers,state.error])];}}finally{this.scanning=false;if(!this.stopped){this.operationalReporter.report(state);const t=Date.now();if(t-this.summaryAt>=FRESH_DECISION_SUMMARY_MS){this.summaryAt=t;void logFreshDecisionSummary(t);this.logMemory();}}}
   }
 }
