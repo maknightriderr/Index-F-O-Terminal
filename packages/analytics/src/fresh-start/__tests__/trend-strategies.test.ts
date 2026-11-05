@@ -32,6 +32,14 @@ describe('1.8 momentum breakout', () => {
             expect(Math.abs(x!.referenceEntry - x!.stop)).toBeLessThanOrEqual(2 * x!.atr);
         }
     });
+    it('1.9: takes an ordinary breakout bar (~1 ATR, 55% body, close in the top 30%) that 1.8 refused, still refuses a weak one', () => {
+        // 5 Nov: NIFTY's breakouts of the day's high were refused MOM_BAR_QUALITY (1.2 ATR / 60% body / 70% close).
+        const ordinary = [...quiet, bar(6, 101.5, 103.2, 101.2, 102.6, 2500)];
+        for (const [c, d] of [[context(ordinary), 'BULLISH'], [mirror(context(ordinary)), 'BEARISH']] as const)
+            expect(find(c, 'NEW_MOMENTUM_BREAKOUT_V1'), JSON.stringify(refusal(c, 'NEW_MOMENTUM_BREAKOUT_V1'))).toMatchObject({ direction: d });
+        const indecisive = [...quiet, bar(6, 101.8, 103.2, 101.2, 102.6, 2500)]; // 40% body
+        expect(refusal(context(indecisive), 'NEW_MOMENTUM_BREAKOUT_V1')).toMatchObject({ code: 'SETUP_CONDITIONS_NOT_MET', detail: 'MOM_BAR_QUALITY' });
+    });
     it('refuses normal volume, a weak bar and the first half hour, naming the gate', () => {
         const lowVol = [...quiet, bar(6, 101.3, 104.6, 101.2, 104.4, 1500)];
         expect(refusal(context(lowVol), 'NEW_MOMENTUM_BREAKOUT_V1')).toMatchObject({ code: 'SETUP_CONDITIONS_NOT_MET', detail: 'MOM_VOLUME' });

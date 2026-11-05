@@ -1,7 +1,7 @@
 // Approved implementation pack; pure functions only. Time, calendars and data provenance are injected.
 import { atr, ema } from '../indicators/index.js';
 import { freshOrderFlowEvidence, type FreshOrderFlowInput } from './order-flow-evidence.js';
-export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.8';
+export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.9';
 /** Minimum underlying reward / risk for a target, and the furthest target in 5-minute ATR before it is capped (1.5). */
 /**
  * 1.5 regime filter: the trend strategies (ORB, VWAP pullback, opening pullback) stand aside on a choppy day, where a
@@ -27,6 +27,14 @@ export const FRESH_STRATEGIES = ['NEW_ORB_RETEST_V1', 'NEW_VWAP_PULLBACK_V1', 'N
 export const FRESH_TREND_STRATEGIES: readonly string[] = ['NEW_MOMENTUM_BREAKOUT_V1', 'NEW_TREND_FLAG_V1', 'NEW_EVENT_BREAKOUT_V1'];
 /** Momentum breakout: efficiency over the last FRESH_EFFICIENCY_BARS needed (a trend day, not a drift). */
 export const FRESH_MOMENTUM_MIN_EFFICIENCY = 0.4;
+/**
+ * Momentum breakout bar (1.9, 5 Nov): range >= 0.9 ATR, body >= 50% of range, close in the outer 35%. Was 1.2 ATR / 60% /
+ * 70%: NIFTY's breakouts of the day's high on 5 Nov were refused MOM_BAR_QUALITY four times in an hour. Owner-approved
+ * paper loosening; outcomes are compared against 1.8 by pack version.
+ */
+export const FRESH_MOMENTUM_BAR_MIN_RANGE_ATR = 0.9;
+export const FRESH_MOMENTUM_BAR_MIN_BODY = 0.5;
+export const FRESH_MOMENTUM_BAR_MIN_CLOSE_LOCATION = 0.65;
 /** Momentum breakout: breakout bar volume against the same slot on earlier sessions. */
 export const FRESH_MOMENTUM_MIN_RVOL = 2;
 /** Trend strategies: the widest initial underlying risk accepted, in 5-minute ATRs (a wider stop only buys fewer lots). */
@@ -358,7 +366,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                             if (favorable(today[j].close, ext)) chased++;
                         }
                         reach(3, 'MOM_BAR_QUALITY');
-                        if (current.high - current.low >= 1.2 * a && body(current) >= .6 && closeLocation(current, d) >= .7) {
+                        if (current.high - current.low >= FRESH_MOMENTUM_BAR_MIN_RANGE_ATR * a && body(current) >= FRESH_MOMENTUM_BAR_MIN_BODY && closeLocation(current, d) >= FRESH_MOMENTUM_BAR_MIN_CLOSE_LOCATION) {
                             reach(4, 'MOM_VOLUME');
                             if (rvol(current) >= FRESH_MOMENTUM_MIN_RVOL) {
                                 reach(5, 'MOM_EXTENDED_OR_CHASED');
