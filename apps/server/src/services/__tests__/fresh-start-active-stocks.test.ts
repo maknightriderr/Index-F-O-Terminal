@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { freshRankStocks, type FreshReference } from '../fresh-start/markets.js';
+import { freshEventClearStocks, freshRankStocks, type FreshReference } from '../fresh-start/markets.js';
 
 const ref = (name: string, token: string) => ({ id: `NSE_CM:${token}`, name, market: 'NSE_STOCK_OPTIONS', signal: { token } }) as unknown as FreshReference;
 
@@ -14,5 +14,10 @@ describe('active F&O stock ranking (5 Nov)', () => {
     ]);
     expect(freshRankStocks(refs, q).map((r) => r.name)).toEqual(['B', 'C', 'A', 'D', 'E']);
     expect(freshRankStocks(refs, new Map([['5', { ltp: 50, close: 50, volume: 1, percentChange: -7 }]])).map((r) => r.name)[0]).toBe('E');
+  });
+  it('ranks only stocks clear of an event blackout (5 Nov: 8 of 9 selected stocks were reporting results)', () => {
+    const refs = [ref('A', '1'), ref('B', '2'), ref('C', '3')];
+    expect(freshEventClearStocks(refs, (r) => r.name !== 'B').map((r) => r.name)).toEqual(['A', 'C']);
+    expect(freshEventClearStocks(refs, () => false).map((r) => r.name)).toEqual(['A', 'B', 'C']); // issuer source down
   });
 });
