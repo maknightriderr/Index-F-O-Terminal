@@ -67,6 +67,14 @@ describe('benchmark volume shape for a contract with too little own history (5 N
     // Own level: 200 x (3 x 3 + 72 x 1) = 16,200 a day; slot 10 holds 1/81 of the day → 200, not the benchmark's 5,000.
     for (const v of c.rvolReferences[10]) expect(v).toBeCloseTo(200, 6);
   });
+  it('borrows per slot: a thin contract with 20 covered days but volume in few sessions of a slot (5 Nov FINNIFTY)', () => {
+    // Every day covered (quiet gaps filled with zero volume), but slot 10 traded on only 5 of 20 days.
+    const own = bars(() => 200).map((b) => { const s = getSessionWindow('NSE', freshIstDay(b.time))!, slot = (b.time - s.open) / 300000, day = Math.floor(b.time / 86400000); return slot === 10 && day % 4 !== 0 && b.time < getSessionWindow('NSE', freshIstDay(now))!.open ? { ...b, volume: 0 } : b; });
+    const c = ctx(own, bars(() => 5000));
+    expect(c.volumeShape).toBe('BENCHMARK');
+    expect(c.rvolReferences[10].filter((x) => x > 0).length).toBeGreaterThanOrEqual(15);
+    expect(c.rvolReferences[11]).toEqual(ctx(own).rvolReferences[11]); // a slot with enough own sessions keeps its own
+  });
   it('keeps its own references when it has enough sessions, and never borrows without an own level', () => {
     expect(ctx(bars(() => 200), bars(() => 5000)).volumeShape).toBeUndefined();
     const noOwn = ctx(bars(() => 0, 20), bars(() => 5000));

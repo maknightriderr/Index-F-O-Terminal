@@ -122,14 +122,22 @@ export function buildFreshReferenceContext(args:{now:number;instrument:string;so
   const historical=five.filter(x=>x.time<session.open&&x.availableAt<=args.now),byDay=new Map<string,FreshBar[]>();for(const b of historical){const d=freshIstDay(b.time);byDay.set(d,[...(byDay.get(d)??[]),b]);}
   const dates=[...byDay.keys()].sort().slice(-20);
   const own=freshVolumeReferences(byDay,dates,exchange);
-  // A contract with fewer than FRESH_MIN_VOLUME_SESSIONS well-covered sessions (5 Nov: FINNIFTY 1, MIDCPNIFTY 14 — the
+  // A thin contract (5 Nov: FINNIFTY, NIFTYNXT50, MIDCPNIFTY — the
   // current futures traded thinly while it was the next month) borrows the intraday volume SHAPE of its exchange's
   // benchmark future (NIFTY / SENSEX, or an MCX mini's parent), scaled by its OWN latest well-covered session total.
   // The shape is market-wide (open and close heavy); the level, which differs per contract, stays its own.
-  let volume=own,volumeShape:'OWN'|'BENCHMARK'='OWN';
-  if(own.sessions<FRESH_MIN_VOLUME_SESSIONS&&own.level!=null&&args.volumeBenchmark?.length){
+  // Per slot: a thin contract can pass the day-coverage rule on filled no-trade bars yet carry volume in only a few
+  // sessions of a slot (5 Nov FINNIFTY: 20 sessions, 5 with volume at 11:30). Each slot (and the opening / evening
+  // reference) with fewer than FRESH_MIN_VOLUME_SESSIONS positive own values takes the benchmark's, at the own level.
+  const usable=(xs:readonly number[]|undefined)=>(xs??[]).filter(x=>Number.isFinite(x)&&x>0).length;
+  let volume={slots:{...own.slots},opening:own.opening,evening:own.evening},volumeShape:'OWN'|'BENCHMARK'='OWN';
+  if(own.level!=null&&args.volumeBenchmark?.length){
     const bench=freshHistoricalDays(args.volumeBenchmark,exchange,session.open,args.now),borrowed=freshVolumeReferences(bench.byDay,bench.dates,exchange,own.level);
-    if(borrowed.sessions>=FRESH_MIN_VOLUME_SESSIONS){volume=borrowed;volumeShape='BENCHMARK';}
+    if(borrowed.sessions>=FRESH_MIN_VOLUME_SESSIONS){
+      for(const [k,v] of Object.entries(borrowed.slots))if(usable(own.slots[Number(k)])<FRESH_MIN_VOLUME_SESSIONS&&usable(v)>=FRESH_MIN_VOLUME_SESSIONS){volume.slots[Number(k)]=v;volumeShape='BENCHMARK';}
+      if(usable(own.opening)<FRESH_MIN_VOLUME_SESSIONS&&usable(borrowed.opening)>=FRESH_MIN_VOLUME_SESSIONS){volume.opening=borrowed.opening;volumeShape='BENCHMARK';}
+      if(usable(own.evening)<FRESH_MIN_VOLUME_SESSIONS&&usable(borrowed.evening)>=FRESH_MIN_VOLUME_SESSIONS){volume.evening=borrowed.evening;volumeShape='BENCHMARK';}
+    }
   }
   const {slots:rvol,opening,evening}=volume;
   const eveningAt=exchange==='MCX'?freshMcxEveningAnchor(date):null;
