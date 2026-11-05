@@ -115,6 +115,8 @@ export class FreshSharedFeed {
     }
     /** Per exchange segment since the last read: ticks seen, accepted 2-10 s late, dropped (> 10 s late or clock ahead), max lag. */
     private lag=new Map<string,{ticks:number;late:number;dropped:number;skewed:number;maxLagMs:number}>();
+    /** Entry counts of the in-memory maps (memory accounting, 5 Nov cost review). */
+    sizes(){let quotes=0,history=0;for(const v of this.books.values())quotes+=v.length;for(const v of this.referenceHistory.values())history+=v.length;return {targets:this.targets.size,books:this.books.size,quotes,referenceTicks:history,latest:this.latest.size,pairs:this.pairs.size};}
     tickLagStats(){const out=Object.fromEntries(this.lag);this.lag.clear();return out;}
     private receive(raw: readonly Tick[]) {
         const ticks:Tick[]=[];

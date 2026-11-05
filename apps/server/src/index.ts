@@ -71,6 +71,7 @@ import { startBarArchive } from './services/bar-archive.js';
 import { startDailyReview } from './services/daily-review-job.js';
 import { startAutomaticTradeReview } from './services/auto-review-job.js';
 import { startRecordReconciliation } from './services/record-reconciliation.js';
+import { startFreshMaintenance } from './services/fresh-start/maintenance.js';
 import { opsStatus, startOpsMonitor } from './services/ops-monitor.js';
 import { freshCalendarHorizons } from './services/fresh-start/calendar-horizon.js';
 import { orderFlowFeedActive, startOrderFlowFeed } from './services/dhan-feed.js';
@@ -442,6 +443,8 @@ for (const spec of [
   timerService('automaticTradeReview', () => startAutomaticTradeReview(), { ready: () => schemaReady }),
   // Audit 2026-10-18 (REC-1): once a day, every closed plan against its trade row; alerts a disagreement once. Read-only.
   timerService('recordReconciliation', () => startRecordReconciliation(), { ready: () => schemaReady }),
+  // 5 Nov cost review: once a night, evaluation inputs older than 10 days are trimmed (results, trades, decisions kept).
+  timerService('freshMaintenance', () => startFreshMaintenance(), { ready: () => schemaReady }),
   // Audit 2026-10-18 (OBS-1): functional health checks every minute; one Telegram alert per incident. Read-only.
   timerService('opsMonitor', () => startOpsMonitor(subscriptionManager), { ready: () => recoveryReady }),
   timerService('holidayCalendarCheck', () => startHolidayCalendarCheck()),
