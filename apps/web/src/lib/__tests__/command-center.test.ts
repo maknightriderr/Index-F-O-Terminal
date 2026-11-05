@@ -95,7 +95,7 @@ describe('setup radar', () => {
     const s = status([], { evaluations: [{ id: 'e', at: new Date(at('10:35')).toISOString(), instrument: 'NIFTY', session: 's', refusals: [
       { strategy: 'NEW_MOMENTUM_BREAKOUT_V1', code: 'SETUP_CONDITIONS_NOT_MET', detail: 'MOM_LOW_EFFICIENCY' },
       { strategy: 'NEW_ORB_RETEST_V1', code: 'CHOPPY_REGIME', detail: 'EFFICIENCY_10PCT' },
-      { strategy: 'NEW_VWAP_PULLBACK_V1', code: 'WARMUP' },
+      { strategy: 'NEW_VWAP_PULLBACK_V1', code: 'WARMUP', detail: '5M_80_15M_20' },
     ] }] });
     const cells = setupRadar(s, [], NOW).find((r) => r.instrument === 'NIFTY')!.cells;
     expect(cells.NEW_MOMENTUM_BREAKOUT_V1).toMatchObject({ code: 'SETUP_CONDITIONS_NOT_MET', detail: 'MOM_LOW_EFFICIENCY' });
