@@ -19,7 +19,7 @@ describe('fresh-start executable paper admission', () => {
     });
     it.each(['eventClear', 'calendarVerified'] as const)('blocks missing %s', key => { const r = request(); r[key] = false; expect(admitFreshPaper(r)).toEqual({ ok: false, code: 'BLOCKED_REQUIRED_CAPABILITY' }); });
     it.each(['metadataVerified', 'modelVerified', 'feesVerified'] as const)('blocks unknown %s', key => { const r = request(); r.contract[key] = false; expect(admitFreshPaper(r).ok).toBe(false); });
-    it.each([0, 11])('rejects index expiry sessions %s', days => { const r = request(); r.contract.expiryTradableSessions = days; expect(admitFreshPaper(r)).toEqual({ ok: false, code: 'EXPIRY_INELIGIBLE' }); });
+    it.each([0, 26])('rejects index expiry sessions %s (25 is the monthly-series ceiling)', days => { const r = request(); r.contract.expiryTradableSessions = days; expect(admitFreshPaper(r)).toEqual({ ok: false, code: 'EXPIRY_INELIGIBLE' }); });
     it('does not treat a newly received old quote as a post-latency fill', () => { const r = request(); r.quote.eventAt = at + 100; expect(admitFreshPaper(r)).toEqual({ ok: false, code: 'ENTRY_EXPIRED_OR_EARLY' }); });
     it('rejects a changed source epoch and wrong contract', () => { const r = request(); r.quote.epoch = 'e2'; expect(admitFreshPaper(r).ok).toBe(false); r.quote.epoch = 'e1'; r.quote.contract = 'OTHER'; expect(admitFreshPaper(r).ok).toBe(false); });
     it('never forces one lot when risk, depth or capital cannot afford it', () => {

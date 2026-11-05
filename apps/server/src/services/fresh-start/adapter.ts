@@ -1,5 +1,5 @@
 import {getSessionWindow,FO_SEGMENT,type Instrument} from '@fno/shared';
-import {assessFreshPlan,fitFreshParity,fitFreshFuturesParity,freshFuturesPremiumScenarios,freshPremiumScenarios,freshRoundTripFees,freshRoundTripFeeBreakdown,type FreshCandidate,type FreshQuote,type FreshContract} from '@fno/analytics';
+import {assessFreshPlan,FRESH_MONTHLY_MAX_EXPIRY_SESSIONS,fitFreshParity,fitFreshFuturesParity,freshFuturesPremiumScenarios,freshPremiumScenarios,freshRoundTripFees,freshRoundTripFeeBreakdown,type FreshCandidate,type FreshQuote,type FreshContract} from '@fno/analytics';
 import type {FreshQualifiedAdapter,FreshPreparedCandidate} from './runtime.js';
 import {FreshSharedFeed} from './feed.js';
 import {FreshEventSource} from './event-source.js';
@@ -48,7 +48,13 @@ export class FreshProductionAdapter implements FreshQualifiedAdapter {
     if(await this.ports.legacyRisk())return reject('LEGACY_POSITION_OR_INVENTORY_UNAVAILABLE');
     let signal=this.feed.underlying(ref.id),spot=this.feed.underlying(freshReferenceSpotId(ref));if(!signal||!spot)return reject('STALE_EXACT_REFERENCE');
     const market=ref.market,master=this.ports.master(),futureMaster=mcx?master.filter(x=>x.exchange==='MCX'&&x.name===ref.name&&x.instrumentType==='FUTCOM'):[],universe=master.filter(x=>x.exchange===exchange&&x.segment==='FO'&&x.name===ref.name&&x.instrumentType===(mcx?'OPTFUT':market==='NSE_STOCK_OPTIONS'?'OPTSTK':'OPTIDX')&&x.expiry&&x.strike&&x.strike>0&&Number.isSafeInteger(x.lotSize)&&x.lotSize>0&&x.tickSize>0&&(!mcx||resolveFreshMcxLink(x,futureMaster)?.futureToken===ref.signal.token));
-    const expiries=[...new Set(universe.map(x=>x.expiry!))].filter(d=>{const n=freshExpirySessions(c.session,d,exchange);return n!=null&&n>=(mcx?FRESH_MCX_PAPER_PROPOSAL.minimumExpirySessions:bse?FRESH_BSE_PAPER_PROPOSAL.minimumExpirySessions:market==='NSE_STOCK_OPTIONS'?3:1)&&n<=(mcx?FRESH_MCX_PAPER_PROPOSAL.maximumExpirySessions:bse?FRESH_BSE_PAPER_PROPOSAL.maximumExpirySessions:market==='NSE_STOCK_OPTIONS'?15:10);}).sort().slice(0,2);
+    // Nearest expiries inside the market's standard window (NSE index 1-10, stocks 3-15, BSE 1-10, MCX 3-15 sessions).
+    // A monthly-only product has none in the first half of its cycle (5 Nov: BANKNIFTY / FINNIFTY setups refused with
+    // expiries [] - next expiry 23 Nov, 12 sessions away), so it then takes its single nearest expiry up to
+    // FRESH_MONTHLY_MAX_EXPIRY_SESSIONS: the only listed series, with less time decay than a weekly.
+    const minSessions=mcx?FRESH_MCX_PAPER_PROPOSAL.minimumExpirySessions:bse?FRESH_BSE_PAPER_PROPOSAL.minimumExpirySessions:market==='NSE_STOCK_OPTIONS'?3:1,maxSessions=mcx?FRESH_MCX_PAPER_PROPOSAL.maximumExpirySessions:bse?FRESH_BSE_PAPER_PROPOSAL.maximumExpirySessions:market==='NSE_STOCK_OPTIONS'?15:10;
+    const listed=[...new Set(universe.map(x=>x.expiry!))].map(d=>({d,n:freshExpirySessions(c.session,d,exchange)})).filter((x):x is {d:string;n:number}=>x.n!=null&&x.n>=minSessions&&x.n<=FRESH_MONTHLY_MAX_EXPIRY_SESSIONS).sort((a,b)=>a.d.localeCompare(b.d));
+    const standard=listed.filter(x=>x.n<=maxSessions),expiries=(standard.length?standard.slice(0,2):listed.slice(0,1)).map(x=>x.d);
     const spotPrice=spot.price;
     const strikes=[...new Set(universe.filter(x=>expiries.includes(x.expiry!)).map(x=>x.strike!))].sort((a,b)=>Math.abs(a-spotPrice)-Math.abs(b-spotPrice)||a-b).slice(0,5);
     const rows=await this.store.recover(),marks=this.marks(rows),accountId=`${c.version}:${c.session}`,account=await this.store.accountView(accountId,this.ports.capital,marks,now),eligible:{contract:FreshContract;rr:number;spread:number;tick:number;iv:number|null;expiry:string}[]=[],refusals:{contract:string;code:string}[]=[];

@@ -1,5 +1,7 @@
 import {freshPremiumForNet,freshRoundTripFees,type FreshFeePolicy} from './pricing.js';
 import type { FreshCandidate } from './strategies.js';
+/** Longest expiry a paper entry may take: a monthly-only series early in its cycle (the adapter prefers 1-10 / 3-15). */
+export const FRESH_MONTHLY_MAX_EXPIRY_SESSIONS = 25;
 export interface FreshQuote {
     contract: string;
     source: string;
@@ -102,7 +104,7 @@ function assessFreshPaper(args: {
         return refuse('BLOCKED_REQUIRED_CAPABILITY');
     if (k.market !== 'NSE_INDEX_OPTIONS' && k.market !== 'NSE_STOCK_OPTIONS' && !(k.market === 'BSE_VERIFIED_OPTIONS' && k.marketPolicy === 'BSE_INDEX_1_10_PAPER_V1') && !(k.market === 'MCX_VERIFIED_FUTURES_OPTIONS' && k.marketPolicy === 'MCX_EXACT_FUTURE_3_15_PAPER_V1'))
         return refuse('MARKET_DISCOVERY_ONLY');
-    if (!Number.isSafeInteger(k.expiryTradableSessions) || k.expiryTradableSessions < ((k.market === 'NSE_STOCK_OPTIONS' || k.market === 'MCX_VERIFIED_FUTURES_OPTIONS') ? 3 : 1) || k.expiryTradableSessions > ((k.market === 'NSE_STOCK_OPTIONS' || k.market === 'MCX_VERIFIED_FUTURES_OPTIONS') ? 15 : 10))
+    if (!Number.isSafeInteger(k.expiryTradableSessions) || k.expiryTradableSessions < ((k.market === 'NSE_STOCK_OPTIONS' || k.market === 'MCX_VERIFIED_FUTURES_OPTIONS') ? 3 : 1) || k.expiryTradableSessions > FRESH_MONTHLY_MAX_EXPIRY_SESSIONS)
         return refuse('EXPIRY_INELIGIBLE');
     const qc = freshQuoteCode(q, k.id, k.source, k.sourceEpoch, args.now);
     if (qc)
