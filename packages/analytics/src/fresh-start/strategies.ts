@@ -78,6 +78,8 @@ export interface FreshContext {
     levels: readonly FreshLevel[];
     previousHigh: number;
     previousLow: number;
+    /** Which live reference was stale when referenceVerified is false (diagnostics only). */
+    referenceDetail?: string;
     referenceVerified: boolean;
     /** Entry permitted under the declared event policy; complete coverage is separate immutable evidence. */
     eventClear: boolean;
@@ -140,15 +142,16 @@ export function freshSwingLevels(bars: readonly FreshBar[], now: number): FreshL
 }
 export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
     const out: FreshEvaluation = { candidates: [], refusals: [] };
-    const refuseAll = (code: string) => {
+    // `detail` (diagnostics only) says which input was short, e.g. WARMUP "5M_80_15M_20" or BLOCKED_REFERENCE "SIGNAL_STALE".
+    const refuseAll = (code: string, detail?: string) => {
         for (const strategy of FRESH_STRATEGIES)
-            out.refusals.push({ strategy, code });
+            out.refusals.push(detail ? { strategy, code, detail } : { strategy, code });
         return out;
     };
     if (![c.now, c.sessionOpen, c.sessionClose].every(finite) || c.sessionClose <= c.sessionOpen || !c.instrument || !c.sourceEpoch || !c.session)
         return refuseAll('INVALID_CONTEXT');
     if (!c.referenceVerified || !c.calendarVerified)
-        return refuseAll('BLOCKED_REFERENCE_OR_CALENDAR');
+        return refuseAll('BLOCKED_REFERENCE_OR_CALENDAR', !c.calendarVerified ? 'CALENDAR_UNVERIFIED' : c.referenceDetail);
     if (!c.eventClear)
         return refuseAll('BLOCKED_EVENT_DATA');
     if (c.now < c.sessionOpen || c.now >= c.sessionClose - 3600000)
@@ -159,7 +162,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
         return refuseAll('INVALID_HISTORY');
     const b = closed(c.bars5, 300000, c.now), h = closed(c.bars15, 900000, c.now), m = closed(c.bars1, 60000, c.now);
     if (b.length < 100 || h.length < 75)
-        return refuseAll('WARMUP');
+        return refuseAll('WARMUP', `5M_${b.length}_15M_${h.length}`);
     // The 15-minute trend needs a bar closed within the last ~15 minutes. In the session's first 15 minutes none of
     // today's has closed yet and the previous session's last bar is the newest one — that is the open, not a stale
     // feed (5 Nov: every MCX evaluation at 09:05/09:10 read STALE_TREND_CONTEXT). Mid-session it is still stale.
@@ -197,7 +200,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
         return refuseAll('NO_VOLUME');
     // Every setup needs relative volume; without enough earlier sessions say so instead of a generic "no setup".
     if (!finite(rvol(current)))
-        return refuseAll('RVOL_HISTORY_INSUFFICIENT');
+        return refuseAll('RVOL_HISTORY_INSUFFICIENT', `SESSIONS_${(c.rvolReferences[(current.time - c.sessionOpen) / 300000] ?? []).filter(x => finite(x) && x > 0).length}`);
     const signs = today.slice(-6).map(x => Math.sign(x.close - vwapAt(x.time + 300000)));
     const crosses = signs.reduce((n, x, i) => n + (i > 0 && x !== 0 && signs[i - 1] !== 0 && x !== signs[i - 1] ? 1 : 0), 0), range = !strong && crosses >= 2;
     const levels = [...c.levels, ...freshSwingLevels(b, c.now)].filter(x => finite(x.price) && x.price > 0 && x.knownAt <= decisionAt);

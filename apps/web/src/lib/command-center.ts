@@ -302,7 +302,10 @@ const RADAR_REASONS: Readonly<Record<string, string>> = Object.freeze({
 
 /** The reason a Radar cell shows: the furthest gate the setup reached when the engine gave one, else its code. */
 export function radarReason(c: Pick<RadarCell, 'code' | 'detail'>): string {
-  const key = c.detail ?? c.code;
+  // A gate detail names the reason for "no setup" / "choppy"; for data codes (WARMUP, stale reference) the code does,
+  // and the detail is only the measured input (hover).
+  const gated = c.code === 'SETUP_CONDITIONS_NOT_MET' || c.code === 'CHOPPY_REGIME';
+  const key = (gated ? c.detail : null) ?? c.code;
   if (!key) return '—';
   const choppy = /^EFFICIENCY_(\d)0PCT$/.exec(key);
   if (choppy) return `Choppy (trend ${choppy[1]}0%)`;
