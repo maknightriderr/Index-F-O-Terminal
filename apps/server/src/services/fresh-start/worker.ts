@@ -53,6 +53,11 @@ export const FRESH_HISTORY_SEED_DAYS = 35;
 export const FRESH_PINNED_EMPTY_LIMIT=3;
 /** A mini MCX contract the feed does not carry reads its parent product's order flow (marked proxy). */
 export const FRESH_FLOW_PROXY:Readonly<Record<string,string>>=Object.freeze({CRUDEOILM:'CRUDEOIL',NATGASMINI:'NATURALGAS'});
+/** The benchmark whose intraday volume shape a reference with too little own volume history borrows (context.ts). */
+export function freshVolumeBenchmarkName(ref:Pick<FreshReference,'name'|'market'>):string|null{
+  const b=ref.market==='NSE_INDEX_OPTIONS'?'NIFTY':ref.market==='BSE_VERIFIED_OPTIONS'?'SENSEX':ref.market==='MCX_VERIFIED_FUTURES_OPTIONS'?({...FRESH_FLOW_PROXY,GOLDM:'GOLD',SILVERM:'SILVER'} as Record<string,string>)[ref.name]??null:null;
+  return b&&b!==ref.name?b:null;
+}
 /** 1.8 shadow: today's five-minute inferred order flow for a reference, from the Dhan feed (undefined when not covered). */
 export function freshOrderFlowFor(name:string,from:number,to:number):FreshContext['orderFlow']{
   // The reference's own contract when the feed carries it, else the parent product's (marked proxy).
@@ -146,7 +151,8 @@ export class FreshPaperWorker {
     this.histories.delete(ref.id);this.histories.set(ref.id,{five:bars5,one:bars1,lastSeen,source,emptyFetches});
     while(this.histories.size>40)this.histories.delete(this.histories.keys().next().value!);
     const signalLive=!!this.feed.underlying(ref.id),spotLive=!!this.feed.underlying(freshReferenceSpotId(ref));
-    const ex=freshReferenceExchange(ref),c=buildFreshReferenceContext({now:receivedAt,exchange:ex,instrument:ref.id,sourceEpoch:this.feed.sourceEpoch,bars5:fillFreshGaps(bars5,300000,ex),bars1:fillFreshGaps(bars1,60000,ex),eventClear:this.events.clearance(receivedAt,freshIstDay(receivedAt),freshEventMarket(ref.market),ref.name)===null,referenceVerified:signalLive&&spotLive,referenceDetail:signalLive&&spotLive?undefined:!signalLive&&!spotLive?'SIGNAL_AND_SPOT_STALE':!signalLive?'SIGNAL_STALE':'SPOT_STALE',recentReleases:this.events.releases(receivedAt,freshEventMarket(ref.market),ref.name),orderFlow:freshOrderFlowFor(ref.name,open,receivedAt)});
+    const benchName=freshVolumeBenchmarkName(ref),benchRef=benchName?this.selected.find(r=>r.name===benchName&&r.market===ref.market):undefined,volumeBenchmark=benchRef?this.histories.get(benchRef.id)?.five:undefined;
+    const ex=freshReferenceExchange(ref),c=buildFreshReferenceContext({now:receivedAt,exchange:ex,instrument:ref.id,sourceEpoch:this.feed.sourceEpoch,bars5:fillFreshGaps(bars5,300000,ex),bars1:fillFreshGaps(bars1,60000,ex),eventClear:this.events.clearance(receivedAt,freshIstDay(receivedAt),freshEventMarket(ref.market),ref.name)===null,referenceVerified:signalLive&&spotLive,...(volumeBenchmark?{volumeBenchmark:fillFreshGaps(volumeBenchmark,300000,ex)}:{}),referenceDetail:signalLive&&spotLive?undefined:!signalLive&&!spotLive?'SIGNAL_AND_SPOT_STALE':!signalLive?'SIGNAL_STALE':'SPOT_STALE',recentReleases:this.events.releases(receivedAt,freshEventMarket(ref.market),ref.name),orderFlow:freshOrderFlowFor(ref.name,open,receivedAt)});
     if(c)c.eventEvidence=this.events.evidence(receivedAt,freshEventMarket(ref.market),ref.name);
     return {context:c,newClose:!!old&&lastSeen>old.lastSeen,lastSeen};
   }
