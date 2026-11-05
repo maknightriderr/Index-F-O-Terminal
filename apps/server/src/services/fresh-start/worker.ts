@@ -19,7 +19,7 @@ import {FreshRuntime} from './runtime.js';
 import {flowFiveMinuteBars} from '../order-flow-store.js';
 import type {FreshContext} from '@fno/analytics';
 import {logFreshDecisionSummary} from './decision-summary.js';
-import {freshRankStocks,FRESH_MARKETS,freshMarketBlockers,freshBookSupportsLot,discoverFreshMarkets,freshDiscoveryWindow,freshReferenceOptions,freshReferenceExchange,freshReferenceSpotId,freshEventMarket,freshMarketExchange,freshIndexKey,type FreshMarket} from './markets.js';
+import {freshEventClearStocks,freshRankStocks,FRESH_MARKETS,freshMarketBlockers,freshBookSupportsLot,discoverFreshMarkets,freshDiscoveryWindow,freshReferenceOptions,freshReferenceExchange,freshReferenceSpotId,freshEventMarket,freshMarketExchange,freshIndexKey,type FreshMarket} from './markets.js';
 import {freshAdapterState as state} from './adapter-state.js';
 import {FreshOperationalReporter} from './operational-evidence.js';
 import {registerFreshResearchProtocol,freshResearchReadiness} from './research-inventory.js';
@@ -122,7 +122,12 @@ export class FreshPaperWorker {
     if(!slots||!stocks.length)return selected;
     try{
       const quotes=await this.provider.getQuote(CM_SEGMENT.NSE,stocks.map(r=>r.signal.token),'FULL');
-      const ranked=freshRankStocks(stocks,new Map(quotes.map(q=>[q.token,q])));
+      // Rank only stocks the event rules let trade now. The most active stocks on a results day are the ones reporting
+      // (5 Nov: 8 of 9 selected stocks refused BLOCKED_EVENT_DATA all day). If no stock is clear (an issuer source is
+      // down), rank them all as before; the per-evaluation event check still applies either way.
+      const now=Date.now(),day=freshIstDay(now),clear=freshEventClearStocks(stocks,r=>this.events.clearance(now,day,'STOCK',r.name)===null);
+      const ranked=freshRankStocks(clear,new Map(quotes.map(q=>[q.token,q])));
+      state.activeStocksEventBlocked=stocks.length-clear.length;
       if(!quotes.length)return selected;
       state.activeStocks=ranked.slice(0,slots).map(r=>r.name);
       return [...selected.filter(r=>r.market!=='NSE_STOCK_OPTIONS'),...ranked.slice(0,slots)];

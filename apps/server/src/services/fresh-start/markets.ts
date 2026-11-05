@@ -109,3 +109,6 @@ export function freshReferenceOptions(master:readonly Instrument[],ref:FreshRefe
   const expiries=[...new Set(linked.map(x=>x.expiry!))].sort().slice(0,2),strikes=[...new Set(linked.filter(x=>expiries.includes(x.expiry!)).map(x=>x.strike!))].sort((a,b)=>Math.abs(a-price)-Math.abs(b-price)||a-b).slice(0,5);
   return linked.filter(x=>expiries.includes(x.expiry!)&&strikes.includes(x.strike!)&&['CE','PE'].includes(x.optionType??'')&&(!ref.mcxLinks||resolveFreshMcxLink(x,master)?.futureToken===ref.signal.token)).slice(0,20);
 }
+
+/** The stocks the event rules let trade now; all of them when none is clear (an issuer source down), as before. */
+export function freshEventClearStocks<T>(stocks:readonly T[],isClear:(s:T)=>boolean):T[]{const clear=stocks.filter(isClear);return clear.length?clear:[...stocks];}
