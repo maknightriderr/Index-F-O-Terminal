@@ -13,6 +13,14 @@ export type FreshMcxDepthMode = 'LOTS' | 'UNITS' | 'UNKNOWN';
 /** One consumer of the existing Angel socket. No independent broker connection or REST quote fallback. */
 /** How old a reference's last trade may be (exchange time) while the feed is live. Was 2 s (2 Nov). */
 export const FRESH_REFERENCE_MAX_AGE_MS = 5000;
+/**
+ * A quiet futures signal (NIFTYNXT50, FINNIFTY, BANKEX: one trade every 20-30 s on 5 Nov) is read from its spot index
+ * plus the futures basis at its last trade, while that trade is at most this old and the spot itself is live. Its own
+ * last trade stays the reference whenever it is within FRESH_REFERENCE_MAX_AGE_MS.
+ */
+export const FRESH_QUIET_SIGNAL_MAX_AGE_MS = 60000;
+/** The basis is measured only from a futures trade and a spot tick at most this far apart (exchange time). */
+export const FRESH_BASIS_PAIR_MS = 2000;
 /** The feed counts as live when any tick arrived within this window. */
 export const FRESH_FEED_ALIVE_MS = 2000;
 export class FreshSharedFeed {
@@ -28,6 +36,9 @@ export class FreshSharedFeed {
     private mcxContracts = new Map<string, { product: string; lot: number }>();
     private mcxEvidence = new Map<string, { samples: number; nonMultiple: number }>();
     private removeTick: (() => void) | null = null;
+    /** Futures signal id → its spot index id (NSE/BSE index references), for the basis-adjusted quiet-signal reading. */
+    private pairs = new Map<string, string>();
+    private basis = new Map<string, { value: number; at: number }>();
     private removeRecovery: (() => void) | null = null;
     constructor(private subscriptions: SubscriptionManager, private now: () => number = Date.now, private clientId = 'fresh-start:shared-feed') { }
     get sourceEpoch() { return `ANGEL-SNAP:${this.connectionId}:${this.epoch}`; }
@@ -77,10 +88,22 @@ export class FreshSharedFeed {
     private scaled(q: FreshQuote, tick: number): FreshQuote { const k = this.depthScale(q.contract); return { ...q, tick, bidUnits: q.bidUnits * k, askUnits: q.askUnits * k }; }
     async syncTargets(targets:readonly SubscriptionTarget[],capacity:number){
         const wanted=new Set(targets.map(t=>`${t.exchangeSegment}:${t.token}`));
-        for(const [id,t] of this.targets)if(!wanted.has(id)){this.subscriptions.unsubscribe(this.clientId,[t]);this.targets.delete(id);this.books.delete(id);this.latest.delete(id);this.referenceHistory.delete(id);}
+        for(const [id,t] of this.targets)if(!wanted.has(id)){this.subscriptions.unsubscribe(this.clientId,[t]);this.targets.delete(id);this.books.delete(id);this.latest.delete(id);this.referenceHistory.delete(id);this.basis.delete(id);this.pairs.delete(id);}
         if(targets.length)await this.reserve(targets,capacity);
     }
-    underlyingAt(id:string,at:number){const t=this.referenceHistory.get(id)?.filter(x=>x.timestamp<=at&&x.exchangeTimestamp!=null&&x.exchangeTimestamp<=at&&at-x.exchangeTimestamp<=FRESH_REFERENCE_MAX_AGE_MS).at(-1);return t?{price:t.ltp,at:t.exchangeTimestamp!}:null;}
+    /** Declares a futures signal's spot index, so a quiet signal can be read as spot + basis (see FRESH_QUIET_SIGNAL_MAX_AGE_MS). */
+    pairReference(signalId:string,spotId:string){if(signalId!==spotId)this.pairs.set(signalId,spotId);}
+    private direct(id:string,at:number){const t=this.referenceHistory.get(id)?.filter(x=>x.timestamp<=at&&x.exchangeTimestamp!=null&&x.exchangeTimestamp<=at&&at-x.exchangeTimestamp<=FRESH_REFERENCE_MAX_AGE_MS).at(-1);return t?{price:t.ltp,at:t.exchangeTimestamp!}:null;}
+    underlyingAt(id:string,at:number){
+      const own=this.direct(id,at);if(own)return own;
+      const spotId=this.pairs.get(id),b=this.basis.get(id);if(!spotId||!b||b.at>at||at-b.at>FRESH_QUIET_SIGNAL_MAX_AGE_MS)return null;
+      const spot=this.direct(spotId,at);return spot?{price:spot.price+b.value,at:spot.at}:null;
+    }
+    private updateBasis(signalId:string){
+      const spotId=this.pairs.get(signalId),f=this.latest.get(signalId),s=spotId?this.latest.get(spotId):undefined;
+      if(f?.exchangeTimestamp==null||s?.exchangeTimestamp==null||Math.abs(f.exchangeTimestamp-s.exchangeTimestamp)>FRESH_BASIS_PAIR_MS)return;
+      const prior=this.basis.get(signalId);if(!prior||f.exchangeTimestamp>=prior.at)this.basis.set(signalId,{value:f.ltp-s.ltp,at:f.exchangeTimestamp});
+    }
     private receive(ticks: readonly Tick[]) {
         for (const t of ticks) {
             if (t.exchangeTimestamp == null || ![t.exchangeTimestamp, t.timestamp, t.ltp].every(Number.isFinite) || t.ltp <= 0 || t.exchangeTimestamp > t.timestamp || t.timestamp > this.now() || this.now() - t.exchangeTimestamp > 2000)
@@ -92,6 +115,8 @@ export class FreshSharedFeed {
                     continue;
                 this.latest.set(id, t);
                 this.referenceHistory.set(id,[...(this.referenceHistory.get(id)??[]).filter(x=>this.now()-x.timestamp<=FRESH_REFERENCE_MAX_AGE_MS+500),t].slice(-100));
+                if(this.pairs.has(id))this.updateBasis(id);
+                for(const [signal,spot] of this.pairs)if(spot===id)this.updateBasis(signal);
                 if (t.bid == null || t.ask == null || t.bidQty == null || t.askQty == null)
                     continue;
                 // Tick size is added only from a verified exact contract at read time, never inferred from LTP.
@@ -126,7 +151,15 @@ export class FreshSharedFeed {
      * limit and kept its market WAITING_FOR_EXACT_REFERENCES. The last trade now counts for up to 5 s, but only while the
      * feed itself is live (some tick in the last 2 s), so a dropped connection never reads as a quiet market.
      */
-    underlying(id: string) { const t = this.latest.get(id); return t?.exchangeTimestamp != null && this.now() - t.exchangeTimestamp <= FRESH_REFERENCE_MAX_AGE_MS && this.feedAlive() && t.timestamp <= this.now() ? { price: t.ltp, at: t.exchangeTimestamp } : null; }
+    underlying(id: string): { price: number; at: number } | null {
+        const t = this.latest.get(id);
+        if (t?.exchangeTimestamp != null && this.now() - t.exchangeTimestamp <= FRESH_REFERENCE_MAX_AGE_MS && this.feedAlive() && t.timestamp <= this.now()) return { price: t.ltp, at: t.exchangeTimestamp };
+        // A quiet futures signal: its spot index (live) plus the basis at the signal's last trade (<= 60 s old).
+        const spotId = this.pairs.get(id), b = this.basis.get(id);
+        if (!spotId || !b || t?.exchangeTimestamp == null || this.now() - t.exchangeTimestamp > FRESH_QUIET_SIGNAL_MAX_AGE_MS || this.now() - b.at > FRESH_QUIET_SIGNAL_MAX_AGE_MS) return null;
+        const spot = this.underlying(spotId);
+        return spot ? { price: spot.price + b.value, at: spot.at } : null;
+    }
     futuresObservation(id:string,tick:number){const value=this.underlying(id),t=this.latest.get(id);return value&&t?{contract:id,price:value.price,tick,source:'ANGEL',epoch:this.sourceEpoch,eventAt:value.at,receivedAt:t.timestamp}:null;}
     quote(id: string, tick: number): FreshQuote | null {
         const q = this.books.get(id)?.at(-1);

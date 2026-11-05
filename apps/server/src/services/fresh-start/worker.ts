@@ -162,6 +162,7 @@ export class FreshPaperWorker {
       const exchangeKey=[...openExchanges].sort().join(',');
       if(!this.selectionAt||now-this.selectionAt>=1800000||exchangeKey!==this.selectionExchangeKey){const window=freshDiscoveryWindow(this.discovery!.references.filter(r=>openExchanges.has(freshReferenceExchange(r))),this.cursor);this.selected=openExchanges.has('NSE')?await this.activeStocks(window.selected):window.selected;this.cursor=window.nextCursor;this.selectionAt=now;this.selectionExchangeKey=exchangeKey;}
       const refs=this.selected.filter(r=>openExchanges.has(freshReferenceExchange(r)));
+      for(const r of refs)this.feed.pairReference(r.id,freshReferenceSpotId(r));
       // Eight simultaneous option slices (<=160 books) plus <=40 reference interests fit this consumer's 250-token cap.
       const bookWindow=freshDiscoveryWindow(refs,Math.floor(now/FRESH_BOOK_ROTATION_MS),20).selected,bookRefs:FreshReference[]=[];
       for(const market of FRESH_MARKETS){const ref=bookWindow.find(r=>r.market===market);if(ref)bookRefs.push(ref);}

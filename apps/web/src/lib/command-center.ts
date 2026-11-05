@@ -283,7 +283,31 @@ export function promotionGate(p: FreshStrategyPerformance | undefined): GateChec
 // ---------------- Setup radar ----------------
 
 export type RadarState = 'IN_TRADE' | 'FILLED' | 'REFUSED' | 'NO_SETUP' | 'NOT_EVALUATED';
-export interface RadarCell { state: RadarState; code: string | null; at: number | null }
+export interface RadarCell { state: RadarState; code: string | null; at: number | null; detail?: string | null }
+
+/** Short plain-English reasons for the engine's refusal codes and gate details (Radar cells). */
+const RADAR_REASONS: Readonly<Record<string, string>> = Object.freeze({
+  ORB_OUTSIDE_WINDOW: 'Outside ORB window', ORB_NO_TREND: 'No 15m trend', ORB_RANGE_WIDTH: 'Opening range too narrow/wide', ORB_NO_BREAKOUT: 'No range breakout',
+  ORB_BREAKOUT_QUALITY: 'Weak breakout bar', ORB_BREAKOUT_RVOL: 'Breakout volume low', ORB_NO_RETEST_TRIGGER: 'Waiting for retest',
+  VWAP_BEFORE_10_30: 'Starts 10:30', VWAP_NO_TREND: 'No 15m trend', VWAP_NO_IMPULSE: 'No impulse leg', VWAP_PULLBACK_SHAPE: 'Pullback shape off',
+  SWEEP_FIRST_30_MIN: 'First 30 min', SWEEP_LEVEL_NOT_BREACHED: 'PDH/PDL not swept', SWEEP_BREACH_NOT_RECENT: 'Sweep too old',
+  OPEN_OUTSIDE_WINDOW: 'Outside opening window', OPEN_NO_TREND: 'No 15m trend', OPEN_IMPULSE_WEAK: 'Opening move weak', OPEN_PULLBACK_SHAPE: 'Pullback shape off', OPEN_NO_TRIGGER: 'Waiting for trigger',
+  MOM_FIRST_30_MIN: 'First 30 min', MOM_LOW_EFFICIENCY: 'Move not directional', MOM_NO_NEW_EXTREME: 'No new day high/low', MOM_AGAINST_15M_EMA20: 'Against 15m EMA20', MOM_BAR_QUALITY: 'Weak breakout bar',
+  FLAG_FIRST_45_MIN: 'First 45 min', FLAG_NO_STRONG_TREND: 'No strong trend', FLAG_NO_POLE: 'No flag pole', FLAG_SHAPE: 'Flag shape off', FLAG_NO_TRIGGER: 'Waiting for trigger',
+  EVENT_NO_RECENT_RELEASE: 'No recent data release', VWAP_RANGE: 'Chopping around VWAP',
+  RVOL_HISTORY_INSUFFICIENT: 'Volume history short', WARMUP: 'Warming up (history)', BLOCKED_REFERENCE_OR_CALENDAR: 'Live price stale', BLOCKED_EVENT_DATA: 'Event blackout',
+  TREND_FIRST_15M_PENDING: 'First 15 min', STALE_TREND_CONTEXT: '15m bar missing', ENTRY_WINDOW: 'Entry window closed', MISSING_BARS: 'Bars missing', NO_VOLUME: 'No volume',
+  TARGET_TOO_CLOSE: 'Target too close', SETUP_CONDITIONS_NOT_MET: 'No setup',
+});
+
+/** The reason a Radar cell shows: the furthest gate the setup reached when the engine gave one, else its code. */
+export function radarReason(c: Pick<RadarCell, 'code' | 'detail'>): string {
+  const key = c.detail ?? c.code;
+  if (!key) return '—';
+  const choppy = /^EFFICIENCY_(\d)0PCT$/.exec(key);
+  if (choppy) return `Choppy (trend ${choppy[1]}0%)`;
+  return RADAR_REASONS[key] ?? key.replaceAll('_', ' ').toLowerCase();
+}
 export interface RadarRow { instrument: string; at: number | null; cells: Record<string, RadarCell> }
 
 /**
@@ -309,8 +333,8 @@ export function setupRadar(status: FreshStartStatus | null, positions: PositionV
     const r = row(e.instrument);
     if (r.at != null) continue;
     r.at = at;
-    for (const ref of Array.isArray(e.refusals) ? (e.refusals as Array<{ strategy?: string; code?: string }>) : []) {
-      if (ref.strategy && r.cells[ref.strategy]) r.cells[ref.strategy] = { state: 'NO_SETUP', code: ref.code ?? null, at };
+    for (const ref of Array.isArray(e.refusals) ? (e.refusals as Array<{ strategy?: string; code?: string; detail?: string | null }>) : []) {
+      if (ref.strategy && r.cells[ref.strategy]) r.cells[ref.strategy] = { state: 'NO_SETUP', code: ref.code ?? null, at, detail: ref.detail ?? null };
     }
   }
   for (const c of [...status.candidates].reverse()) {

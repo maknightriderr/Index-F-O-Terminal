@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FreshStartStatus, OptionChain } from '@fno/shared';
-import { accountView, equityCurve, exitReasons, istDay, pickContract, positionViews, promotionGate, rHistogram, setupRadar, stopToTarget, timeHeatmap, toPositionView } from '../command-center';
+import { accountView, equityCurve, exitReasons, istDay, pickContract, positionViews, promotionGate, radarReason, rHistogram, setupRadar, stopToTarget, timeHeatmap, toPositionView } from '../command-center';
 
 const NOW = Date.parse('2026-11-02T06:30:00Z'); // 12:00 IST
 const at = (hhmm: string) => Date.parse(`2026-11-02T${hhmm}:00+05:30`);
@@ -90,6 +90,19 @@ describe('setup radar', () => {
     expect(bn.cells.NEW_ORB_RETEST_V1).toMatchObject({ state: 'REFUSED', code: 'WIDE_SPREAD' });
     expect(bn.cells.NEW_PREVIOUS_SESSION_SWEEP_V1.state).toBe('NOT_EVALUATED');
     expect(rows.find((r) => r.instrument === 'NIFTY')!.cells.NEW_ORB_RETEST_V1.state).toBe('IN_TRADE');
+  });
+  it('shows the furthest gate a setup reached, in plain words (5 Nov: every cell read "setup conditions not met")', () => {
+    const s = status([], { evaluations: [{ id: 'e', at: new Date(at('10:35')).toISOString(), instrument: 'NIFTY', session: 's', refusals: [
+      { strategy: 'NEW_MOMENTUM_BREAKOUT_V1', code: 'SETUP_CONDITIONS_NOT_MET', detail: 'MOM_LOW_EFFICIENCY' },
+      { strategy: 'NEW_ORB_RETEST_V1', code: 'CHOPPY_REGIME', detail: 'EFFICIENCY_10PCT' },
+      { strategy: 'NEW_VWAP_PULLBACK_V1', code: 'WARMUP' },
+    ] }] });
+    const cells = setupRadar(s, [], NOW).find((r) => r.instrument === 'NIFTY')!.cells;
+    expect(cells.NEW_MOMENTUM_BREAKOUT_V1).toMatchObject({ code: 'SETUP_CONDITIONS_NOT_MET', detail: 'MOM_LOW_EFFICIENCY' });
+    expect(radarReason(cells.NEW_MOMENTUM_BREAKOUT_V1)).toBe('Move not directional');
+    expect(radarReason(cells.NEW_ORB_RETEST_V1)).toBe('Choppy (trend 10%)');
+    expect(radarReason(cells.NEW_VWAP_PULLBACK_V1)).toBe('Warming up (history)');
+    expect(radarReason({ code: 'SOME_NEW_CODE', detail: null })).toBe('some new code');
   });
   it('ignores yesterday', () => {
     const s = status([], { evaluations: [{ id: 'e', at: '2026-11-01T06:00:00Z', instrument: 'NIFTY', session: 's', refusals: [] }] });
