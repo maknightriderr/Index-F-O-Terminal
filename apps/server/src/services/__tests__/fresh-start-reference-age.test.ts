@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { FreshSharedFeed, FRESH_REFERENCE_MAX_AGE_MS, FRESH_QUIET_SIGNAL_MAX_AGE_MS } from '../fresh-start/feed.js';
+import { FreshSharedFeed, FRESH_REFERENCE_MAX_AGE_MS, FRESH_QUIET_SIGNAL_MAX_AGE_MS, FRESH_TICK_MAX_LAG_MS } from '../fresh-start/feed.js';
 import type { SubscriptionManager } from '../../lib/subscription-manager.js';
 
 function setup() {
@@ -60,5 +60,21 @@ describe('reference freshness (2 Nov: quiet contracts read as stale under a 2 s 
     expect(s.feed.underlying('NSE_FO:f')).toBeNull(); // not paired
     s.feed.pairReference('NSE_FO:f', 'NSE_CM:s');
     expect(s.feed.underlying('NSE_FO:f')).toBeNull(); // paired, but no basis was ever measured (spot and future 10 s apart)
+  });
+  it('keeps a 3 s late MCX tick as the last trade, drops one > 10 s late, reads a small clock lead as receive time (5 Nov)', async () => {
+    const s = setup();
+    await s.feed.reserve([{ token: 'crude', exchange: 'MCX', exchangeSegment: 'MCX_FO' }], 250);
+    // Exchange time 10,000, received at 13,000: 3 s late. It used to be dropped (> 2 s) and the future read as stale.
+    s.setNow(13_000); s.emit([{ ...tick('crude', 10_000, 5400), timestamp: 13_000 }]);
+    expect(s.feed.underlying('MCX_FO:crude')).toEqual({ price: 5400, at: 10_000 });
+    // A book on a late tick is still not a usable quote (2-second book freshness).
+    s.emit([{ ...tick('crude', 10_500, 5401), timestamp: 13_000, bid: 5400, ask: 5401, bidQty: 100, askQty: 100 }]);
+    expect(s.feed.quote('MCX_FO:crude', 1)).toBeNull();
+    // > 10 s late: dropped.
+    s.setNow(30_000); s.emit([{ ...tick('crude', 30_000 - FRESH_TICK_MAX_LAG_MS - 1, 5390), timestamp: 30_000 }]);
+    expect(s.feed.tickLagStats()['MCX_FO']).toMatchObject({ ticks: 3, late: 2, dropped: 1 });
+    // Exchange time 500 ms ahead of receipt: clock skew, read as the receive time.
+    s.setNow(31_000); s.emit([{ ...tick('crude', 31_500, 5395), timestamp: 31_000 }]);
+    expect(s.feed.underlying('MCX_FO:crude')).toEqual({ price: 5395, at: 31_000 });
   });
 });
