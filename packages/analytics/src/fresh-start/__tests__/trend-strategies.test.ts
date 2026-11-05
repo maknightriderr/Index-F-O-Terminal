@@ -40,6 +40,12 @@ describe('1.8 momentum breakout', () => {
         const indecisive = [...quiet, bar(6, 101.8, 103.2, 101.2, 102.6, 2500)]; // 40% body
         expect(refusal(context(indecisive), 'NEW_MOMENTUM_BREAKOUT_V1')).toMatchObject({ code: 'SETUP_CONDITIONS_NOT_MET', detail: 'MOM_BAR_QUALITY' });
     });
+    it('1.11: takes a breakout ~4 ATR from VWAP (a trend day), still refuses one beyond 5 ATR', () => {
+        const atVwap = (c: FreshContext, p: number): FreshContext => ({ ...c, bars1: c.bars1.map(x => ({ ...x, open: p, high: p, low: p, close: p })) });
+        const c = context(momentumDay), a = evaluateFreshStrategies(c).candidates.find(x => x.strategy === 'NEW_MOMENTUM_BREAKOUT_V1')!.atr;
+        expect(find(atVwap(c, 104.4 - 4 * a), 'NEW_MOMENTUM_BREAKOUT_V1')).toBeDefined();
+        expect(refusal(atVwap(c, 104.4 - 5.5 * a), 'NEW_MOMENTUM_BREAKOUT_V1')).toMatchObject({ code: 'SETUP_CONDITIONS_NOT_MET', detail: 'MOM_EXTENDED_OR_CHASED' });
+    });
     it('refuses normal volume, a weak bar and the first half hour, naming the gate', () => {
         const lowVol = [...quiet, bar(6, 101.3, 104.6, 101.2, 104.4, 1500)];
         expect(refusal(context(lowVol), 'NEW_MOMENTUM_BREAKOUT_V1')).toMatchObject({ code: 'SETUP_CONDITIONS_NOT_MET', detail: 'MOM_VOLUME' });

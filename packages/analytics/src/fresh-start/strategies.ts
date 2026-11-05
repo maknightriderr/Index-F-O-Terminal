@@ -1,7 +1,7 @@
 // Approved implementation pack; pure functions only. Time, calendars and data provenance are injected.
 import { atr, ema } from '../indicators/index.js';
 import { freshOrderFlowEvidence, type FreshOrderFlowInput } from './order-flow-evidence.js';
-export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.10';
+export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.11';
 /** Minimum underlying reward / risk for a target, and the furthest target in 5-minute ATR before it is capped (1.5). */
 /**
  * 1.5 regime filter: the trend strategies (ORB, VWAP pullback, opening pullback) stand aside on a choppy day, where a
@@ -30,10 +30,22 @@ export const FRESH_MOMENTUM_MIN_EFFICIENCY = 0.4;
 /**
  * ORB retest (1.10, 5 Nov): a breakout of the opening range is taken all session (up to the entry cutoff), not only in
  * the first two hours after the anchor - a range that holds for hours and then breaks and runs was never captured.
- * After FRESH_ORB_EARLY_WINDOW_MS the breakout must be the FIRST close beyond the level since the range formed: a late
- * break of a range that already broke and failed earlier in the day is chop, not a range expansion.
+ *
+ * 1.11 (owner, 5 Nov): after FRESH_ORB_EARLY_WINDOW_MS a late breakout is either
+ *  - the FIRST close beyond the level since the range formed (a range expansion), or
+ *  - a STOP-HUNT re-break: an earlier break closed back inside the range (failed, trapping breakout traders), and this
+ *    breakout closes beyond that failed attempt's extreme (the trap's stops are gone) on rvol >= FRESH_ORB_REBREAK_MIN_RVOL.
+ * Earlier closes beyond the level that never returned inside are the same move, not a re-break, and are refused.
+ * The retest confirmation (hold of the level within 3 bars, a confirming bar) applies to every ORB entry.
  */
 export const FRESH_ORB_EARLY_WINDOW_MS = 7200000;
+export const FRESH_ORB_REBREAK_MIN_RVOL = 2;
+/**
+ * Momentum breakout: how far the breakout close may sit from VWAP, in 5-minute ATR (1.11, was 3). On a trend day price
+ * holds 4-6 ATR from VWAP, so 3 refused the strongest days (5 Nov CRUDEOIL: MOM_EXTENDED_OR_CHASED). The chase rule
+ * (<= 1 earlier new-extreme close in the last 30 minutes) and the 2-ATR risk cap still keep late entries out.
+ */
+export const FRESH_MOMENTUM_MAX_VWAP_ATR = 5;
 /**
  * Momentum breakout bar (1.9, 5 Nov): range >= 0.9 ATR, body >= 50% of range, close in the outer 35%. Was 1.2 ATR / 60% /
  * 70%: NIFTY's breakouts of the day's high on 5 Nov were refused MOM_BAR_QUALITY four times in an hour. Owner-approved
@@ -259,12 +271,23 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                         const breakout = day[i], retests = day.slice(i + 1), first = retests.find(x => (d === 1 ? x.low : x.high) >= level - .15 * a && (d === 1 ? x.low : x.high) <= level + .15 * a && favorable(x.close, level) && confirms(x) && closeLocation(x, d) >= .7);
                         reach(2, 'ORB_NO_BREAKOUT');
                         if (!favorable(breakout.close, level + d * .05 * a)) continue;
-                        reach(2.5, 'ORB_LATE_LEVEL_ALREADY_BROKEN');
-                        if (breakout.time - anchor.at >= FRESH_ORB_EARLY_WINDOW_MS && day.slice(3, i).some(x => favorable(x.close, level))) continue;
+                        // Late (>= 2 h after the anchor): first break, or a stop-hunt re-break (see FRESH_ORB_REBREAK_MIN_RVOL).
+                        let minBreakoutRvol = 1.5;
+                        if (breakout.time - anchor.at >= FRESH_ORB_EARLY_WINDOW_MS) {
+                            const since = day.slice(3, i), lastBeyond = since.map(x => favorable(x.close, level)).lastIndexOf(true);
+                            if (lastBeyond >= 0) {
+                                reach(2.5, 'ORB_LATE_LEVEL_ALREADY_BROKEN');
+                                if (!since.slice(lastBeyond + 1).some(x => d * (x.close - level) < 0)) continue;
+                                reach(2.6, 'ORB_REBREAK_NOT_BEYOND_TRAP');
+                                const trap = d === 1 ? Math.max(...since.map(x => x.high)) : Math.min(...since.map(x => x.low));
+                                if (!favorable(breakout.close, trap)) continue;
+                                minBreakoutRvol = FRESH_ORB_REBREAK_MIN_RVOL;
+                            }
+                        }
                         reach(3, 'ORB_BREAKOUT_QUALITY');
                         if (!(body(breakout) >= .6 && closeLocation(breakout, d) >= .75 && favorable(breakout.close, vw(breakout)))) continue;
                         reach(4, 'ORB_BREAKOUT_RVOL');
-                        if (!(rvol(breakout) >= 1.5)) continue;
+                        if (!(rvol(breakout) >= minBreakoutRvol)) continue;
                         reach(5, 'ORB_NO_RETEST_TRIGGER');
                         if (retests.length <= 3 && first === current && !retests.some(x => d * (x.close - level) < -.15 * a)) {
                             stop = lo(retests) - d * .1 * a;
@@ -379,7 +402,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                             reach(4, 'MOM_VOLUME');
                             if (rvol(current) >= FRESH_MOMENTUM_MIN_RVOL) {
                                 reach(5, 'MOM_EXTENDED_OR_CHASED');
-                                if (favorable(current.close, vwap) && Math.abs(current.close - vwap) <= 3 * a && chased <= 1) {
+                                if (favorable(current.close, vwap) && Math.abs(current.close - vwap) <= FRESH_MOMENTUM_MAX_VWAP_ATR * a && chased <= 1) {
                                     reach(6, 'MOM_RISK_TOO_WIDE');
                                     // Beyond the breakout bar itself: if price comes back through it, the breakout failed.
                                     const s = (d === 1 ? current.low : current.high) - d * .1 * a;
