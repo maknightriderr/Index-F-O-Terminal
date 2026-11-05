@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getSessionWindow } from '@fno/shared';
 import type { FreshBar } from '@fno/analytics';
-import { freshIstDay, freshVolumeReferences } from '../fresh-start/context.js';
+import { buildFreshReferenceContext, freshIstDay, freshVolumeReferences } from '../fresh-start/context.js';
 
 // Twenty NSE sessions of a futures contract: as the next month (first 15 days) it trades 10% of its front-month volume.
 const now = Date.parse('2026-11-05T11:00:00+05:30');
@@ -37,5 +37,39 @@ describe('level-normalised relative volume (5 Nov audit: futures rollover)', () 
     expect(r.slots[0][0] / r.slots[10][0]).toBeCloseTo(3, 6);
     expect(r.slots[10]).toHaveLength(19);
     expect(freshVolumeReferences(new Map(), [], 'NSE')).toMatchObject({ level: null, opening: [] });
+  });
+});
+
+describe('benchmark volume shape for a contract with too little own history (5 Nov: FINNIFTY SESSIONS_1)', () => {
+  // Twenty NSE sessions of bars ending on the day before `now`, plus today's session up to 11:00.
+  function bars(levelFor: (dayIndex: number) => number, days = 20) {
+    const out: FreshBar[] = [];
+    let k = 0;
+    for (let d = 40; d >= 1 && k < days; d--) {
+      const day = freshIstDay(now - d * 86400000), s = getSessionWindow('NSE', day);
+      if (!s) continue;
+      for (let t = s.open, slot = 0; t + 300000 <= s.close; t += 300000, slot++) out.push({ time: t, availableAt: t + 300000, open: 100, high: 101, low: 99, close: 100, volume: levelFor(k) * (slot < 3 ? 3 : 1) });
+      k++;
+    }
+    const s = getSessionWindow('NSE', freshIstDay(now))!;
+    for (let t = s.open; t + 300000 <= now; t += 300000) out.push({ time: t, availableAt: t + 300000, open: 100, high: 101, low: 99, close: 100, volume: 50 });
+    return out;
+  }
+  const ctx = (own: FreshBar[], volumeBenchmark?: FreshBar[]) => buildFreshReferenceContext({ now, instrument: 'NSE_FO:fin', sourceEpoch: 'e', bars5: own, bars1: [], eventClear: true, referenceVerified: true, ...(volumeBenchmark ? { volumeBenchmark } : {}) })!;
+  it('borrows the benchmark shape scaled to the contract\'s own latest session total', () => {
+    const own = bars(() => 200, 2), bench = bars(() => 5000);
+    const plain = ctx(own);
+    expect(plain.rvolReferences[10]).toHaveLength(2); // too few for rvol (needs 15)
+    expect(plain.volumeShape).toBeUndefined();
+    const c = ctx(own, bench);
+    expect(c.volumeShape).toBe('BENCHMARK');
+    expect(c.rvolReferences[10]).toHaveLength(20);
+    // Own level: 200 x (3 x 3 + 72 x 1) = 16,200 a day; slot 10 holds 1/81 of the day → 200, not the benchmark's 5,000.
+    for (const v of c.rvolReferences[10]) expect(v).toBeCloseTo(200, 6);
+  });
+  it('keeps its own references when it has enough sessions, and never borrows without an own level', () => {
+    expect(ctx(bars(() => 200), bars(() => 5000)).volumeShape).toBeUndefined();
+    const noOwn = ctx(bars(() => 0, 20), bars(() => 5000));
+    expect(noOwn.volumeShape).toBeUndefined();
   });
 });

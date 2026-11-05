@@ -1,5 +1,5 @@
 import {getSessionWindow,HOLIDAY_CALENDAR_YEARS,type Exchange,type OHLCV} from '@fno/shared';
-import type {FreshBar,FreshContext} from '@fno/analytics';
+import {FRESH_MIN_VOLUME_SESSIONS,type FreshBar,type FreshContext} from '@fno/analytics';
 export const freshIstDay=(at:number)=>new Date(at).toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'});
 export function freshExpirySessions(session:string,expiry:string,exchange:Exchange='NSE'):number|null {
   if(!/^\d{4}-\d{2}-\d{2}$/.test(session)||!/^\d{4}-\d{2}-\d{2}$/.test(expiry)||expiry<session)return null;
@@ -90,31 +90,50 @@ export const FRESH_VOLUME_DAY_COVERAGE=0.75;
  * Days covering < 75% of their session are skipped (a gappy day's total understates it); with no well-covered day
  * there is no level and the strategies refuse with RVOL_HISTORY_INSUFFICIENT rather than guess.
  */
-export function freshVolumeReferences(byDay:ReadonlyMap<string,readonly FreshBar[]>,dates:readonly string[],exchange:Exchange):{slots:Record<number,number[]>;opening:number[];evening:number[];level:number|null}{
+export function freshVolumeReferences(byDay:ReadonlyMap<string,readonly FreshBar[]>,dates:readonly string[],exchange:Exchange,levelOverride?:number):{slots:Record<number,number[]>;opening:number[];evening:number[];level:number|null;sessions:number}{
   const days:Array<{day:string;s:{open:number;close:number};bars:readonly FreshBar[];total:number}>=[];
   for(const day of dates){
     const s=getSessionWindow(exchange,day),bars=byDay.get(day)??[];if(!s)continue;
     const inside=bars.filter(x=>x.time>=s.open&&x.time+300000<=s.close&&(x.time-s.open)%300000===0),total=inside.reduce((n,x)=>n+(Number.isFinite(x.volume)&&x.volume>0?x.volume:0),0);
     if(total>0&&inside.length>=FRESH_VOLUME_DAY_COVERAGE*((s.close-s.open)/300000))days.push({day,s,bars:inside,total});
   }
-  const latest=days[days.length-1],level=latest?latest.total:null,slots:Record<number,number[]>={},opening:number[]=[],evening:number[]=[];
-  if(level==null)return {slots,opening,evening,level};
+  const latest=days[days.length-1],level=levelOverride!=null&&levelOverride>0?levelOverride:latest?latest.total:null,slots:Record<number,number[]>={},opening:number[]=[],evening:number[]=[];
+  if(level==null)return {slots,opening,evening,level,sessions:days.length};
   const share=(v:number,total:number)=>Number.isFinite(v)&&v>0?v/total*level:0;
   for(const {day,s,bars,total} of days){
     for(const b of bars)(slots[(b.time-s.open)/300000]??=[]).push(share(b.volume,total));
     const first=bars.filter(x=>x.time<s.open+900000);if(first.length===3&&first.every((x,i)=>x.time===s.open+i*300000))opening.push(share(first.reduce((n,x)=>n+x.volume,0),total));
     if(exchange==='MCX'){const at=freshMcxEveningAnchor(day),eve=bars.filter(x=>x.time>=at&&x.time<at+900000);if(eve.length===3&&eve.every((x,i)=>x.time===at+i*300000))evening.push(share(eve.reduce((n,x)=>n+x.volume,0),total));}
   }
-  return {slots,opening,evening,level};
+  return {slots,opening,evening,level,sessions:days.length};
 }
-export function buildFreshReferenceContext(args:{now:number;instrument:string;sourceEpoch:string;bars5:readonly FreshBar[];bars1:readonly FreshBar[];eventClear:boolean;referenceVerified:boolean;referenceDetail?:string;exchange?:Exchange;recentReleases?:readonly number[];orderFlow?:FreshContext['orderFlow']}):FreshContext|null {
+/**
+ * Day-grouped in-session five-minute bars before `before` (a day's open), last 20 sessions: the input of the volume
+ * references for a contract or for its benchmark.
+ */
+function freshHistoricalDays(bars:readonly FreshBar[],exchange:Exchange,before:number,now:number):{byDay:Map<string,FreshBar[]>;dates:string[]}{
+  const byDay=new Map<string,FreshBar[]>();
+  for(const x of bars){const d=freshIstDay(x.time),s=getSessionWindow(exchange,d);if(!HOLIDAY_CALENDAR_YEARS.includes(Number(d.slice(0,4)))||!s||x.time<s.open||x.time+300000>s.close||(x.time-s.open)%300000!==0||x.time>=before||x.availableAt>now)continue;byDay.set(d,[...(byDay.get(d)??[]),x]);}
+  return {byDay,dates:[...byDay.keys()].sort().slice(-20)};
+}
+export function buildFreshReferenceContext(args:{now:number;instrument:string;sourceEpoch:string;bars5:readonly FreshBar[];bars1:readonly FreshBar[];eventClear:boolean;referenceVerified:boolean;referenceDetail?:string;exchange?:Exchange;volumeBenchmark?:readonly FreshBar[];recentReleases?:readonly number[];orderFlow?:FreshContext['orderFlow']}):FreshContext|null {
   const exchange=args.exchange??'NSE',date=freshIstDay(args.now),session=getSessionWindow(exchange,date);if(!session||!HOLIDAY_CALENDAR_YEARS.includes(Number(date.slice(0,4))))return null;
   const five=args.bars5.filter(x=>{const d=freshIstDay(x.time),s=getSessionWindow(exchange,d);return HOLIDAY_CALENDAR_YEARS.includes(Number(d.slice(0,4)))&&s!=null&&x.time>=s.open&&x.time+300000<=s.close&&(x.time-s.open)%300000===0;});
   const historical=five.filter(x=>x.time<session.open&&x.availableAt<=args.now),byDay=new Map<string,FreshBar[]>();for(const b of historical){const d=freshIstDay(b.time);byDay.set(d,[...(byDay.get(d)??[]),b]);}
   const dates=[...byDay.keys()].sort().slice(-20);
-  const {slots:rvol,opening,evening}=freshVolumeReferences(byDay,dates,exchange);
+  const own=freshVolumeReferences(byDay,dates,exchange);
+  // A contract with fewer than FRESH_MIN_VOLUME_SESSIONS well-covered sessions (5 Nov: FINNIFTY 1, MIDCPNIFTY 14 — the
+  // current futures traded thinly while it was the next month) borrows the intraday volume SHAPE of its exchange's
+  // benchmark future (NIFTY / SENSEX, or an MCX mini's parent), scaled by its OWN latest well-covered session total.
+  // The shape is market-wide (open and close heavy); the level, which differs per contract, stays its own.
+  let volume=own,volumeShape:'OWN'|'BENCHMARK'='OWN';
+  if(own.sessions<FRESH_MIN_VOLUME_SESSIONS&&own.level!=null&&args.volumeBenchmark?.length){
+    const bench=freshHistoricalDays(args.volumeBenchmark,exchange,session.open,args.now),borrowed=freshVolumeReferences(bench.byDay,bench.dates,exchange,own.level);
+    if(borrowed.sessions>=FRESH_MIN_VOLUME_SESSIONS){volume=borrowed;volumeShape='BENCHMARK';}
+  }
+  const {slots:rvol,opening,evening}=volume;
   const eveningAt=exchange==='MCX'?freshMcxEveningAnchor(date):null;
   let previous:string|null=null;for(let i=1;i<=14;i++){const d=freshIstDay(Date.parse(date+'T12:00:00+05:30')-i*86400000);if(getSessionWindow(exchange,d)){previous=d;break;}}
   const ps=previous?getSessionWindow(exchange,previous):null,pd=previous?byDay.get(previous)??[]:[],complete=freshPreviousSessionUsable(pd,ps);
-  return {now:args.now,session:date,sessionOpen:session.open,sessionClose:session.close,instrument:args.instrument,sourceEpoch:args.sourceEpoch,bars5:five.slice(-300),bars15:freshTrendBars(five,exchange).slice(-300),bars1:args.bars1.filter(x=>x.time>=session.open&&x.time+60000<=session.close),rvolReferences:rvol,openingVolumeReferences:opening,openingAnchors:[{at:session.open,volumeReferences:opening},...(eveningAt!=null&&eveningAt>session.open&&eveningAt+2*3600000<=session.close?[{at:eveningAt,volumeReferences:evening}]:[])],previousHigh:complete?Math.max(...pd.map(x=>x.high)):0,previousLow:complete?Math.min(...pd.map(x=>x.low)):0,levels:[],referenceVerified:args.referenceVerified,...(args.referenceDetail?{referenceDetail:args.referenceDetail}:{}),eventClear:args.eventClear,calendarVerified:true,recentReleases:[...(args.recentReleases??[])],...(args.orderFlow?{orderFlow:args.orderFlow}:{})};
+  return {now:args.now,session:date,sessionOpen:session.open,sessionClose:session.close,instrument:args.instrument,sourceEpoch:args.sourceEpoch,bars5:five.slice(-300),bars15:freshTrendBars(five,exchange).slice(-300),bars1:args.bars1.filter(x=>x.time>=session.open&&x.time+60000<=session.close),rvolReferences:rvol,openingVolumeReferences:opening,openingAnchors:[{at:session.open,volumeReferences:opening},...(eveningAt!=null&&eveningAt>session.open&&eveningAt+2*3600000<=session.close?[{at:eveningAt,volumeReferences:evening}]:[])],previousHigh:complete?Math.max(...pd.map(x=>x.high)):0,previousLow:complete?Math.min(...pd.map(x=>x.low)):0,levels:[],referenceVerified:args.referenceVerified,...(args.referenceDetail?{referenceDetail:args.referenceDetail}:{}),eventClear:args.eventClear,calendarVerified:true,...(volumeShape==='BENCHMARK'?{volumeShape}:{}),recentReleases:[...(args.recentReleases??[])],...(args.orderFlow?{orderFlow:args.orderFlow}:{})};
 }
