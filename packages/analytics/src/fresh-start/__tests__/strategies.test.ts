@@ -92,6 +92,16 @@ describe('fresh-start point-in-time strategy rules', () => {
         expect(evaluateFreshStrategies(c).refusals[0].code).toBe('MISSING_BARS');
     });
     it('does not use future bars, late-arriving confirmations or future target levels', () => { const c = orb(), baseline = evaluateFreshStrategies(c); c.bars5 = [...c.bars5, bar(open + 1500000, 103, 105, 102, 104)]; expect(evaluateFreshStrategies(c)).toEqual(baseline); const delayed = orb(); delayed.bars5 = delayed.bars5.map((x, i, a) => i === a.length - 1 ? { ...x, availableAt: delayed.now + 1000 } : x); expect(evaluateFreshStrategies(delayed).candidates).toEqual([]); const target = orb(); target.previousHigh = 0; target.previousLow = 0; target.levels = target.levels.map(x => ({ ...x, knownAt: target.now + 1000 })); expect(evaluateFreshStrategies(target).candidates.find(x => x.strategy === 'NEW_ORB_RETEST_V1')).toBeUndefined(); });
+    it('reads the open\'s first 15 minutes as TREND_FIRST_15M_PENDING, a missing mid-session 15m bar as stale (5 Nov)', () => {
+        const overnight = (c: FreshContext): FreshContext => ({ ...c, bars15: c.bars15.filter(x => x.time < open).map(x => ({ ...x, time: x.time - 9 * 3600000, availableAt: x.availableAt - 9 * 3600000 })) });
+        for (const today of [[bar(open)], [bar(open), bar(open + 300000)]]) {
+            const r = evaluateFreshStrategies(overnight(context(today)));
+            expect(r.refusals.length).toBeGreaterThan(0);
+            expect(r.refusals.every(x => x.code === 'TREND_FIRST_15M_PENDING'), JSON.stringify(r.refusals[0])).toBe(true);
+        }
+        const mid = evaluateFreshStrategies(overnight(context(Array.from({ length: 6 }, (_, i) => bar(open + i * 300000)))));
+        expect(mid.refusals.every(x => x.code === 'STALE_TREND_CONTEXT')).toBe(true);
+    });
     it('rejects a stale decision and an unfinished breakout without retest', () => { const c = orb(); c.now += 2100; expect(evaluateFreshStrategies(c).refusals[0].code).toBe('LATE_DECISION'); const x = orb(); x.bars5 = x.bars5.slice(0, -1); x.now -= 300000; expect(evaluateFreshStrategies(x).candidates).toEqual([]); });
     it('does not label a swing before its two right-hand bars are known', () => { const b = [bar(open, 100, 101), bar(open + 300000, 100, 102), bar(open + 600000, 100, 105), bar(open + 900000, 100, 103), bar(open + 1200000, 100, 102)]; expect(freshSwingLevels(b, open + 1200000)).toEqual([]); expect(freshSwingLevels(b, open + 1500000)).toContainEqual({ price: 105, knownAt: open + 1500000, role: 'RESISTANCE', kind: 'CONFIRMED_SWING' }); });
     describe('1.5 target selection', () => {

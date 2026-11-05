@@ -160,8 +160,11 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
     const b = closed(c.bars5, 300000, c.now), h = closed(c.bars15, 900000, c.now), m = closed(c.bars1, 60000, c.now);
     if (b.length < 100 || h.length < 75)
         return refuseAll('WARMUP');
+    // The 15-minute trend needs a bar closed within the last ~15 minutes. In the session's first 15 minutes none of
+    // today's has closed yet and the previous session's last bar is the newest one — that is the open, not a stale
+    // feed (5 Nov: every MCX evaluation at 09:05/09:10 read STALE_TREND_CONTEXT). Mid-session it is still stale.
     if (c.now - (last(h).time + 900000) > 902000)
-        return refuseAll('STALE_TREND_CONTEXT');
+        return refuseAll(last(h).time < c.sessionOpen && c.now < c.sessionOpen + 900000 + 2000 ? 'TREND_FIRST_15M_PENDING' : 'STALE_TREND_CONTEXT');
     const today = b.filter(x => x.time >= c.sessionOpen), minute = m.filter(x => x.time >= c.sessionOpen);
     if (!today.length || !minute.length)
         return refuseAll('MISSING_SESSION_DATA');
