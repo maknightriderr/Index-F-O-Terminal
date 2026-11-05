@@ -21,6 +21,15 @@ export const FRESH_REFERENCE_MAX_AGE_MS = 5000;
 export const FRESH_QUIET_SIGNAL_MAX_AGE_MS = 60000;
 /** The basis is measured only from a futures trade and a spot tick at most this far apart (exchange time). */
 export const FRESH_BASIS_PAIR_MS = 2000;
+/**
+ * Ticks reach this consumer up to this late (receive time - exchange time) and still update a reference's last trade.
+ * They were dropped beyond 2 s, so on MCX (ticks typically 2-4 s late on 5 Nov) a liquid future's last trade often read
+ * older than FRESH_REFERENCE_MAX_AGE_MS at a bar close: ~30% of MCX evaluations refused SIGNAL_AND_SPOT_STALE. The age
+ * rule itself is unchanged (exchange time), and a book still needs the 2-second freshness of freshQuoteCode.
+ */
+export const FRESH_TICK_MAX_LAG_MS = 10000;
+/** An exchange time ahead of our receive time by up to this much is clock skew and is read as the receive time. */
+export const FRESH_TICK_CLOCK_SKEW_MS = 1000;
 /** The feed counts as live when any tick arrived within this window. */
 export const FRESH_FEED_ALIVE_MS = 2000;
 export class FreshSharedFeed {
@@ -104,9 +113,22 @@ export class FreshSharedFeed {
       if(f?.exchangeTimestamp==null||s?.exchangeTimestamp==null||Math.abs(f.exchangeTimestamp-s.exchangeTimestamp)>FRESH_BASIS_PAIR_MS)return;
       const prior=this.basis.get(signalId);if(!prior||f.exchangeTimestamp>=prior.at)this.basis.set(signalId,{value:f.ltp-s.ltp,at:f.exchangeTimestamp});
     }
-    private receive(ticks: readonly Tick[]) {
+    /** Per exchange segment since the last read: ticks seen, accepted 2-10 s late, dropped (> 10 s late or clock ahead), max lag. */
+    private lag=new Map<string,{ticks:number;late:number;dropped:number;skewed:number;maxLagMs:number}>();
+    tickLagStats(){const out=Object.fromEntries(this.lag);this.lag.clear();return out;}
+    private receive(raw: readonly Tick[]) {
+        const ticks:Tick[]=[];
+        for (const r of raw) {
+            if (r.exchangeTimestamp == null || ![r.exchangeTimestamp, r.timestamp, r.ltp].every(Number.isFinite) || r.ltp <= 0 || r.timestamp > this.now()) continue;
+            const st=this.lag.get(r.exchangeSegment??'UNKNOWN')??{ticks:0,late:0,dropped:0,skewed:0,maxLagMs:0};this.lag.set(r.exchangeSegment??'UNKNOWN',st);st.ticks++;
+            const ahead=r.exchangeTimestamp-r.timestamp,lagMs=this.now()-r.exchangeTimestamp;
+            if(ahead>FRESH_TICK_CLOCK_SKEW_MS||lagMs>FRESH_TICK_MAX_LAG_MS){st.dropped++;continue;}
+            if(ahead>0)st.skewed++;else if(lagMs>2000)st.late++;
+            st.maxLagMs=Math.max(st.maxLagMs,lagMs);
+            ticks.push(ahead>0?{...r,exchangeTimestamp:r.timestamp}:r);
+        }
         for (const t of ticks) {
-            if (t.exchangeTimestamp == null || ![t.exchangeTimestamp, t.timestamp, t.ltp].every(Number.isFinite) || t.ltp <= 0 || t.exchangeTimestamp > t.timestamp || t.timestamp > this.now() || this.now() - t.exchangeTimestamp > 2000)
+            if (t.exchangeTimestamp == null)
                 continue;
             const matches = [...this.targets.entries()].filter(([, v]) => v.token === t.token && v.exchange === t.exchange && v.exchangeSegment === t.exchangeSegment);
             for (const [id] of matches) {

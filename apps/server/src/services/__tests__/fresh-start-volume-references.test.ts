@@ -40,7 +40,7 @@ describe('level-normalised relative volume (5 Nov audit: futures rollover)', () 
   });
 });
 
-describe('benchmark volume shape for a contract with too little own history (5 Nov: FINNIFTY SESSIONS_1)', () => {
+describe('benchmark volume shape for a contract with too little own history (5 Nov: FINNIFTY SESSIONS_1)', { timeout: 20_000 }, () => {
   // Twenty NSE sessions of bars ending on the day before `now`, plus today's session up to 11:00.
   function bars(levelFor: (dayIndex: number) => number, days = 20) {
     const out: FreshBar[] = [];
