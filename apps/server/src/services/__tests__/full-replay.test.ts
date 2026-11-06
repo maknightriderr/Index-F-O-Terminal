@@ -234,7 +234,11 @@ describe('full replay of the real decision path', () => {
     // Reviewed changes from c19c041f2d460fc9: delta/IV/decay and selected strike;
     // cost/target/geometry gates now reject before the former 0.04 net-R:R plan.
     // This historical-fixture override still cannot mint a paper trade.
-    expect(fp).toBe('d80de8d57c285a3d');
+    // REGIME-DI (2026-11-07) moved it deliberately from d80de8d57c285a3d: the strong-trend label's direction now comes
+    // from the 1H +DI / -DI instead of the late 1H Supertrend, so this fixture reads STRONG_BULL_TREND (was
+    // STRONG_BEAR_TREND). Diffed field by field: regime, and the reason texts gain "Confidence reduced from 50 to 40:
+    // this runs against the STRONG_BULL_TREND regime." The decision is unchanged: COST_EXCEEDS_EDGE, no trade.
+    expect(fp).toBe('759952c4a1242031');
     expect(live.setupWatch).toEqual(expect.arrayContaining([expect.objectContaining({source:'A2',blockCode:'INVALID_TRADE_GEOMETRY',plan:null}),expect.objectContaining({source:'F3',blockCode:'UNREALISTIC_TARGET',plan:null})]));
     expect(live.tradeSetup).toMatchObject({ available: false, noTradeCode: 'COST_EXCEEDS_EDGE',fnoValidation:{strikeSelection:{selectedStrike:25050}} });
     expect(live.tradeSetup.researchTrigger).toBeUndefined(); // F3's live-spot target no longer pays its decay

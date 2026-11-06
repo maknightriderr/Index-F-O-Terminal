@@ -138,7 +138,7 @@ import {
   type PcrSnapshotPoint,
   type PositioningBaselines,
 } from './intraday-positioning.js';
-import { classifyRegime, applyFastIntradayRegime, persistedBreakout, type RegimeSource } from './regime-classifier.js';
+import { adxTrendDirection, classifyRegime, applyFastIntradayRegime, persistedBreakout, type RegimeSource } from './regime-classifier.js';
 import { isOwnMint, mintOnce, mintLockKey } from './setup-mint-lock.js';
 import { IV_PRESSURE_MIN_PCT } from './option-chain.js';
 import {
@@ -1468,13 +1468,14 @@ async function computeMarketBias(
       : clamp(Math.round(agreementShare * evidenceFactor * 100), 15, 95);
 
   // --- Regime: leading breakout/breakdown (fresh, volume-confirmed Bollinger break) takes priority over the lagging ADX-based trend read, overridden by expiry-day gamma when DTE<=1 ---
-  const baseRegime = classifyRegime(adxValue, st1hDirectionConfirmed, atrPctZ, chain?.dte ?? null, chain?.gammaExposure?.regime ?? null, freshBreakoutUp, freshBreakoutDown, operatorActivityBullish, operatorActivityBearish);
+  const baseRegime = classifyRegime(adxValue, adxTrendDirection(adx1h.plusDI.at(-1), adx1h.minusDI.at(-1), st1hDirectionConfirmed), atrPctZ, chain?.dte ?? null, chain?.gammaExposure?.regime ?? null, freshBreakoutUp, freshBreakoutDown, operatorActivityBullish, operatorActivityBearish);
   // FAST_INTRADAY_REGIME (INTRADAY only): a 15m-ADX trend read when the 1H
   // ADX found none, and a fresh breakout held while price stays beyond the
   // Bollinger midline — see regime-classifier.ts. Off (or POSITIONAL) = the
   // 1H read above, unchanged, and nothing extra is computed.
   const fastRegimeEnabled = COVERAGE_LAG_FLAGS.FAST_INTRADAY_REGIME && !isPositional;
-  const adx15Series = fastRegimeEnabled ? adx(c15.highs, c15.lows, c15.closes, 14).adx : [];
+  const adx15 = fastRegimeEnabled ? adx(c15.highs, c15.lows, c15.closes, 14) : null;
+  const adx15Series = adx15?.adx ?? [];
   const adx15mValue: number | null = adx15Series.length > 0 ? adx15Series[adx15Series.length - 1] : null;
   // Same flip handling as the 1H direction: an unconfirmed fresh flip reads as the previous bar's direction.
   const st15DirectionConfirmed = st15JustFlipped && !volumeConfirms ? st15PrevDirection : st15Direction;
@@ -1493,7 +1494,7 @@ async function computeMarketBias(
     enabled: fastRegimeEnabled,
     baseRegime,
     adx15m: adx15mValue,
-    st15Direction: st15DirectionConfirmed,
+    st15Direction: adxTrendDirection(adx15?.plusDI.at(-1), adx15?.minusDI.at(-1), st15DirectionConfirmed),
     persisted: breakoutPersist,
   });
 
@@ -1638,7 +1639,7 @@ async function computeMarketBias(
   }
   if (regimeSource === '15M_FALLBACK' && adx15mValue != null) {
     reasoning.push(
-      `1H ADX ${fmt(adxValue, 0)} reads no trend yet, but 15m ADX ${fmt(adx15mValue, 0)} with a ${st15DirectionConfirmed === 'UP' ? 'bullish' : 'bearish'} 15m Supertrend shows an intraday trend — regime read from the 15m chart.`
+      `1H ADX ${fmt(adxValue, 0)} reads no trend yet, but 15m ADX ${fmt(adx15mValue, 0)} with ${adxTrendDirection(adx15?.plusDI.at(-1), adx15?.minusDI.at(-1), st15DirectionConfirmed) === 'UP' ? '+DI above -DI' : '-DI above +DI'} shows an intraday ${adxTrendDirection(adx15?.plusDI.at(-1), adx15?.minusDI.at(-1), st15DirectionConfirmed) === 'UP' ? 'up' : 'down'}-trend — regime read from the 15m chart.`
     );
   }
   if (rsiDivergence.signal !== 'NONE') {

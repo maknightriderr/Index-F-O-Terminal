@@ -8,7 +8,7 @@ import {sql} from '../../lib/db.js';
 import {redis,scanKeys} from '../../lib/redis.js';
 import {schemaFileReady} from '../ensure-capture-schema.js';
 import {FRESH_CONFIG,freshEntriesEnabled} from '../../config/fresh-start.js';
-import {FreshSharedFeed} from './feed.js';
+import {FreshSharedFeed,FRESH_FEED_MAX_TARGETS} from './feed.js';
 import {createFreshEventSource} from './event-source.js';
 import {FreshProductionAdapter,type FreshReference} from './adapter.js';
 import {FreshPaperStore} from './store.js';
@@ -38,19 +38,30 @@ export const FRESH_DECISION_SUMMARY_MS=900_000;
 export const FRESH_BOOK_ROTATION_MS=120_000;
 /** Index option books stay subscribed all session (6 Nov: rotating 8 slices left most index setups without books). */
 export const FRESH_PINNED_BOOK_MARKETS:ReadonlySet<string>=new Set(['NSE_INDEX_OPTIONS','BSE_VERIFIED_OPTIONS']);
-/** Tokens this consumer plans for (cap 250, 10 kept spare), and the most rotating 20-book slices. */
-export const FRESH_BOOK_TOKEN_BUDGET=240;
-export const FRESH_MAX_ROTATING_BOOK_SLICES=6;
+/**
+ * Token plan (7 Nov): this consumer may hold up to FRESH_FEED_MAX_TARGETS tokens, never more than the shared
+ * connection's free headroom allows, with FRESH_TOKEN_SPARE kept free. Priority when the budget is short: held
+ * positions, references, pinned index books, then rotating slices (urgent setups first, each market's minimum, the rest).
+ */
+export const FRESH_TOKEN_SPARE=10;
+export const FRESH_MAX_ROTATING_BOOK_SLICES=8;
+/** Each rotating market's minimum slices while it is open (6 Nov: MCX's six products shared one slice during NSE hours
+ * and showed 0 observed books all day; after the NSE close they had 35). */
+export const FRESH_ROTATION_MIN_SLICES:Readonly<Record<string,number>>=Object.freeze({NSE_STOCK_OPTIONS:1,MCX_VERIFIED_FUTURES_OPTIONS:2});
 /** How long a reference with a fresh setup keeps its books ahead of the rotation. */
 export const FRESH_URGENT_BOOK_MS=5*60_000;
 /** At most one watchdog reconnect in this window. */
 export const FRESH_FEED_RECONNECT_GAP_MS=10*60_000;
-/** Rotating book references: urgent ones first, then one per market from the rotation window, then the rest. */
+/** The tokens this consumer may plan for: its cap, bounded by what the shared connection has free (950 limit). */
+export function freshTokenCapacity(ownTokens:number,sharedTokens:number,sharedLimit=950):number{
+  return Math.max(0,Math.min(FRESH_FEED_MAX_TARGETS,ownTokens+sharedLimit-sharedTokens)-FRESH_TOKEN_SPARE);
+}
+/** Rotating book references: urgent ones first, then each market's minimum from the rotation window, then the rest. */
 export function freshRotatingBookRefs(refs:readonly FreshReference[],rotation:number,urgent:ReadonlySet<string>,slots:number):FreshReference[]{
   const others=refs.filter(r=>!FRESH_PINNED_BOOK_MARKETS.has(r.market)),out:FreshReference[]=[],add=(r:FreshReference|undefined)=>{if(r&&out.length<slots&&!out.includes(r))out.push(r);};
   for(const r of others)if(urgent.has(r.id))add(r);
   const window=freshDiscoveryWindow(others,rotation,20).selected;
-  for(const market of FRESH_MARKETS)add(window.find(r=>r.market===market));
+  for(const market of FRESH_MARKETS){const minimum=FRESH_ROTATION_MIN_SLICES[market]??1,have=out.filter(r=>r.market===market).length;for(const r of window.filter(x=>x.market===market&&!out.includes(x)).slice(0,Math.max(0,minimum-have)))add(r);}
   for(const r of window)add(r);
   return out;
 }
@@ -89,9 +100,9 @@ export class FreshPaperWorker {
   private operationalReporter=new FreshOperationalReporter(evidence=>logger.info(evidence,'Fresh-start operational evidence; readiness and paper-only blockers observed'));
   private feed:FreshSharedFeed;private events=createFreshEventSource(persistFreshCalendarSnapshot);private store=new FreshPaperStore(undefined,()=>!this.stopped&&freshEntriesEnabled());private monitor:FreshPositionMonitor;private runtime:FreshRuntime;
   private refs=new Map<string,FreshReference>();private master:Instrument[]=[];private masterDay='';private histories=new Map<string,History>();private lagReadAt=0;private shortlist:SubscriptionTarget[]=[];
-  private positions:Awaited<ReturnType<FreshPaperStore['recover']>>=[];private timers:ReturnType<typeof setInterval>[]=[];private removeObservation:(()=>void)|null=null;private scanning=false;private ready=false;private stopped=false;private lastScan=0;private discovery:ReturnType<typeof discoverFreshMarkets>|null=null;private selectionAt=0;private cursor=0;private selected:FreshReference[]=[];private selectionExchangeKey='';private historyCursor=0;private historyFailures=new Map<string,string>();private historyRetryAt=new Map<string,number>();private subscriptionReady=false;private urgentBooks=new Map<string,number>();private reconnectAt=0;
+  private positions:Awaited<ReturnType<FreshPaperStore['recover']>>=[];private timers:ReturnType<typeof setInterval>[]=[];private removeObservation:(()=>void)|null=null;private scanning=false;private ready=false;private stopped=false;private lastScan=0;private discovery:ReturnType<typeof discoverFreshMarkets>|null=null;private selectionAt=0;private cursor=0;private selected:FreshReference[]=[];private selectionExchangeKey='';private historyCursor=0;private historyFailures=new Map<string,string>();private historyRetryAt=new Map<string,number>();private subscriptionReady=false;private urgentBooks=new Map<string,number>();private readonly feedClientId=`fresh-start:production:${randomUUID()}`;private reconnectAt=0;
   constructor(private provider:MarketDataProvider,private subscriptions:SubscriptionManager){
-    this.feed=new FreshSharedFeed(subscriptions,Date.now,`fresh-start:production:${randomUUID()}`);this.monitor=new FreshPositionMonitor(this.feed,this.store);
+    this.feed=new FreshSharedFeed(subscriptions,Date.now,this.feedClientId);this.monitor=new FreshPositionMonitor(this.feed,this.store);
     const adapter=new FreshProductionAdapter(this.feed,this.events,this.store,{references:()=>this.refs,master:()=>this.master,capital:FRESH_CONFIG.capital??0,legacyRisk:()=>this.legacyRisk(),audit:auditFreshEvaluation,refusal:auditFreshAdapter,ivRank:(name,expiry,ivPct)=>ivRankFor(name,expiry,ivPct),watch:async rows=>{this.positions=rows;this.monitor.watch(rows);await this.syncTargets();}});
     this.runtime=new FreshRuntime(this.store,adapter,()=>FRESH_CONFIG.activationApproved&&state.entriesArmed);
   }
@@ -118,12 +129,14 @@ export class FreshPaperWorker {
   private pollMonitor(){this.monitor.tick();const held=this.monitor.summary();state.heldPositions=held.open;state.oldestExitPendingAt=held.oldestExitPendingAt;state.marks=this.monitor.marks();if(!this.monitor.healthy){state.entriesArmed=false;if(!state.entryBlockers.includes('BLOCKED_EXIT_PERSISTENCE'))state.entryBlockers.push('BLOCKED_EXIT_PERSISTENCE');}}
   stop(){this.stopped=true;this.ready=false;for(const t of this.timers)clearInterval(t);this.removeObservation?.();this.feed.close();state.entriesArmed=false;state.monitorRunning=false;state.scannerRunning=false;}
   private async legacyRisk(){try{const [r]=await sql`SELECT count(*)::int AS n FROM signals WHERE signal_type='TRADE_SETUP' AND inputs->>'outcome' IS NULL AND coalesce(inputs->>'voided','')<>'true'`;if(r.n>0)return true;for(const key of await scanKeys('trade_setup:*')){const raw=await redis.get(key);if(!raw)continue;const value=JSON.parse(raw);if(!value||typeof value!=='object'||typeof value.available!=='boolean'||value.available)return true;}return false;}catch{return true;}}
+  /** How many of these tokens no other client holds: releasing them frees shared headroom (a shared token does not). */
+  private exclusiveOwn(targets:readonly SubscriptionTarget[]){return this.subscriptions.exclusiveCount(this.feedClientId,targets);}
   private async syncTargets(){
     const held:SubscriptionTarget[]=[];for(const p of this.positions)for(const id of [p.state.contract.id,p.state.candidate.instrument]){const m=/^(NSE_FO|NSE_CM|BSE_FO|BSE_CM|MCX_FO):(\d+)$/.exec(id);if(!m)throw Error('BLOCKED_HELD_CONTRACT_IDENTITY');held.push({exchange:m[1].startsWith('MCX')?'MCX':m[1].startsWith('BSE')?'BSE':'NSE',exchangeSegment:m[1] as SubscriptionTarget['exchangeSegment'],token:m[2]});}
     const unique=(a:SubscriptionTarget[])=>[...new Map(a.map(t=>[`${t.exchangeSegment}:${t.token}`,t])).values()];
-    this.subscriptionReady=true;let wanted=unique([...held,...this.shortlist]);const own=new Set(this.feed.subscribedTargets.map(x=>`${x.exchangeSegment}:${x.token}`)),available=950-this.subscriptions.getStatus().subscriptionCount;
-    if(wanted.length>250||wanted.filter(x=>!own.has(`${x.exchangeSegment}:${x.token}`)).length>available){state.entriesArmed=false;this.subscriptionReady=false;state.entryBlockers.push('BLOCKED_SHARED_SUBSCRIPTION_HEADROOM');wanted=unique(held);}
-    await this.feed.syncTargets(wanted,250);
+    this.subscriptionReady=true;let wanted=unique([...held,...this.shortlist]);const key=(x:SubscriptionTarget)=>`${x.exchangeSegment}:${x.token}`,wantedKeys=new Set(wanted.map(key)),own=new Set(this.feed.subscribedTargets.map(key)),released=this.exclusiveOwn(this.feed.subscribedTargets.filter(x=>!wantedKeys.has(key(x)))),available=950-this.subscriptions.getStatus().subscriptionCount+released;
+    if(wanted.length>FRESH_FEED_MAX_TARGETS||wanted.filter(x=>!own.has(`${x.exchangeSegment}:${x.token}`)).length>available){state.entriesArmed=false;this.subscriptionReady=false;state.entryBlockers.push('BLOCKED_SHARED_SUBSCRIPTION_HEADROOM');wanted=unique(held);}
+    await this.feed.syncTargets(wanted,FRESH_FEED_MAX_TARGETS);
   }
   private async loadMaster(day:string){
     if(day===this.masterDay)return;const master=await this.provider.getInstrumentMaster();if(this.stopped)return;if(!master.length)throw Error('BLOCKED_INSTRUMENT_MASTER');
@@ -213,10 +226,13 @@ export class FreshPaperWorker {
       let slices:{ref:FreshReference;options:Instrument[]}[]=[];
       const planBooks=async()=>{
         const optionsFor=(ref:FreshReference,expiryLimit:number)=>freshReferenceOptions(this.master,ref,day,this.feed.underlying(freshReferenceSpotId(ref))?.price??null,expiryLimit);
-        const refTokens=new Set(refs.flatMap(r=>[r.id,freshReferenceSpotId(r)])).size,heldTokens=this.positions.length*2;
-        const pinned=refs.filter(r=>FRESH_PINNED_BOOK_MARKETS.has(r.market)).map(ref=>({ref,options:optionsFor(ref,1)}));
-        const pinnedTokens=pinned.reduce((n,s)=>n+s.options.length,0),slots=Math.max(0,Math.min(FRESH_MAX_ROTATING_BOOK_SLICES,Math.floor((FRESH_BOOK_TOKEN_BUDGET-refTokens-heldTokens-pinnedTokens)/20)));
+        const refTokens=new Set(refs.flatMap(r=>[r.id,freshReferenceSpotId(r)])).size,heldTokens=new Set(this.positions.flatMap(p=>[p.state.contract.id,p.state.candidate.instrument])).size;
+        const capacity=freshTokenCapacity(this.exclusiveOwn(this.feed.subscribedTargets),this.subscriptions.getStatus().subscriptionCount);
+        let free=capacity-refTokens-heldTokens;const pinned:typeof slices=[];
+        for(const ref of refs.filter(r=>FRESH_PINNED_BOOK_MARKETS.has(r.market))){const options=optionsFor(ref,1);if(options.length<=free){pinned.push({ref,options});free-=options.length;}}
+        const slots=Math.max(0,Math.min(FRESH_MAX_ROTATING_BOOK_SLICES,Math.floor(free/20)));
         slices=[...pinned,...freshRotatingBookRefs(refs,Math.floor(now/FRESH_BOOK_ROTATION_MS),new Set(this.urgentBooks.keys()),slots).map(ref=>({ref,options:optionsFor(ref,2)}))];
+        state.bookPlan={capacity,refTokens,heldTokens,slots,tokens:refTokens+heldTokens+slices.reduce((n,x)=>n+x.options.length,0),slices:slices.map(x=>({name:x.ref.name,market:x.ref.market,options:x.options.length,pinned:FRESH_PINNED_BOOK_MARKETS.has(x.ref.market)}))};
         // MCX depth unit inference needs each MCX book's verified lot (feed.ts registerMcxDepth).
         for(const {ref,options} of slices)if(ref.market==='MCX_VERIFIED_FUTURES_OPTIONS')for(const x of options){const u=freshContractUnits(x);if(u)this.feed.registerMcxDepth(`${FO_SEGMENT.MCX}:${x.token}`,ref.name,u.lotQuantity);}
         state.mcxDepthUnits=this.feed.mcxDepthModes();
@@ -262,7 +278,9 @@ export class FreshPaperWorker {
         }
         if((state.entriesArmed||urgent)&&blockers.length===0){
           // A queue deadline (evaluation started > 2 s after the context) must not read as an adapter failure.
-          try{state.lastDecision=await this.runtime.onClosedReference(h.context);}catch(error){state.lastDecision=error instanceof Error&&/^[A-Z_]+$/.test(error.message)?error.message:'EVALUATION_FAILED';await auditFreshEvaluation(h.context,evaluateFreshStrategies(h.context));}
+          // Not awaited (7 Nov): pricing waits up to the entry window (20 s) for books and must not stall the scan; the
+          // runtime's queues bound the concurrency, and a failure is recorded, never thrown into the scan.
+          const context=h.context;void this.runtime.onClosedReference(context).then(decision=>{state.lastDecision=decision;},async(error:unknown)=>{state.lastDecision=error instanceof Error&&/^[A-Z_]+$/.test(error.message)?error.message:'EVALUATION_FAILED';await auditFreshEvaluation(context,evaluateFreshStrategies(context)).catch(()=>undefined);});
         }else{await auditFreshEvaluation(h.context,evaluateFreshStrategies(h.context));state.lastDecision=blockers[0]??'BLOCKED_REQUIRED_CAPABILITY';}
       }
       state.discovery.historyCache=this.histories.size;state.status=state.entriesArmed?'FORWARD_PAPER_RUNNING':'PAPER_ARMED_DATA_BLOCKED';state.error=null;

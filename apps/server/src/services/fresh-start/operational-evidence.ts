@@ -18,6 +18,9 @@ export function freshOperationalEvidence(state:State){
     sources:{macro:source(sources?.macro),issuer:source(sources?.issuer),freeGlobal:source(sources?.freeGlobal),publicMacro:source(sources?.publicMacro),commodity:(sources?.commodity??[]).map(s=>({product:code(s.product),...source(s)})),officialMacro:(sources?.officialMacro??[]).map(s=>({source:code(s.source),...source(s)}))},
     // Tick lateness per exchange segment over the last minute (5 Nov: MCX ticks 2-4 s late read as stale references).
     tickLag:state.tickLag??{},
+    // The token plan and each book slice (7 Nov: MCX showed 0 books during NSE hours), and MCX depth-unit inference.
+    bookPlan:state.bookPlan?{capacity:state.bookPlan.capacity,refTokens:state.bookPlan.refTokens,heldTokens:state.bookPlan.heldTokens,slots:state.bookPlan.slots,tokens:state.bookPlan.tokens,slices:state.bookPlan.slices.slice(0,24).map(x=>({name:name(x.name),market:code(x.market),options:x.options,pinned:x.pinned}))}:null,
+    mcxDepthUnits:Object.fromEntries(Object.entries(state.mcxDepthUnits??{}).slice(0,12).map(([k,v])=>[name(k),{mode:code(v.mode),samples:v.samples,nonMultiple:v.nonMultiple}])),
     // Which selected references are still waiting, and on what — so a market-wide code is traceable to instruments.
     references:(state.referenceBlockers??[]).filter(r=>r.codes.length).slice(0,24).map(r=>({name:name(r.name),market:code(r.market),codes:codes(r.codes),signalAgeMs:age(r.signalAgeMs),spotAgeMs:age(r.spotAgeMs)})),
     liveOrdersAllowed:false,

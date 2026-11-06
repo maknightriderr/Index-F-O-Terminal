@@ -17,7 +17,7 @@ import {logger} from '../../lib/logger.js';
 import {freshAdapterState as state} from '../fresh-start/adapter-state.js';
 const initialState=structuredClone(state);
 afterEach(()=>vi.useRealTimers());
-function setup(){Object.assign(state,structuredClone(initialState));mocks.eiaRefresh.mockReset().mockResolvedValue(undefined);mocks.officialRefresh.mockReset().mockResolvedValue(undefined);const provider={getInstrumentMaster:vi.fn(),getHistoricalData:vi.fn(),isAuthenticated:vi.fn()},manager={onTick:vi.fn(()=>()=>{}),onRecovering:vi.fn(()=>()=>{}),unsubscribe:vi.fn(),subscribe:vi.fn(async()=>{}),getStatus:()=>({subscriptionCount:0})};return {provider,manager,worker:new FreshPaperWorker(provider as any,manager as any)};}
+function setup(){Object.assign(state,structuredClone(initialState));mocks.eiaRefresh.mockReset().mockResolvedValue(undefined);mocks.officialRefresh.mockReset().mockResolvedValue(undefined);const provider={getInstrumentMaster:vi.fn(),getHistoricalData:vi.fn(),isAuthenticated:vi.fn()},manager={onTick:vi.fn(()=>()=>{}),onRecovering:vi.fn(()=>()=>{}),unsubscribe:vi.fn(),subscribe:vi.fn(async()=>{}),getStatus:()=>({subscriptionCount:0}),exclusiveCount:vi.fn(()=>0)};return {provider,manager,worker:new FreshPaperWorker(provider as any,manager as any)};}
 describe('production worker lifecycle',()=>{
  it('keeps a stopped worker entry store disabled when a replacement worker re-arms shared readiness',()=>{
    const {worker}=setup();const enabled=mocks.storeConstruct.mock.calls.at(-1)![0] as ()=>boolean;

@@ -35,6 +35,17 @@ import type { GammaExposureRegime, MarketRegime } from '@fno/shared';
 // this is checked first, ahead of the ADX bands below.
 const EXPIRY_GAMMA_MAX_DTE = 1;
 
+/**
+ * The direction of the trend whose STRENGTH the ADX measures: +DI above -DI is an up-trend, below a down-trend
+ * (Wilder). 6 Nov: the strong/weak trend label took its direction from the 1H Supertrend, which flips late, so
+ * CRUDEOIL read "Strong Bull Trend" (ADX 26.7) while price sat below EMA20 < EMA50 and the ADX was measuring the
+ * fall. The Supertrend direction is kept only as the tie-breaker (equal or missing DI).
+ */
+export function adxTrendDirection(plusDI: number | undefined, minusDI: number | undefined, fallback: 'UP' | 'DOWN'): 'UP' | 'DOWN' {
+  if (plusDI == null || minusDI == null || !Number.isFinite(plusDI) || !Number.isFinite(minusDI) || plusDI === minusDI) return fallback;
+  return plusDI > minusDI ? 'UP' : 'DOWN';
+}
+
 export function classifyRegime(
   adxValue: number,
   st1hDirection: 'UP' | 'DOWN',
