@@ -1,7 +1,7 @@
 // Approved implementation pack; pure functions only. Time, calendars and data provenance are injected.
 import { atr, ema } from '../indicators/index.js';
 import { freshOrderFlowEvidence, type FreshOrderFlowInput } from './order-flow-evidence.js';
-export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.11';
+export const FRESH_PACK_VERSION = 'NEW-INTRADAY-1.12';
 /** Minimum underlying reward / risk for a target, and the furthest target in 5-minute ATR before it is capped (1.5). */
 /**
  * 1.5 regime filter: the trend strategies (ORB, VWAP pullback, opening pullback) stand aside on a choppy day, where a
@@ -27,6 +27,11 @@ export const FRESH_STRATEGIES = ['NEW_ORB_RETEST_V1', 'NEW_VWAP_PULLBACK_V1', 'N
 export const FRESH_TREND_STRATEGIES: readonly string[] = ['NEW_MOMENTUM_BREAKOUT_V1', 'NEW_TREND_FLAG_V1', 'NEW_EVENT_BREAKOUT_V1'];
 /** Momentum breakout: efficiency over the last FRESH_EFFICIENCY_BARS needed (a trend day, not a drift). */
 export const FRESH_MOMENTUM_MIN_EFFICIENCY = 0.4;
+/**
+ * Pullback strategies (1.12): in a strong 15-minute trend they skip the 1-hour efficiency (choppy) test, which the
+ * pullback itself fails (6 Nov NIFTY: a VWAP pullback after 10:30 refused EFFICIENCY_00/10PCT for 30 minutes).
+ */
+export const FRESH_PULLBACK_STRATEGIES: ReadonlySet<string> = new Set(['NEW_VWAP_PULLBACK_V1', 'NEW_FIRST_OPENING_PULLBACK_V1', 'NEW_TREND_FLAG_V1']);
 /**
  * ORB retest (1.10, 5 Nov): a breakout of the opening range is taken all session (up to the entry cutoff), not only in
  * the first two hours after the anchor - a range that holds for hours and then breaks and runs was never captured.
@@ -252,7 +257,11 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
         const reach = (n: number, name: string) => { if (n > gate) { gate = n; gateName = name; } };
         // The sweep is a reversal and the momentum / event breakouts carry their own regime rules, so only the
         // pullback-style trend strategies (and the flag) stand aside on a choppy tape.
-        if (choppy && strategy !== 'NEW_PREVIOUS_SESSION_SWEEP_V1' && strategy !== 'NEW_MOMENTUM_BREAKOUT_V1' && strategy !== 'NEW_EVENT_BREAKOUT_V1') {
+        // 1.12 (6 Nov, owner): a pullback lowers the last hour's efficiency by its own shape (up, back to VWAP, bounce),
+        // so in a STRONG 15-minute trend the pullback strategies skip the efficiency test (FRESH_PULLBACK_STRATEGIES); the
+        // VWAP-range (chop around VWAP) test still applies to them, and both tests still apply to the ORB retest.
+        const pullbackInTrend = strong && FRESH_PULLBACK_STRATEGIES.has(strategy);
+        if ((range || (choppy && !pullbackInTrend)) && strategy !== 'NEW_PREVIOUS_SESSION_SWEEP_V1' && strategy !== 'NEW_MOMENTUM_BREAKOUT_V1' && strategy !== 'NEW_EVENT_BREAKOUT_V1') {
             out.refusals.push({ strategy, code: 'CHOPPY_REGIME', detail: range ? 'VWAP_RANGE' : `EFFICIENCY_${Math.min(9, Math.floor(efficiency * 10))}0PCT` });
             continue;
         }
