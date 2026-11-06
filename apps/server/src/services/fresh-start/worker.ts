@@ -21,7 +21,7 @@ import type {FreshContext} from '@fno/analytics';
 import {logFreshDecisionSummary} from './decision-summary.js';
 import {freshEventClearStocks,freshRankStocks,FRESH_MARKETS,freshMarketBlockers,freshBookSupportsLot,discoverFreshMarkets,freshDiscoveryWindow,freshReferenceOptions,freshReferenceExchange,freshReferenceSpotId,freshEventMarket,freshMarketExchange,freshIndexKey,type FreshMarket} from './markets.js';
 import {freshAdapterState as state} from './adapter-state.js';
-import {freshParseScan,freshStockIntel,freshStocksInPlay,freshInPlayDirection,freshIndexIntel,FRESH_SCAN_KEY,type FreshScan,type FreshFuturesSample} from './intel.js';
+import {freshParseScan,freshStockIntel,freshStocksInPlay,freshInPlayDirection,freshIndexIntel,FRESH_INDEX_HEAVYWEIGHTS,FRESH_SCAN_KEY,type FreshScan,type FreshFuturesSample} from './intel.js';
 import {buildOptionChain} from '../option-chain.js';
 import type {FreshOiSample} from '@fno/analytics';
 import {FreshOperationalReporter} from './operational-evidence.js';
@@ -284,7 +284,9 @@ export class FreshPaperWorker {
       // 2.0 index intel: every minute, each index future's price / OI, and (in the background) its option chain's OI.
       if(now-this.indexSampleAt>=60_000){this.indexSampleAt=now;const indexRefs=refs.filter(r=>FRESH_PINNED_BOOK_MARKETS.has(r.market));
         for(const r of indexRefs){const oi=this.feed.openInterest(r.id),px=this.feed.underlying(r.id);if(oi&&px)this.futSamples.set(r.id,[...(this.futSamples.get(r.id)??[]).filter(x=>now-x.at<=FRESH_INDEX_SAMPLE_KEEP_MS),{at:oi.at,price:px.price,oi:oi.oi}]);}
-        void this.refreshChains(indexRefs);}
+        // Chain OI only for indices with a breadth table: the others refuse on breadth first, so their chains would be
+        // provider calls (rate-limited) that nothing reads.
+        void this.refreshChains(indexRefs.filter(r=>FRESH_INDEX_HEAVYWEIGHTS[r.name]!=null));}
       if(now-this.lagReadAt>=60000){state.tickLag=this.feed.tickLagStats();this.lagReadAt=now;}
       state.referenceContracts=refs.length;state.optionContracts=slices.reduce((n,s)=>n+s.options.length,0);state.sourceEpoch=this.feed.sourceEpoch;
       const legacyOpen=await this.legacyRisk(),monitorHealthy=this.monitor.healthy;
