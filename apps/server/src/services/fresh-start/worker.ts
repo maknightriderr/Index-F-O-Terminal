@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {logger} from '../../lib/logger.js';
 import {getSessionWindow,HOLIDAY_CALENDAR_YEARS,FO_SEGMENT,CM_SEGMENT,type Exchange,type Instrument} from '@fno/shared';
-import {evaluateFreshStrategies,type FreshBar} from '@fno/analytics';
+import {evaluateFreshStrategies,FRESH_SHADOW_STRATEGIES,type FreshBar} from '@fno/analytics';
 import type {MarketDataProvider} from '../../providers/interface.js';
 import type {SubscriptionManager,SubscriptionTarget} from '../../lib/subscription-manager.js';
 import {sql} from '../../lib/db.js';
@@ -271,7 +271,7 @@ export class FreshPaperWorker {
         state.barCallbacks++;let blockers=blockersFor(ref),urgent=false;
         // A setup on a reference whose books are not subscribed right now (stocks / MCX rotate): subscribe them at once
         // and let the candidate's entry window (FRESH_ENTRY_WINDOW_MS) wait for the first books, instead of losing it.
-        if(blockers.length===1&&blockers[0]==='WAITING_FOR_OBSERVED_BOOKS'&&evaluateFreshStrategies(h.context).candidates.length){
+        if(blockers.length===1&&blockers[0]==='WAITING_FOR_OBSERVED_BOOKS'&&evaluateFreshStrategies(h.context).candidates.some(c=>!FRESH_SHADOW_STRATEGIES.has(c.strategy))){
           this.urgentBooks.set(ref.id,Date.now()+FRESH_URGENT_BOOK_MS);await planBooks();urgent=true;
           blockers=blockersFor(ref).filter(code=>code!=='WAITING_FOR_OBSERVED_BOOKS');
           logger.info({event:'freshUrgentBooks',instrument:ref.id,name:ref.name,market:ref.market,subscribed:slices.some(x=>x.ref.id===ref.id),blockers},'Fresh-start: setup without observed books; its option books subscribed for the entry window');

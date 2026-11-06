@@ -1,7 +1,7 @@
 import {FreshPaperWorker} from './worker.js';
 import type { MarketDataProvider } from '../../providers/interface.js';
 import type { SubscriptionManager } from '../../lib/subscription-manager.js';
-import { evaluateFreshStrategies, type FreshContext, type FreshCandidate } from '@fno/analytics';
+import { evaluateFreshStrategies, FRESH_SHADOW_STRATEGIES, type FreshContext, type FreshCandidate } from '@fno/analytics';
 import { freshEntriesEnabled } from '../../config/fresh-start.js';
 import { FreshPaperStore, type FreshEntryRequest } from './store.js';
 import { FreshWorkQueue } from './queue.js';
@@ -39,8 +39,12 @@ export class FreshRuntime {
             return Promise.resolve('BLOCKED_QUALIFIED_ADAPTER');
         const adapter = this.adapter;
         return this.evaluations.add(context.now + 2000, async () => {
-            const evaluation = evaluateFreshStrategies(context);
-            await adapter.audit(context, evaluation);
+            const evaluated = evaluateFreshStrategies(context);
+            await adapter.audit(context, evaluated);
+            // Shadow strategies (2.0): recorded as a decision, never priced or entered.
+            for (const c of evaluated.candidates.filter(c => FRESH_SHADOW_STRATEGIES.has(c.strategy)))
+                await adapter.decision?.(c, 'SHADOW_STRATEGY');
+            const evaluation = { ...evaluated, candidates: evaluated.candidates.filter(c => !FRESH_SHADOW_STRATEGIES.has(c.strategy)) };
             if(adapter.prepare){
                 const plans=await Promise.all(evaluation.candidates.map(c=>this.builds.add(c.expiresAt,()=>adapter.prepare!(c))));
                 const eligible=plans.filter((p):p is FreshPreparedCandidate=>p!==null).sort((a,b)=>a.candidate.at-b.candidate.at||b.netRR-a.netRR||a.candidate.origin-b.candidate.origin||a.candidate.strategy.localeCompare(b.candidate.strategy));

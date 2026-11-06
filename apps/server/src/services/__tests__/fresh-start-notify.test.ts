@@ -34,4 +34,10 @@ describe('fresh-start Telegram trade notice text', () => {
     const t = formatFreshTradeNotice({ kind: 'EXIT', position: position({ state: 'CLOSED', exitPrice: 1, exitReason: '<b>x</b>', netPnl: 0 }) });
     expect(t).toContain('&lt;b&gt;x&lt;/b&gt;');
   });
+  it('2.0: an entry past a live account limit says which one, and an ordinary entry says nothing', () => {
+    const flagged = formatFreshTradeNotice({ kind: 'ENTRY', position: position({ riskFlags: ['WOULD_PAUSE_3_LOSSES', 'WOULD_BLOCK_MAX_OPEN'] }) });
+    expect(flagged).toContain('⚠️ Live account would have skipped this: 3 losses in a row; more than 2 positions open');
+    expect(formatFreshTradeNotice({ kind: 'ENTRY', position: position() })).not.toContain('⚠️');
+  });
 });
+
