@@ -19,6 +19,7 @@ export const STRATEGY_NAMES: Record<string, string> = {
   NEW_EVENT_BREAKOUT_V1: 'Event breakout',
   NEW_RS_STOCK_V1: 'Stock in play',
   NEW_INDEX_BREADTH_V1: 'Index breadth',
+  NEW_MCX_FLOW_V1: 'MCX order flow',
 };
 /** 2.0: the 1.x strategies run in shadow — evaluated and recorded, never traded (packages/analytics FRESH_SHADOW_STRATEGIES). */
 export const SHADOW_STRATEGY_IDS: ReadonlySet<string> = new Set(['NEW_ORB_RETEST_V1', 'NEW_VWAP_PULLBACK_V1', 'NEW_PREVIOUS_SESSION_SWEEP_V1', 'NEW_FIRST_OPENING_PULLBACK_V1', 'NEW_MOMENTUM_BREAKOUT_V1', 'NEW_TREND_FLAG_V1', 'NEW_EVENT_BREAKOUT_V1']);
@@ -300,6 +301,9 @@ const RADAR_REASONS: Readonly<Record<string, string>> = Object.freeze({
   IDX_NOT_AN_INDEX: 'Indices only', IDX_INTEL_STALE: 'Index data stale', IDX_BEFORE_10_00: 'Starts 10:00', IDX_BREADTH_UNAVAILABLE: 'No breadth data',
   IDX_BREADTH_SPLIT: 'Heavyweights split', IDX_FUTURES_OI_AGAINST: 'Futures OI against', IDX_NOT_HOLDING_VWAP: 'Not holding VWAP',
   IDX_NO_TRIGGER: 'Waiting for hold / base / wall break', IDX_RISK_TOO_WIDE: 'Risk too wide', IDX_LOCATION_NO_ROOM: 'OI wall too close', IDX_OI_UNAVAILABLE: 'Chain OI unavailable',
+  IDX_FLOW_OPPOSED: 'Order flow against',
+  MCX_NOT_A_COMMODITY: 'MCX only', MCX_BEFORE_START: 'Starts 45 min after open', MCX_FLOW_UNAVAILABLE: 'No order-flow data', MCX_FLOW_NOT_ALIGNED: 'Order flow not with the move',
+  MCX_15M_AGAINST: '15m trend against', MCX_NOT_HOLDING_VWAP: 'Not holding VWAP', MCX_NO_TRIGGER: 'Waiting for bought hold / break', MCX_RISK_TOO_WIDE: 'Risk > 1.2 ATR',
   ORB_OUTSIDE_WINDOW: 'Opening range not formed', ORB_LATE_LEVEL_ALREADY_BROKEN: 'Range already broke earlier', ORB_REBREAK_NOT_BEYOND_TRAP: 'Re-break below trap high/low', ORB_NO_TREND: 'No 15m trend', ORB_RANGE_WIDTH: 'Opening range too narrow/wide', ORB_NO_BREAKOUT: 'No range breakout',
   ORB_BREAKOUT_QUALITY: 'Weak breakout bar', ORB_BREAKOUT_RVOL: 'Breakout volume low', ORB_NO_RETEST_TRIGGER: 'Waiting for retest',
   VWAP_BEFORE_10_30: 'Starts 10:30', VWAP_NO_TREND: 'No 15m trend', VWAP_NO_IMPULSE: 'No impulse leg', VWAP_PULLBACK_SHAPE: 'Pullback shape off',

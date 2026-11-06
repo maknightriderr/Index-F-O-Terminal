@@ -16,7 +16,7 @@ import {FreshPositionMonitor} from './monitor.js';
 import {freshContractUnits} from './contract-units.js';
 import {ivRankFor} from '../fno-scanner.js';
 import {FreshRuntime} from './runtime.js';
-import {flowFiveMinuteBars} from '../order-flow-store.js';
+import {flowFiveMinuteBars,footprintsFor,flowBarStart,FLOW_BAR_MS} from '../order-flow-store.js';
 import type {FreshContext} from '@fno/analytics';
 import {logFreshDecisionSummary} from './decision-summary.js';
 import {freshEventClearStocks,freshRankStocks,FRESH_MARKETS,freshMarketBlockers,freshBookSupportsLot,discoverFreshMarkets,freshDiscoveryWindow,freshReferenceOptions,freshReferenceExchange,freshReferenceSpotId,freshEventMarket,freshMarketExchange,freshIndexKey,type FreshMarket} from './markets.js';
@@ -90,13 +90,29 @@ export const FRESH_HISTORY_SEED_DAYS = 35;
 /** Consecutive empty candle answers from a reference's pinned feed before its history is dropped and reseeded. */
 export const FRESH_PINNED_EMPTY_LIMIT=3;
 /** A mini MCX contract the feed does not carry reads its parent product's order flow (marked proxy). */
-export const FRESH_FLOW_PROXY:Readonly<Record<string,string>>=Object.freeze({CRUDEOILM:'CRUDEOIL',NATGASMINI:'NATURALGAS'});
+/** The flow contract a reference without its own reads (marked proxy): the parent MCX product, or for BSE indices the
+ * NSE index with the same heavyweights (7 Nov: the Dhan feed carries NSE F&O and MCX only, not BSE). */
+export const FRESH_FLOW_PROXY:Readonly<Record<string,string>>=Object.freeze({CRUDEOILM:'CRUDEOIL',NATGASMINI:'NATURALGAS',SENSEX:'NIFTY',BANKEX:'BANKNIFTY'});
 /** The benchmark whose intraday volume shape a reference with too little own volume history borrows (context.ts). */
 export function freshVolumeBenchmarkName(ref:Pick<FreshReference,'name'|'market'>):string|null{
   const b=ref.market==='NSE_INDEX_OPTIONS'?'NIFTY':ref.market==='BSE_VERIFIED_OPTIONS'?'SENSEX':ref.market==='MCX_VERIFIED_FUTURES_OPTIONS'?({...FRESH_FLOW_PROXY,GOLDM:'GOLD',SILVERM:'SILVER'} as Record<string,string>)[ref.name]??null:null;
   return b&&b!==ref.name?b:null;
 }
 /** 1.8 shadow: today's five-minute inferred order flow for a reference, from the Dhan feed (undefined when not covered). */
+/** The flow symbol a reference reads (its own, else its proxy), or null when the feed carries neither. */
+export function freshFlowSymbol(name:string,from:number,to:number):string|null{
+  for(const symbol of [name,FRESH_FLOW_PROXY[name]].filter((x):x is string=>!!x))if(flowFiveMinuteBars(symbol,from,to+1))return symbol;
+  return null;
+}
+/** The last 15-minute footprint closed by `now` of a flow symbol, as relative reads (no price levels), or null. */
+export async function freshFootprint15(symbol:string,now:number):Promise<FreshContext['footprint15']>{
+  const barTime=flowBarStart(now)-FLOW_BAR_MS;
+  try{
+    const fp=(await footprintsFor(symbol,[barTime])).get(barTime);
+    if(!fp||fp.deltaMode==='UNAVAILABLE'||!(fp.trades>0))return null;
+    return {barTime,deltaPct:fp.deltaPct!=null&&Number.isFinite(fp.deltaPct)?fp.deltaPct:null,buyImbalances:fp.buyImbalances??0,sellImbalances:fp.sellImbalances??0,trades:fp.trades};
+  }catch{return null;}
+}
 export function freshOrderFlowFor(name:string,from:number,to:number):FreshContext['orderFlow']{
   // The reference's own contract when the feed carries it, else the parent product's (marked proxy).
   for(const symbol of [name,FRESH_FLOW_PROXY[name]].filter((x):x is string=>!!x)){const f=flowFiveMinuteBars(symbol,from,to+1);if(f)return {source:'DHAN_INFERRED',instrument:f.instrument,proxy:symbol!==name,bars:f.bars};}
@@ -239,6 +255,7 @@ export class FreshPaperWorker {
     if(c)c.eventEvidence=this.events.evidence(receivedAt,freshEventMarket(ref.market),ref.name);
     // 2.0: the stock's universe-scan inputs as of this evaluation (null when no scan row is fresh enough).
     if(c&&ref.market==='NSE_STOCK_OPTIONS')c.stockIntel=freshStockIntel(this.scanSnapshot,ref,receivedAt);
+    if(c&&ref.market==='MCX_VERIFIED_FUTURES_OPTIONS'){c.commodity=true;const flowSymbol=freshFlowSymbol(ref.name,open,receivedAt);c.footprint15=flowSymbol?await freshFootprint15(flowSymbol,receivedAt):null;}
     if(c&&FRESH_PINNED_BOOK_MARKETS.has(ref.market))c.indexIntel=freshIndexIntel(ref.name,this.scanSnapshot,this.futSamples.get(ref.id)??[],this.oiChains.get(ref.id)??[],receivedAt);
     return {context:c,newClose:!!old&&lastSeen>old.lastSeen,lastSeen};
   }

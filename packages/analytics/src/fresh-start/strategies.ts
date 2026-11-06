@@ -1,6 +1,7 @@
 // Approved implementation pack; pure functions only. Time, calendars and data provenance are injected.
 import { atr, ema } from '../indicators/index.js';
 import { freshOrderFlowEvidence, type FreshOrderFlowInput } from './order-flow-evidence.js';
+import { detectOrderBlocks } from '../market-structure/index.js';
 export const FRESH_PACK_VERSION = 'NEW-INTRADAY-2.0';
 /** Minimum underlying reward / risk for a target, and the furthest target in 5-minute ATR before it is capped (1.5). */
 /**
@@ -84,7 +85,7 @@ export const FRESH_TREND_NOMINAL_R = 2.5;
 /** A major level (opening range, previous day) closer than this many R ahead blocks a trend entry outright. */
 export const FRESH_TREND_MIN_ROOM_R = 0.5;
 /** 2.0 strategies that trade (the 1.x list above runs in shadow). */
-export const FRESH_ACTIVE_STRATEGIES = ['NEW_RS_STOCK_V1', 'NEW_INDEX_BREADTH_V1'] as const;
+export const FRESH_ACTIVE_STRATEGIES = ['NEW_RS_STOCK_V1', 'NEW_INDEX_BREADTH_V1', 'NEW_MCX_FLOW_V1'] as const;
 /** Every strategy the engine evaluates: 1.x (shadow) and 2.0 (active). */
 export const FRESH_ALL_STRATEGIES = [...FRESH_STRATEGIES, ...FRESH_ACTIVE_STRATEGIES] as const;
 export type FreshStrategy = typeof FRESH_ALL_STRATEGIES[number];
@@ -138,6 +139,15 @@ export const FRESH_IDX_WALL_UNWIND = 0.05;
 export const FRESH_IDX_OI_MAX_AGE_MS = 3 * 60000;
 export const FRESH_IDX_OI_LOOKBACK_MS: readonly [number, number] = [12 * 60000, 20 * 60000];
 export const FRESH_IDX_WALL_BREAK_MAX_RISK_ATR = 1.5;
+/** The last closed 15-minute footprint of the instrument's flow contract (relative reads only: no price levels). */
+export interface FreshFootprintRead { barTime: number; deltaPct: number | null; buyImbalances: number; sellImbalances: number; trades: number }
+/** 2.0 NEW_MCX_FLOW_V1 parameters (paper hypothesis). Flow sides are INFERRED by the feed, never exact. */
+export const FRESH_MCX_FLOW_BARS = 3;
+export const FRESH_MCX_FLOW_MIN_DELTA = 0.15;
+export const FRESH_MCX_TRIGGER_DELTA = 0.15;
+export const FRESH_MCX_BREAK_DELTA = 0.2;
+/** An order block counts as "at the entry" within this many ATR (shadow tag only). */
+export const FRESH_OB_NEAR_ATR = 0.5;
 const RS_BULLISH_OI: ReadonlySet<string> = new Set(['LONG_BUILDUP', 'SHORT_COVERING']);
 const RS_BEARISH_OI: ReadonlySet<string> = new Set(['SHORT_BUILDUP', 'LONG_UNWINDING']);
 export type FreshDirection = 'BULLISH' | 'BEARISH';
@@ -191,6 +201,10 @@ export interface FreshContext {
     stockIntel?: FreshStockIntel | null;
     /** 2.0: the index's breadth / futures OI / chain OI inputs (undefined for a stock / commodity). */
     indexIntel?: FreshIndexIntel | null;
+    /** 2.0: true for an MCX commodity reference (NEW_MCX_FLOW_V1). */
+    commodity?: boolean;
+    /** 2.0: the last closed 15-minute footprint of the flow contract, or null when unavailable. */
+    footprint15?: FreshFootprintRead | null;
 }
 export interface FreshCandidate {
     id: string;
@@ -322,6 +336,16 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
     const efficiency = recent.length >= 4 && path > 0 ? Math.abs(last(recent).close - recent[0].close) / path : 1;
     const choppy = range || efficiency < FRESH_MIN_EFFICIENCY;
     const directions = [1, -1] as const;
+    // 2.0 shadow tag: the nearest unmitigated order block of the trade's side within FRESH_OB_NEAR_ATR of the entry (OB-2.0
+    // detector on the closed five-minute bars). Recorded for outcome comparison only; it never refuses or alters a trade.
+    let blocks: ReturnType<typeof detectOrderBlocks> | null = null;
+    const obTag = (d: number, price: number, atrNow: number) => {
+        blocks ??= detectOrderBlocks(b);
+        const near = blocks.filter(x => x.type === (d === 1 ? 'BULLISH' : 'BEARISH') && x.state !== 'MITIGATED')
+            .map(x => ({ x, dist: price > x.top ? price - x.top : price < x.bottom ? x.bottom - price : 0 }))
+            .sort((p, q) => p.dist - q.dist)[0];
+        return near && near.dist <= FRESH_OB_NEAR_ATR * atrNow ? { near: true, state: near.x.state, top: near.x.top, bottom: near.x.bottom, distanceAtr: Math.round(near.dist / atrNow * 100) / 100 } : { near: false };
+    };
     const ema5 = new Map<number, number>(); { const e = ema(b.map(x => x.close), 20); b.forEach((x, i) => { if (finite(e[i])) ema5.set(x.time, e[i]); }); }
     for (const strategy of FRESH_ALL_STRATEGIES) {
         let emitted = false;
@@ -334,7 +358,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
         // so in a STRONG 15-minute trend the pullback strategies skip the efficiency test (FRESH_PULLBACK_STRATEGIES); the
         // VWAP-range (chop around VWAP) test still applies to them, and both tests still apply to the ORB retest.
         const pullbackInTrend = strong && FRESH_PULLBACK_STRATEGIES.has(strategy);
-        if ((range || (choppy && !pullbackInTrend)) && strategy !== 'NEW_PREVIOUS_SESSION_SWEEP_V1' && strategy !== 'NEW_MOMENTUM_BREAKOUT_V1' && strategy !== 'NEW_EVENT_BREAKOUT_V1' && strategy !== 'NEW_RS_STOCK_V1' && strategy !== 'NEW_INDEX_BREADTH_V1') {
+        if ((range || (choppy && !pullbackInTrend)) && strategy !== 'NEW_PREVIOUS_SESSION_SWEEP_V1' && strategy !== 'NEW_MOMENTUM_BREAKOUT_V1' && strategy !== 'NEW_EVENT_BREAKOUT_V1' && strategy !== 'NEW_RS_STOCK_V1' && strategy !== 'NEW_INDEX_BREADTH_V1' && strategy !== 'NEW_MCX_FLOW_V1') {
             out.refusals.push({ strategy, code: 'CHOPPY_REGIME', detail: range ? 'VWAP_RANGE' : `EFFICIENCY_${Math.min(9, Math.floor(efficiency * 10))}0PCT` });
             continue;
         }
@@ -687,11 +711,74 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                                             reach(7, nowOi ? 'IDX_LOCATION_NO_ROOM' : 'IDX_OI_UNAVAILABLE');
                                             const next = nowOi ? walls(nowOi, d === 1).filter(x => d * (x.strike - current.close) > 0).sort((x, y) => d * (x.strike - y.strike))[0] : undefined;
                                             if (nowOi && (!next || d * (next.strike - current.close) >= FRESH_IDX_MIN_ROOM_R * risk)) {
-                                                stop = s;
-                                                origin = o;
-                                                profile = 'TREND';
-                                                indexTrigger = { trigger, breadth: ix!.breadth, futuresOi: ix!.futuresOi, nextWall: next?.strike ?? null };
+                                                // Order-flow veto (owner, 7 Nov): no entry when the decision bar's flow is clearly against the
+                                                // trade. Unavailable / neutral flow does not veto (SENSEX / BANKEX read NIFTY / BANKNIFTY's, proxy).
+                                                reach(8, 'IDX_FLOW_OPPOSED');
+                                                const flow = freshOrderFlowEvidence(c.orderFlow, direction, current.time, o);
+                                                if (flow.alignment !== 'OPPOSED') {
+                                                    stop = s;
+                                                    origin = o;
+                                                    profile = 'TREND';
+                                                    indexTrigger = { trigger, breadth: ix!.breadth, futuresOi: ix!.futuresOi, nextWall: next?.strike ?? null, flow: flow.alignment };
+                                                }
                                             }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // ---- 2.0 MCX ORDER FLOW: a commodity trend that the (inferred) aggressive volume confirms. The last three five-minute
+            // flow bars' delta must lean the trade's way (>= 15% of classified volume) and the decision bar's must not oppose it;
+            // entries are a VWAP / EMA20 hold whose resumption bar is itself bought / sold (delta >= 15%), or a tight-base break
+            // on delta >= 20% that the last closed 15-minute footprint does not contradict. No flow, no trade: never a guess.
+            if (strategy === 'NEW_MCX_FLOW_V1') {
+                reach(0, !c.commodity ? 'MCX_NOT_A_COMMODITY' : 'MCX_BEFORE_START');
+                if (c.commodity && c.now - c.sessionOpen >= FRESH_RS_START_MS) {
+                    reach(1, 'MCX_FLOW_UNAVAILABLE');
+                    const flowBars = c.orderFlow?.bars ?? [], fb = (t: number) => flowBars.find(x => x.time === t);
+                    const recent = today.slice(-FRESH_MCX_FLOW_BARS).map(x => fb(x.time)), cur = fb(current.time);
+                    const buy = recent.reduce((n, x) => n + (x?.buy ?? 0), 0), sell = recent.reduce((n, x) => n + (x?.sell ?? 0), 0), un = recent.reduce((n, x) => n + (x?.unclassified ?? 0), 0), trades = recent.reduce((n, x) => n + (x?.trades ?? 0), 0);
+                    const delta = (x: { buy: number; sell: number } | undefined) => x && x.buy + x.sell > 0 ? d * (x.buy - x.sell) / (x.buy + x.sell) : null;
+                    if (cur && recent.every(x => x != null) && buy + sell > 0 && (buy + sell) / (buy + sell + un) >= .5 && trades >= 3 * 5) {
+                        reach(2, 'MCX_FLOW_NOT_ALIGNED');
+                        const setupDelta = d * (buy - sell) / (buy + sell), barDelta = delta(cur)!;
+                        if (setupDelta >= FRESH_MCX_FLOW_MIN_DELTA && barDelta > -FRESH_MCX_FLOW_MIN_DELTA) {
+                            reach(3, 'MCX_15M_AGAINST');
+                            if (!(d === 1 ? bear : bull)) {
+                                reach(4, 'MCX_NOT_HOLDING_VWAP');
+                                const last6 = today.slice(-6);
+                                if (last6.length === 6 && last6.filter(x => d * (x.close - vw(x)) < 0).length <= 1 && favorable(current.close, vwap)) {
+                                    reach(5, 'MCX_NO_TRIGGER');
+                                    const prior = today[today.length - 2];
+                                    const touches = (x: FreshBar) => [vw(x), ema5.get(x.time)].some(L => L != null && finite(L) && d * ((d === 1 ? x.low : x.high) - L) <= FRESH_RS_TOUCH_ATR * a && d * (x.close - L) >= -FRESH_RS_TOUCH_ATR * a);
+                                    const window3 = today.slice(-4, -1), touchAt = window3.findIndex(touches);
+                                    let s: number | null = null, o: number | null = null, trigger = '';
+                                    if (prior && touchAt >= 0 && barDelta >= FRESH_MCX_TRIGGER_DELTA && favorable(current.close, d === 1 ? prior.high : prior.low) && confirms(current, .4) && closeLocation(current, d) >= .65 && rvol(current) >= 1.2) {
+                                        s = lo([...window3.slice(touchAt), current]) - d * .1 * a; o = window3[touchAt].time; trigger = 'FLOW_HOLD';
+                                    }
+                                    const fp = c.footprint15 && finite(c.footprint15.barTime) && c.footprint15.barTime + 900000 <= c.now ? c.footprint15 : null;
+                                    const fpAgrees = !fp || ((fp.deltaPct == null || d * fp.deltaPct >= 0) && (d === 1 ? fp.buyImbalances >= fp.sellImbalances : fp.sellImbalances >= fp.buyImbalances));
+                                    if (s == null && barDelta >= FRESH_MCX_BREAK_DELTA && fpAgrees)
+                                        for (const n of [6, 5, 4, 3]) {
+                                            const base = today.slice(-1 - n, -1);
+                                            if (base.length < n) continue;
+                                            const hi = Math.max(...base.map(x => x.high)), low = Math.min(...base.map(x => x.low));
+                                            if (hi - low > FRESH_RS_BASE_MAX_ATR * a) continue;
+                                            if (d * (current.close - (d === 1 ? hi : low)) > .05 * a && body(current) >= .5 && rvol(current) >= 1.5) {
+                                                s = (d === 1 ? low : hi) - d * .1 * a; o = base[0].time; trigger = 'FLOW_BREAK';
+                                                break;
+                                            }
+                                        }
+                                    if (s != null && o != null) {
+                                        reach(6, 'MCX_RISK_TOO_WIDE');
+                                        if (d * (current.close - s) > 0 && d * (current.close - s) <= FRESH_RS_MAX_RISK_ATR * a) {
+                                            stop = s;
+                                            origin = o;
+                                            profile = 'TREND';
+                                            indexTrigger = { trigger, setupDelta: Math.round(setupDelta * 1000) / 1000, barDelta: Math.round(barDelta * 1000) / 1000, footprint: fp ? { deltaPct: fp.deltaPct, buyImbalances: fp.buyImbalances, sellImbalances: fp.sellImbalances } : 'UNAVAILABLE' };
                                         }
                                     }
                                 }
@@ -712,7 +799,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                     continue;
                 }
                 const targetPrice = current.close + d * FRESH_TREND_NOMINAL_R * risk, parentId = `${c.instrument}:${c.session}:${direction}:${origin}`;
-                out.candidates.push({ id: `${FRESH_PACK_VERSION}:${c.sourceEpoch}:${parentId}:${strategy}:${current.time}`, parentId, version: FRESH_PACK_VERSION, strategy, direction, instrument: c.instrument, sourceEpoch: c.sourceEpoch, session: c.session, at: decisionAt, referenceEntry: current.close, stop, target: targetPrice, atr: a, origin, expiresAt: Math.min(decisionAt + FRESH_ENTRY_WINDOW_MS, c.sessionClose - 3600000), exitProfile: 'TREND', trailAtr: FRESH_TREND_TRAIL_ATR, evidence: { ...(c.eventEvidence ? { eventCalendar: c.eventEvidence } : {}), ...(c.stockIntel ? { stockIntel: c.stockIntel } : {}), ...(indexTrigger ? { index: indexTrigger } : {}), orderFlow: freshOrderFlowEvidence(c.orderFlow, direction, current.time, origin), rvol: finite(rvol(current)) ? rvol(current) : 'UNAVAILABLE', volumeShape: c.volumeShape ?? 'OWN', vwap, reference: 'BAR_VWAP_PROXY', efficiency, targetKind: 'TRAILING_STOP', targetR: FRESH_TREND_NOMINAL_R, trailAtr: FRESH_TREND_TRAIL_ATR } });
+                out.candidates.push({ id: `${FRESH_PACK_VERSION}:${c.sourceEpoch}:${parentId}:${strategy}:${current.time}`, parentId, version: FRESH_PACK_VERSION, strategy, direction, instrument: c.instrument, sourceEpoch: c.sourceEpoch, session: c.session, at: decisionAt, referenceEntry: current.close, stop, target: targetPrice, atr: a, origin, expiresAt: Math.min(decisionAt + FRESH_ENTRY_WINDOW_MS, c.sessionClose - 3600000), exitProfile: 'TREND', trailAtr: FRESH_TREND_TRAIL_ATR, evidence: { ...(c.eventEvidence ? { eventCalendar: c.eventEvidence } : {}), ...(c.stockIntel ? { stockIntel: c.stockIntel } : {}), ...(indexTrigger ? { [strategy === 'NEW_MCX_FLOW_V1' ? 'mcxFlow' : 'index']: indexTrigger } : {}), ...(strategy === 'NEW_RS_STOCK_V1' || strategy === 'NEW_INDEX_BREADTH_V1' || strategy === 'NEW_MCX_FLOW_V1' ? { orderBlock: obTag(d, current.close, a) } : {}), orderFlow: freshOrderFlowEvidence(c.orderFlow, direction, current.time, origin), rvol: finite(rvol(current)) ? rvol(current) : 'UNAVAILABLE', volumeShape: c.volumeShape ?? 'OWN', vwap, reference: 'BAR_VWAP_PROXY', efficiency, targetKind: 'TRAILING_STOP', targetR: FRESH_TREND_NOMINAL_R, trailAtr: FRESH_TREND_TRAIL_ATR } });
                 emitted = true;
                 continue;
             }

@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import { flowFiveMinuteBars, recordFlowTrade, registerFlowSymbol, resetFlowStore } from '../order-flow-store.js';
-import { freshOrderFlowFor } from '../fresh-start/worker.js';
+import { freshOrderFlowFor, freshFlowSymbol, freshFootprint15 } from '../fresh-start/worker.js';
 
 const t0 = Date.parse('2026-11-05T04:00:00Z');
 describe('five-minute order flow for the fresh-start shadow tag (5 Nov)', () => {
@@ -26,3 +26,20 @@ describe('five-minute order flow for the fresh-start shadow tag (5 Nov)', () => 
     expect(flowFiveMinuteBars('CRUDEOIL', t0, t0 + 600000)!.bars).toEqual([{ time: t0 + 300000, buy: 0, sell: 2, unclassified: 0, trades: 1 }]);
   });
 });
+
+describe('2.0: BSE indices read their NSE twin\'s flow; MCX footprint read', () => {
+  beforeEach(() => resetFlowStore());
+  it('reads NIFTY for SENSEX and BANKNIFTY for BANKEX, marked proxy', () => {
+    const t0 = Date.parse('2026-11-09T04:00:00Z');
+    registerFlowSymbol('NIFTY', { exchange: 'NSE', instrument: 'NIFTY-FUT', source: 'DHAN', mode: 'INFERRED', startedAt: t0 });
+    recordFlowTrade('NIFTY', { time: t0 + 1000, price: 1, qty: 10, side: 'BUY' });
+    expect(freshOrderFlowFor('SENSEX', t0, t0 + 600000)).toMatchObject({ proxy: true, instrument: 'NIFTY-FUT' });
+    expect(freshFlowSymbol('SENSEX', t0, t0 + 600000)).toBe('NIFTY');
+    expect(freshFlowSymbol('BANKEX', t0, t0 + 600000)).toBeNull(); // BANKNIFTY carries no flow here
+    expect(freshFlowSymbol('NIFTY', t0, t0 + 600000)).toBe('NIFTY');
+  });
+  it('reads no footprint (null, never a guess) when the symbol has none', async () => {
+    expect(await freshFootprint15('CRUDEOIL', Date.parse('2026-11-09T06:00:00Z'))).toBeNull();
+  });
+});
+
