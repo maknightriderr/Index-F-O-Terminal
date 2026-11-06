@@ -151,9 +151,17 @@ describe('fresh-start point-in-time strategy rules', () => {
         it('stands the trend strategies aside on a choppy session and records the efficiency on a trade', () => {
             // A see-saw open: the closes go nowhere over a long path (efficiency well below 0.3).
             const saw = context([bar(open, 100, 101, 99, 100.5), bar(open + 300000, 100.5, 101, 99.5, 99.5), bar(open + 600000, 99.5, 101, 99.4, 100.6), bar(open + 900000, 100.6, 101, 99.4, 99.6), bar(open + 1200000, 99.6, 101, 99.5, 100.4)]);
-            const r = evaluateFreshStrategies(saw);
+            // Weak 15-minute trend (flat): every trend strategy stands aside on the see-saw.
+            const flat = { ...saw, bars15: saw.bars15.map(x => ({ ...x, open: 100, high: 101, low: 99, close: 100 })) };
+            const r = evaluateFreshStrategies(flat);
             for (const s of ['NEW_ORB_RETEST_V1', 'NEW_VWAP_PULLBACK_V1', 'NEW_FIRST_OPENING_PULLBACK_V1'] as const) expect(r.refusals).toContainEqual(expect.objectContaining({ strategy: s, code: 'CHOPPY_REGIME' }));
             expect(r.refusals.some(x => x.strategy === 'NEW_PREVIOUS_SESSION_SWEEP_V1' && x.code === 'CHOPPY_REGIME')).toBe(false);
+            // 1.12: in a strong 15-minute trend the pullback strategies skip the efficiency test (a pullback lowers it by
+            // its own shape); the ORB retest does not.
+            const trending = evaluateFreshStrategies(saw);
+            expect(trending.refusals).toContainEqual(expect.objectContaining({ strategy: 'NEW_ORB_RETEST_V1', code: 'CHOPPY_REGIME' }));
+            for (const s of ['NEW_VWAP_PULLBACK_V1', 'NEW_FIRST_OPENING_PULLBACK_V1'] as const)
+                expect(trending.refusals.find(x => x.strategy === s)?.detail ?? '').not.toMatch(/^EFFICIENCY_/);
             const ok = evaluateFreshStrategies(orb()).candidates.find(x => x.strategy === 'NEW_ORB_RETEST_V1')!;
             expect(ok.evidence.efficiency as number).toBeGreaterThanOrEqual(0.3);
         });
