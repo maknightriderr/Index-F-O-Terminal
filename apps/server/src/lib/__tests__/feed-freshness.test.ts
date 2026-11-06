@@ -176,6 +176,17 @@ describe('SubscriptionManager — the feed', () => {
     return { provider: { createWebSocketConnection: () => ws } as any, cb, subscribed };
   }
 
+  it('counts the tokens only one client holds (releasing them frees connection headroom)', async () => {
+    const { provider } = fakeProvider();
+    const sm = new SubscriptionManager(provider);
+    const a = { token: '1', exchange: 'NSE' as const, exchangeSegment: 'NSE_FO' as const }, b = { ...a, token: '2' }, c = { ...a, token: '3' };
+    await sm.subscribe('fresh', [a, b, c]);
+    await sm.subscribe('ui', [b]);
+    expect(sm.exclusiveCount('fresh', [a, b, c])).toBe(2);
+    expect(sm.exclusiveCount('ui', [b])).toBe(0);
+    expect(sm.exclusiveCount('fresh', [{ ...a, token: '9' }])).toBe(0);
+  });
+
   it('drops repeats before any listener sees them, flags partial batches, and recovers through the gap checker', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(MON_11);

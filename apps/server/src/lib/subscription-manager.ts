@@ -254,6 +254,16 @@ export class SubscriptionManager {
     return this.latestQuotes.get(`${exchangeSegment}:${token}`);
   }
 
+  /** How many of these targets only `clientId` holds: releasing them frees connection headroom (O(targets)). */
+  exclusiveCount(clientId: string, targets: readonly SubscriptionTarget[]): number {
+    let n = 0;
+    for (const t of targets) {
+      const subscribers = this.refCounts.get(this.keyFor(t));
+      if (subscribers && subscribers.size === 1 && subscribers.has(clientId)) n++;
+    }
+    return n;
+  }
+
   /** Which clients currently want updates for this token (across any exchange segment). */
   getSubscriberIdsForToken(token: string): Set<string> {
     const ids = new Set<string>();

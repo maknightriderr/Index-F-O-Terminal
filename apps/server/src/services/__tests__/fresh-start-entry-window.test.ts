@@ -8,7 +8,8 @@ import {FreshSharedFeed,FRESH_FEED_STALL_MS} from '../fresh-start/feed.js';
 import {FreshEventSource} from '../fresh-start/event-source.js';
 import {FRESH_PAPER_EVENT_POLICY} from '../../config/fresh-event-policy.js';
 import {FreshProductionAdapter,FRESH_PARITY_RELAXED,type FreshReference} from '../fresh-start/adapter.js';
-import {freshRotatingBookRefs,FRESH_PINNED_BOOK_MARKETS} from '../fresh-start/worker.js';
+import {freshRotatingBookRefs,freshTokenCapacity,FRESH_PINNED_BOOK_MARKETS,FRESH_TOKEN_SPARE} from '../fresh-start/worker.js';
+import {FRESH_FEED_MAX_TARGETS} from '../fresh-start/feed.js';
 
 let pg:PGlite;
 function client(db:any):FreshDb{return {unsafe:async(q,p=[])=>((await db.query(q,p.map((x:any)=>x instanceof Date?x.toISOString():x))).rows),begin:fn=>db.transaction((tx:any)=>fn(client(tx)))};}
@@ -91,5 +92,19 @@ describe('fresh-start book plan',()=>{
     const urgent=freshRotatingBookRefs(refs,0,new Set(['D']),2);expect(urgent[0].id).toBe('D');expect(urgent).toHaveLength(2);
     expect(freshRotatingBookRefs(refs,0,new Set(),0)).toEqual([]);
     expect(freshRotatingBookRefs(refs,0,new Set(),10).some(r=>FRESH_PINNED_BOOK_MARKETS.has(r.market))).toBe(false);
+  });
+  it('gives MCX two slices while NSE is open (7 Nov: six MCX products shared one slice and showed 0 books)',()=>{
+    const four=freshRotatingBookRefs(refs,0,new Set(),4);
+    expect(four.filter(r=>r.market==='MCX_VERIFIED_FUTURES_OPTIONS')).toHaveLength(2);
+    expect(four.filter(r=>r.market==='NSE_STOCK_OPTIONS')).toHaveLength(2);
+    // An urgent setup still comes first, and never pushes the total past the slots.
+    const urgent=freshRotatingBookRefs(refs,0,new Set(['D']),3);expect(urgent.map(r=>r.id)[0]).toBe('D');expect(urgent).toHaveLength(3);
+    expect(urgent.filter(r=>r.market==='MCX_VERIFIED_FUTURES_OPTIONS')).toHaveLength(2);
+  });
+  it('plans tokens within its cap and the shared connection headroom',()=>{
+    expect(freshTokenCapacity(0,100)).toBe(FRESH_FEED_MAX_TARGETS-FRESH_TOKEN_SPARE);
+    expect(freshTokenCapacity(0,800)).toBe(150-FRESH_TOKEN_SPARE); // only 150 free on the connection
+    expect(freshTokenCapacity(200,900)).toBe(250-FRESH_TOKEN_SPARE); // own exclusive tokens count as reusable
+    expect(freshTokenCapacity(0,990)).toBe(0);
   });
 });

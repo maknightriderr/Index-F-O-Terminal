@@ -18,7 +18,9 @@ export interface FreshQualifiedAdapter {
 }
 export class FreshRuntime {
     private builds = new FreshWorkQueue(20, 4);
-    private evaluations = new FreshWorkQueue(100, 2);
+    // 8 (was 2): an evaluation holds its slot while its candidates price (up to the 20 s entry window), and a queued
+    // evaluation must start within 2 s of its context.
+    private evaluations = new FreshWorkQueue(100, 8);
     private recovered = false;
     constructor(private store = new FreshPaperStore(), private adapter: FreshQualifiedAdapter | null = null, private enabled: () => boolean = freshEntriesEnabled) { }
     async recover() {

@@ -38,6 +38,9 @@ export const FRESH_FEED_ALIVE_MS = 2000;
  * has been accepted for this long, the worker asks for a fresh upstream connection.
  */
 export const FRESH_FEED_STALL_MS = 60_000;
+/** The most tokens this consumer may hold on the shared connection (7 Nov: 250 -> 400; the worker's plan also
+ * keeps within the connection's free headroom, see freshTokenCapacity). */
+export const FRESH_FEED_MAX_TARGETS = 400;
 export class FreshSharedFeed {
     private epoch = 0;
     private lastTickAt = 0;
@@ -80,7 +83,7 @@ export class FreshSharedFeed {
                 throw Error('MARKET_NOT_QUALIFIED');
             combined.set(`${t.exchangeSegment}:${t.token}`, t);
         }
-        if (combined.size > Math.min(250, verifiedNewCapacity))
+        if (combined.size > Math.min(FRESH_FEED_MAX_TARGETS, verifiedNewCapacity))
             throw Error('FRESH_SUBSCRIPTION_BUDGET');
         await this.subscriptions.subscribe(this.clientId, [...combined.values()]);
         if (this.closed) {
