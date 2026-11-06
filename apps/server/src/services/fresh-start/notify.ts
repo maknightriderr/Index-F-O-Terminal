@@ -16,6 +16,7 @@ const STRATEGY: Record<string, string> = {
   NEW_EVENT_BREAKOUT_V1: 'Event breakout',
   NEW_RS_STOCK_V1: 'Stock in play (relative strength)',
   NEW_INDEX_BREADTH_V1: 'Index breadth trend',
+  NEW_MCX_FLOW_V1: 'MCX order flow',
 };
 /** Live account limits a paper entry went past (2.0: paper records them instead of refusing). */
 const RISK_FLAG: Record<string, string> = {
