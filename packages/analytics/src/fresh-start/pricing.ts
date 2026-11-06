@@ -4,12 +4,21 @@ export interface ParityPair {strike:number;call:FreshQuote;put:FreshQuote;}
 export interface FreshParityBasis {forward:number;discount:number;expiryAt:number;at:number;epoch:string;source:string;strikes:number[];}
 export interface FreshFutureObservation {contract:string;price:number;tick:number;source:string;epoch:string;eventAt:number;receivedAt:number;}
 export interface FreshFuturesParityBasis extends FreshParityBasis {futureContract:string;futureAt:number;}
-function validFuture(f:FreshFutureObservation,now:number){return !!f.contract&&!!f.source&&!!f.epoch&&[f.price,f.tick,f.eventAt,f.receivedAt,now].every(Number.isFinite)&&f.price>0&&f.tick>0&&f.eventAt<=f.receivedAt&&f.receivedAt<=now&&now-f.eventAt<=2000;}
+/**
+ * How old, and how far apart in exchange time, the parity quotes may be. Default: every quote <= 2 s old and all
+ * within 1 s of each other. 6 Nov: that synchronous snapshot of 6-10 option books almost never existed (options tick
+ * on trades, every few seconds), so 6 of 7 setups in two days never reached a contract. The adapter retries with a
+ * relaxed tolerance for the BASIS only; the traded quote keeps the 2 s rule, and the bid/ask no-arbitrage band below
+ * still rejects any fit the older quotes cannot all support.
+ */
+export interface FreshParityTolerance {maxAgeMs:number;maxSkewMs:number;}
+export const FRESH_PARITY_STRICT:FreshParityTolerance=Object.freeze({maxAgeMs:2000,maxSkewMs:1000});
+function validFuture(f:FreshFutureObservation,now:number,maxAgeMs=2000){return !!f.contract&&!!f.source&&!!f.epoch&&[f.price,f.tick,f.eventAt,f.receivedAt,now].every(Number.isFinite)&&f.price>0&&f.tick>0&&f.eventAt<=f.receivedAt&&f.receivedAt<=now&&now-f.eventAt<=maxAgeMs;}
 /** C-P=D(F-K), with F fixed to the exact mapped future observation, never a fitted replacement future. */
-export function fitFreshFuturesParity(pairs:readonly ParityPair[],future:FreshFutureObservation,expiryAt:number,now:number):FreshFuturesParityBasis|null {
-  if(!validFuture(future,now))return null;
-  const fitted=fitFreshParity(pairs,expiryAt,now),quotes=pairs.flatMap(x=>[x.call,x.put]);
-  if(!fitted||fitted.source!==future.source||fitted.epoch!==future.epoch||new Set(quotes.map(q=>q.contract)).size!==quotes.length||quotes.some(q=>Math.abs(q.eventAt-future.eventAt)>1000))return null;
+export function fitFreshFuturesParity(pairs:readonly ParityPair[],future:FreshFutureObservation,expiryAt:number,now:number,tolerance:FreshParityTolerance=FRESH_PARITY_STRICT):FreshFuturesParityBasis|null {
+  if(!validFuture(future,now,tolerance.maxAgeMs))return null;
+  const fitted=fitFreshParity(pairs,expiryAt,now,tolerance),quotes=pairs.flatMap(x=>[x.call,x.put]);
+  if(!fitted||fitted.source!==future.source||fitted.epoch!==future.epoch||new Set(quotes.map(q=>q.contract)).size!==quotes.length||quotes.some(q=>Math.abs(q.eventAt-future.eventAt)>tolerance.maxSkewMs))return null;
   const xs=pairs.map(x=>future.price-x.strike),ys=pairs.map(x=>(x.call.bid+x.call.ask-x.put.bid-x.put.ask)/2),sumSquares=xs.reduce((s,x)=>s+x*x,0);
   if(!(sumSquares>0&&Number.isFinite(sumSquares)))return null;
   const discount=xs.reduce((s,x,i)=>s+x*ys[i],0)/sumSquares;
@@ -17,11 +26,11 @@ export function fitFreshFuturesParity(pairs:readonly ParityPair[],future:FreshFu
   return {...fitted,forward:future.price,discount,futureContract:future.contract,futureAt:future.eventAt};
 }
 /** European parity C-P=D(F-K); the caller verifies exact underlying and expiry identity from the master. */
-export function fitFreshParity(pairs:readonly ParityPair[],expiryAt:number,now:number):FreshParityBasis|null {
+export function fitFreshParity(pairs:readonly ParityPair[],expiryAt:number,now:number,tolerance:FreshParityTolerance=FRESH_PARITY_STRICT):FreshParityBasis|null {
   if(pairs.length<3||pairs.length>5||!Number.isFinite(expiryAt)||expiryAt<=now)return null;
   const a=[...pairs].sort((x,y)=>x.strike-y.strike),quotes=a.flatMap(x=>[x.call,x.put]);
   if(new Set(a.map(x=>x.strike)).size!==a.length||new Set(quotes.map(x=>x.epoch)).size!==1||new Set(quotes.map(x=>x.source)).size!==1)return null;
-  if(quotes.some(q=>![q.bid,q.ask,q.tick,q.eventAt,q.receivedAt].every(Number.isFinite)||q.tick<=0||q.bid<=0||q.ask<q.bid||!Number.isSafeInteger(q.bidUnits)||!Number.isSafeInteger(q.askUnits)||q.bidUnits<=0||q.askUnits<=0||q.eventAt>q.receivedAt||q.receivedAt>now||now-q.eventAt>2000)||Math.max(...quotes.map(q=>q.eventAt))-Math.min(...quotes.map(q=>q.eventAt))>1000)return null;
+  if(quotes.some(q=>![q.bid,q.ask,q.tick,q.eventAt,q.receivedAt].every(Number.isFinite)||q.tick<=0||q.bid<=0||q.ask<q.bid||!Number.isSafeInteger(q.bidUnits)||!Number.isSafeInteger(q.askUnits)||q.bidUnits<=0||q.askUnits<=0||q.eventAt>q.receivedAt||q.receivedAt>now||now-q.eventAt>tolerance.maxAgeMs)||Math.max(...quotes.map(q=>q.eventAt))-Math.min(...quotes.map(q=>q.eventAt))>tolerance.maxSkewMs)return null;
   const xs=a.map(x=>x.strike),ys=a.map(x=>(x.call.bid+x.call.ask-x.put.bid-x.put.ask)/2);
   if(xs.some(x=>!Number.isFinite(x)||x<=0))return null;
   const mx=xs.reduce((s,x)=>s+x,0)/xs.length,my=ys.reduce((s,x)=>s+x,0)/ys.length;

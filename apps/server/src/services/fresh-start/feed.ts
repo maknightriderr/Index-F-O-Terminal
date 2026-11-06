@@ -32,9 +32,18 @@ export const FRESH_TICK_MAX_LAG_MS = 10000;
 export const FRESH_TICK_CLOCK_SKEW_MS = 1000;
 /** The feed counts as live when any tick arrived within this window. */
 export const FRESH_FEED_ALIVE_MS = 2000;
+/**
+ * Watchdog (6 Nov, 11:30 IST): after a restart every tick arrived with an old exchange time, all were dropped, and
+ * every reference read stale for ~12 minutes until the next deploy reconnected. When ticks keep arriving but none
+ * has been accepted for this long, the worker asks for a fresh upstream connection.
+ */
+export const FRESH_FEED_STALL_MS = 60_000;
 export class FreshSharedFeed {
     private epoch = 0;
     private lastTickAt = 0;
+    private lastRawAt = 0;
+    private lastAcceptedAt = 0;
+    private watchSince = 0;
     private closed = false;
     private readonly connectionId = randomUUID();
     private books = new Map<string, FreshQuote[]>();
@@ -56,6 +65,7 @@ export class FreshSharedFeed {
             throw Error('FEED_CLOSED');
         if (this.removeTick)
             return;
+        this.watchSince = this.now();
         this.removeTick = this.subscriptions.onTick(ticks => this.receive(ticks));
         this.removeRecovery = this.subscriptions.onRecovering(() => { this.epoch++; this.books.clear(); this.latest.clear(); this.referenceHistory.clear(); this.notify(); });
     }
@@ -122,6 +132,7 @@ export class FreshSharedFeed {
         const ticks:Tick[]=[];
         for (const r of raw) {
             if (r.exchangeTimestamp == null || ![r.exchangeTimestamp, r.timestamp, r.ltp].every(Number.isFinite) || r.ltp <= 0 || r.timestamp > this.now()) continue;
+            this.lastRawAt=this.now();
             const st=this.lag.get(r.exchangeSegment??'UNKNOWN')??{ticks:0,late:0,dropped:0,skewed:0,maxLagMs:0};this.lag.set(r.exchangeSegment??'UNKNOWN',st);st.ticks++;
             const ahead=r.exchangeTimestamp-r.timestamp,lagMs=this.now()-r.exchangeTimestamp;
             if(ahead>FRESH_TICK_CLOCK_SKEW_MS||lagMs>FRESH_TICK_MAX_LAG_MS){
@@ -129,6 +140,7 @@ export class FreshSharedFeed {
               st.dropped++;st.droppedLagMs=[Math.min(st.droppedLagMs?.[0]??lagMs,lagMs),Math.max(st.droppedLagMs?.[1]??lagMs,lagMs)];st.droppedAheadMs=[Math.min(st.droppedAheadMs?.[0]??ahead,ahead),Math.max(st.droppedAheadMs?.[1]??ahead,ahead)];st.clockMs=this.now()-r.timestamp;continue;}
             if(ahead>0)st.skewed++;else if(lagMs>2000)st.late++;
             st.maxLagMs=Math.max(st.maxLagMs,lagMs);
+            this.lastAcceptedAt=this.now();
             ticks.push(ahead>0?{...r,exchangeTimestamp:r.timestamp}:r);
         }
         for (const t of ticks) {
@@ -163,6 +175,10 @@ export class FreshSharedFeed {
         if (ticks.some(t => t.exchangeTimestamp != null && Number.isFinite(t.timestamp) && t.timestamp <= this.now())) this.lastTickAt = Math.max(this.lastTickAt, ...ticks.map(t => Number.isFinite(t.timestamp) && t.timestamp <= this.now() ? t.timestamp : 0));
         this.notify();
     }
+    /** Ticks are arriving (last one <= 5 s ago) but none was accepted for FRESH_FEED_STALL_MS. */
+    stalled() { const now = this.now(); return this.lastRawAt > 0 && now - this.lastRawAt <= 5000 && now - Math.max(this.lastAcceptedAt, this.watchSince) >= FRESH_FEED_STALL_MS; }
+    /** Restarts the stall clock after a reconnect was requested. */
+    resetStallClock() { this.watchSince = this.now(); }
     /** True while any tick reached this consumer in the last FRESH_FEED_ALIVE_MS: the connection itself is live. */
     feedAlive() { return this.lastTickAt > 0 && this.now() - this.lastTickAt <= FRESH_FEED_ALIVE_MS; }
     private notify() {
@@ -193,6 +209,19 @@ export class FreshSharedFeed {
             return null;
         const value = this.scaled(q, tick);
         return freshQuoteCode(value, id, 'ANGEL', this.sourceEpoch, this.now()) === null ? value : null;
+    }
+    /**
+     * The latest book for a model input only (the parity basis), when it is at most maxAgeMs old in exchange time.
+     * Never a traded price: entries and marks use quote() / firstAsk(), which keep the 2-second rule.
+     */
+    modelQuote(id: string, tick: number, maxAgeMs: number): FreshQuote | null {
+        const q = this.books.get(id)?.at(-1);
+        if (!q || this.latest.get(id)?.exchangeTimestamp !== q.eventAt)
+            return null;
+        const value = this.scaled(q, tick), now = this.now();
+        if (freshQuoteCode(value, id, 'ANGEL', this.sourceEpoch, value.receivedAt) !== null || value.receivedAt > now || now - value.eventAt > maxAgeMs)
+            return null;
+        return value;
     }
     /** Returns the earliest eligible observed book after simulated arrival, even if the caller finishes work later. */
     firstAsk(id: string, tick: number, arrivalAt: number, deadline: number): Promise<FreshQuote | null> {

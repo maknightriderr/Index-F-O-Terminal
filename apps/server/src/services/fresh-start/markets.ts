@@ -4,6 +4,7 @@ import {freshFeePolicyFor} from './fees.js';
 import {freshContractUnits} from './contract-units.js';
 import {freshBsePaperPolicyApproved} from './bse-policy.js';
 import {freshMcxPaperPolicyApproved} from './mcx-policy.js';
+import {freshTradableExpiries} from './expiries.js';
 /** 1.5: the mini energy contracts fit the INR 5,00,000 account's per-trade risk; the full-size lots never do. */
 /** Option-chain names whose index token is listed under another key (NSE options say NIFTYNXT50, the index table NIFTYNEXT50). */
 /** Index name comparison key: upper case, letters and digits only. */
@@ -101,12 +102,15 @@ export function freshDiscoveryWindow(refs:readonly FreshReference[],cursor:numbe
     for(let i=0;i<n;i++)selected.push(group[(start+i)%group.length]);}
   return {selected,nextCursor:cursor+7};
 }
-/** Both sides support diagnostics/parity; selection remains at most five strikes and two expiries. */
-export function freshReferenceOptions(master:readonly Instrument[],ref:FreshReference,day:string,price:number|null){
+/**
+ * Both sides support diagnostics/parity; selection remains at most five strikes and `expiryLimit` (<= 2) expiries.
+ * The expiries are the adapter's own (freshTradableExpiries) when the calendar can count them, else the nearest listed.
+ */
+export function freshReferenceOptions(master:readonly Instrument[],ref:FreshReference,day:string,price:number|null,expiryLimit=2){
   if(price==null||!Number.isFinite(price)||price<=0)return [];
   const exchange=freshReferenceExchange(ref),rows=master.filter(x=>x.exchange===exchange&&x.segment==='FO'&&x.name===ref.name&&x.instrumentType===freshOptionType(ref.market)&&x.expiry&&x.expiry>day&&x.strike!=null&&x.strike>0&&Number.isSafeInteger(x.lotSize)&&x.lotSize>0&&Number.isFinite(x.tickSize)&&x.tickSize>0);
   const linked=ref.mcxLinks?rows.filter(x=>ref.mcxLinks!.some(link=>link.optionExpiry===x.expiry&&link.futureToken===ref.signal.token)):rows;
-  const expiries=[...new Set(linked.map(x=>x.expiry!))].sort().slice(0,2),strikes=[...new Set(linked.filter(x=>expiries.includes(x.expiry!)).map(x=>x.strike!))].sort((a,b)=>Math.abs(a-price)-Math.abs(b-price)||a-b).slice(0,5);
+  const listed=[...new Set(linked.map(x=>x.expiry!))].sort(),tradable=freshTradableExpiries(ref.market,listed,day,exchange),expiries=(tradable.length?tradable:listed).slice(0,Math.max(1,Math.min(2,expiryLimit))),strikes=[...new Set(linked.filter(x=>expiries.includes(x.expiry!)).map(x=>x.strike!))].sort((a,b)=>Math.abs(a-price)-Math.abs(b-price)||a-b).slice(0,5);
   return linked.filter(x=>expiries.includes(x.expiry!)&&strikes.includes(x.strike!)&&['CE','PE'].includes(x.optionType??'')&&(!ref.mcxLinks||resolveFreshMcxLink(x,master)?.futureToken===ref.signal.token)).slice(0,20);
 }
 

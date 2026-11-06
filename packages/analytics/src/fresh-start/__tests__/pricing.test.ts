@@ -1,6 +1,6 @@
 import {describe,it,expect} from 'vitest';
 import {blackScholesPrice} from '../../greeks/index.js';
-import {fitFreshParity,freshPremiumScenarios,freshRoundTripFees,freshPremiumForNet,type FreshFeePolicy} from '../pricing.js';
+import {fitFreshParity,FRESH_PARITY_STRICT,freshPremiumScenarios,freshRoundTripFees,freshPremiumForNet,type FreshFeePolicy} from '../pricing.js';
 import {FRESH_RISK_PER_TRADE,admitFreshPaper,assessFreshPlan,advanceFreshPosition,type FreshContract} from '../paper.js';
 import {request,position} from './fixtures.js';
 const now=Date.parse('2026-10-30T06:00:00Z'),expiryAt=now+7*86400000,t=7/365,forward=25020,discount=.999;
@@ -10,6 +10,15 @@ describe('observed European parity and explicit pricing scenarios',()=>{
  it('recovers forward and discount from three paired contracts without an invented interest rate',()=>{const b=fitFreshParity(pairs(),expiryAt,now)!;expect(b.forward).toBeCloseTo(forward,6);expect(b.discount).toBeCloseTo(discount,8);});
  it('rejects stale, mixed-epoch, duplicate-strike and inconsistent parity evidence',()=>{for(const change of [(p:ReturnType<typeof pairs>)=>{p[0].call.eventAt-=2001;},(p:ReturnType<typeof pairs>)=>{p[0].put.epoch='other';},(p:ReturnType<typeof pairs>)=>{p[0].strike=p[1].strike;},(p:ReturnType<typeof pairs>)=>{p[1].call.bid+=10;p[1].call.ask+=10;}]){const p=pairs();change(p);expect(fitFreshParity(p,expiryAt,now)).toBeNull();}});
  it.each(['CE','PE'] as const)('reprices %s on its signal reference and exposes the IV/spread assumptions',side=>{const p=pairs(),basis=fitFreshParity(p,expiryAt,now)!,q=side==='CE'?p[1].call:p[1].put;const r=freshPremiumScenarios({basis,quote:q,strike:25000,side,signalKind:'FUTURES',signalPrice:25010,pricingSpot:25000,target:side==='CE'?25300:24700,stop:side==='CE'?24900:25100,now,cutoff:now+3600000})!;expect(r.targetPremiumScenarios).toHaveLength(2);expect(r.targetPremiumScenarios[0]).toBeGreaterThan(r.invalidationPremiumScenarios[0]);expect(r.targetPremiumScenarios[1]).toBeLessThan(r.targetPremiumScenarios[0]);expect(Math.sign(r.delta)).toBe(side==='CE'?1:-1);expect(r.evidence.ivShocks).toEqual([0,-.02]);});
+});
+describe('parity tolerance (6 Nov: synchronous 2 s snapshots rarely existed)',()=>{
+ const aged=()=>{const p=pairs();p.forEach((x,i)=>{x.call.eventAt=x.call.receivedAt=now-8000+i*2000;x.put.eventAt=x.put.receivedAt=now-7000+i*2000;});return p;};
+ it('refuses 8 s old, 5 s apart books under the strict default and fits them under a 10 s tolerance',()=>{
+  expect(fitFreshParity(aged(),expiryAt,now)).toBeNull();expect(fitFreshParity(aged(),expiryAt,now,FRESH_PARITY_STRICT)).toBeNull();
+  const b=fitFreshParity(aged(),expiryAt,now,{maxAgeMs:10000,maxSkewMs:10000})!;expect(b.forward).toBeCloseTo(forward,6);expect(b.at).toBe(now);});
+ it('still refuses beyond the tolerance and books the no-arbitrage band cannot support',()=>{
+  const old=aged();old[0].call.eventAt=old[0].call.receivedAt=now-10001;expect(fitFreshParity(old,expiryAt,now,{maxAgeMs:10000,maxSkewMs:10000})).toBeNull();
+  const bad=aged();bad[1].call.bid+=10;bad[1].call.ask+=10;expect(fitFreshParity(bad,expiryAt,now,{maxAgeMs:10000,maxSkewMs:10000})).toBeNull();});
 });
 describe('flat per-order brokerage and actual-quantity net paper results',()=>{
  it('charges flat round-trip brokerage once, regardless of lot count',()=>{const one=freshRoundTripFees(100,110,25,1,policy),three=freshRoundTripFees(100,110,75,1,policy),fixed=40*1.18;expect(three-fixed).toBeCloseTo(3*(one-fixed),8);});
