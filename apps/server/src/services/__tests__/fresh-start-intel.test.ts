@@ -1,7 +1,7 @@
 // 2.0 stocks in play: the F&O universe scan -> per-stock intel and the selection of stock references.
 import { describe, it, expect } from 'vitest';
 import { FRESH_INTEL_MAX_AGE_MS } from '@fno/analytics';
-import { freshParseScan, freshSectorStrength, freshStockIntel, freshStocksInPlay, freshInPlayDirection, type FreshScan } from '../fresh-start/intel.js';
+import { freshParseScan, freshSectorStrength, freshStockIntel, freshStocksInPlay, freshInPlayDirection, freshIndexBreadth, freshFuturesOiRead, freshOiBefore, freshIndexIntel, FRESH_INDEX_HEAVYWEIGHTS, type FreshScan } from '../fresh-start/intel.js';
 
 const now = Date.parse('2026-11-09T06:00:00Z');
 const row = (symbol: string, x: Record<string, unknown> = {}) => ({ symbol, exchange: 'NSE', price: 100, changePercent: 1, volume: 1, futuresOi: 1, futuresChangeOi: 1, futuresChangeOiPercent: 1, oiInterpretation: 'LONG_BUILDUP', pcr: 1, atmIv: 20, ceIv: 20, peIv: 20, ivSkew: 0, ivRank: 40, ivPercentile: 40, atmGamma: 0, atmTheta: 0, atmVega: 0, atmSpreadPct: 0.5, direction: 'BULLISH', confidence: 50, score: 50, relativeStrength: 1.2, timestamp: now - 60000, ...x }) as any;
@@ -46,3 +46,36 @@ describe('fresh-start 2.0 intel', () => {
     expect(freshStocksInPlay(null, stocks, now, 3, new Set(), clear)).toEqual([]);
   });
 });
+
+describe('fresh-start 2.0 index intel', () => {
+  const heavy = (above: string[], missing: string[] = []) => scan(Object.keys(FRESH_INDEX_HEAVYWEIGHTS.BANKNIFTY).filter((x) => !missing.includes(x)).map((x) => row(x, { price: 100, vwap: above.includes(x) ? 99 : 101 })));
+  it('measures heavyweight breadth by weight, and refuses it below 70% coverage or without a table', () => {
+    expect(freshIndexBreadth(heavy(['HDFCBANK', 'ICICIBANK']), 'BANKNIFTY').breadth).toBeCloseTo(53 / 95.5, 6);
+    expect(freshIndexBreadth(heavy(Object.keys(FRESH_INDEX_HEAVYWEIGHTS.BANKNIFTY)), 'BANKNIFTY').breadth).toBe(1);
+    const thin = freshIndexBreadth(heavy([], ['HDFCBANK', 'ICICIBANK']), 'BANKNIFTY');
+    expect(thin.breadth).toBeNull(); expect(thin.coverage).toBeCloseTo(42.5 / 95.5, 6);
+    expect(freshIndexBreadth(heavy([]), 'MIDCPNIFTY')).toEqual({ breadth: null, coverage: 0 });
+    expect(freshIndexBreadth(scan([row('HDFCBANK', { vwap: undefined })]), 'BANKNIFTY').breadth).toBeNull(); // no VWAP, no vote
+  });
+  it('reads the index future price / OI over 30 minutes, only with >= 20 minutes of samples', () => {
+    const s = (min: number, price: number, oi: number) => ({ at: now - min * 60000, price, oi });
+    expect(freshFuturesOiRead([s(25, 100, 1000), s(0, 101, 1100)], now)).toBe('LONG_BUILDUP');
+    expect(freshFuturesOiRead([s(25, 100, 1000), s(0, 99, 1100)], now)).toBe('SHORT_BUILDUP');
+    expect(freshFuturesOiRead([s(25, 100, 1000), s(0, 101, 900)], now)).toBe('SHORT_COVERING');
+    expect(freshFuturesOiRead([s(25, 100, 1000), s(0, 99, 900)], now)).toBe('LONG_UNWINDING');
+    expect(freshFuturesOiRead([s(25, 100, 1000), s(0, 101, 1003)], now)).toBe('NEUTRAL');
+    expect(freshFuturesOiRead([s(10, 100, 1000), s(0, 101, 1100)], now)).toBeNull();
+    expect(freshFuturesOiRead([s(25, 100, 1000), s(-1, 101, 1100)], now)).toBeNull(); // a later sample is never read
+  });
+  it('pairs the latest chain OI with the sample ~15 minutes earlier, and builds point-in-time index intel', () => {
+    const c = (min: number) => ({ at: now - min * 60000, strikes: [{ strike: 100, callOi: min, putOi: 1 }] });
+    expect(freshOiBefore([c(30), c(16), c(14), c(1)], c(1))?.strikes[0].callOi).toBe(16);
+    expect(freshOiBefore([c(5), c(1)], c(1))).toBeNull();
+    const x = freshIndexIntel('BANKNIFTY', heavy(Object.keys(FRESH_INDEX_HEAVYWEIGHTS.BANKNIFTY)), [], [c(16), c(1), c(-1)], now)!;
+    expect(x).toMatchObject({ breadth: 1, futuresOi: null });
+    expect(x.oiNow?.at).toBe(now - 60000); // the later chain sample is not used
+    expect(x.oiBefore?.at).toBe(now - 16 * 60000);
+    expect(x.at).toBe(now - 60000);
+  });
+});
+

@@ -10,7 +10,7 @@
 // ============================================================
 
 import { SECTOR_MAP, type FnoScannerRow } from '@fno/shared';
-import { FRESH_INTEL_MAX_AGE_MS, FRESH_RS_MIN_PCT, FRESH_RS_MAX_SPREAD_PCT, FRESH_RS_MAX_IV_RANK, FRESH_RS_SECTOR_TOLERANCE_PCT, type FreshStockIntel } from '@fno/analytics';
+import { FRESH_INTEL_MAX_AGE_MS, FRESH_RS_MIN_PCT, FRESH_RS_MAX_SPREAD_PCT, FRESH_RS_MAX_IV_RANK, FRESH_RS_SECTOR_TOLERANCE_PCT, FRESH_IDX_OI_LOOKBACK_MS, type FreshStockIntel, type FreshIndexIntel, type FreshOiSample } from '@fno/analytics';
 import type { FreshReference } from './markets.js';
 
 /** The scanner's stored scan (read-only-views.ts fnoScanLastKey): when it was taken, and its rows. */
@@ -91,4 +91,70 @@ export function freshStocksInPlay(scan: FreshScan | null, stocks: readonly Fresh
   for (let i = 0; out.length < slots && (i < bulls.length || i < bears.length); i++)
     for (const r of [bulls[i], bears[i]]) if (r && out.length < slots && !out.includes(r)) out.push(r);
   return out;
+}
+
+// ============================================================
+// 2.0 INDEX INTEL — heavyweight breadth, the index future's price / OI read, chain OI samples
+// ============================================================
+
+/**
+ * Approximate free-float weights (%) of each index's heavyweights, for breadth only: the share of this weight trading
+ * above its own VWAP. Approximate and reviewed monthly; breadth needs 70% of the listed weight to have data.
+ * MIDCPNIFTY and NIFTYNXT50 have no table (constituents not verified), so their breadth reads unavailable.
+ */
+export const FRESH_INDEX_HEAVYWEIGHTS: Readonly<Record<string, Readonly<Record<string, number>>>> = Object.freeze({
+  NIFTY: { HDFCBANK: 13, ICICIBANK: 9, RELIANCE: 8.5, INFY: 5, BHARTIARTL: 4.5, LT: 4, ITC: 3.5, TCS: 3, SBIN: 3, AXISBANK: 3, KOTAKBANK: 2.7, 'M&M': 2.5, BAJFINANCE: 2.2, HINDUNILVR: 2, SUNPHARMA: 1.7 },
+  SENSEX: { HDFCBANK: 15, ICICIBANK: 10, RELIANCE: 10, INFY: 6, BHARTIARTL: 5, LT: 4.5, ITC: 4, TCS: 3.8, SBIN: 3.3, AXISBANK: 3.2, KOTAKBANK: 3, 'M&M': 2.8, BAJFINANCE: 2.5, HINDUNILVR: 2.2, SUNPHARMA: 2 },
+  BANKNIFTY: { HDFCBANK: 28, ICICIBANK: 25, SBIN: 9, KOTAKBANK: 8, AXISBANK: 8, INDUSINDBK: 3, FEDERALBNK: 3, BANKBARODA: 3, IDFCFIRSTB: 2.5, AUBANK: 2, PNB: 2, CANBK: 2 },
+  BANKEX: { HDFCBANK: 28, ICICIBANK: 25, SBIN: 10, AXISBANK: 9, KOTAKBANK: 9, INDUSINDBK: 4, BANKBARODA: 3, FEDERALBNK: 3, IDFCFIRSTB: 2.5, AUBANK: 2 },
+  FINNIFTY: { HDFCBANK: 30, ICICIBANK: 24, AXISBANK: 8, SBIN: 8, KOTAKBANK: 7, BAJFINANCE: 6, SHRIRAMFIN: 3, BAJAJFINSV: 3, HDFCLIFE: 2.5, SBILIFE: 2.5 },
+});
+export const FRESH_BREADTH_MIN_COVERAGE = 0.7;
+
+/** Pure: the weight share of `index`'s heavyweights above their own VWAP in the scan, and the weight covered. */
+export function freshIndexBreadth(scan: FreshScan | null, index: string): { breadth: number | null; coverage: number } {
+  const weights = FRESH_INDEX_HEAVYWEIGHTS[index];
+  if (!scan || !weights) return { breadth: null, coverage: 0 };
+  const total = Object.values(weights).reduce((a, b) => a + b, 0), bySymbol = new Map(scan.rows.map((r) => [r.symbol, r]));
+  let covered = 0, above = 0;
+  for (const [symbol, w] of Object.entries(weights)) {
+    const r = bySymbol.get(symbol);
+    if (!r || !(w > 0) || !(r.vwap! > 0) || !(r.price > 0)) continue;
+    covered += w;
+    if (r.price > r.vwap!) above += w;
+  }
+  const coverage = total > 0 ? covered / total : 0;
+  return { breadth: coverage >= FRESH_BREADTH_MIN_COVERAGE && covered > 0 ? above / covered : null, coverage };
+}
+
+/** One sample of an index future: price and open interest at `at`. */
+export interface FreshFuturesSample { at: number; price: number; oi: number }
+export const FRESH_FUTURES_OI_WINDOW_MS = 30 * 60000;
+/** The smallest OI change (fraction) read as positioning, rather than noise. */
+export const FRESH_FUTURES_OI_MIN_CHANGE = 0.005;
+/**
+ * Pure: the index future's price / OI read over the last 30 minutes (samples at or before `now`, spanning >= 20 min):
+ * price up + OI up = LONG_BUILDUP, down + up = SHORT_BUILDUP, up + down = SHORT_COVERING, down + down = LONG_UNWINDING,
+ * an OI change under 0.5% = NEUTRAL; null without enough samples.
+ */
+export function freshFuturesOiRead(samples: readonly FreshFuturesSample[], now: number): string | null {
+  const xs = samples.filter((x) => x.at <= now && now - x.at <= FRESH_FUTURES_OI_WINDOW_MS && x.oi > 0 && x.price > 0).sort((a, b) => a.at - b.at);
+  if (xs.length < 2 || xs[xs.length - 1].at - xs[0].at < 20 * 60000) return null;
+  const first = xs[0], last = xs[xs.length - 1], doi = (last.oi - first.oi) / first.oi, dp = last.price - first.price;
+  if (Math.abs(doi) < FRESH_FUTURES_OI_MIN_CHANGE || dp === 0) return 'NEUTRAL';
+  return dp > 0 ? (doi > 0 ? 'LONG_BUILDUP' : 'SHORT_COVERING') : (doi > 0 ? 'SHORT_BUILDUP' : 'LONG_UNWINDING');
+}
+
+/** Pure: the chain OI sample nearest to ~15 minutes before the latest one (within 12-20 min), or null. */
+export function freshOiBefore(samples: readonly FreshOiSample[], latest: FreshOiSample): FreshOiSample | null {
+  const target = latest.at - 15 * 60000;
+  return samples.filter((x) => latest.at - x.at >= FRESH_IDX_OI_LOOKBACK_MS[0] && latest.at - x.at <= FRESH_IDX_OI_LOOKBACK_MS[1]).sort((a, b) => Math.abs(a.at - target) - Math.abs(b.at - target))[0] ?? null;
+}
+
+/** Pure: an index's intel as of `now` from the scan (breadth), its futures samples and its chain OI samples. */
+export function freshIndexIntel(name: string, scan: FreshScan | null, futures: readonly FreshFuturesSample[], chains: readonly FreshOiSample[], now: number): FreshIndexIntel | null {
+  const usable = chains.filter((x) => x.at <= now).sort((a, b) => a.at - b.at), oiNow = usable[usable.length - 1] ?? null;
+  const { breadth, coverage } = freshIndexBreadth(scan && scan.at <= now && now - scan.at <= FRESH_INTEL_MAX_AGE_MS ? scan : null, name);
+  const at = Math.min(scan && scan.at <= now ? scan.at : now, oiNow ? oiNow.at : now);
+  return { at, breadth, breadthCoverage: Math.round(coverage * 1000) / 1000, futuresOi: freshFuturesOiRead(futures, now), oiNow, oiBefore: oiNow ? freshOiBefore(usable, oiNow) : null };
 }
