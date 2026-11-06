@@ -84,7 +84,7 @@ export const FRESH_TREND_NOMINAL_R = 2.5;
 /** A major level (opening range, previous day) closer than this many R ahead blocks a trend entry outright. */
 export const FRESH_TREND_MIN_ROOM_R = 0.5;
 /** 2.0 strategies that trade (the 1.x list above runs in shadow). */
-export const FRESH_ACTIVE_STRATEGIES = ['NEW_RS_STOCK_V1'] as const;
+export const FRESH_ACTIVE_STRATEGIES = ['NEW_RS_STOCK_V1', 'NEW_INDEX_BREADTH_V1'] as const;
 /** Every strategy the engine evaluates: 1.x (shadow) and 2.0 (active). */
 export const FRESH_ALL_STRATEGIES = [...FRESH_STRATEGIES, ...FRESH_ACTIVE_STRATEGIES] as const;
 export type FreshStrategy = typeof FRESH_ALL_STRATEGIES[number];
@@ -111,6 +111,33 @@ export const FRESH_RS_MAX_IV_RANK = 80;
 export const FRESH_RS_TOUCH_ATR = 0.15;
 export const FRESH_RS_BASE_MAX_ATR = 0.6;
 export const FRESH_RS_MAX_RISK_ATR = 1.2;
+/** One option-chain OI sample (nearest expiry), as of `at`. */
+export interface FreshOiSample { at: number; strikes: ReadonlyArray<{ strike: number; callOi: number; putOi: number }> }
+/**
+ * 2.0 index inputs, as of `at`. breadth: the weight share (0-1) of the index's heavyweights trading above their own
+ * VWAP (null when under 70% of the weight has data). futuresOi: the index future's 30-minute price / OI read
+ * (LONG_BUILDUP, SHORT_BUILDUP, SHORT_COVERING, LONG_UNWINDING, NEUTRAL) or null. oiNow / oiBefore: chain OI now and
+ * ~15 minutes earlier.
+ */
+export interface FreshIndexIntel {
+    at: number;
+    breadth: number | null;
+    breadthCoverage: number;
+    futuresOi: string | null;
+    oiNow: FreshOiSample | null;
+    oiBefore: FreshOiSample | null;
+}
+/** 2.0 NEW_INDEX_BREADTH_V1 parameters (paper hypothesis). */
+export const FRESH_IDX_BREADTH_BULL = 0.7;
+export const FRESH_IDX_BREADTH_BEAR = 0.3;
+export const FRESH_IDX_MIN_ROOM_R = 1.5;
+/** A strike is an OI wall when its OI is at least this share of the largest OI on that side of the chain. */
+export const FRESH_IDX_WALL_SHARE = 0.6;
+/** A wall break needs the wall's own OI down at least this much over ~15 minutes (writers covering). */
+export const FRESH_IDX_WALL_UNWIND = 0.05;
+export const FRESH_IDX_OI_MAX_AGE_MS = 3 * 60000;
+export const FRESH_IDX_OI_LOOKBACK_MS: readonly [number, number] = [12 * 60000, 20 * 60000];
+export const FRESH_IDX_WALL_BREAK_MAX_RISK_ATR = 1.5;
 const RS_BULLISH_OI: ReadonlySet<string> = new Set(['LONG_BUILDUP', 'SHORT_COVERING']);
 const RS_BEARISH_OI: ReadonlySet<string> = new Set(['SHORT_BUILDUP', 'LONG_UNWINDING']);
 export type FreshDirection = 'BULLISH' | 'BEARISH';
@@ -162,6 +189,8 @@ export interface FreshContext {
     calendarVerified: boolean;
     /** 2.0: the stock's universe-scan inputs (undefined for an index / commodity, null when no fresh scan row). */
     stockIntel?: FreshStockIntel | null;
+    /** 2.0: the index's breadth / futures OI / chain OI inputs (undefined for a stock / commodity). */
+    indexIntel?: FreshIndexIntel | null;
 }
 export interface FreshCandidate {
     id: string;
@@ -305,7 +334,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
         // so in a STRONG 15-minute trend the pullback strategies skip the efficiency test (FRESH_PULLBACK_STRATEGIES); the
         // VWAP-range (chop around VWAP) test still applies to them, and both tests still apply to the ORB retest.
         const pullbackInTrend = strong && FRESH_PULLBACK_STRATEGIES.has(strategy);
-        if ((range || (choppy && !pullbackInTrend)) && strategy !== 'NEW_PREVIOUS_SESSION_SWEEP_V1' && strategy !== 'NEW_MOMENTUM_BREAKOUT_V1' && strategy !== 'NEW_EVENT_BREAKOUT_V1' && strategy !== 'NEW_RS_STOCK_V1') {
+        if ((range || (choppy && !pullbackInTrend)) && strategy !== 'NEW_PREVIOUS_SESSION_SWEEP_V1' && strategy !== 'NEW_MOMENTUM_BREAKOUT_V1' && strategy !== 'NEW_EVENT_BREAKOUT_V1' && strategy !== 'NEW_RS_STOCK_V1' && strategy !== 'NEW_INDEX_BREADTH_V1') {
             out.refusals.push({ strategy, code: 'CHOPPY_REGIME', detail: range ? 'VWAP_RANGE' : `EFFICIENCY_${Math.min(9, Math.floor(efficiency * 10))}0PCT` });
             continue;
         }
@@ -314,7 +343,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
             const favorable = (x: number, y: number) => d * (x - y) > 0, vw = (x: FreshBar) => vwapAt(x.time + 300000);
             const confirms = (x: FreshBar, min = .5) => d * (x.close - x.open) > 0 && body(x) >= min;
             const lo = (xs: readonly FreshBar[]) => d === 1 ? Math.min(...xs.map(x => x.low)) : Math.max(...xs.map(x => x.high));
-            let stop: number | undefined, origin: number | undefined, profile: 'TARGET' | 'TREND' = 'TARGET';
+            let stop: number | undefined, origin: number | undefined, profile: 'TARGET' | 'TREND' = 'TARGET', indexTrigger: Record<string, unknown> | undefined;
             if (strategy === 'NEW_ORB_RETEST_V1') reach(0, opening.length === 3 && day.length >= 5 ? 'ORB_NO_TREND' : 'ORB_OUTSIDE_WINDOW');
             if (strategy === 'NEW_ORB_RETEST_V1' && directional && opening.length === 3 && day.length >= 5) {
                 const level = d === 1 ? orh : orl, width = orh - orl;
@@ -595,6 +624,82 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                     }
                 }
             }
+            // ---- 2.0 INDEX BREADTH TREND: an index move its heavyweights agree with (>= 70% of the weight on the trade's
+            // side of their own VWAP), futures OI not against it, room to the next OI wall, entered on a VWAP / EMA20 hold, a
+            // tight-base break, or an OI-wall break (the wall's writers covering). Breadth is its regime: it is exempt from
+            // the choppy filter, and a split tape (breadth between 30% and 70%) is refused instead.
+            if (strategy === 'NEW_INDEX_BREADTH_V1') {
+                const ix = c.indexIntel;
+                const fresh = ix != null && finite(ix.at) && ix.at <= c.now && c.now - ix.at <= FRESH_INTEL_MAX_AGE_MS;
+                reach(0, ix === undefined ? 'IDX_NOT_AN_INDEX' : !fresh ? 'IDX_INTEL_STALE' : 'IDX_BEFORE_10_00');
+                if (fresh && c.now - c.sessionOpen >= FRESH_RS_START_MS) {
+                    reach(1, 'IDX_BREADTH_UNAVAILABLE');
+                    if (ix!.breadth != null && finite(ix!.breadth)) {
+                        reach(2, 'IDX_BREADTH_SPLIT');
+                        if (d === 1 ? ix!.breadth >= FRESH_IDX_BREADTH_BULL : ix!.breadth <= FRESH_IDX_BREADTH_BEAR) {
+                            reach(3, 'IDX_FUTURES_OI_AGAINST');
+                            if (ix!.futuresOi !== (d === 1 ? 'SHORT_BUILDUP' : 'LONG_BUILDUP')) {
+                                reach(4, 'IDX_NOT_HOLDING_VWAP');
+                                const last6 = today.slice(-6);
+                                if (last6.length === 6 && last6.filter(x => d * (x.close - vw(x)) < 0).length <= 1 && favorable(current.close, vwap)) {
+                                    reach(5, 'IDX_NO_TRIGGER');
+                                    const nowOi = ix!.oiNow && finite(ix!.oiNow.at) && ix!.oiNow.at <= c.now && c.now - ix!.oiNow.at <= FRESH_IDX_OI_MAX_AGE_MS ? ix!.oiNow : null;
+                                    const before = nowOi && ix!.oiBefore && nowOi.at - ix!.oiBefore.at >= FRESH_IDX_OI_LOOKBACK_MS[0] && nowOi.at - ix!.oiBefore.at <= FRESH_IDX_OI_LOOKBACK_MS[1] ? ix!.oiBefore : null;
+                                    const side = (sample: FreshOiSample, call: boolean) => sample.strikes.map(x => ({ strike: x.strike, oi: call ? x.callOi : x.putOi })).filter(x => finite(x.strike) && finite(x.oi) && x.oi >= 0);
+                                    const walls = (sample: FreshOiSample, call: boolean) => { const xs = side(sample, call), max = Math.max(0, ...xs.map(x => x.oi)); return max > 0 ? xs.filter(x => x.oi >= FRESH_IDX_WALL_SHARE * max) : []; };
+                                    const prior = today[today.length - 2];
+                                    const touches = (x: FreshBar) => [vw(x), ema5.get(x.time)].some(L => L != null && finite(L) && d * ((d === 1 ? x.low : x.high) - L) <= FRESH_RS_TOUCH_ATR * a && d * (x.close - L) >= -FRESH_RS_TOUCH_ATR * a);
+                                    let s: number | null = null, o: number | null = null, maxRisk = FRESH_RS_MAX_RISK_ATR, trigger = '';
+                                    // C: the 5-minute close crosses a wall (as it stood ~15 min ago) whose own OI has dropped >= 5% while the
+                                    // other side's OI at that strike grew: writers covering, the move that pays an option buyer fastest.
+                                    if (before && prior && rvol(current) >= 1.5 && confirms(current, .5))
+                                        for (const w of walls(before, d === 1)) {
+                                            const nowW = nowOi!.strikes.find(x => x.strike === w.strike), wasW = before.strikes.find(x => x.strike === w.strike);
+                                            if (!nowW || !wasW) continue;
+                                            const own = d === 1 ? [nowW.callOi, wasW.callOi] : [nowW.putOi, wasW.putOi], other = d === 1 ? [nowW.putOi, wasW.putOi] : [nowW.callOi, wasW.callOi];
+                                            if (d * (prior.close - w.strike) <= 0 && d * (current.close - w.strike) > .05 * a && own[0] <= (1 - FRESH_IDX_WALL_UNWIND) * own[1] && other[0] > other[1]) {
+                                                s = lo([prior, current]) - d * .1 * a; o = prior.time; maxRisk = FRESH_IDX_WALL_BREAK_MAX_RISK_ATR; trigger = `WALL_BREAK_${w.strike}`;
+                                                break;
+                                            }
+                                        }
+                                    // A: VWAP / EMA20 hold (as NEW_RS_STOCK_V1).
+                                    const window3 = today.slice(-4, -1), touchAt = window3.findIndex(touches);
+                                    if (s == null && prior && touchAt >= 0 && favorable(current.close, d === 1 ? prior.high : prior.low) && confirms(current, .4) && closeLocation(current, d) >= .65 && rvol(current) >= 1.2) {
+                                        s = lo([...window3.slice(touchAt), current]) - d * .1 * a; o = window3[touchAt].time; trigger = 'VWAP_HOLD';
+                                    }
+                                    // B: a 3-6 bar base no wider than 0.6 ATR, then a close out of it on rvol >= 1.5.
+                                    if (s == null)
+                                        for (const n of [6, 5, 4, 3]) {
+                                            const base = today.slice(-1 - n, -1);
+                                            if (base.length < n) continue;
+                                            const hi = Math.max(...base.map(x => x.high)), low = Math.min(...base.map(x => x.low));
+                                            if (hi - low > FRESH_RS_BASE_MAX_ATR * a) continue;
+                                            if (d * (current.close - (d === 1 ? hi : low)) > .05 * a && body(current) >= .5 && rvol(current) >= 1.5) {
+                                                s = (d === 1 ? low : hi) - d * .1 * a; o = base[0].time; trigger = 'BASE_BREAK';
+                                                break;
+                                            }
+                                        }
+                                    if (s != null && o != null) {
+                                        reach(6, 'IDX_RISK_TOO_WIDE');
+                                        const risk = d * (current.close - s);
+                                        if (risk > 0 && risk <= maxRisk * a) {
+                                            // Location: the next OI wall in the trade's direction (now) must be >= 1.5R away.
+                                            reach(7, nowOi ? 'IDX_LOCATION_NO_ROOM' : 'IDX_OI_UNAVAILABLE');
+                                            const next = nowOi ? walls(nowOi, d === 1).filter(x => d * (x.strike - current.close) > 0).sort((x, y) => d * (x.strike - y.strike))[0] : undefined;
+                                            if (nowOi && (!next || d * (next.strike - current.close) >= FRESH_IDX_MIN_ROOM_R * risk)) {
+                                                stop = s;
+                                                origin = o;
+                                                profile = 'TREND';
+                                                indexTrigger = { trigger, breadth: ix!.breadth, futuresOi: ix!.futuresOi, nextWall: next?.strike ?? null };
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             if (stop == null || origin == null || !favorable(current.close, stop))
                 continue;
             if (profile === 'TREND') {
@@ -607,7 +712,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                     continue;
                 }
                 const targetPrice = current.close + d * FRESH_TREND_NOMINAL_R * risk, parentId = `${c.instrument}:${c.session}:${direction}:${origin}`;
-                out.candidates.push({ id: `${FRESH_PACK_VERSION}:${c.sourceEpoch}:${parentId}:${strategy}:${current.time}`, parentId, version: FRESH_PACK_VERSION, strategy, direction, instrument: c.instrument, sourceEpoch: c.sourceEpoch, session: c.session, at: decisionAt, referenceEntry: current.close, stop, target: targetPrice, atr: a, origin, expiresAt: Math.min(decisionAt + FRESH_ENTRY_WINDOW_MS, c.sessionClose - 3600000), exitProfile: 'TREND', trailAtr: FRESH_TREND_TRAIL_ATR, evidence: { ...(c.eventEvidence ? { eventCalendar: c.eventEvidence } : {}), ...(c.stockIntel ? { stockIntel: c.stockIntel } : {}), orderFlow: freshOrderFlowEvidence(c.orderFlow, direction, current.time, origin), rvol: finite(rvol(current)) ? rvol(current) : 'UNAVAILABLE', volumeShape: c.volumeShape ?? 'OWN', vwap, reference: 'BAR_VWAP_PROXY', efficiency, targetKind: 'TRAILING_STOP', targetR: FRESH_TREND_NOMINAL_R, trailAtr: FRESH_TREND_TRAIL_ATR } });
+                out.candidates.push({ id: `${FRESH_PACK_VERSION}:${c.sourceEpoch}:${parentId}:${strategy}:${current.time}`, parentId, version: FRESH_PACK_VERSION, strategy, direction, instrument: c.instrument, sourceEpoch: c.sourceEpoch, session: c.session, at: decisionAt, referenceEntry: current.close, stop, target: targetPrice, atr: a, origin, expiresAt: Math.min(decisionAt + FRESH_ENTRY_WINDOW_MS, c.sessionClose - 3600000), exitProfile: 'TREND', trailAtr: FRESH_TREND_TRAIL_ATR, evidence: { ...(c.eventEvidence ? { eventCalendar: c.eventEvidence } : {}), ...(c.stockIntel ? { stockIntel: c.stockIntel } : {}), ...(indexTrigger ? { index: indexTrigger } : {}), orderFlow: freshOrderFlowEvidence(c.orderFlow, direction, current.time, origin), rvol: finite(rvol(current)) ? rvol(current) : 'UNAVAILABLE', volumeShape: c.volumeShape ?? 'OWN', vwap, reference: 'BAR_VWAP_PROXY', efficiency, targetKind: 'TRAILING_STOP', targetR: FRESH_TREND_NOMINAL_R, trailAtr: FRESH_TREND_TRAIL_ATR } });
                 emitted = true;
                 continue;
             }

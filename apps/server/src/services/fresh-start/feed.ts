@@ -188,6 +188,11 @@ export class FreshSharedFeed {
         for (const f of this.listeners)
             f();
     }
+    /** The latest open interest reported for this id (SNAP_QUOTE), with its exchange time; null when none. */
+    openInterest(id: string): { oi: number; at: number } | null {
+        const t = this.latest.get(id);
+        return t?.exchangeTimestamp != null && t.oi != null && Number.isFinite(t.oi) && t.oi > 0 ? { oi: t.oi, at: t.exchangeTimestamp } : null;
+    }
     /** Milliseconds since the last exchange-stamped tick for this id, or null when none was received (diagnostics only). */
     tickAge(id: string) { const t = this.latest.get(id); return t?.exchangeTimestamp != null ? Math.max(0, this.now() - t.exchangeTimestamp) : null; }
     /**

@@ -735,6 +735,8 @@ export interface FnoScannerRow {
   score: number;
   /** Today's changePercent minus NIFTY's own changePercent — positive means this stock is outperforming the index today, not just moving with it. */
   relativeStrength: number;
+  /** The equity's volume-weighted average price today (Angel FULL quote avgPrice); absent when not quoted. */
+  vwap?: number;
   timestamp: number;
 }
 

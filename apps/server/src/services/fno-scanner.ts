@@ -292,6 +292,7 @@ export async function scanFnoUniverse(provider: MarketDataProvider, exchange: Ex
       confidence,
       score,
       relativeStrength: Math.round((changePercent - niftyChangePercent) * 100) / 100,
+      ...(eqQuote.avgPrice != null && Number.isFinite(eqQuote.avgPrice) && eqQuote.avgPrice > 0 ? { vwap: eqQuote.avgPrice } : {}),
       timestamp: now,
     });
   }

@@ -21,7 +21,9 @@ import type {FreshContext} from '@fno/analytics';
 import {logFreshDecisionSummary} from './decision-summary.js';
 import {freshEventClearStocks,freshRankStocks,FRESH_MARKETS,freshMarketBlockers,freshBookSupportsLot,discoverFreshMarkets,freshDiscoveryWindow,freshReferenceOptions,freshReferenceExchange,freshReferenceSpotId,freshEventMarket,freshMarketExchange,freshIndexKey,type FreshMarket} from './markets.js';
 import {freshAdapterState as state} from './adapter-state.js';
-import {freshParseScan,freshStockIntel,freshStocksInPlay,freshInPlayDirection,FRESH_SCAN_KEY,type FreshScan} from './intel.js';
+import {freshParseScan,freshStockIntel,freshStocksInPlay,freshInPlayDirection,freshIndexIntel,FRESH_SCAN_KEY,type FreshScan,type FreshFuturesSample} from './intel.js';
+import {buildOptionChain} from '../option-chain.js';
+import type {FreshOiSample} from '@fno/analytics';
 import {FreshOperationalReporter} from './operational-evidence.js';
 import {registerFreshResearchProtocol,freshResearchReadiness} from './research-inventory.js';
 import {freshIstDay,freshBars,mergeFreshBars,buildFreshReferenceContext,fillFreshGaps} from './context.js';
@@ -53,6 +55,10 @@ export const FRESH_ROTATION_MIN_SLICES:Readonly<Record<string,number>>=Object.fr
 export const FRESH_URGENT_BOOK_MS=5*60_000;
 /** The leading stocks in play whose option books go ahead of the rotation (2 leaders + 2 laggards, alternating). */
 export const FRESH_IN_PLAY_BOOK_SLICES=4;
+/** Index future / chain OI samples are kept this long (the strategy reads 30 min of futures and ~15 min of chain OI). */
+export const FRESH_INDEX_SAMPLE_KEEP_MS=35*60_000;
+/** Indices whose option books hold their two nearest tradable expiries (owner, 7 Nov); the others hold the nearest. */
+export const FRESH_TWO_EXPIRY_INDICES:ReadonlySet<string>=new Set(['NIFTY','SENSEX']);
 /** At most one watchdog reconnect in this window. */
 export const FRESH_FEED_RECONNECT_GAP_MS=10*60_000;
 /** The tokens this consumer may plan for: its cap, bounded by what the shared connection has free (950 limit). */
@@ -103,7 +109,7 @@ export class FreshPaperWorker {
   private operationalReporter=new FreshOperationalReporter(evidence=>logger.info(evidence,'Fresh-start operational evidence; readiness and paper-only blockers observed'));
   private feed:FreshSharedFeed;private events=createFreshEventSource(persistFreshCalendarSnapshot);private store=new FreshPaperStore(undefined,()=>!this.stopped&&freshEntriesEnabled());private monitor:FreshPositionMonitor;private runtime:FreshRuntime;
   private refs=new Map<string,FreshReference>();private master:Instrument[]=[];private masterDay='';private histories=new Map<string,History>();private lagReadAt=0;private shortlist:SubscriptionTarget[]=[];
-  private positions:Awaited<ReturnType<FreshPaperStore['recover']>>=[];private timers:ReturnType<typeof setInterval>[]=[];private removeObservation:(()=>void)|null=null;private scanning=false;private ready=false;private stopped=false;private lastScan=0;private discovery:ReturnType<typeof discoverFreshMarkets>|null=null;private selectionAt=0;private cursor=0;private selected:FreshReference[]=[];private selectionExchangeKey='';private historyCursor=0;private historyFailures=new Map<string,string>();private historyRetryAt=new Map<string,number>();private subscriptionReady=false;private urgentBooks=new Map<string,number>();private scanSnapshot:FreshScan|null=null;private scanReadAt=0;private stocksAt=0;private inPlay:string[]=[];private readonly feedClientId=`fresh-start:production:${randomUUID()}`;private reconnectAt=0;
+  private positions:Awaited<ReturnType<FreshPaperStore['recover']>>=[];private timers:ReturnType<typeof setInterval>[]=[];private removeObservation:(()=>void)|null=null;private scanning=false;private ready=false;private stopped=false;private lastScan=0;private discovery:ReturnType<typeof discoverFreshMarkets>|null=null;private selectionAt=0;private cursor=0;private selected:FreshReference[]=[];private selectionExchangeKey='';private historyCursor=0;private historyFailures=new Map<string,string>();private historyRetryAt=new Map<string,number>();private subscriptionReady=false;private urgentBooks=new Map<string,number>();private scanSnapshot:FreshScan|null=null;private oiChains=new Map<string,FreshOiSample[]>();private futSamples=new Map<string,FreshFuturesSample[]>();private indexSampleAt=0;private chainsBusy=false;private scanReadAt=0;private stocksAt=0;private inPlay:string[]=[];private readonly feedClientId=`fresh-start:production:${randomUUID()}`;private reconnectAt=0;
   constructor(private provider:MarketDataProvider,private subscriptions:SubscriptionManager){
     this.feed=new FreshSharedFeed(subscriptions,Date.now,this.feedClientId);this.monitor=new FreshPositionMonitor(this.feed,this.store);
     const adapter=new FreshProductionAdapter(this.feed,this.events,this.store,{references:()=>this.refs,master:()=>this.master,capital:FRESH_CONFIG.capital??0,legacyRisk:()=>this.legacyRisk(),audit:auditFreshEvaluation,refusal:auditFreshAdapter,ivRank:(name,expiry,ivPct)=>ivRankFor(name,expiry,ivPct),watch:async rows=>{this.positions=rows;this.monitor.watch(rows);await this.syncTargets();}});
@@ -181,6 +187,20 @@ export class FreshPaperWorker {
       return [...selected.filter(r=>r.market!=='NSE_STOCK_OPTIONS'),...ranked.slice(0,slots)];
     }catch{return selected;}
   }
+  /** Samples each index's nearest-expiry option chain OI (shared chain cache with the bias engine); never throws. */
+  private async refreshChains(refs:readonly FreshReference[]){
+    if(this.chainsBusy)return;this.chainsBusy=true;
+    try{
+      for(const r of refs){
+        if(this.stopped)return;
+        try{
+          const chain=await buildOptionChain(this.provider,r.name,freshReferenceExchange(r)),at=Math.min(Date.now(),Number.isFinite(chain.timestamp)?chain.timestamp:Date.now());
+          const strikes=chain.strikes.map(x=>({strike:x.strike,callOi:x.call?.oi??0,putOi:x.put?.oi??0})).filter(x=>Number.isFinite(x.strike)&&x.strike>0);
+          if(strikes.length)this.oiChains.set(r.id,[...(this.oiChains.get(r.id)??[]).filter(x=>at-x.at<=FRESH_INDEX_SAMPLE_KEEP_MS),{at,strikes}]);
+        }catch{/* this index's OI stays as it was; the strategy refuses IDX_OI_UNAVAILABLE once it is stale */}
+      }
+    }finally{this.chainsBusy=false;}
+  }
   /** The selection with its stock slots given to stocks in play first (see intel.ts), the rest unchanged. */
   private withStocksInPlay(selected:FreshReference[],now:number,day:string):FreshReference[]{
     const slots=selected.filter(r=>r.market==='NSE_STOCK_OPTIONS').length,stocks=this.discovery?.references.filter(r=>r.market==='NSE_STOCK_OPTIONS')??[];
@@ -219,6 +239,7 @@ export class FreshPaperWorker {
     if(c)c.eventEvidence=this.events.evidence(receivedAt,freshEventMarket(ref.market),ref.name);
     // 2.0: the stock's universe-scan inputs as of this evaluation (null when no scan row is fresh enough).
     if(c&&ref.market==='NSE_STOCK_OPTIONS')c.stockIntel=freshStockIntel(this.scanSnapshot,ref,receivedAt);
+    if(c&&FRESH_PINNED_BOOK_MARKETS.has(ref.market))c.indexIntel=freshIndexIntel(ref.name,this.scanSnapshot,this.futSamples.get(ref.id)??[],this.oiChains.get(ref.id)??[],receivedAt);
     return {context:c,newClose:!!old&&lastSeen>old.lastSeen,lastSeen};
   }
   private async scan(){
@@ -248,7 +269,7 @@ export class FreshPaperWorker {
         const refTokens=new Set(refs.flatMap(r=>[r.id,freshReferenceSpotId(r)])).size,heldTokens=new Set(this.positions.flatMap(p=>[p.state.contract.id,p.state.candidate.instrument])).size;
         const capacity=freshTokenCapacity(this.exclusiveOwn(this.feed.subscribedTargets),this.subscriptions.getStatus().subscriptionCount);
         let free=capacity-refTokens-heldTokens;const pinned:typeof slices=[];
-        for(const ref of refs.filter(r=>FRESH_PINNED_BOOK_MARKETS.has(r.market))){const options=optionsFor(ref,1);if(options.length<=free){pinned.push({ref,options});free-=options.length;}}
+        for(const ref of refs.filter(r=>FRESH_PINNED_BOOK_MARKETS.has(r.market))){const options=optionsFor(ref,FRESH_TWO_EXPIRY_INDICES.has(ref.name)?2:1);if(options.length<=free){pinned.push({ref,options});free-=options.length;}}
         const slots=Math.max(0,Math.min(FRESH_MAX_ROTATING_BOOK_SLICES,Math.floor(free/20)));
         slices=[...pinned,...freshRotatingBookRefs(refs,Math.floor(now/FRESH_BOOK_ROTATION_MS),new Set([...this.urgentBooks.keys(),...this.inPlay.slice(0,FRESH_IN_PLAY_BOOK_SLICES)]),slots).map(ref=>({ref,options:optionsFor(ref,2)}))];
         state.bookPlan={capacity,refTokens,heldTokens,slots,tokens:refTokens+heldTokens+slices.reduce((n,x)=>n+x.options.length,0),slices:slices.map(x=>({name:x.ref.name,market:x.ref.market,options:x.options.length,pinned:FRESH_PINNED_BOOK_MARKETS.has(x.ref.market)}))};
@@ -260,6 +281,10 @@ export class FreshPaperWorker {
       };
       this.positions=await this.store.recover();this.monitor.watch(this.positions);await planBooks();
       this.watchFeed();
+      // 2.0 index intel: every minute, each index future's price / OI, and (in the background) its option chain's OI.
+      if(now-this.indexSampleAt>=60_000){this.indexSampleAt=now;const indexRefs=refs.filter(r=>FRESH_PINNED_BOOK_MARKETS.has(r.market));
+        for(const r of indexRefs){const oi=this.feed.openInterest(r.id),px=this.feed.underlying(r.id);if(oi&&px)this.futSamples.set(r.id,[...(this.futSamples.get(r.id)??[]).filter(x=>now-x.at<=FRESH_INDEX_SAMPLE_KEEP_MS),{at:oi.at,price:px.price,oi:oi.oi}]);}
+        void this.refreshChains(indexRefs);}
       if(now-this.lagReadAt>=60000){state.tickLag=this.feed.tickLagStats();this.lagReadAt=now;}
       state.referenceContracts=refs.length;state.optionContracts=slices.reduce((n,s)=>n+s.options.length,0);state.sourceEpoch=this.feed.sourceEpoch;
       const legacyOpen=await this.legacyRisk(),monitorHealthy=this.monitor.healthy;
