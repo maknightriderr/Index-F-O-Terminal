@@ -18,8 +18,12 @@ export const STRATEGY_NAMES: Record<string, string> = {
   NEW_TREND_FLAG_V1: 'Trend flag',
   NEW_EVENT_BREAKOUT_V1: 'Event breakout',
 };
+/** 2.0: the 1.x strategies run in shadow — evaluated and recorded, never traded (packages/analytics FRESH_SHADOW_STRATEGIES). */
+export const SHADOW_STRATEGY_IDS: ReadonlySet<string> = new Set(['NEW_ORB_RETEST_V1', 'NEW_VWAP_PULLBACK_V1', 'NEW_PREVIOUS_SESSION_SWEEP_V1', 'NEW_FIRST_OPENING_PULLBACK_V1', 'NEW_MOMENTUM_BREAKOUT_V1', 'NEW_TREND_FLAG_V1', 'NEW_EVENT_BREAKOUT_V1']);
 export const STRATEGY_IDS = Object.keys(STRATEGY_NAMES);
 export const strategyName = (id: string) => STRATEGY_NAMES[id] ?? id.replace(/^NEW_|_V\d+$/g, '').replaceAll('_', ' ').toLowerCase();
+/** A radar / table column header: the name, marked when the strategy now runs in shadow (its past trades keep the plain name). */
+export const strategyHeader = (id: string) => strategyName(id) + (SHADOW_STRATEGY_IDS.has(id) ? ' (shadow)' : '');
 
 /** The engine's sizing rule (packages/analytics fresh-start/paper.ts FRESH_RISK_PER_TRADE): 0.5% of capital per trade. */
 export const RISK_FRACTION = 0.005;
@@ -287,6 +291,7 @@ export interface RadarCell { state: RadarState; code: string | null; at: number 
 
 /** Short plain-English reasons for the engine's refusal codes and gate details (Radar cells). */
 const RADAR_REASONS: Readonly<Record<string, string>> = Object.freeze({
+  SHADOW_STRATEGY: 'Shadow: setup recorded, not traded',
   ORB_OUTSIDE_WINDOW: 'Opening range not formed', ORB_LATE_LEVEL_ALREADY_BROKEN: 'Range already broke earlier', ORB_REBREAK_NOT_BEYOND_TRAP: 'Re-break below trap high/low', ORB_NO_TREND: 'No 15m trend', ORB_RANGE_WIDTH: 'Opening range too narrow/wide', ORB_NO_BREAKOUT: 'No range breakout',
   ORB_BREAKOUT_QUALITY: 'Weak breakout bar', ORB_BREAKOUT_RVOL: 'Breakout volume low', ORB_NO_RETEST_TRIGGER: 'Waiting for retest',
   VWAP_BEFORE_10_30: 'Starts 10:30', VWAP_NO_TREND: 'No 15m trend', VWAP_NO_IMPULSE: 'No impulse leg', VWAP_PULLBACK_SHAPE: 'Pullback shape off',

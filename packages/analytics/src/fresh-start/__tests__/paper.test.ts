@@ -23,11 +23,14 @@ describe('fresh-start executable paper admission', () => {
     it('does not treat a newly received old quote as a post-latency fill', () => { const r = request(); r.quote.eventAt = at + 100; expect(admitFreshPaper(r)).toEqual({ ok: false, code: 'ENTRY_EXPIRED_OR_EARLY' }); });
     it('rejects a changed source epoch and wrong contract', () => { const r = request(); r.quote.epoch = 'e2'; expect(admitFreshPaper(r).ok).toBe(false); r.quote.epoch = 'e1'; r.quote.contract = 'OTHER'; expect(admitFreshPaper(r).ok).toBe(false); });
     it('never forces one lot when risk, depth or capital cannot afford it', () => {
-        for (const change of [(r: ReturnType<typeof request>) => r.account.capital = 100, (r: ReturnType<typeof request>) => r.quote.askUnits = 24, (r: ReturnType<typeof request>) => r.account.reservedRisk = 10000]) {
+        // 2.0: reserved open risk no longer shrinks the size (it is recorded); paper cash still bounds it.
+        for (const change of [(r: ReturnType<typeof request>) => r.account.capital = 100, (r: ReturnType<typeof request>) => r.quote.askUnits = 24, (r: ReturnType<typeof request>) => r.account.reservedPremium = r.account.equity]) {
             const r = request();
             change(r);
             expect(admitFreshPaper(r)).toEqual({ ok: false, code: 'ZERO_PERMITTED_LOTS' });
         }
+        const r = request(); r.account.reservedRisk = 10000;
+        expect(admitFreshPaper(r)).toMatchObject({ ok: true, riskFlags: ['WOULD_BLOCK_OPEN_RISK'] });
     });
     it('permits a second unrelated position within aggregate and per-trade limits', () => { const r = request(); r.account.openPositions = 1; r.account.reservedRisk = 1950; r.account.reservedPremium = 7575; expect(admitFreshPaper(r).ok).toBe(true); });
     it('uses multiplier once in cash sizing and P&L', () => {
@@ -38,12 +41,22 @@ describe('fresh-start executable paper admission', () => {
         if (a.ok)
             expect(a.initialRiskCurrency).toBe(a.quantity * 2 * a.initialRiskPerUnit);
     });
-    it('blocks missing marks, daily loss, loss streak, parent reuse and legacy exposure', () => {
-        for (const change of [(r: ReturnType<typeof request>) => r.account.marksComplete = false, (r: ReturnType<typeof request>) => r.account.dailyNet = -10000, (r: ReturnType<typeof request>) => r.account.consecutiveNetLosses = 3, (r: ReturnType<typeof request>) => r.parentAlreadyTraded = true, (r: ReturnType<typeof request>) => r.legacyPositionOpen = true]) {
+    it('blocks missing marks, parent reuse, a second position on the instrument and legacy exposure', () => {
+        for (const change of [(r: ReturnType<typeof request>) => r.account.marksComplete = false, (r: ReturnType<typeof request>) => r.parentAlreadyTraded = true, (r: ReturnType<typeof request>) => r.legacyPositionOpen = true, (r: ReturnType<typeof request>) => r.instrumentPositionOpen = true, (r: ReturnType<typeof request>) => r.account.cohortNet = NaN]) {
             const r = request();
             change(r);
             expect(admitFreshPaper(r).ok).toBe(false);
         }
+    });
+    it('2.0: records a loss streak, daily loss and open-position count instead of refusing (paper)', () => {
+        const streak = request(); streak.account.consecutiveNetLosses = 3;
+        expect(admitFreshPaper(streak)).toMatchObject({ ok: true, riskFlags: ['WOULD_PAUSE_3_LOSSES'] });
+        const daily = request(); daily.account.dailyNet = -10000;
+        const d = admitFreshPaper(daily);
+        expect(d.ok && d.riskFlags).toEqual(expect.arrayContaining(['WOULD_PAUSE_DAILY_LOSS', 'WOULD_BLOCK_OPEN_RISK']));
+        const busy = request(); busy.account.openPositions = 5;
+        expect(admitFreshPaper(busy)).toMatchObject({ ok: true, riskFlags: ['WOULD_BLOCK_MAX_OPEN'] });
+        expect(admitFreshPaper(request())).toMatchObject({ ok: true, riskFlags: [] });
     });
     it('does not choose a farther target or bypass the worst IV scenario', () => { const r = request(); r.contract.targetPremiumScenarios = [200, 110]; expect(admitFreshPaper(r)).toEqual({ ok: false, code: 'NET_PAYOFF_TOO_LOW' }); });
     it('has the same positive premium geometry for bought puts', () => { const r = request(); r.candidate = { ...candidate, direction: 'BEARISH', stop: 105, target: 85 }; r.contract.delta = -.55; expect(admitFreshPaper(r).ok).toBe(true); });
@@ -98,16 +111,17 @@ describe('1.5 risk policy', () => {
         const a = admitFreshPaper(r);
         expect(a.ok && a.initialRiskCurrency).toBeLessThanOrEqual(2500);
         expect(a.ok && a.quantity).toBe(75); // INR 2,500 / (26.5 × 25) → 3 lots
+        // 2.0: the same 0.5% size after the 1% open-risk / daily budgets are used; a live account would have skipped it.
         const full = request(); full.account.capital = full.account.equity = 500000; full.account.reservedRisk = 5000;
-        expect(admitFreshPaper(full)).toEqual({ ok: false, code: 'ZERO_PERMITTED_LOTS' });
+        expect(admitFreshPaper(full)).toMatchObject({ ok: true, quantity: 75, riskFlags: ['WOULD_BLOCK_OPEN_RISK'] });
         const down = request(); down.account.capital = down.account.equity = 500000; down.account.dailyNet = -5000;
-        expect(admitFreshPaper(down)).toEqual({ ok: false, code: 'ACCOUNT_PAUSED' });
+        expect(admitFreshPaper(down)).toMatchObject({ ok: true, quantity: 75, riskFlags: ['WOULD_PAUSE_DAILY_LOSS', 'WOULD_BLOCK_OPEN_RISK'] });
     });
-    it('pauses the cohort at a 5% cumulative net loss', () => {
+    it('flags the cohort at a 5% cumulative net loss', () => {
         const r = request(); r.account.capital = r.account.equity = 500000; r.account.cohortNet = -24999;
         expect(admitFreshPaper(r).ok).toBe(true);
         r.account.cohortNet = -25000;
-        expect(admitFreshPaper(r)).toEqual({ ok: false, code: 'COHORT_DRAWDOWN_PAUSED' });
+        expect(admitFreshPaper(r)).toMatchObject({ ok: true, riskFlags: ['WOULD_PAUSE_COHORT'] }); // 2.0: recorded in paper
     });
 });
 describe('full-size MCX crude lot (100 bbl) at INR 30 lakh', () => {

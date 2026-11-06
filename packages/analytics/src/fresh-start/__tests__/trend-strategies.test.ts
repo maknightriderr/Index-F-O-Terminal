@@ -139,8 +139,10 @@ describe('5 Nov: no daily entry cap per instrument', () => {
         const { admitFreshPaper } = await import('../paper.js');
         const { request } = await import('./fixtures.js');
         expect(admitFreshPaper({ ...request(), entriesToday: 5 }).ok).toBe(true);
-        expect(admitFreshPaper({ ...request(), entriesToday: 5, barsSinceLastClose: 1 })).toMatchObject({ ok: false, code: 'EXPOSURE_OR_PARENT' });
-        expect(admitFreshPaper({ ...request(), entriesToday: 5, correlatedPositionOpen: true })).toMatchObject({ ok: false, code: 'EXPOSURE_OR_PARENT' });
+        // 2.0: a re-entry cooldown and a same-group position are recorded in paper; the same instrument is still refused.
+        expect(admitFreshPaper({ ...request(), entriesToday: 5, barsSinceLastClose: 1 })).toMatchObject({ ok: true, riskFlags: ['WOULD_BLOCK_REENTRY_COOLDOWN'] });
+        expect(admitFreshPaper({ ...request(), entriesToday: 5, correlatedPositionOpen: true })).toMatchObject({ ok: true, riskFlags: ['WOULD_BLOCK_CORRELATED'] });
+        expect(admitFreshPaper({ ...request(), entriesToday: 5, instrumentPositionOpen: true })).toMatchObject({ ok: false, code: 'EXPOSURE_OR_PARENT' });
     });
 });
 

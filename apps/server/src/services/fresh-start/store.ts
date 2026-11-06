@@ -100,7 +100,8 @@ export class FreshPaperStore {
             const account = { cohortNet: Number(cohort?.net ?? NaN) + unrealized, capital: a.capital, equity: a.capital + a.realized_net + unrealized, dailyNet: a.realized_net + unrealized, reservedRisk, reservedPremium, openPositions: open.length, consecutiveNetLosses: a.paused ? 3 : a.consecutive_losses, marksComplete };
             const admission = admitFreshPaper({ ...r, candidate: c, account,
                 parentAlreadyTraded: parents.some(p => p.id === c.parentId && p.traded),
-                correlatedPositionOpen: open.some(x => x.risk_group === r.riskGroup || x.state.candidate.instrument === c.instrument),
+                correlatedPositionOpen: open.some(x => x.risk_group === r.riskGroup && x.state.candidate.instrument !== c.instrument),
+                instrumentPositionOpen: open.some(x => x.state.candidate.instrument === c.instrument),
                 entriesToday: same.length, barsSinceLastClose: lastClose ? Math.floor((r.now - new Date(lastClose).getTime()) / 300000) : null,
             });
             const s4Used = c.strategy === 'NEW_FIRST_OPENING_PULLBACK_V1' && same.some(x => x.strategy === c.strategy);
@@ -108,7 +109,7 @@ export class FreshPaperStore {
             await tx.unsafe('INSERT INTO fresh_candidates(id,account_id,at,version,strategy,parent_id,decision,code,evidence) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb) ON CONFLICT DO NOTHING', [c.id, r.accountId, new Date(r.now), c.version, c.strategy, c.parentId, code === 'FILLED' ? 'FILLED' : 'REFUSED', code, JSON.stringify({ candidate: c, contract: r.contract, quote: r.quote, account, admission })]);
             if (!admission.ok || s4Used)
                 return { ok: false, code };
-            const p: FreshPaperPosition = { id: c.id, sessionCutoff:r.cutoff, contract: {...r.contract,explicitRoundTripCostPerUnit:admission.explicitCostPerUnit}, candidate: c, quantity: admission.quantity, entry: admission.entry, originalRiskCurrency: admission.initialRiskCurrency,
+            const p: FreshPaperPosition = { id: c.id, ...(admission.riskFlags.length ? { riskFlags: admission.riskFlags } : {}), sessionCutoff:r.cutoff, contract: {...r.contract,explicitRoundTripCostPerUnit:admission.explicitCostPerUnit}, candidate: c, quantity: admission.quantity, entry: admission.entry, originalRiskCurrency: admission.initialRiskCurrency,
                 emergencyStop: admission.emergencyStop, currentStop: admission.emergencyStop, highBid: r.quote.bid, openedAt: r.now, lastEventAt: r.now,
                 state: 'OPEN', exitTriggeredAt: null, exitReason: null, exitPrice: null, netPnl: null, maxUnderlyingFavorable: 0 };
             await tx.unsafe('INSERT INTO fresh_parent_moves(account_id,id,instrument,direction,session,origin,traded,evidence) VALUES($1,$2,$3,$4,$5,$6,true,$7::jsonb) ON CONFLICT(account_id,id) DO UPDATE SET traded=true', [r.accountId, c.parentId, c.instrument, c.direction, r.session, c.origin, JSON.stringify(c)]);

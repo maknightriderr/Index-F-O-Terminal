@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FreshStartStatus, OptionChain } from '@fno/shared';
-import { accountView, equityCurve, exitReasons, istDay, pickContract, positionViews, promotionGate, radarReason, rHistogram, setupRadar, stopToTarget, timeHeatmap, toPositionView } from '../command-center';
+import { strategyHeader, strategyName, accountView, equityCurve, exitReasons, istDay, pickContract, positionViews, promotionGate, radarReason, rHistogram, setupRadar, stopToTarget, timeHeatmap, toPositionView } from '../command-center';
 
 const NOW = Date.parse('2026-11-02T06:30:00Z'); // 12:00 IST
 const at = (hhmm: string) => Date.parse(`2026-11-02T${hhmm}:00+05:30`);
@@ -168,5 +168,13 @@ describe('order-flow shadow', () => {
     expect(rows.ALIGNED.avgR).toBeCloseTo(0.25);
     expect(rows.OPPOSED).toMatchObject({ trades: 1, wins: 0, avgR: -1 });
     expect(rows.UNTAGGED.trades).toBe(1);
+  });
+});
+
+describe('2.0 shadow strategies', () => {
+  it('marks a shadow strategy in column headers only; its past trades keep the plain name', () => {
+    expect(strategyHeader('NEW_ORB_RETEST_V1')).toBe('ORB retest (shadow)');
+    expect(strategyName('NEW_ORB_RETEST_V1')).toBe('ORB retest');
+    expect(strategyHeader('NEW_SOMETHING_ELSE_V1')).toBe('something else');
   });
 });

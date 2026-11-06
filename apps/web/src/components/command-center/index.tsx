@@ -30,6 +30,7 @@ import {
   signedR,
   STRATEGY_IDS,
   strategyName,
+  strategyHeader,
   stopToTarget,
   type PositionView,
   type RadarState,
@@ -238,7 +239,7 @@ export function SetupRadar({ rows }: { rows: ReturnType<typeof setupRadar> }) {
           <thead>
             <tr>
               <th scope="col">Instrument</th>
-              {STRATEGY_IDS.map((s) => <th key={s} scope="col">{strategyName(s)}</th>)}
+              {STRATEGY_IDS.map((s) => <th key={s} scope="col">{strategyHeader(s)}</th>)}
             </tr>
           </thead>
           <tbody>

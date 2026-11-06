@@ -11,7 +11,27 @@ const STRATEGY: Record<string, string> = {
   NEW_VWAP_PULLBACK_V1: 'VWAP pullback',
   NEW_PREVIOUS_SESSION_SWEEP_V1: 'PDH/PDL sweep reversal',
   NEW_FIRST_OPENING_PULLBACK_V1: 'First opening pullback',
+  NEW_MOMENTUM_BREAKOUT_V1: 'Momentum breakout',
+  NEW_TREND_FLAG_V1: 'Trend flag',
+  NEW_EVENT_BREAKOUT_V1: 'Event breakout',
+  NEW_RS_STOCK_V1: 'Stock in play (relative strength)',
+  NEW_INDEX_BREADTH_V1: 'Index breadth trend',
 };
+/** Live account limits a paper entry went past (2.0: paper records them instead of refusing). */
+const RISK_FLAG: Record<string, string> = {
+  WOULD_PAUSE_3_LOSSES: '3 losses in a row',
+  WOULD_PAUSE_DAILY_LOSS: 'daily loss limit (1%) reached',
+  WOULD_PAUSE_COHORT: 'cumulative drawdown limit (5%) reached',
+  WOULD_BLOCK_MAX_OPEN: 'more than 2 positions open',
+  WOULD_BLOCK_OPEN_RISK: 'open-risk / daily budget exceeded',
+  WOULD_BLOCK_CORRELATED: 'another position open in the same group',
+  WOULD_BLOCK_REENTRY_COOLDOWN: 're-entry within 15 min of the last close',
+};
+/** Pure: the warning line for an entry past live limits, or null. */
+export function freshRiskFlagLine(flags: readonly string[] | undefined): string | null {
+  if (!flags?.length) return null;
+  return `⚠️ Live account would have skipped this: ${flags.map((f) => RISK_FLAG[f] ?? esc(f)).join('; ')}`;
+}
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const inr = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
 const px = (n: number) => n.toFixed(2);
@@ -31,6 +51,7 @@ export function formatFreshTradeNotice({ kind, position: p }: FreshTradeNotice):
       `Entry ${px(p.entry)} (ask fill) × ${p.quantity} lot(s) = ${units} units at ${ist(p.openedAt)} IST`,
       `Initial risk ${inr(p.originalRiskCurrency)} (1R) · premium stop ${px(p.currentStop)}`,
       `Underlying: invalidation ${px(p.candidate.stop)} · target ${px(p.candidate.target)}`,
+      ...[freshRiskFlagLine(p.riskFlags)].filter((x): x is string => x != null),
       `<i>Paper trade — no broker order is placed.</i>`,
     ].join('\n');
   }

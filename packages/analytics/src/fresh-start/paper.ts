@@ -56,6 +56,8 @@ export interface FreshAccount {
 export const FRESH_RISK_PER_TRADE = 0.005;
 export const FRESH_MAX_OPEN_RISK = 0.01;
 export const FRESH_DAILY_LOSS_LIMIT = 0.01;
+/** Open positions a live account would allow; paper records WOULD_BLOCK_MAX_OPEN above it (2.0). */
+export const FRESH_LIVE_MAX_OPEN_POSITIONS = 2;
 export const FRESH_COHORT_DRAWDOWN_FRACTION = 0.05;
 export type FreshAdmission = {
     ok: false;
@@ -70,6 +72,8 @@ export type FreshAdmission = {
     lots: number;
     premiumCurrency: number;
     riskRewardNet: number;
+    /** Account limits that would have refused this entry in live trading; paper records them instead (2.0). */
+    riskFlags: string[];
     explicitCostPerUnit: number;
 };
 export function freshQuoteCode(q: FreshQuote, contract: string, source: string, epoch: string, now: number): string | null {
@@ -94,7 +98,10 @@ function assessFreshPaper(args: {
     eventClear: boolean;
     legacyPositionOpen: boolean;
     parentAlreadyTraded: boolean;
+    /** Another open position in the same risk group (sector / index family): recorded, not refused (2.0). */
     correlatedPositionOpen: boolean;
+    /** An open position on this same instrument: always refused (one position per instrument, no doubling). */
+    instrumentPositionOpen?: boolean;
     /** Entries on this instrument today (recorded for evidence; no longer capped, 5 Nov). */
     entriesToday: number;
     barsSinceLastClose: number | null;
@@ -120,15 +127,24 @@ function assessFreshPaper(args: {
         return refuse('ENTRY_EXPIRED_OR_EARLY');
     if (d * (args.currentUnderlying - c.referenceEntry) > .25 * c.atr)
         return refuse('EXTENDED_ENTRY');
-    // 5 Nov (owner): no cap on entries per instrument per day. Still one position per instrument / risk group at a
-    // time, one trade per parent setup, a 3-bar pause after a close, and the account-level open-risk and daily limits.
-    if (args.legacyPositionOpen || args.correlatedPositionOpen || args.parentAlreadyTraded || (args.barsSinceLastClose != null && args.barsSinceLastClose < 3))
+    // 2.0 (owner, 7 Nov): in paper the account limits RECORD instead of refusing, so a strategy keeps producing trades
+    // (and its evidence) after losses. Each one a live account would have enforced is kept on the position as a
+    // riskFlag (and announced). Still refused: the legacy book, a second position on the same instrument, a second
+    // trade from the same parent setup, broken account state, and premium beyond the paper cash available.
+    if (args.legacyPositionOpen || args.instrumentPositionOpen || args.parentAlreadyTraded)
         return refuse('EXPOSURE_OR_PARENT');
-    if (!a.marksComplete || a.capital <= 0 || a.equity <= 0 || a.reservedRisk < 0 || a.reservedPremium < 0 || a.openPositions >= 2 || a.dailyNet <= -FRESH_DAILY_LOSS_LIMIT * a.capital || a.consecutiveNetLosses >= 3)
+    if (!a.marksComplete || a.capital <= 0 || a.equity <= 0 || a.reservedRisk < 0 || a.reservedPremium < 0)
         return refuse('ACCOUNT_PAUSED');
-    // A run of losing days never resets the cohort: each account-day starts fresh, the cumulative drawdown does not.
-    if (a.cohortNet == null || !Number.isFinite(a.cohortNet) || a.cohortNet <= -FRESH_COHORT_DRAWDOWN_FRACTION * a.capital)
+    if (a.cohortNet == null || !Number.isFinite(a.cohortNet))
         return refuse('COHORT_DRAWDOWN_PAUSED');
+    const riskFlags: string[] = [];
+    if (args.correlatedPositionOpen) riskFlags.push('WOULD_BLOCK_CORRELATED');
+    if (args.barsSinceLastClose != null && args.barsSinceLastClose < 3) riskFlags.push('WOULD_BLOCK_REENTRY_COOLDOWN');
+    if (a.openPositions >= FRESH_LIVE_MAX_OPEN_POSITIONS) riskFlags.push('WOULD_BLOCK_MAX_OPEN');
+    if (a.consecutiveNetLosses >= 3) riskFlags.push('WOULD_PAUSE_3_LOSSES');
+    if (a.dailyNet <= -FRESH_DAILY_LOSS_LIMIT * a.capital) riskFlags.push('WOULD_PAUSE_DAILY_LOSS');
+    // A run of losing days never resets the cohort: each account-day starts fresh, the cumulative drawdown does not.
+    if (a.cohortNet <= -FRESH_COHORT_DRAWDOWN_FRACTION * a.capital) riskFlags.push('WOULD_PAUSE_COHORT');
     if (!Number.isSafeInteger(k.lotQuantity) || k.lotQuantity <= 0 || !Number.isFinite(k.multiplier) || k.multiplier <= 0 || Math.abs(k.delta) < .45 || Math.abs(k.delta) > .65 || (d === 1 ? k.delta <= 0 : k.delta >= 0))
         return refuse('INVALID_CONTRACT');
     if ((q.ask - q.bid) / ((q.ask + q.bid) / 2) > ((k.market === 'NSE_STOCK_OPTIONS' || k.market === 'MCX_VERIFIED_FUTURES_OPTIONS') ? .015 : .01))
@@ -140,7 +156,9 @@ function assessFreshPaper(args: {
     // Both adverse exit tick and quantity-level flat brokerage belong in frozen initial R.
     const baseRisk = Math.max(entry - Math.max(0,Math.min(...k.invalidationPremiumScenarios)-q.tick), entry-Math.max(0,emergencyStop-q.tick));
     const targetExit=Math.max(0,Math.min(...k.targetPremiumScenarios)-q.tick),perLot=k.lotQuantity*k.multiplier;
-    const budget=Math.min(FRESH_RISK_PER_TRADE*a.capital,FRESH_MAX_OPEN_RISK*a.capital-a.reservedRisk,FRESH_DAILY_LOSS_LIMIT*a.capital+a.dailyNet-a.reservedRisk);
+    // Sized on the per-trade risk alone (2.0): the open-risk and daily budgets used to shrink the size to zero after a
+    // loss, which refused the trade as surely as a pause. What a live account would have allowed is recorded below.
+    const budget=FRESH_RISK_PER_TRADE*a.capital,liveBudget=Math.min(budget,FRESH_MAX_OPEN_RISK*a.capital-a.reservedRisk,FRESH_DAILY_LOSS_LIMIT*a.capital+a.dailyNet-a.reservedRisk);
     let fixed=0,variable=explicit*perLot;
     try { if(k.feePolicy){fixed=2*k.feePolicy.brokeragePerOrder*(1+k.feePolicy.gstFraction);variable=freshRoundTripFees(entry,entry,k.lotQuantity,k.multiplier,k.feePolicy)-fixed;} }
     catch {return refuse('MODEL_OR_COST_UNAVAILABLE');}
@@ -152,7 +170,8 @@ function assessFreshPaper(args: {
     const rewardFees=k.feePolicy?freshRoundTripFees(entry,targetExit,quantity,k.multiplier,k.feePolicy):explicit*units;
     const initialRiskCurrency=baseRisk*units+riskFees,rr=((targetExit-entry)*units-rewardFees)/initialRiskCurrency;
     if(!(initialRiskCurrency>0)||!Number.isFinite(rr)||rr<1.5)return refuse('NET_PAYOFF_TOO_LOW');
-    return {ok:true,entry,emergencyStop,quantity,lots,initialRiskPerUnit:initialRiskCurrency/units,initialRiskCurrency,premiumCurrency:entry*units,riskRewardNet:rr,explicitCostPerUnit:riskFees/units};
+    if(initialRiskCurrency>liveBudget+1e-6)riskFlags.push('WOULD_BLOCK_OPEN_RISK');
+    return {ok:true,entry,emergencyStop,quantity,lots,initialRiskPerUnit:initialRiskCurrency/units,initialRiskCurrency,premiumCurrency:entry*units,riskRewardNet:rr,explicitCostPerUnit:riskFees/units,riskFlags};
 }
 export type FreshAdmissionInput=Parameters<typeof assessFreshPaper>[0];
 /** Indicative selection only. Never use this result as a fill authorization. */
@@ -161,6 +180,8 @@ export function admitFreshPaper(args:FreshAdmissionInput){return assessFreshPape
 
 export interface FreshPaperPosition {
     id: string;
+    /** Live account limits this paper entry went past (FreshAdmission.riskFlags); absent before 2.0. */
+    riskFlags?: string[];
     contract: FreshContract;
     candidate: FreshCandidate;
     quantity: number;

@@ -20,7 +20,7 @@ import { useAlerts } from '@/lib/use-alerts';
 import { useFeedSummary } from '@/lib/use-feed-summary';
 import { useMarketStore, useWorkspaceStore } from '@/stores';
 import { exchangeFor, WORKSPACE_PRESETS, type WorkspaceFocus } from '@/lib/commands';
-import { accountView, inr, istTime, pickContract, positionViews, radarReason, setupRadar, signedInr, signedR, STRATEGY_IDS, strategyName, type RadarCell } from '@/lib/command-center';
+import { accountView, inr, istTime, pickContract, positionViews, radarReason, setupRadar, signedInr, signedR, STRATEGY_IDS, strategyName, strategyHeader, type RadarCell } from '@/lib/command-center';
 import { Empty, Pill, type Tone } from '@/components/command-center/panel';
 
 const fmt = (v: number | null | undefined, d = 2) => (v == null || !Number.isFinite(v) ? '—' : v.toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d }));
@@ -240,7 +240,7 @@ function Radar({ rows, names, onOpen, loading }: { rows: ReturnType<typeof setup
         <thead>
           <tr>
             <th>Instrument</th>
-            {STRATEGY_IDS.map((s) => <th key={s}>{strategyName(s)}</th>)}
+            {STRATEGY_IDS.map((s) => <th key={s}>{strategyHeader(s)}</th>)}
             <th>Last</th>
           </tr>
         </thead>
