@@ -83,7 +83,36 @@ export const FRESH_TREND_TRAIL_ATR = 2;
 export const FRESH_TREND_NOMINAL_R = 2.5;
 /** A major level (opening range, previous day) closer than this many R ahead blocks a trend entry outright. */
 export const FRESH_TREND_MIN_ROOM_R = 0.5;
-export type FreshStrategy = typeof FRESH_STRATEGIES[number];
+/** 2.0 strategies that trade (the 1.x list above runs in shadow). */
+export const FRESH_ACTIVE_STRATEGIES = ['NEW_RS_STOCK_V1'] as const;
+/** Every strategy the engine evaluates: 1.x (shadow) and 2.0 (active). */
+export const FRESH_ALL_STRATEGIES = [...FRESH_STRATEGIES, ...FRESH_ACTIVE_STRATEGIES] as const;
+export type FreshStrategy = typeof FRESH_ALL_STRATEGIES[number];
+/**
+ * 2.0 stock-in-play inputs from the F&O universe scan (all ~200 stocks, refreshed every 150 s), as of `at`.
+ * relativeStrength / sectorRelativeStrength: today's % change minus NIFTY's (percentage points).
+ * atmSpreadPct: ATM bid-ask spread as % of mid. ivRank: 0-100, null when the history is short.
+ */
+export interface FreshStockIntel {
+    at: number;
+    relativeStrength: number;
+    oiInterpretation: string;
+    sectorRelativeStrength: number | null;
+    atmSpreadPct: number | null;
+    ivRank: number | null;
+}
+/** 2.0 NEW_RS_STOCK_V1 parameters (paper hypothesis; every gate is counted in the decision summary). */
+export const FRESH_INTEL_MAX_AGE_MS = 6 * 60000;
+export const FRESH_RS_START_MS = 45 * 60000;
+export const FRESH_RS_MIN_PCT = 0.7;
+export const FRESH_RS_SECTOR_TOLERANCE_PCT = 0.3;
+export const FRESH_RS_MAX_SPREAD_PCT = 1;
+export const FRESH_RS_MAX_IV_RANK = 80;
+export const FRESH_RS_TOUCH_ATR = 0.15;
+export const FRESH_RS_BASE_MAX_ATR = 0.6;
+export const FRESH_RS_MAX_RISK_ATR = 1.2;
+const RS_BULLISH_OI: ReadonlySet<string> = new Set(['LONG_BUILDUP', 'SHORT_COVERING']);
+const RS_BEARISH_OI: ReadonlySet<string> = new Set(['SHORT_BUILDUP', 'LONG_UNWINDING']);
 export type FreshDirection = 'BULLISH' | 'BEARISH';
 export interface FreshBar {
     time: number;
@@ -131,6 +160,8 @@ export interface FreshContext {
     eventClear: boolean;
     eventEvidence?: Record<string,unknown>;
     calendarVerified: boolean;
+    /** 2.0: the stock's universe-scan inputs (undefined for an index / commodity, null when no fresh scan row). */
+    stockIntel?: FreshStockIntel | null;
 }
 export interface FreshCandidate {
     id: string;
@@ -190,7 +221,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
     const out: FreshEvaluation = { candidates: [], refusals: [] };
     // `detail` (diagnostics only) says which input was short, e.g. WARMUP "5M_80_15M_20" or BLOCKED_REFERENCE "SIGNAL_STALE".
     const refuseAll = (code: string, detail?: string) => {
-        for (const strategy of FRESH_STRATEGIES)
+        for (const strategy of FRESH_ALL_STRATEGIES)
             out.refusals.push(detail ? { strategy, code, detail } : { strategy, code });
         return out;
     };
@@ -262,7 +293,8 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
     const efficiency = recent.length >= 4 && path > 0 ? Math.abs(last(recent).close - recent[0].close) / path : 1;
     const choppy = range || efficiency < FRESH_MIN_EFFICIENCY;
     const directions = [1, -1] as const;
-    for (const strategy of FRESH_STRATEGIES) {
+    const ema5 = new Map<number, number>(); { const e = ema(b.map(x => x.close), 20); b.forEach((x, i) => { if (finite(e[i])) ema5.set(x.time, e[i]); }); }
+    for (const strategy of FRESH_ALL_STRATEGIES) {
         let emitted = false;
         // Furthest gate reached by this strategy in either direction: the funnel behind "no setup" (diagnostics only).
         let gate = -1, gateName = 'NOT_REACHED';
@@ -273,7 +305,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
         // so in a STRONG 15-minute trend the pullback strategies skip the efficiency test (FRESH_PULLBACK_STRATEGIES); the
         // VWAP-range (chop around VWAP) test still applies to them, and both tests still apply to the ORB retest.
         const pullbackInTrend = strong && FRESH_PULLBACK_STRATEGIES.has(strategy);
-        if ((range || (choppy && !pullbackInTrend)) && strategy !== 'NEW_PREVIOUS_SESSION_SWEEP_V1' && strategy !== 'NEW_MOMENTUM_BREAKOUT_V1' && strategy !== 'NEW_EVENT_BREAKOUT_V1') {
+        if ((range || (choppy && !pullbackInTrend)) && strategy !== 'NEW_PREVIOUS_SESSION_SWEEP_V1' && strategy !== 'NEW_MOMENTUM_BREAKOUT_V1' && strategy !== 'NEW_EVENT_BREAKOUT_V1' && strategy !== 'NEW_RS_STOCK_V1') {
             out.refusals.push({ strategy, code: 'CHOPPY_REGIME', detail: range ? 'VWAP_RANGE' : `EFFICIENCY_${Math.min(9, Math.floor(efficiency * 10))}0PCT` });
             continue;
         }
@@ -502,6 +534,67 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                     }
                 }
             }
+            // ---- 2.0 STOCK IN PLAY (relative strength): a stock leading / lagging NIFTY with aligned futures OI, entered on a
+            // hold of VWAP / EMA20 or a break out of a tight base. It reads the stock's own chart, not the index regime, so
+            // it is exempt from the choppy filter (a choppy index day is exactly when a stock in play matters).
+            if (strategy === 'NEW_RS_STOCK_V1') {
+                const intel = c.stockIntel;
+                const fresh = intel != null && finite(intel.at) && intel.at <= c.now && c.now - intel.at <= FRESH_INTEL_MAX_AGE_MS;
+                reach(0, intel === undefined ? 'RS_NOT_A_STOCK' : !fresh ? 'RS_INTEL_STALE' : 'RS_BEFORE_10_00');
+                if (fresh && c.now - c.sessionOpen >= FRESH_RS_START_MS) {
+                    reach(1, 'RS_WEAK');
+                    if (d * intel!.relativeStrength >= FRESH_RS_MIN_PCT) {
+                        reach(2, 'RS_OI_NOT_ALIGNED');
+                        if ((d === 1 ? RS_BULLISH_OI : RS_BEARISH_OI).has(intel!.oiInterpretation)) {
+                            reach(3, 'RS_SECTOR_AGAINST');
+                            if (intel!.sectorRelativeStrength == null || d * intel!.sectorRelativeStrength >= -FRESH_RS_SECTOR_TOLERANCE_PCT) {
+                                reach(4, 'RS_LIQUIDITY_OR_IV');
+                                if (intel!.atmSpreadPct != null && intel!.atmSpreadPct <= FRESH_RS_MAX_SPREAD_PCT && (intel!.ivRank == null || intel!.ivRank < FRESH_RS_MAX_IV_RANK)) {
+                                    reach(5, 'RS_15M_AGAINST');
+                                    if (!(d === 1 ? bear : bull)) {
+                                        reach(6, 'RS_NOT_HOLDING_VWAP');
+                                        const last6 = today.slice(-6);
+                                        if (last6.length === 6 && last6.filter(x => d * (x.close - vw(x)) < 0).length <= 1 && favorable(current.close, vwap)) {
+                                            reach(7, 'RS_NO_TRIGGER');
+                                            const prior = today[today.length - 2];
+                                            // A: a pullback in the last three bars touched VWAP or the 5-minute EMA20 (within 0.15 ATR, close not
+                                            // more than 0.15 ATR through it), and this bar resumes: closes past the prior bar, in its outer 35%,
+                                            // with relative volume >= 1.2.
+                                            const touches = (x: FreshBar) => [vw(x), ema5.get(x.time)].some(L => L != null && finite(L) && d * ((d === 1 ? x.low : x.high) - L) <= FRESH_RS_TOUCH_ATR * a && d * (x.close - L) >= -FRESH_RS_TOUCH_ATR * a);
+                                            const window3 = today.slice(-4, -1), touchAt = window3.findIndex(touches);
+                                            let s: number | null = null, o: number | null = null;
+                                            if (prior && touchAt >= 0 && favorable(current.close, d === 1 ? prior.high : prior.low) && confirms(current, .4) && closeLocation(current, d) >= .65 && rvol(current) >= 1.2) {
+                                                const pullback = [...window3.slice(touchAt), current];
+                                                s = lo(pullback) - d * .1 * a; o = window3[touchAt].time;
+                                            }
+                                            // B: a 3-6 bar base no wider than 0.6 ATR, and this bar closes out of it with rvol >= 1.5.
+                                            if (s == null)
+                                                for (const n of [6, 5, 4, 3]) {
+                                                    const base = today.slice(-1 - n, -1);
+                                                    if (base.length < n) continue;
+                                                    const hi = Math.max(...base.map(x => x.high)), low = Math.min(...base.map(x => x.low));
+                                                    if (hi - low > FRESH_RS_BASE_MAX_ATR * a) continue;
+                                                    if (d * (current.close - (d === 1 ? hi : low)) > .05 * a && body(current) >= .5 && rvol(current) >= 1.5) {
+                                                        s = (d === 1 ? low : hi) - d * .1 * a; o = base[0].time;
+                                                        break;
+                                                    }
+                                                }
+                                            if (s != null && o != null) {
+                                                reach(8, 'RS_RISK_TOO_WIDE');
+                                                if (d * (current.close - s) > 0 && d * (current.close - s) <= FRESH_RS_MAX_RISK_ATR * a) {
+                                                    stop = s;
+                                                    origin = o;
+                                                    profile = 'TREND';
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             if (stop == null || origin == null || !favorable(current.close, stop))
                 continue;
             if (profile === 'TREND') {
@@ -514,7 +607,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                     continue;
                 }
                 const targetPrice = current.close + d * FRESH_TREND_NOMINAL_R * risk, parentId = `${c.instrument}:${c.session}:${direction}:${origin}`;
-                out.candidates.push({ id: `${FRESH_PACK_VERSION}:${c.sourceEpoch}:${parentId}:${strategy}:${current.time}`, parentId, version: FRESH_PACK_VERSION, strategy, direction, instrument: c.instrument, sourceEpoch: c.sourceEpoch, session: c.session, at: decisionAt, referenceEntry: current.close, stop, target: targetPrice, atr: a, origin, expiresAt: Math.min(decisionAt + FRESH_ENTRY_WINDOW_MS, c.sessionClose - 3600000), exitProfile: 'TREND', trailAtr: FRESH_TREND_TRAIL_ATR, evidence: { ...(c.eventEvidence ? { eventCalendar: c.eventEvidence } : {}), orderFlow: freshOrderFlowEvidence(c.orderFlow, direction, current.time, origin), rvol: finite(rvol(current)) ? rvol(current) : 'UNAVAILABLE', volumeShape: c.volumeShape ?? 'OWN', vwap, reference: 'BAR_VWAP_PROXY', efficiency, targetKind: 'TRAILING_STOP', targetR: FRESH_TREND_NOMINAL_R, trailAtr: FRESH_TREND_TRAIL_ATR } });
+                out.candidates.push({ id: `${FRESH_PACK_VERSION}:${c.sourceEpoch}:${parentId}:${strategy}:${current.time}`, parentId, version: FRESH_PACK_VERSION, strategy, direction, instrument: c.instrument, sourceEpoch: c.sourceEpoch, session: c.session, at: decisionAt, referenceEntry: current.close, stop, target: targetPrice, atr: a, origin, expiresAt: Math.min(decisionAt + FRESH_ENTRY_WINDOW_MS, c.sessionClose - 3600000), exitProfile: 'TREND', trailAtr: FRESH_TREND_TRAIL_ATR, evidence: { ...(c.eventEvidence ? { eventCalendar: c.eventEvidence } : {}), ...(c.stockIntel ? { stockIntel: c.stockIntel } : {}), orderFlow: freshOrderFlowEvidence(c.orderFlow, direction, current.time, origin), rvol: finite(rvol(current)) ? rvol(current) : 'UNAVAILABLE', volumeShape: c.volumeShape ?? 'OWN', vwap, reference: 'BAR_VWAP_PROXY', efficiency, targetKind: 'TRAILING_STOP', targetR: FRESH_TREND_NOMINAL_R, trailAtr: FRESH_TREND_TRAIL_ATR } });
                 emitted = true;
                 continue;
             }

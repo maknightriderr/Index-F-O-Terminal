@@ -1,12 +1,12 @@
 import {createHash} from 'node:crypto';
 import {z} from 'zod';
-import {freshValidationGate,partitionFreshResearch,type FreshResearchTrade,FRESH_STRATEGIES,FRESH_PACK_VERSION} from '@fno/analytics';
+import {freshValidationGate,partitionFreshResearch,type FreshResearchTrade,FRESH_ALL_STRATEGIES,FRESH_PACK_VERSION} from '@fno/analytics';
 import {FRESH_RESEARCH_PROTOCOL as protocol,freshProtocolDigest} from '../../config/fresh-research.js';
 import {FRESH_MARKETS} from './markets.js';
 import type {FreshDb} from './store.js';
 const finite=z.number().finite(),positive=finite.positive();
 const eventClass=z.enum(['EVENT_DATA_UNVERIFIED','EVENT_COVERAGE_VERIFIED','EVENT_POLICY_UNRECORDED']);
-const cohortSchema=z.object({market:z.enum(FRESH_MARKETS),strategy:z.enum(FRESH_STRATEGIES),direction:z.enum(['BULLISH','BEARISH']),timeframe:z.literal('5m'),eventPolicyId:z.string().min(1).max(128),eventEvidenceClass:eventClass}).strict();
+const cohortSchema=z.object({market:z.enum(FRESH_MARKETS),strategy:z.enum(FRESH_ALL_STRATEGIES),direction:z.enum(['BULLISH','BEARISH']),timeframe:z.literal('5m'),eventPolicyId:z.string().min(1).max(128),eventEvidenceClass:eventClass}).strict();
 const tradeSchema=cohortSchema.extend({id:z.string().min(1).max(200),version:z.literal(FRESH_PACK_VERSION),session:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),entryAt:positive,exitAt:positive,netPnl:finite,initialRisk:positive}).strict();
 const bundleSchema=z.object({schema:z.literal('FRESH_RESEARCH_BUNDLE_V1'),protocolDigest:z.string().length(64),cohort:cohortSchema,
  evidence:z.enum(['SIGNAL_ONLY','MODELED_FILL','OBSERVED_QUOTE_BACKTEST','FORWARD_PAPER_LEDGER']),

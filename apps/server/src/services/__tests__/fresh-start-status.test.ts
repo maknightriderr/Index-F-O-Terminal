@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
-import { FRESH_STRATEGIES } from '@fno/analytics';
+import { FRESH_ALL_STRATEGIES } from '@fno/analytics';
 import { PGlite } from '@electric-sql/pglite';
 import { readFileSync } from 'node:fs';
 let pg: PGlite;
@@ -25,5 +25,5 @@ describe('fresh-start read-only status and all-cohort aggregation', () => {
       }finally{await pg.exec('TRUNCATE fresh_paper_events,fresh_paper_positions,fresh_candidates,fresh_parent_moves,fresh_paper_accounts CASCADE');}
     });
 
-    it('returns one explicitly unvalidated row per strategy with unavailable net results, and performs no writes', async () => { const before = (await pg.query('SELECT count(*) FROM fresh_paper_accounts')).rows; const r = await freshStartStatus(); expect(r).toMatchObject({ enabled: false, legacyNewEntries: false, liveOrdersAllowed: false, capital: 3000000, performanceValidated: false, schemaReady: true }); expect(r.performance).toHaveLength(FRESH_STRATEGIES.length); expect(r.performance.every(x => x.netPnl === null && x.winRate === null && x.validation === 'NOT_VALIDATED')).toBe(true); expect((await pg.query('SELECT count(*) FROM fresh_paper_accounts')).rows).toEqual(before); expect(r.blockers).toContain('QUALIFIED_SHARED_FEED_ADAPTER'); expect(r.reviews).toEqual([]);expect(r.capabilities).toContainEqual({id:'PRICING_MODEL_AND_SCENARIOS',status:'IMPLEMENTED_NOT_FULLY_QUALIFIED'}); });
+    it('returns one explicitly unvalidated row per strategy with unavailable net results, and performs no writes', async () => { const before = (await pg.query('SELECT count(*) FROM fresh_paper_accounts')).rows; const r = await freshStartStatus(); expect(r).toMatchObject({ enabled: false, legacyNewEntries: false, liveOrdersAllowed: false, capital: 3000000, performanceValidated: false, schemaReady: true }); expect(r.performance).toHaveLength(FRESH_ALL_STRATEGIES.length); expect(r.performance.every(x => x.netPnl === null && x.winRate === null && x.validation === 'NOT_VALIDATED')).toBe(true); expect((await pg.query('SELECT count(*) FROM fresh_paper_accounts')).rows).toEqual(before); expect(r.blockers).toContain('QUALIFIED_SHARED_FEED_ADAPTER'); expect(r.reviews).toEqual([]);expect(r.capabilities).toContainEqual({id:'PRICING_MODEL_AND_SCENARIOS',status:'IMPLEMENTED_NOT_FULLY_QUALIFIED'}); });
 });

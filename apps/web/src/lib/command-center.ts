@@ -17,6 +17,7 @@ export const STRATEGY_NAMES: Record<string, string> = {
   NEW_MOMENTUM_BREAKOUT_V1: 'Momentum breakout',
   NEW_TREND_FLAG_V1: 'Trend flag',
   NEW_EVENT_BREAKOUT_V1: 'Event breakout',
+  NEW_RS_STOCK_V1: 'Stock in play',
 };
 /** 2.0: the 1.x strategies run in shadow — evaluated and recorded, never traded (packages/analytics FRESH_SHADOW_STRATEGIES). */
 export const SHADOW_STRATEGY_IDS: ReadonlySet<string> = new Set(['NEW_ORB_RETEST_V1', 'NEW_VWAP_PULLBACK_V1', 'NEW_PREVIOUS_SESSION_SWEEP_V1', 'NEW_FIRST_OPENING_PULLBACK_V1', 'NEW_MOMENTUM_BREAKOUT_V1', 'NEW_TREND_FLAG_V1', 'NEW_EVENT_BREAKOUT_V1']);
@@ -292,6 +293,9 @@ export interface RadarCell { state: RadarState; code: string | null; at: number 
 /** Short plain-English reasons for the engine's refusal codes and gate details (Radar cells). */
 const RADAR_REASONS: Readonly<Record<string, string>> = Object.freeze({
   SHADOW_STRATEGY: 'Shadow: setup recorded, not traded',
+  RS_NOT_A_STOCK: 'Stocks only', RS_INTEL_STALE: 'Scan data stale', RS_BEFORE_10_00: 'Starts 10:00', RS_WEAK: 'Not leading / lagging NIFTY',
+  RS_OI_NOT_ALIGNED: 'Futures OI not aligned', RS_SECTOR_AGAINST: 'Sector against', RS_LIQUIDITY_OR_IV: 'Spread wide / IV high',
+  RS_15M_AGAINST: '15m trend against', RS_NOT_HOLDING_VWAP: 'Not holding VWAP', RS_NO_TRIGGER: 'Waiting for pullback / base break', RS_RISK_TOO_WIDE: 'Risk > 1.2 ATR',
   ORB_OUTSIDE_WINDOW: 'Opening range not formed', ORB_LATE_LEVEL_ALREADY_BROKEN: 'Range already broke earlier', ORB_REBREAK_NOT_BEYOND_TRAP: 'Re-break below trap high/low', ORB_NO_TREND: 'No 15m trend', ORB_RANGE_WIDTH: 'Opening range too narrow/wide', ORB_NO_BREAKOUT: 'No range breakout',
   ORB_BREAKOUT_QUALITY: 'Weak breakout bar', ORB_BREAKOUT_RVOL: 'Breakout volume low', ORB_NO_RETEST_TRIGGER: 'Waiting for retest',
   VWAP_BEFORE_10_30: 'Starts 10:30', VWAP_NO_TREND: 'No 15m trend', VWAP_NO_IMPULSE: 'No impulse leg', VWAP_PULLBACK_SHAPE: 'Pullback shape off',
