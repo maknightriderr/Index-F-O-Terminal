@@ -17,6 +17,13 @@ export const FRESH_MIN_VOLUME_SESSIONS = 15;
 /** VWAP pullback runs only from 75 minutes after the open (10:30 on NSE), after the ORB and opening-pullback window. */
 export const FRESH_VWAP_START_MS = 75 * 60000;
 export const FRESH_MIN_TARGET_R = 1.5;
+/**
+ * How long a candidate may wait for an executable option book (6 Nov: was 2 s). Options trade every few seconds, so
+ * a 2 s window let 6 of 7 setups in two days expire before one fresh book arrived. The entry is still taken only on
+ * a book observed after arrival (<= 2 s old), and assessFreshPlan's EXTENDED_ENTRY guard refuses it if the
+ * underlying has run more than 0.25 ATR past the signal close in the meantime.
+ */
+export const FRESH_ENTRY_WINDOW_MS = 20_000;
 export const FRESH_MAX_TARGET_ATR = 3;
 export const FRESH_STRATEGIES = ['NEW_ORB_RETEST_V1', 'NEW_VWAP_PULLBACK_V1', 'NEW_PREVIOUS_SESSION_SWEEP_V1', 'NEW_FIRST_OPENING_PULLBACK_V1', 'NEW_MOMENTUM_BREAKOUT_V1', 'NEW_TREND_FLAG_V1', 'NEW_EVENT_BREAKOUT_V1'] as const;
 /**
@@ -502,7 +509,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                     continue;
                 }
                 const targetPrice = current.close + d * FRESH_TREND_NOMINAL_R * risk, parentId = `${c.instrument}:${c.session}:${direction}:${origin}`;
-                out.candidates.push({ id: `${FRESH_PACK_VERSION}:${c.sourceEpoch}:${parentId}:${strategy}:${current.time}`, parentId, version: FRESH_PACK_VERSION, strategy, direction, instrument: c.instrument, sourceEpoch: c.sourceEpoch, session: c.session, at: decisionAt, referenceEntry: current.close, stop, target: targetPrice, atr: a, origin, expiresAt: Math.min(decisionAt + 2000, c.sessionClose - 3600000), exitProfile: 'TREND', trailAtr: FRESH_TREND_TRAIL_ATR, evidence: { ...(c.eventEvidence ? { eventCalendar: c.eventEvidence } : {}), orderFlow: freshOrderFlowEvidence(c.orderFlow, direction, current.time, origin), rvol: finite(rvol(current)) ? rvol(current) : 'UNAVAILABLE', volumeShape: c.volumeShape ?? 'OWN', vwap, reference: 'BAR_VWAP_PROXY', efficiency, targetKind: 'TRAILING_STOP', targetR: FRESH_TREND_NOMINAL_R, trailAtr: FRESH_TREND_TRAIL_ATR } });
+                out.candidates.push({ id: `${FRESH_PACK_VERSION}:${c.sourceEpoch}:${parentId}:${strategy}:${current.time}`, parentId, version: FRESH_PACK_VERSION, strategy, direction, instrument: c.instrument, sourceEpoch: c.sourceEpoch, session: c.session, at: decisionAt, referenceEntry: current.close, stop, target: targetPrice, atr: a, origin, expiresAt: Math.min(decisionAt + FRESH_ENTRY_WINDOW_MS, c.sessionClose - 3600000), exitProfile: 'TREND', trailAtr: FRESH_TREND_TRAIL_ATR, evidence: { ...(c.eventEvidence ? { eventCalendar: c.eventEvidence } : {}), orderFlow: freshOrderFlowEvidence(c.orderFlow, direction, current.time, origin), rvol: finite(rvol(current)) ? rvol(current) : 'UNAVAILABLE', volumeShape: c.volumeShape ?? 'OWN', vwap, reference: 'BAR_VWAP_PROXY', efficiency, targetKind: 'TRAILING_STOP', targetR: FRESH_TREND_NOMINAL_R, trailAtr: FRESH_TREND_TRAIL_ATR } });
                 emitted = true;
                 continue;
             }
@@ -539,7 +546,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
             }
             const targetPrice = capped ? current.close + d * cap : chosen.price, targetKind = capped ? 'ATR_CAP' : chosen.kind;
             const parentId = `${c.instrument}:${c.session}:${direction}:${origin}`;
-            out.candidates.push({ id: `${FRESH_PACK_VERSION}:${c.sourceEpoch}:${parentId}:${strategy}:${current.time}`, parentId, version: FRESH_PACK_VERSION, strategy, direction, instrument: c.instrument, sourceEpoch: c.sourceEpoch, session: c.session, at: decisionAt, referenceEntry: current.close, stop, target: targetPrice, atr: a, origin, expiresAt: Math.min(decisionAt + 2000, c.sessionClose - 3600000), evidence: { ...(c.eventEvidence?{eventCalendar:c.eventEvidence}:{}), orderFlow: freshOrderFlowEvidence(c.orderFlow, direction, current.time, origin), rvol: finite(rvol(current)) ? rvol(current) : 'UNAVAILABLE', volumeShape: c.volumeShape ?? 'OWN', vwap, reference: 'BAR_VWAP_PROXY', efficiency, targetKind, targetR: d * (targetPrice - current.close) / risk } });
+            out.candidates.push({ id: `${FRESH_PACK_VERSION}:${c.sourceEpoch}:${parentId}:${strategy}:${current.time}`, parentId, version: FRESH_PACK_VERSION, strategy, direction, instrument: c.instrument, sourceEpoch: c.sourceEpoch, session: c.session, at: decisionAt, referenceEntry: current.close, stop, target: targetPrice, atr: a, origin, expiresAt: Math.min(decisionAt + FRESH_ENTRY_WINDOW_MS, c.sessionClose - 3600000), evidence: { ...(c.eventEvidence?{eventCalendar:c.eventEvidence}:{}), orderFlow: freshOrderFlowEvidence(c.orderFlow, direction, current.time, origin), rvol: finite(rvol(current)) ? rvol(current) : 'UNAVAILABLE', volumeShape: c.volumeShape ?? 'OWN', vwap, reference: 'BAR_VWAP_PROXY', efficiency, targetKind, targetR: d * (targetPrice - current.close) / risk } });
             emitted = true;
         }
         if (!emitted && !out.refusals.some(x => x.strategy === strategy))

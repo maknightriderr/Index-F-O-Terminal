@@ -17,7 +17,7 @@ export interface FreshQualifiedAdapter {
     audit(context: FreshContext, evaluation: ReturnType<typeof evaluateFreshStrategies>): Promise<void>;
 }
 export class FreshRuntime {
-    private builds = new FreshWorkQueue(20, 2);
+    private builds = new FreshWorkQueue(20, 4);
     private evaluations = new FreshWorkQueue(100, 2);
     private recovered = false;
     constructor(private store = new FreshPaperStore(), private adapter: FreshQualifiedAdapter | null = null, private enabled: () => boolean = freshEntriesEnabled) { }

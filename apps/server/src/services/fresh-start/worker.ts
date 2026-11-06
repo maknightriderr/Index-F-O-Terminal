@@ -36,6 +36,24 @@ type History={five:FreshBar[];one:FreshBar[];lastSeen:number;source:'DHAN'|'ANGE
 /** How often today's decisions are summarised to the log (decision-summary.ts). */
 export const FRESH_DECISION_SUMMARY_MS=900_000;
 export const FRESH_BOOK_ROTATION_MS=120_000;
+/** Index option books stay subscribed all session (6 Nov: rotating 8 slices left most index setups without books). */
+export const FRESH_PINNED_BOOK_MARKETS:ReadonlySet<string>=new Set(['NSE_INDEX_OPTIONS','BSE_VERIFIED_OPTIONS']);
+/** Tokens this consumer plans for (cap 250, 10 kept spare), and the most rotating 20-book slices. */
+export const FRESH_BOOK_TOKEN_BUDGET=240;
+export const FRESH_MAX_ROTATING_BOOK_SLICES=6;
+/** How long a reference with a fresh setup keeps its books ahead of the rotation. */
+export const FRESH_URGENT_BOOK_MS=5*60_000;
+/** At most one watchdog reconnect in this window. */
+export const FRESH_FEED_RECONNECT_GAP_MS=10*60_000;
+/** Rotating book references: urgent ones first, then one per market from the rotation window, then the rest. */
+export function freshRotatingBookRefs(refs:readonly FreshReference[],rotation:number,urgent:ReadonlySet<string>,slots:number):FreshReference[]{
+  const others=refs.filter(r=>!FRESH_PINNED_BOOK_MARKETS.has(r.market)),out:FreshReference[]=[],add=(r:FreshReference|undefined)=>{if(r&&out.length<slots&&!out.includes(r))out.push(r);};
+  for(const r of others)if(urgent.has(r.id))add(r);
+  const window=freshDiscoveryWindow(others,rotation,20).selected;
+  for(const market of FRESH_MARKETS)add(window.find(r=>r.market===market));
+  for(const r of window)add(r);
+  return out;
+}
 export function freshAngelTime(ms:number):string{
   const d=new Date(ms+19800000),pad=(n:number)=>String(n).padStart(2,'0');
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
@@ -71,7 +89,7 @@ export class FreshPaperWorker {
   private operationalReporter=new FreshOperationalReporter(evidence=>logger.info(evidence,'Fresh-start operational evidence; readiness and paper-only blockers observed'));
   private feed:FreshSharedFeed;private events=createFreshEventSource(persistFreshCalendarSnapshot);private store=new FreshPaperStore(undefined,()=>!this.stopped&&freshEntriesEnabled());private monitor:FreshPositionMonitor;private runtime:FreshRuntime;
   private refs=new Map<string,FreshReference>();private master:Instrument[]=[];private masterDay='';private histories=new Map<string,History>();private lagReadAt=0;private shortlist:SubscriptionTarget[]=[];
-  private positions:Awaited<ReturnType<FreshPaperStore['recover']>>=[];private timers:ReturnType<typeof setInterval>[]=[];private removeObservation:(()=>void)|null=null;private scanning=false;private ready=false;private stopped=false;private lastScan=0;private discovery:ReturnType<typeof discoverFreshMarkets>|null=null;private selectionAt=0;private cursor=0;private selected:FreshReference[]=[];private selectionExchangeKey='';private historyCursor=0;private historyFailures=new Map<string,string>();private historyRetryAt=new Map<string,number>();private subscriptionReady=false;
+  private positions:Awaited<ReturnType<FreshPaperStore['recover']>>=[];private timers:ReturnType<typeof setInterval>[]=[];private removeObservation:(()=>void)|null=null;private scanning=false;private ready=false;private stopped=false;private lastScan=0;private discovery:ReturnType<typeof discoverFreshMarkets>|null=null;private selectionAt=0;private cursor=0;private selected:FreshReference[]=[];private selectionExchangeKey='';private historyCursor=0;private historyFailures=new Map<string,string>();private historyRetryAt=new Map<string,number>();private subscriptionReady=false;private urgentBooks=new Map<string,number>();private reconnectAt=0;
   constructor(private provider:MarketDataProvider,private subscriptions:SubscriptionManager){
     this.feed=new FreshSharedFeed(subscriptions,Date.now,`fresh-start:production:${randomUUID()}`);this.monitor=new FreshPositionMonitor(this.feed,this.store);
     const adapter=new FreshProductionAdapter(this.feed,this.events,this.store,{references:()=>this.refs,master:()=>this.master,capital:FRESH_CONFIG.capital??0,legacyRisk:()=>this.legacyRisk(),audit:auditFreshEvaluation,refusal:auditFreshAdapter,ivRank:(name,expiry,ivPct)=>ivRankFor(name,expiry,ivPct),watch:async rows=>{this.positions=rows;this.monitor.watch(rows);await this.syncTargets();}});
@@ -117,6 +135,13 @@ export class FreshPaperWorker {
   }
 
   /** Swaps the window's round-robin stocks for the same number of the most active F&O stocks (one quote call). */
+  /** Feed watchdog (see FRESH_FEED_STALL_MS): ticks arrive but none is accepted, so ask for a new upstream connection. */
+  private watchFeed(){
+    if(!this.feed.stalled()||Date.now()-this.reconnectAt<FRESH_FEED_RECONNECT_GAP_MS)return;
+    this.reconnectAt=Date.now();this.feed.resetStallClock();const tickLag=this.feed.tickLagStats();state.tickLag=tickLag;
+    logger.warn({event:'freshFeedWatchdog',tickLag},'Fresh-start feed watchdog: ticks arriving but none accepted for 60 s; reconnecting the upstream feed');
+    void this.subscriptions.refreshConnection().catch((error:unknown)=>logger.warn({event:'freshFeedWatchdogFailed',error:error instanceof Error?error.message:String(error)},'Fresh-start feed watchdog reconnect failed'));
+  }
   /** Process memory and the worker's in-memory caches, every 15 minutes (5 Nov cost review: backend RSS 2-8 GB). */
   private logMemory(){
     try{
@@ -182,16 +207,24 @@ export class FreshPaperWorker {
       if(!this.selectionAt||now-this.selectionAt>=1800000||exchangeKey!==this.selectionExchangeKey){const window=freshDiscoveryWindow(this.discovery!.references.filter(r=>openExchanges.has(freshReferenceExchange(r))),this.cursor);this.selected=openExchanges.has('NSE')?await this.activeStocks(window.selected):window.selected;this.cursor=window.nextCursor;this.selectionAt=now;this.selectionExchangeKey=exchangeKey;}
       const refs=this.selected.filter(r=>openExchanges.has(freshReferenceExchange(r)));
       for(const r of refs)this.feed.pairReference(r.id,freshReferenceSpotId(r));
-      // Eight simultaneous option slices (<=160 books) plus <=40 reference interests fit this consumer's 250-token cap.
-      const bookWindow=freshDiscoveryWindow(refs,Math.floor(now/FRESH_BOOK_ROTATION_MS),20).selected,bookRefs:FreshReference[]=[];
-      for(const market of FRESH_MARKETS){const ref=bookWindow.find(r=>r.market===market);if(ref)bookRefs.push(ref);}
-      for(const ref of bookWindow)if(bookRefs.length<8&&!bookRefs.some(r=>r.id===ref.id))bookRefs.push(ref);
-      const slices=bookRefs.map(ref=>({ref,options:freshReferenceOptions(this.master,ref,day,this.feed.underlying(freshReferenceSpotId(ref))?.price??null)}));
-      // MCX depth unit inference needs each MCX book's verified lot (feed.ts registerMcxDepth).
-      for(const {ref,options} of slices)if(ref.market==='MCX_VERIFIED_FUTURES_OPTIONS')for(const x of options){const u=freshContractUnits(x);if(u)this.feed.registerMcxDepth(`${FO_SEGMENT.MCX}:${x.token}`,ref.name,u.lotQuantity);}
-      state.mcxDepthUnits=this.feed.mcxDepthModes();
-      this.shortlist=[...refs.flatMap(r=>[{token:r.signal.token,exchange:freshReferenceExchange(r),exchangeSegment:r.signal.segment==='FO'?FO_SEGMENT[freshReferenceExchange(r)]:r.spot.exchangeSegment},{token:r.spot.token,exchange:freshReferenceExchange(r),exchangeSegment:r.spot.exchangeSegment}]),...slices.flatMap(({ref,options})=>options.map(x=>({token:x.token,exchange:freshReferenceExchange(ref),exchangeSegment:FO_SEGMENT[freshReferenceExchange(ref)]})))];
-      this.positions=await this.store.recover();this.monitor.watch(this.positions);await this.syncTargets();
+      // Option books (6 Nov): index option books (NSE + BSE, nearest tradable expiry) stay subscribed all session;
+      // stocks and MCX share the remaining slots in a 2-minute rotation, a reference with a fresh setup first.
+      for(const [id,until] of this.urgentBooks)if(until<=now)this.urgentBooks.delete(id);
+      let slices:{ref:FreshReference;options:Instrument[]}[]=[];
+      const planBooks=async()=>{
+        const optionsFor=(ref:FreshReference,expiryLimit:number)=>freshReferenceOptions(this.master,ref,day,this.feed.underlying(freshReferenceSpotId(ref))?.price??null,expiryLimit);
+        const refTokens=new Set(refs.flatMap(r=>[r.id,freshReferenceSpotId(r)])).size,heldTokens=this.positions.length*2;
+        const pinned=refs.filter(r=>FRESH_PINNED_BOOK_MARKETS.has(r.market)).map(ref=>({ref,options:optionsFor(ref,1)}));
+        const pinnedTokens=pinned.reduce((n,s)=>n+s.options.length,0),slots=Math.max(0,Math.min(FRESH_MAX_ROTATING_BOOK_SLICES,Math.floor((FRESH_BOOK_TOKEN_BUDGET-refTokens-heldTokens-pinnedTokens)/20)));
+        slices=[...pinned,...freshRotatingBookRefs(refs,Math.floor(now/FRESH_BOOK_ROTATION_MS),new Set(this.urgentBooks.keys()),slots).map(ref=>({ref,options:optionsFor(ref,2)}))];
+        // MCX depth unit inference needs each MCX book's verified lot (feed.ts registerMcxDepth).
+        for(const {ref,options} of slices)if(ref.market==='MCX_VERIFIED_FUTURES_OPTIONS')for(const x of options){const u=freshContractUnits(x);if(u)this.feed.registerMcxDepth(`${FO_SEGMENT.MCX}:${x.token}`,ref.name,u.lotQuantity);}
+        state.mcxDepthUnits=this.feed.mcxDepthModes();
+        this.shortlist=[...refs.flatMap(r=>[{token:r.signal.token,exchange:freshReferenceExchange(r),exchangeSegment:r.signal.segment==='FO'?FO_SEGMENT[freshReferenceExchange(r)]:r.spot.exchangeSegment},{token:r.spot.token,exchange:freshReferenceExchange(r),exchangeSegment:r.spot.exchangeSegment}]),...slices.flatMap(({ref,options})=>options.map(x=>({token:x.token,exchange:freshReferenceExchange(ref),exchangeSegment:FO_SEGMENT[freshReferenceExchange(ref)]})))];
+        await this.syncTargets();
+      };
+      this.positions=await this.store.recover();this.monitor.watch(this.positions);await planBooks();
+      this.watchFeed();
       if(now-this.lagReadAt>=60000){state.tickLag=this.feed.tickLagStats();this.lagReadAt=now;}
       state.referenceContracts=refs.length;state.optionContracts=slices.reduce((n,s)=>n+s.options.length,0);state.sourceEpoch=this.feed.sourceEpoch;
       const legacyOpen=await this.legacyRisk(),monitorHealthy=this.monitor.healthy;
@@ -219,8 +252,18 @@ export class FreshPaperWorker {
         if(!h.newClose){await auditFreshEvaluation(h.context,evaluateFreshStrategies(h.context));state.lastDecision='HISTORY_SEED_NO_RETROACTIVE_ENTRY';continue;}
         const currentExpected=session.open+(Math.floor((Date.now()-session.open)/300000)-1)*300000;
         if(h.lastSeen!==currentExpected){state.lastDecision='MISSING_CURRENT_CLOSED_BAR';continue;}
-        state.barCallbacks++;const blockers=blockersFor(ref);
-        if(state.entriesArmed&&blockers.length===0)state.lastDecision=await this.runtime.onClosedReference(h.context);else{await auditFreshEvaluation(h.context,evaluateFreshStrategies(h.context));state.lastDecision=blockers[0]??'BLOCKED_REQUIRED_CAPABILITY';}
+        state.barCallbacks++;let blockers=blockersFor(ref),urgent=false;
+        // A setup on a reference whose books are not subscribed right now (stocks / MCX rotate): subscribe them at once
+        // and let the candidate's entry window (FRESH_ENTRY_WINDOW_MS) wait for the first books, instead of losing it.
+        if(blockers.length===1&&blockers[0]==='WAITING_FOR_OBSERVED_BOOKS'&&evaluateFreshStrategies(h.context).candidates.length){
+          this.urgentBooks.set(ref.id,Date.now()+FRESH_URGENT_BOOK_MS);await planBooks();urgent=true;
+          blockers=blockersFor(ref).filter(code=>code!=='WAITING_FOR_OBSERVED_BOOKS');
+          logger.info({event:'freshUrgentBooks',instrument:ref.id,name:ref.name,market:ref.market,subscribed:slices.some(x=>x.ref.id===ref.id),blockers},'Fresh-start: setup without observed books; its option books subscribed for the entry window');
+        }
+        if((state.entriesArmed||urgent)&&blockers.length===0){
+          // A queue deadline (evaluation started > 2 s after the context) must not read as an adapter failure.
+          try{state.lastDecision=await this.runtime.onClosedReference(h.context);}catch(error){state.lastDecision=error instanceof Error&&/^[A-Z_]+$/.test(error.message)?error.message:'EVALUATION_FAILED';await auditFreshEvaluation(h.context,evaluateFreshStrategies(h.context));}
+        }else{await auditFreshEvaluation(h.context,evaluateFreshStrategies(h.context));state.lastDecision=blockers[0]??'BLOCKED_REQUIRED_CAPABILITY';}
       }
       state.discovery.historyCache=this.histories.size;state.status=state.entriesArmed?'FORWARD_PAPER_RUNNING':'PAPER_ARMED_DATA_BLOCKED';state.error=null;
     }catch(error){if(this.stopped)return;state.entriesArmed=false;state.status='BLOCKED_ADAPTER';state.error=error instanceof Error&&/^BLOCKED_[A-Z_]+$/.test(error.message)?error.message:'ADAPTER_INPUT_OR_STORAGE_UNAVAILABLE';state.entryBlockers=[state.error];for(const m of state.marketReadiness){m.eligibleReferences=0;m.blockers=[...new Set([...m.blockers,state.error])];}}finally{this.scanning=false;if(!this.stopped){this.operationalReporter.report(state);const t=Date.now();if(t-this.summaryAt>=FRESH_DECISION_SUMMARY_MS){this.summaryAt=t;void logFreshDecisionSummary(t);this.logMemory();}}}
