@@ -114,7 +114,7 @@ export class FreshSharedFeed {
       const prior=this.basis.get(signalId);if(!prior||f.exchangeTimestamp>=prior.at)this.basis.set(signalId,{value:f.ltp-s.ltp,at:f.exchangeTimestamp});
     }
     /** Per exchange segment since the last read: ticks seen, accepted 2-10 s late, dropped (> 10 s late or clock ahead), max lag. */
-    private lag=new Map<string,{ticks:number;late:number;dropped:number;skewed:number;maxLagMs:number}>();
+    private lag=new Map<string,{ticks:number;late:number;dropped:number;skewed:number;maxLagMs:number;droppedLagMs?:[number,number];droppedAheadMs?:[number,number];clockMs?:number}>();
     /** Entry counts of the in-memory maps (memory accounting, 5 Nov cost review). */
     sizes(){let quotes=0,history=0;for(const v of this.books.values())quotes+=v.length;for(const v of this.referenceHistory.values())history+=v.length;return {targets:this.targets.size,books:this.books.size,quotes,referenceTicks:history,latest:this.latest.size,pairs:this.pairs.size};}
     tickLagStats(){const out=Object.fromEntries(this.lag);this.lag.clear();return out;}
@@ -124,7 +124,9 @@ export class FreshSharedFeed {
             if (r.exchangeTimestamp == null || ![r.exchangeTimestamp, r.timestamp, r.ltp].every(Number.isFinite) || r.ltp <= 0 || r.timestamp > this.now()) continue;
             const st=this.lag.get(r.exchangeSegment??'UNKNOWN')??{ticks:0,late:0,dropped:0,skewed:0,maxLagMs:0};this.lag.set(r.exchangeSegment??'UNKNOWN',st);st.ticks++;
             const ahead=r.exchangeTimestamp-r.timestamp,lagMs=this.now()-r.exchangeTimestamp;
-            if(ahead>FRESH_TICK_CLOCK_SKEW_MS||lagMs>FRESH_TICK_MAX_LAG_MS){st.dropped++;continue;}
+            if(ahead>FRESH_TICK_CLOCK_SKEW_MS||lagMs>FRESH_TICK_MAX_LAG_MS){
+              // The range of what a dropped tick looked like (6 Nov: every tick dropped after a restart, cause unknown).
+              st.dropped++;st.droppedLagMs=[Math.min(st.droppedLagMs?.[0]??lagMs,lagMs),Math.max(st.droppedLagMs?.[1]??lagMs,lagMs)];st.droppedAheadMs=[Math.min(st.droppedAheadMs?.[0]??ahead,ahead),Math.max(st.droppedAheadMs?.[1]??ahead,ahead)];st.clockMs=this.now()-r.timestamp;continue;}
             if(ahead>0)st.skewed++;else if(lagMs>2000)st.late++;
             st.maxLagMs=Math.max(st.maxLagMs,lagMs);
             ticks.push(ahead>0?{...r,exchangeTimestamp:r.timestamp}:r);
