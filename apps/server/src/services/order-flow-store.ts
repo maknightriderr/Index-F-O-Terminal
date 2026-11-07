@@ -9,7 +9,7 @@
 // ============================================================
 
 import { gzipSync } from 'node:zlib';
-import { buildFootprint, unavailableFootprint, flowPriceStep, FLOW_MAX_UNRECONCILED_SHARE, ORDER_FLOW_VERSION, type DeltaMode, type FlowTrade, type FootprintBar } from '@fno/analytics';
+import { buildFootprint, unavailableFootprint, flowPriceStep, istSession, type VwapSums, FLOW_MAX_UNRECONCILED_SHARE, ORDER_FLOW_VERSION, type DeltaMode, type FlowTrade, type FootprintBar } from '@fno/analytics';
 import { isMarketOpen, type Exchange } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
@@ -40,6 +40,8 @@ interface SymbolFlow {
   footprints: Map<number, FootprintBar>;
   /** The newest bar already finalized (written). */
   lastClosed: number | null;
+  /** Dhan engine v2: trade-based session VWAP sums of the current contract (reset per IST session / contract). */
+  vwap?: { session: string; instrument: string | null; sums: VwapSums; unreconciled: number };
 }
 
 const flows = new Map<string, SymbolFlow>();
@@ -79,7 +81,30 @@ export function recordFlowTrade(symbol: string, trade: FlowTrade): void {
   if (!f || !(trade.qty > 0)) return;
   if (f.priceStep == null) f.priceStep = flowPriceStep(trade.price, f.tickSize);
   f.trades.push(trade);
+  sessionVwap(f, trade.time).sums.pv += trade.price * trade.qty;
+  f.vwap!.sums.v += trade.qty;
+  f.vwap!.sums.p2v += trade.price * trade.price * trade.qty;
   recordFiveMinute(symbol, f.instrument, trade);
+}
+
+function sessionVwap(f: SymbolFlow, time: number): NonNullable<SymbolFlow['vwap']> {
+  const session = istSession(time);
+  if (!f.vwap || f.vwap.session !== session || f.vwap.instrument !== f.instrument) f.vwap = { session, instrument: f.instrument, sums: { pv: 0, v: 0, p2v: 0 }, unreconciled: 0 };
+  return f.vwap;
+}
+
+/** Engine v2 read: one contract's state for the session of `now` (closed footprints of that session + VWAP sums). */
+export function flowSessionState(symbol: string, now: number): { exchange: string; instrument: string | null; kind: SymbolFlow['kind']; tickSize: number | null; footprints: FootprintBar[]; vwap: { sums: VwapSums; unreconciled: number } | null } | null {
+  const f = flows.get(symbol);
+  if (!f) return null;
+  const session = istSession(now);
+  const footprints = [...f.footprints.values()].filter((fp) => istSession(fp.barTime) === session && fp.sourceInstrument === f.instrument).sort((a, b) => a.barTime - b.barTime);
+  const v = f.vwap && f.vwap.session === session && f.vwap.instrument === f.instrument ? { sums: { ...f.vwap.sums }, unreconciled: f.vwap.unreconciled } : null;
+  return { exchange: f.exchange, instrument: f.instrument, kind: f.kind, tickSize: f.tickSize, footprints, vwap: v };
+}
+
+export function flowSymbols(): string[] {
+  return [...flows.keys()];
 }
 
 /**
@@ -90,6 +115,7 @@ export function recordFlowUnreconciled(symbol: string, time: number, qty: number
   const f = flows.get(symbol);
   if (!f || !(qty > 0) || !Number.isFinite(time)) return;
   f.unreconciled.push({ time, qty });
+  sessionVwap(f, time).unreconciled += qty;
   const s = five.get(symbol), start = Math.floor(time / FLOW_FIVE_MS) * FLOW_FIVE_MS;
   if (!s || s.instrument !== f.instrument) five.set(symbol, { instrument: f.instrument, bars: new Map() });
   const series = five.get(symbol)!;

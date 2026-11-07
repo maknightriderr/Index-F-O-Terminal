@@ -1,6 +1,9 @@
 # 3. Detailed Implementation Plan (with resource estimates)
 
-Status: **PROPOSAL — not approved. No implementation starts until the owner approves this plan and answers §3.1.**
+Status: **APPROVED (7 Nov)** — D1 hybrid, D2 record-only risk flags, D3 options paper, D4 existing strategies keep
+running, D5 Expiry Gamma kept as a tagged module, D6 network allowed, D7 storage with nightly cleanup.
+Progress: P1 merged (data integrity, recording). P2 (engines, `packages/analytics/src/dhan-engine/`, read-only snapshot
+at `GET /api/diagnostics/order-flow/engine[?symbol=]`) in review. P3–P6 next.
 All thresholds below are the master prompt's initial research values, configurable and versioned. None is claimed
 profitable. Execution stays paper-only / human-approved (Part 23).
 
