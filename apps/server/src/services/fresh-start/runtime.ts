@@ -76,6 +76,28 @@ export class FreshRuntime {
             return 'NO_ELIGIBLE_ENTRY';
         });
     }
+    /**
+     * Dhan engine v2 (phase 4): one externally decided candidate (a DHAN_* setup SIGNAL) priced and entered through the
+     * same adapter and store as every fresh-start entry: same arming, books, fees, IV filter, account lock, record-only
+     * risk flags. Returns the decision code.
+     */
+    onExternalCandidate(c: FreshCandidate): Promise<string> {
+        if (!this.enabled())
+            return Promise.resolve('PAPER_DISABLED');
+        if (!this.recovered || !this.adapter?.qualified || !this.adapter.prepare)
+            return Promise.resolve('BLOCKED_QUALIFIED_ADAPTER');
+        const adapter = this.adapter;
+        return this.evaluations.add(Date.now() + 2000, async () => {
+            const plan = await this.builds.add(c.expiresAt, () => adapter.prepare!(c));
+            if (!plan) return 'NO_ELIGIBLE_ENTRY';
+            const request = await plan.finish();
+            if (!request) return 'NO_ELIGIBLE_ENTRY';
+            const result = await this.store.enter({ ...request, now: Date.now() });
+            if (result.ok) { await adapter.watch(await this.store.recover(), this.store.observe.bind(this.store)); return 'FILLED'; }
+            await adapter.decision?.(c, result.code);
+            return result.code;
+        });
+    }
 }
 export const freshRuntime = new FreshRuntime();
 let productionWorker:FreshPaperWorker|null=null;

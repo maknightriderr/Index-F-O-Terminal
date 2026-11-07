@@ -206,11 +206,13 @@ export interface FreshContext {
     /** 2.0: the last closed 15-minute footprint of the flow contract, or null when unavailable. */
     footprint15?: FreshFootprintRead | null;
 }
+/** Dhan engine v2 setups paper-traded through the same adapter / store (phase 4). Not evaluated by this module. */
+export type FreshExternalStrategy = 'DHAN_A_SWEEP_ABSORPTION' | 'DHAN_B_IMBALANCE_BREAKOUT' | 'DHAN_C_FAILED_AUCTION_CVD' | 'DHAN_D_VWAP_PROFILE_REJECTION';
 export interface FreshCandidate {
     id: string;
     parentId: string;
     version: string;
-    strategy: FreshStrategy;
+    strategy: FreshStrategy | FreshExternalStrategy;
     direction: FreshDirection;
     instrument: string;
     sourceEpoch: string;

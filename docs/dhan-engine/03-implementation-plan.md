@@ -5,7 +5,11 @@ running, D5 Expiry Gamma kept as a tagged module, D6 network allowed, D7 storage
 Progress: P1 merged (data integrity, recording). P2 merged (engines, `packages/analytics/src/dhan-engine/`, snapshot at
 `GET /api/diagnostics/order-flow/engine[?symbol=]`). P3 in review: setups A–D + 10-point score + mandatory gates +
 no-trade engine (`setups.ts`) and the tagged expiry-gamma module (`expiry-gamma.ts`), recorded SHADOW-only in
-`dhan_engine_signals` (`GET /api/diagnostics/order-flow/engine/signals[?date=]`). P4–P6 next.
+`dhan_engine_signals` (`GET /api/diagnostics/order-flow/engine/signals[?date=]`). P3 merged.
+P4: a DHAN_* SIGNAL becomes an options PAPER candidate through the fresh-start adapter and store (same arming, books,
+fees, IV filter, record-only risk flags); the futures plan is translated to the paper reference by the current basis
+(recorded). The paper decision is written on the signal row. Expiry gamma stays shadow: its rule defines no stop, and
+paper sizing needs one (owner decision pending). `DHAN_ENGINE_PAPER=false` switches paper entries off. P5–P6 next.
 
 P3 known limits (recorded, not hidden):
 - A–D decide on 15-minute footprint closes (Part 11 asks for 5-minute confirmation; 5-minute footprints with price

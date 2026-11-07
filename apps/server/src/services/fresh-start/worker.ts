@@ -1,6 +1,8 @@
 import {randomUUID} from 'node:crypto';
-import { recordGammaChain } from '../dhan-engine-shadow.js';
-import { DHAN_ENGINE_SHADOW } from '../../config/order-flow-flags.js';
+import { recordGammaChain, setDhanPaperHandler, type DhanPaperRequest } from '../dhan-engine-shadow.js';
+import { DHAN_ENGINE_SHADOW, DHAN_ENGINE_PAPER } from '../../config/order-flow-flags.js';
+import { flowLastTrade } from '../order-flow-store.js';
+import { dhanPaperCandidate } from '@fno/analytics';
 import {logger} from '../../lib/logger.js';
 import {getSessionWindow,HOLIDAY_CALENDAR_YEARS,FO_SEGMENT,CM_SEGMENT,type Exchange,type Instrument} from '@fno/shared';
 import {evaluateFreshStrategies,FRESH_SHADOW_STRATEGIES,type FreshBar} from '@fno/analytics';
@@ -136,6 +138,8 @@ export class FreshPaperWorker {
   start(){
     state.entriesArmed=false;state.recovered=false;state.monitorRunning=false;state.scannerRunning=false;state.status='RECOVERING_POSITIONS';state.entryBlockers=['BLOCKED_POSITION_RECOVERY'];
     this.feed.start();this.removeObservation=this.feed.onObservation(()=>{if(this.ready)this.pollMonitor();});
+    // Dhan engine v2 phase 4: DHAN_* setup signals are priced and entered through this worker's adapter and store.
+    if(DHAN_ENGINE_PAPER)setDhanPaperHandler(r=>this.dhanPaper(r));
     // Registered synchronously so the service supervisor owns every timer, including during recovery.
     this.timers=[setInterval(()=>{if(this.ready)this.pollMonitor();},250),setInterval(()=>void this.scan(),1000)];
     return this.bootstrap();
@@ -154,7 +158,20 @@ export class FreshPaperWorker {
     void this.scan();
   }
   private pollMonitor(){this.monitor.tick();const held=this.monitor.summary();state.heldPositions=held.open;state.oldestExitPendingAt=held.oldestExitPendingAt;state.marks=this.monitor.marks();if(!this.monitor.healthy){state.entriesArmed=false;if(!state.entryBlockers.includes('BLOCKED_EXIT_PERSISTENCE'))state.entryBlockers.push('BLOCKED_EXIT_PERSISTENCE');}}
-  stop(){this.stopped=true;this.ready=false;for(const t of this.timers)clearInterval(t);this.removeObservation?.();this.feed.close();state.entriesArmed=false;state.monitorRunning=false;state.scannerRunning=false;}
+  /** Dhan engine v2 phase 4: a DHAN_* SIGNAL on a futures contract -> a candidate on the matching paper reference. */
+  private async dhanPaper(r:DhanPaperRequest):Promise<{decision:string;candidateId:string|null}>{
+    if(!this.ready||this.stopped)return {decision:'PAPER_WORKER_NOT_READY',candidateId:null};
+    const ref=[...this.refs.values()].find(x=>x.name===r.symbol&&(x.market==='NSE_INDEX_OPTIONS'||x.market==='NSE_STOCK_OPTIONS'||x.market==='BSE_VERIFIED_OPTIONS'||x.market==='MCX_VERIFIED_FUTURES_OPTIONS'));
+    if(!ref)return {decision:'DHAN_NO_PAPER_REFERENCE',candidateId:null};
+    const signal=this.feed.underlying(ref.id),futures=flowLastTrade(r.symbol),now=Date.now(),day=freshIstDay(now),session=getSessionWindow(freshReferenceExchange(ref),day);
+    if(!signal)return {decision:'DHAN_REFERENCE_NOT_SUBSCRIBED',candidateId:null};
+    if(!futures)return {decision:'DHAN_PRICE_UNAVAILABLE',candidateId:null};
+    if(!session)return {decision:'DHAN_NO_SESSION',candidateId:null};
+    const built=dhanPaperCandidate({symbol:r.symbol,result:r.result,barTime:r.barTime,decidedAt:r.decidedAt,atr:r.atr,futures,reference:{id:ref.id,sourceEpoch:this.feed.sourceEpoch,price:signal.price,at:signal.at,kind:ref.signal.segment==='CM'?'SPOT':'FUTURES'},session:day,sessionClose:session.close,now});
+    if(!built.ok)return {decision:built.code,candidateId:null};
+    return {decision:await this.runtime.onExternalCandidate(built.candidate),candidateId:built.candidate.id};
+  }
+  stop(){setDhanPaperHandler(null);this.stopped=true;this.ready=false;for(const t of this.timers)clearInterval(t);this.removeObservation?.();this.feed.close();state.entriesArmed=false;state.monitorRunning=false;state.scannerRunning=false;}
   private async legacyRisk(){try{const [r]=await sql`SELECT count(*)::int AS n FROM signals WHERE signal_type='TRADE_SETUP' AND inputs->>'outcome' IS NULL AND coalesce(inputs->>'voided','')<>'true'`;if(r.n>0)return true;for(const key of await scanKeys('trade_setup:*')){const raw=await redis.get(key);if(!raw)continue;const value=JSON.parse(raw);if(!value||typeof value!=='object'||typeof value.available!=='boolean'||value.available)return true;}return false;}catch{return true;}}
   /** How many of these tokens no other client holds: releasing them frees shared headroom (a shared token does not). */
   private exclusiveOwn(targets:readonly SubscriptionTarget[]){return this.subscriptions.exclusiveCount(this.feedClientId,targets);}

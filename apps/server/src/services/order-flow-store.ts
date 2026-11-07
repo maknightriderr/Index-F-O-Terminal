@@ -42,6 +42,8 @@ interface SymbolFlow {
   lastClosed: number | null;
   /** Dhan engine v2: trade-based session VWAP sums of the current contract (reset per IST session / contract). */
   vwap?: { session: string; instrument: string | null; sums: VwapSums; unreconciled: number };
+  /** Engine v2 phase 4: the latest observed trade of the current contract. */
+  lastTrade?: { price: number; at: number };
 }
 
 const flows = new Map<string, SymbolFlow>();
@@ -64,6 +66,7 @@ export function registerFlowSymbol(symbol: string, args: { exchange: string; ins
       f.unreconciled = [];
       f.priceStep = ORDER_FLOW_PRICE_STEP[symbol] ?? null;
       f.lastClosed = flowBarStart(args.startedAt);
+      f.lastTrade = undefined;
     }
     f.kind = args.kind ?? f.kind;
     f.tickSize = args.tickSize ?? f.tickSize;
@@ -81,6 +84,7 @@ export function recordFlowTrade(symbol: string, trade: FlowTrade): void {
   if (!f || !(trade.qty > 0)) return;
   if (f.priceStep == null) f.priceStep = flowPriceStep(trade.price, f.tickSize);
   f.trades.push(trade);
+  if (!f.lastTrade || trade.time >= f.lastTrade.at) f.lastTrade = { price: trade.price, at: trade.time };
   sessionVwap(f, trade.time).sums.pv += trade.price * trade.qty;
   f.vwap!.sums.v += trade.qty;
   f.vwap!.sums.p2v += trade.price * trade.price * trade.qty;
@@ -109,6 +113,11 @@ export function flowContractBars(symbol: string): { exchange: string; instrument
   if (!f) return null;
   const footprints = [...f.footprints.values()].filter((fp) => fp.sourceInstrument === f.instrument).sort((a, b) => a.barTime - b.barTime);
   return { exchange: f.exchange, instrument: f.instrument, kind: f.kind, tickSize: f.tickSize, lastClosed: f.lastClosed, footprints };
+}
+
+/** The latest observed trade of the symbol's current contract, or null. */
+export function flowLastTrade(symbol: string): { price: number; at: number } | null {
+  return flows.get(symbol)?.lastTrade ?? null;
 }
 
 export function flowSymbols(): string[] {
