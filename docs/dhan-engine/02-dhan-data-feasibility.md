@@ -1,26 +1,42 @@
 # 2. DhanHQ Data Availability and Footprint Feasibility Report
 
-**Source of facts.** `dhanhq.co` is not reachable from the audit session (it is not on the session's allowed network
-domains), so the official docs could not be re-read live. Facts below come from (a) the repo's working Dhan
-integration, which was written against the v2 docs and runs in production, and (b) the limits stated in the master
-prompt. Every item marked **REVALIDATE** must be checked against https://dhanhq.co/docs/v2/ before implementation.
-Nothing here is invented: where something is unknown it says so.
+**Source of facts.** Re-verified on 7 Nov 2026 against the official docs (https://dhanhq.co/docs/v2/: live market
+feed, annexure, rate limits, historical data, option chain, expired options data, full market depth, market quote,
+instruments) and Dhan's live instrument master (`api-scrip-master.csv`), after `dhanhq.co` / `images.dhan.co` were
+allowed in the session's network. Items still marked **REVALIDATE** could not be confirmed from those pages.
 
----
+### Verified facts (7 Nov)
+
+| Fact | Value (official docs / master) |
+|---|---|
+| Live feed connections | up to **5 per user**, **5,000 instruments per connection**, **100 instruments per subscribe message** |
+| Feed nature | Docs: "tick-by-tick event based data" (reconciliation in P1 measures how complete it is in practice) |
+| Keep-alive | Server pings every **10 s**; no pong for **> 40 s** closes the connection (the `ws` library auto-pongs) |
+| Disconnect codes | 805 connection limit exceeded · 806 Data APIs not subscribed · 807 token expired · 808 auth failed (client id) · 809 token invalid |
+| Feed response codes | 1 index · 2 ticker · 3 market depth · 4 quote · 5 OI · 6 prev close · 7 market status · 8 full · 50 disconnect |
+| Exchange segments | IDX_I 0 · NSE_EQ 1 · NSE_FNO 2 · NSE_CURRENCY 3 · BSE_EQ 4 · MCX_COMM 5 · BSE_CURRENCY 7 · **BSE_FNO 8** |
+| LTQ field | **int16** (2 bytes) in QUOTE / FULL packets: overflow guard required |
+| Rate limits | Data APIs **5/s, 100,000/day**; Quote APIs **1/s**; Non-trading 20/s; Order APIs 10/s (not used) |
+| Market quote | up to **1,000 instruments per request**, 1 request/s |
+| Option chain | **one unique request every 3 s** (different underlyings/expiries can be fetched concurrently within that) |
+| Intraday history | OHLC + volume + OI, **1/5/15/25/60 min**, **last 5 years**, **≤ 90 days per request** |
+| Expired options | minute-level OHLC, IV, volume, OI, spot; by strike **relative to spot** (ATM±10 index near expiry, ATM±3 others); **≤ 30 days per call**; last 5 years |
+| Full market depth | 20-level (≤ 50 instruments/connection) and 200-level; **only NSE equity and derivatives** (no BSE, no MCX) |
+| Instrument master | `SEM_TICK_SIZE` is in **paise** (NIFTY fut 10.0000 = ₹0.10, SENSEX fut 5.0000 = ₹0.05, GOLD 100.0000 = ₹1); `SEM_LOT_UNITS` = lot; ~220 NSE stock futures (667 rows, 3 expiries); BSE SENSEX/BANKEX futures (BSE,D); MCX COPPER/ZINC/ALUMINIUM/LEAD present |
 
 ## 2.1 What each Dhan source provides
 
 | Source | Provides | Confirmed by | Limits |
 |---|---|---|---|
-| Live feed, FULL packet | LTP, LTQ (int16), LTT (epoch s), ATP, cumulative day volume, total buy/sell qty, OI, high/low OI, OHLC, **5 levels of depth** (qty, orders, price) | Parser in production (`dhan-feed-packets.ts`) | 5 connections/user, 5,000 instruments/connection, 100 per subscribe message (prompt; **REVALIDATE**) |
+| Live feed, FULL packet | LTP, LTQ (int16), LTT (epoch s), ATP, cumulative day volume, total buy/sell qty, OI, high/low OI, OHLC, **5 levels of depth** (qty, orders, price) | Parser in production + docs | 5 connections/user, 5,000 instruments/connection, 100 per subscribe message (verified) |
 | Live feed, QUOTE | LTP, LTQ, LTT, ATP, volume, buy/sell qty, OHLC (no depth, no OI) | Parser | same |
 | Live feed, TICKER | LTP, LTT | Parser | same |
-| Full market depth (20 / 200 level) | Deeper book | **Not used in the repo** | Segments and availability **REVALIDATE** |
+| Full market depth (20 / 200 level) | Deeper book | Not used in the repo | NSE equity + derivatives only; 20-level ≤ 50 instruments/connection (verified) |
 | Market quote REST | Snapshot quotes | `providers/dhan/quotes.ts` | 1 call/s, ≤ 1,000 instruments |
-| Intraday historical | OHLCV + OI candles, 1/5/15/25/60 min | `providers/dhan/history.ts` | ≤ 90 days per call; data APIs 5/s; how far back **REVALIDATE** |
+| Intraday historical | OHLCV + OI candles, 1/5/15/25/60 min | `providers/dhan/history.ts` | ≤ 90 days per call; 5 years back; data APIs 5/s (verified) |
 | Daily historical | Daily OHLCV | not used yet | **REVALIDATE** |
 | Option chain | Per-strike OI, volume, IV, Greeks, LTP/bid/ask for an underlying + expiry | `providers/dhan/greeks.ts` (indices) | 1 unique request / 3 s |
-| Expired options data | Historical premiums of expired contracts | **not used yet** | Granularity / fields **REVALIDATE** |
+| Expired options data | Minute OHLC, IV, volume, OI, spot by relative strike | not used yet | ≤ 30 days per call (verified) |
 | Instrument master (CSV) | Security id, segment, symbol, expiry, strike, option type, lot size, tick size | `resolveNearestFutures` (one download/day) | One download/day is enough |
 
 ## 2.2 Segment coverage
@@ -28,7 +44,7 @@ Nothing here is invented: where something is unknown it says so.
 | Market | Dhan feed today | Feasible? |
 |---|---|---|
 | NSE index futures (NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY) | ✅ subscribed | ✅ |
-| BSE index futures (SENSEX, BANKEX) | ❌ not wired (only NSE_FNO=2, MCX_COMM=5 codes in code) | Segment support **REVALIDATE**. Even if supported, BSE index **futures** trade thinly, so an estimated footprint may be too sparse to be meaningful. Needs a liquidity measurement before any strategy uses it. |
+| BSE index futures (SENSEX, BANKEX) | ❌ not wired yet | ✅ BSE_FNO = 8 (verified); contracts in the master. BSE index **futures** trade thinly, so the footprint may be too sparse; P1 measures liquidity before any setup uses it. |
 | MCX (GOLD, SILVER, CRUDEOIL, NATURALGAS + minis) | ✅ 6 subscribed | ✅; GOLDM, SILVERM, COPPER, ZINC, ALUMINIUM, LEAD can be added (same segment) |
 | NSE stock futures (~200) | ❌ | ✅ within one connection's 5,000-instrument limit. Liquidity varies widely; many are too thin for a footprint. |
 | Spot indices | not on Dhan feed (Angel provides) | Reference levels only. A footprint is never built from a spot index (no traded volume). |
@@ -62,8 +78,8 @@ Nothing here is invented: where something is unknown it says so.
 6. **Tick size.** The new footprint must bucket by the instrument's tick size (from the master) or explicit multi-tick
    rows per instrument; a native-tick ladder on NIFTY futures (tick 0.05–0.10) is too granular to read, so multi-tick
    rows must be configured and versioned.
-7. **LTQ is int16** in the documented layout. Large single prints (> 32,767 units) would overflow; **REVALIDATE** the
-   field width and add an overflow guard.
+7. **LTQ is int16** (verified). A single print above 32,767 units would overflow (read negative): the reconciler treats
+   a negative / zero LTQ as unknown and books the volume as unreconciled.
 8. **Time stamps.** LTT is in seconds; bar assignment today uses receive time. Packet ordering/sequence numbers are
    not provided in FULL packets (per the parser). Sequence-quality tracking must rely on LTT monotonicity and volume
    monotonicity.
@@ -87,7 +103,7 @@ Nothing here is invented: where something is unknown it says so.
 | Market structure, VWAP (candle-based, labelled), RVOL, OI, option chain, Greeks/IV | ✅ backtestable on Dhan candles + chain | VERIFIED (exchange data) / approximation labelled |
 | Delta, CVD, footprint, imbalance, absorption, exhaustion, volume profile from trades | ✅ live, forward only | ESTIMATED |
 | Footprint-based setup statistics | ⏳ after recorded data accumulates | — |
-| 20-level depth features | ❓ | REVALIDATE availability |
+| 20-level depth features | NSE only, ≤ 50 instruments/connection | not planned for v1 |
 
 ## 2.6 Infrastructure impact of using Dhan more
 

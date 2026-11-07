@@ -76,7 +76,29 @@ export interface FootprintBar {
   high: number | null;
   low: number | null;
   close: number | null;
+  /** Dhan engine v2: volume the feed reported between packets that no observed trade explains (no price, no side). */
+  unreconciledVolume?: number | null;
+  /** True when unreconciled volume exceeds the allowed share: delta / imbalances are then withheld (null / 0). */
+  incomplete?: boolean;
+  /** The instrument tick and the price-row step the levels were bucketed with. */
+  tickSize?: number | null;
+  priceStep?: number | null;
 }
+
+/**
+ * Dhan engine v2 price rows: a multi-tick step of about 5 basis points of price, a whole number of ticks (at least one),
+ * so a ladder stays readable on any instrument (NIFTY fut tick 0.10 -> ~13 points; a Rs 300 stock tick 0.05 -> 0.15).
+ * Explicit, versioned rule (master prompt 4.4: native ticks or defined multi-tick rows, never one common increment).
+ */
+export const FLOW_ROW_BPS = 5;
+export function flowPriceStep(price: number, tick: number | null | undefined): number | null {
+  if (!(price > 0) || !(tick != null && tick > 0)) return null;
+  const ticks = Math.max(1, Math.round((price * FLOW_ROW_BPS) / 10000 / tick));
+  return Math.round(ticks * tick * 1e6) / 1e6;
+}
+
+/** A bar is INCOMPLETE above this share of unreconciled volume (of reconciled + unreconciled). */
+export const FLOW_MAX_UNRECONCILED_SHARE = 0.2;
 
 const bucket = (price: number, step: number) => Math.round(Math.round(price / step) * step * 1e6) / 1e6;
 

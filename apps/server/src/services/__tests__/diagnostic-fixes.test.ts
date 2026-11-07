@@ -198,7 +198,7 @@ describe('MCX order flow (Dhan MCX_COMM)', () => {
       { ExchangeSegment: 'MCX_COMM', SecurityId: '569900' },
       { ExchangeSegment: 'NSE_FNO', SecurityId: '48704' },
     ]);
-    expect(P.DHAN_SEGMENT_CODE).toEqual({ NSE_FNO: 2, MCX_COMM: 5 });
+    expect(P.DHAN_SEGMENT_CODE).toEqual({ NSE_FNO: 2, MCX_COMM: 5, BSE_FNO: 8 }); // Dhan v2 annexure (BSE_FNO added 7 Nov)
     expect(read('../dhan-feed.ts')).toMatch(/const ikey = `\$\{p\.header\.segment\}:\$\{p\.header\.securityId\}`;/);
   });
 });

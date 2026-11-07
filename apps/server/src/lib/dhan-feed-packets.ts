@@ -125,14 +125,24 @@ export function parseDhanFrame(frame: Buffer): DhanPacket[] {
   return out;
 }
 
-export type DhanSegment = 'NSE_FNO' | 'MCX_COMM';
-/** The packet header's numeric exchange segment for each subscription segment (Dhan v2). */
-export const DHAN_SEGMENT_CODE: Readonly<Record<DhanSegment, number>> = Object.freeze({ NSE_FNO: 2, MCX_COMM: 5 });
+export type DhanSegment = 'NSE_FNO' | 'MCX_COMM' | 'BSE_FNO';
+/** The packet header's numeric exchange segment for each subscription segment (Dhan v2 annexure: NSE_FNO 2, MCX_COMM 5, BSE_FNO 8). */
+export const DHAN_SEGMENT_CODE: Readonly<Record<DhanSegment, number>> = Object.freeze({ NSE_FNO: 2, MCX_COMM: 5, BSE_FNO: 8 });
+/** Dhan v2: at most 100 instruments per subscription message (and 5,000 per connection). */
+export const DHAN_MAX_INSTRUMENTS_PER_MESSAGE = 100;
+export const DHAN_MAX_INSTRUMENTS_PER_CONNECTION = 5000;
 
 /** The subscription request for FULL packets (plain ids = NSE F&O). */
 export function fullSubscription(instruments: ReadonlyArray<string | { securityId: string; segment: DhanSegment }>): string {
   const list = instruments.map((x) => (typeof x === 'string' ? { ExchangeSegment: 'NSE_FNO', SecurityId: x } : { ExchangeSegment: x.segment, SecurityId: x.securityId }));
   return JSON.stringify({ RequestCode: DHAN_REQUEST.FULL, InstrumentCount: list.length, InstrumentList: list });
+}
+
+/** FULL subscription messages for any number of instruments, at most DHAN_MAX_INSTRUMENTS_PER_MESSAGE each. */
+export function fullSubscriptions(instruments: ReadonlyArray<{ securityId: string; segment: DhanSegment }>): string[] {
+  const out: string[] = [];
+  for (let k = 0; k < instruments.length; k += DHAN_MAX_INSTRUMENTS_PER_MESSAGE) out.push(fullSubscription(instruments.slice(k, k + DHAN_MAX_INSTRUMENTS_PER_MESSAGE)));
+  return out;
 }
 
 /** The feed URL. The token is a query parameter per Dhan's API — never log the result. */
@@ -144,6 +154,65 @@ export function dhanFeedUrl(clientId: string, accessToken: string): string {
 export function resolveIndexFutures(csv: string, symbols: readonly string[], now: number): Record<string, { securityId: string; tradingSymbol: string; expiry: string }> {
   const r = resolveNearestFutures(csv, symbols.map((symbol) => ({ symbol, exchange: 'NSE' as const })), now);
   return Object.fromEntries(Object.entries(r).map(([s, v]) => [s, { securityId: v.securityId, tradingSymbol: v.tradingSymbol, expiry: v.expiry }]));
+}
+
+/** The underlying of a futures trading symbol: everything before "-<expiry>-FUT" (keeps BAJAJ-AUTO, M&M; CRUDEOIL ≠ CRUDEOILM). */
+export function futuresRoot(tradingSymbol: string | undefined): string | null {
+  const m = /^(.+)-[0-9A-Za-z]+-FUT$/.exec(tradingSymbol ?? '');
+  return m ? m[1] : null;
+}
+
+export type FlowKind = 'INDEX' | 'STOCK' | 'COMMODITY';
+export interface ResolvedFlowContract {
+  securityId: string;
+  tradingSymbol: string;
+  expiry: string;
+  segment: DhanSegment;
+  exchange: 'NSE' | 'BSE' | 'MCX';
+  kind: FlowKind;
+  /** Rupees (the master's SEM_TICK_SIZE is in paise: NIFTY fut 10.0000 = 0.10). Null when the master has none. */
+  tickSize: number | null;
+  /** SEM_LOT_UNITS as listed (contract lot in the exchange's units). */
+  lotSize: number | null;
+}
+
+/**
+ * Nearest unexpired future per wanted symbol from Dhan's instrument master (CSV text): NSE index (D, FUTIDX) and stock
+ * (D, FUTSTK) futures, BSE index futures (D, FUTIDX) and MCX commodity futures (M, FUTCOM). `allStocks` adds every
+ * NSE stock future's underlying. Tick and lot size come from the master, never hard-coded.
+ */
+export function resolveFlowContracts(
+  csv: string,
+  wants: ReadonlyArray<{ symbol: string; exchange: 'NSE' | 'BSE' | 'MCX' }>,
+  now: number,
+  opts: { allStocks?: boolean } = {}
+): Record<string, ResolvedFlowContract> {
+  const lines = csv.split(/\r?\n/);
+  const head = lines[0].split(',');
+  const col = (name: string) => head.indexOf(name);
+  const [ex, seg, id, inst, ts, exp, tick, lot] = ['SEM_EXM_EXCH_ID', 'SEM_SEGMENT', 'SEM_SMST_SECURITY_ID', 'SEM_INSTRUMENT_NAME', 'SEM_TRADING_SYMBOL', 'SEM_EXPIRY_DATE', 'SEM_TICK_SIZE', 'SEM_LOT_UNITS'].map(col);
+  if ([ex, seg, id, inst, ts, exp].some((c) => c < 0)) return {};
+  const wanted = new Map(wants.map((w) => [`${w.exchange}:${w.symbol}`, true]));
+  const best: Record<string, ResolvedFlowContract & { t: number }> = {};
+  for (let k = 1; k < lines.length; k++) {
+    const r = lines[k].split(',');
+    const kind: FlowKind | null =
+      r[seg] === 'D' && r[inst] === 'FUTIDX' && (r[ex] === 'NSE' || r[ex] === 'BSE') ? 'INDEX'
+      : r[seg] === 'D' && r[inst] === 'FUTSTK' && r[ex] === 'NSE' ? 'STOCK'
+      : r[seg] === 'M' && r[inst] === 'FUTCOM' && r[ex] === 'MCX' ? 'COMMODITY'
+      : null;
+    if (!kind) continue;
+    const exchange = r[ex] as 'NSE' | 'BSE' | 'MCX', sym = futuresRoot(r[ts]);
+    if (!sym || !(wanted.has(`${exchange}:${sym}`) || (opts.allStocks && kind === 'STOCK'))) continue;
+    const t = Date.parse(`${r[exp].replace(' ', 'T')}+05:30`);
+    if (!Number.isFinite(t) || t <= now) continue;
+    const tickPaise = tick >= 0 ? Number(r[tick]) : NaN, lotUnits = lot >= 0 ? Number(r[lot]) : NaN;
+    const key = sym;
+    if (best[key] && best[key].exchange !== exchange) continue; // one flow series per name (NSE first in the master order is not assumed)
+    if (!best[key] || t < best[key].t)
+      best[key] = { securityId: r[id], tradingSymbol: r[ts], expiry: r[exp], segment: exchange === 'MCX' ? 'MCX_COMM' : exchange === 'BSE' ? 'BSE_FNO' : 'NSE_FNO', exchange, kind, tickSize: Number.isFinite(tickPaise) && tickPaise > 0 ? Math.round(tickPaise * 100) / 10000 : null, lotSize: Number.isFinite(lotUnits) && lotUnits > 0 ? lotUnits : null, t };
+  }
+  return Object.fromEntries(Object.entries(best).map(([s, { t: _t, ...v }]) => [s, v]));
 }
 
 /**
@@ -168,7 +237,7 @@ export function resolveNearestFutures(
     const isNse = r[ex] === 'NSE' && r[seg] === 'D' && r[inst] === 'FUTIDX';
     const isMcx = r[ex] === 'MCX' && r[seg] === 'M' && r[inst] === 'FUTCOM';
     if (!isNse && !isMcx) continue;
-    const sym = r[ts]?.split('-')[0];
+    const sym = futuresRoot(r[ts]);
     if (!sym || wanted.get(sym) !== (isNse ? 'NSE' : 'MCX')) continue;
     const t = Date.parse(`${r[exp].replace(' ', 'T')}+05:30`);
     if (!Number.isFinite(t) || t <= now) continue;
