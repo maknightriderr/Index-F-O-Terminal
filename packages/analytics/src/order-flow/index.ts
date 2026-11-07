@@ -83,6 +83,9 @@ export interface FootprintBar {
   /** The instrument tick and the price-row step the levels were bucketed with. */
   tickSize?: number | null;
   priceStep?: number | null;
+  /** Dhan engine v2 (memory only): the bar's first trade price and its trade VWAP sums (Σpq, Σq, Σp²q). */
+  open?: number | null;
+  tradeSums?: { pv: number; v: number; p2v: number } | null;
 }
 
 /**

@@ -55,6 +55,7 @@ import { EVENT_ENGINE_VERSION } from '../config/trading-flags.js';
 import { shadowRulesReport, signalEngineMetrics } from '../services/signal-engine-metrics.js';
 import { orderFlowReport } from '../services/order-flow-metrics.js';
 import { dhanEngineSnapshot, dhanEngineSummary } from '../services/dhan-engine-state.js';
+import { dhanShadowSignals, dhanShadowStatus } from '../services/dhan-engine-shadow.js';
 import { replayFull } from '../services/full-replay.js';
 import { measurementReport } from '../services/measurement-report.js';
 import { gateValidationReport, logEvaluationFailure, portfolioRiskReport, scorecardReport, signalQualityReport } from '../services/evaluation-reports.js';
@@ -273,6 +274,17 @@ export function createDiagnosticsRoutes(): Router {
       res.json({ success: true, data: { note: SIMULATION_NOTE, ...(await orderFlowReport(parseQuery(req))) } });
     } catch (err: any) {
       logger.error({ error: err.message }, 'Signal diagnostics order-flow report failed');
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Dhan engine v2 (phase 3): shadow signals of setups A-D and expiry gamma for an IST day (default today). Recorded only.
+  router.get('/order-flow/engine/signals', async (req: Request, res: Response) => {
+    try {
+      const day = typeof req.query.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : new Date(Date.now() + 19_800_000).toISOString().slice(0, 10);
+      res.json({ success: true, data: { note: SIMULATION_NOTE, mode: 'SHADOW_ONLY', day, status: dhanShadowStatus(), signals: await dhanShadowSignals(day) } });
+    } catch (err: any) {
+      logger.error({ error: err.message }, 'Signal diagnostics order-flow engine signals failed');
       res.status(500).json({ success: false, error: err.message });
     }
   });

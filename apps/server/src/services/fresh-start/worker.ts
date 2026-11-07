@@ -1,4 +1,6 @@
 import {randomUUID} from 'node:crypto';
+import { recordGammaChain } from '../dhan-engine-shadow.js';
+import { DHAN_ENGINE_SHADOW } from '../../config/order-flow-flags.js';
 import {logger} from '../../lib/logger.js';
 import {getSessionWindow,HOLIDAY_CALENDAR_YEARS,FO_SEGMENT,CM_SEGMENT,type Exchange,type Instrument} from '@fno/shared';
 import {evaluateFreshStrategies,FRESH_SHADOW_STRATEGIES,type FreshBar} from '@fno/analytics';
@@ -213,6 +215,8 @@ export class FreshPaperWorker {
           const chain=await buildOptionChain(this.provider,r.name,freshReferenceExchange(r)),at=Math.min(Date.now(),Number.isFinite(chain.timestamp)?chain.timestamp:Date.now());
           const strikes=chain.strikes.map(x=>({strike:x.strike,callOi:x.call?.oi??0,putOi:x.put?.oi??0})).filter(x=>Number.isFinite(x.strike)&&x.strike>0);
           if(strikes.length)this.oiChains.set(r.id,[...(this.oiChains.get(r.id)??[]).filter(x=>at-x.at<=FRESH_INDEX_SAMPLE_KEEP_MS),{at,strikes}]);
+          // Dhan engine v2 expiry-gamma module (shadow): its own day-long chain samples; never throws, never trades.
+          if(strikes.length&&DHAN_ENGINE_SHADOW)void recordGammaChain(r.name,chain,at);
         }catch{/* this index's OI stays as it was; the strategy refuses IDX_OI_UNAVAILABLE once it is stale */}
       }
     }finally{this.chainsBusy=false;}

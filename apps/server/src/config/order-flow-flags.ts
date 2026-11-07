@@ -100,6 +100,9 @@ export const DHAN_FLOW_V2_SYMBOLS: Readonly<Record<string, 'NSE' | 'BSE' | 'MCX'
 /** Every NSE stock future's nearest contract (v2). DHAN_FLOW_STOCKS=false leaves stocks out. */
 export const DHAN_FLOW_STOCKS: boolean = DHAN_FLOW_V2 && parseFlag(process.env.DHAN_FLOW_STOCKS, true);
 
+/** Dhan engine v2 phase 3: evaluate setups A-D / expiry gamma on closed bars and record SHADOW signals (no positions). */
+export const DHAN_ENGINE_SHADOW: boolean = parseFlag(process.env.DHAN_ENGINE_SHADOW, true);
+
 export function parseOrderFlowSymbols(raw: string | undefined): { symbols: string[]; rejected: string[] } {
   const asked = (raw == null || raw.trim() === '' ? [...ORDER_FLOW_DEFAULT_SYMBOLS] : raw.split(',')).map((s) => s.trim().toUpperCase()).filter(Boolean);
   return { symbols: asked.filter((s) => ORDER_FLOW_VERIFIED_SYMBOLS.has(s)), rejected: asked.filter((s) => !ORDER_FLOW_VERIFIED_SYMBOLS.has(s)) };

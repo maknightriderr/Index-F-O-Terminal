@@ -140,6 +140,7 @@ export const FILES = [
   '050_fresh_research.sql',
   '051_experiment_event_width.sql',
   '052_order_flow_events.sql',
+  '053_dhan_engine_signals.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */
