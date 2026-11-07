@@ -2,8 +2,19 @@
 
 Status: **APPROVED (7 Nov)** — D1 hybrid, D2 record-only risk flags, D3 options paper, D4 existing strategies keep
 running, D5 Expiry Gamma kept as a tagged module, D6 network allowed, D7 storage with nightly cleanup.
-Progress: P1 merged (data integrity, recording). P2 (engines, `packages/analytics/src/dhan-engine/`, read-only snapshot
-at `GET /api/diagnostics/order-flow/engine[?symbol=]`) in review. P3–P6 next.
+Progress: P1 merged (data integrity, recording). P2 merged (engines, `packages/analytics/src/dhan-engine/`, snapshot at
+`GET /api/diagnostics/order-flow/engine[?symbol=]`). P3 in review: setups A–D + 10-point score + mandatory gates +
+no-trade engine (`setups.ts`) and the tagged expiry-gamma module (`expiry-gamma.ts`), recorded SHADOW-only in
+`dhan_engine_signals` (`GET /api/diagnostics/order-flow/engine/signals[?date=]`). P4–P6 next.
+
+P3 known limits (recorded, not hidden):
+- A–D decide on 15-minute footprint closes (Part 11 asks for 5-minute confirmation; 5-minute footprints with price
+  rows are not built yet); the 30-minute frame is two 15-minute bars.
+- Reference levels (PDH/PDL, OR) come from the futures contract's own bars, not the spot index (Part 15).
+- Setup B needs RVOL against 20 recorded sessions of the same slot: it cannot fire before ~20 sessions of v2 bars.
+- R:R is gross on the underlying; option spread / costs, daily loss and F&O restrictions are phase 4 (listed as
+  "not evaluated" in every no-trade report, never assumed clear).
+- Expiry gamma: day high / low from the minute chain samples' spot; R1 is not available on that path (null).
 All thresholds below are the master prompt's initial research values, configurable and versioned. None is claimed
 profitable. Execution stays paper-only / human-approved (Part 23).
 

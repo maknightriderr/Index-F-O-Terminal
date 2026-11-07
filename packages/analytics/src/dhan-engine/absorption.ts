@@ -2,7 +2,7 @@
 // ABSORPTION (master prompt 5.3) and EXHAUSTION (5.4) — ESTIMATED
 // ============================================================
 // Bullish absorption at bar i (bearish is the mirror):
-//   1. high estimated aggressive selling: the bar's sell volume >= its buy volume (minSideShare of classified);
+//   1. high estimated aggressive selling: the bar's sell volume is more than minSideShare (50%) of classified volume;
 //   2. a row's sell volume >= the 80th percentile of the previous 50 comparable observations (sell volume per row,
 //      earlier valid bars of the same contract); fewer than 50 observations -> nothing is detected (no baseline);
 //   3. limited downward progress: (zone row − bar low) <= 0.25 ATR — sellers hit the zone and price barely moved;
@@ -68,7 +68,7 @@ export function detectAbsorption(fps: readonly FootprintBar[], atr: number, bars
       const base = hist[side].slice(-nObs);
       const aggressive = side === 'BULLISH' ? f.sellVolume ?? 0 : f.buyVolume ?? 0;
       const classified = (f.buyVolume ?? 0) + (f.sellVolume ?? 0);
-      if (bar && base.length >= nObs && classified > 0 && aggressive / classified >= share) {
+      if (bar && base.length >= nObs && classified > 0 && aggressive / classified > share) {
         const threshold = quantile(base, pct)!;
         const rows = f.levels.map((l) => ({ price: l.price, v: side === 'BULLISH' ? l.sell : l.buy })).filter((r) => r.v >= threshold && r.v > 0);
         if (rows.length) {

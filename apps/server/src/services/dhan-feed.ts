@@ -33,9 +33,10 @@ import { isMarketOpen } from '@fno/shared';
 import { logger } from '../lib/logger.js';
 import { serviceHeartbeat } from '../lib/service-supervisor.js';
 import { DHAN_RESPONSE, DHAN_SEGMENT_CODE, DHAN_MAX_INSTRUMENTS_PER_CONNECTION, dhanFeedUrl, fullSubscriptions, parseDhanFrame, resolveFlowContracts, type DhanFullPacket, type ResolvedFlowContract } from '../lib/dhan-feed-packets.js';
-import { ORDER_BLOCK_MODE, ORDER_BLOCK_MODE_REJECTED, OF1_TRADING_REQUESTED, ORDER_FLOW_SUPPORTED, ORDER_FLOW_SYMBOLS, ORDER_FLOW_SYMBOLS_REJECTED, DHAN_FLOW_V2, DHAN_FLOW_V2_SYMBOLS, DHAN_FLOW_STOCKS } from '../config/order-flow-flags.js';
+import { ORDER_BLOCK_MODE, ORDER_BLOCK_MODE_REJECTED, OF1_TRADING_REQUESTED, ORDER_FLOW_SUPPORTED, ORDER_FLOW_SYMBOLS, ORDER_FLOW_SYMBOLS_REJECTED, DHAN_FLOW_V2, DHAN_FLOW_V2_SYMBOLS, DHAN_FLOW_STOCKS, DHAN_ENGINE_SHADOW } from '../config/order-flow-flags.js';
 import { dhanConfigured, dhanSession, dhanSessionStatus, ensureDhanSession, markDhanTokenRejected } from './dhan-session.js';
-import { closeFlowBars, recordFlowTrade, recordFlowUnreconciled, registerFlowSymbol, setFlowFeedConnected } from './order-flow-store.js';
+import { closeFlowBars, flowContractBars, recordFlowTrade, recordFlowUnreconciled, registerFlowSymbol, setFlowFeedConnected } from './order-flow-store.js';
+import { evaluateDhanShadow } from './dhan-engine-shadow.js';
 
 export const DHAN_SCRIP_MASTER_URL = 'https://images.dhan.co/api-data/api-scrip-master.csv';
 const TICK_MS = 10_000;
@@ -363,7 +364,16 @@ async function tick(): Promise<void> {
     logger.info({ event: 'dhanFeedQuality', ...dhanFeedQuality(now) }, 'Dhan feed: data quality (flow sides are ESTIMATED, never exchange-verified)');
   }
   if (!state.ws && now >= state.reconnectAt && Object.keys(state.resolved).length) connect(creds);
-  await closeFlowBars(now, state.connected).catch((err: any) => logger.warn({ error: err.message }, 'Order flow: bar close failed'));
+  const written = await closeFlowBars(now, state.connected).catch((err: any) => { logger.warn({ error: err.message }, 'Order flow: bar close failed'); return 0; });
+  if (written > 0 && DHAN_ENGINE_SHADOW) void evaluateDhanShadow(now, dhanInstrumentHealth).catch((err: any) => logger.warn({ error: err.message }, 'Dhan engine shadow: pass failed'));
+}
+
+/** Engine v2 setups: is the contract's feed live, and is the flow series the contract the feed resolved? */
+export function dhanInstrumentHealth(symbol: string, now: number): { stale: boolean; mappingValid: boolean } {
+  const r = state.resolved[symbol];
+  if (!r) return { stale: true, mappingValid: false };
+  const q = state.quality.get(`${DHAN_SEGMENT_CODE[r.segment]}:${r.securityId}`);
+  return { stale: instrumentStatus(q, now, isMarketOpen(r.exchange, now)) !== 'ESTIMATED', mappingValid: flowContractBars(symbol)?.instrument === r.tradingSymbol };
 }
 
 let started = false;

@@ -7,3 +7,5 @@ export * from './volume-profile.js';
 export * from './vwap.js';
 export * from './absorption.js';
 export * from './regime.js';
+export * from './setups.js';
+export * from './expiry-gamma.js';

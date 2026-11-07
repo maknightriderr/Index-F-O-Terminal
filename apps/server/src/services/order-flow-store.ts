@@ -103,6 +103,14 @@ export function flowSessionState(symbol: string, now: number): { exchange: strin
   return { exchange: f.exchange, instrument: f.instrument, kind: f.kind, tickSize: f.tickSize, footprints, vwap: v };
 }
 
+/** Engine v2 setups: every closed footprint in memory of the symbol's CURRENT contract, oldest first. */
+export function flowContractBars(symbol: string): { exchange: string; instrument: string | null; kind: SymbolFlow['kind']; tickSize: number | null; lastClosed: number | null; footprints: FootprintBar[] } | null {
+  const f = flows.get(symbol);
+  if (!f) return null;
+  const footprints = [...f.footprints.values()].filter((fp) => fp.sourceInstrument === f.instrument).sort((a, b) => a.barTime - b.barTime);
+  return { exchange: f.exchange, instrument: f.instrument, kind: f.kind, tickSize: f.tickSize, lastClosed: f.lastClosed, footprints };
+}
+
 export function flowSymbols(): string[] {
   return [...flows.keys()];
 }
@@ -181,6 +189,11 @@ export async function closeFlowBars(now: number, connected: boolean = feedConnec
       applyReconciliation(fp, unrec);
       fp.tickSize = f.tickSize;
       fp.priceStep = fp.deltaMode === 'UNAVAILABLE' ? null : step;
+      const inBar = f.trades.filter((t) => t.time >= bar && t.time < bar + FLOW_BAR_MS && t.qty > 0).sort((a, b) => a.time - b.time);
+      if (inBar.length) {
+        fp.open = inBar[0].price;
+        fp.tradeSums = inBar.reduce((a, t) => ({ pv: a.pv + t.price * t.qty, v: a.v + t.qty, p2v: a.p2v + t.price * t.price * t.qty }), { pv: 0, v: 0, p2v: 0 });
+      }
       f.footprints.set(bar, fp);
       await persistFootprint(symbol, f, fp, fp.deltaMode === 'UNAVAILABLE' ? unavailableReason ?? (connected ? 'NO_TRADES' : 'FEED_DOWN') : null);
       await persistFlowEvents(symbol, f, bar, unrec);

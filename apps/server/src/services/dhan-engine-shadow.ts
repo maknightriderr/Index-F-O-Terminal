@@ -1,0 +1,224 @@
+// ============================================================
+// DHAN ENGINE v2 — SHADOW RECORDER (phase 3)
+// ============================================================
+// After each 15-minute bar close, setups A–D are evaluated on every flow contract whose bar just closed, and the
+// expiry-gamma module on each index option-chain sample. Evaluations whose setup conditions were met are written to
+// dhan_engine_signals (SIGNAL, or NO_TRADE with its reasons); the rest are counted by their first failed condition
+// and summarised in the log. SHADOW ONLY: nothing here opens a paper or real position (phase 4 decides that).
+// Bounded work: one pass per closed bar, yielding between contracts; any failure is logged and skipped.
+// ============================================================
+
+import {
+  evaluateDhanSetups, evaluateExpiryGamma, istSession, pivotR1, vwapFromSums,
+  DHAN_GAMMA_ID, DHAN_GAMMA_VERSION, DHAN_SETUP_VERSION, type EngineBar, type FootprintBar, type GammaSample, type SetupContext, type SetupResult,
+} from '@fno/analytics';
+import type { OptionChain } from '@fno/shared';
+import { sql } from '../lib/db.js';
+import { logger } from '../lib/logger.js';
+import { schemaFileReady } from './ensure-capture-schema.js';
+import { flowContractBars, flowSessionState, flowSymbols } from './order-flow-store.js';
+
+export const DHAN_SIGNALS_MIGRATION = '053_dhan_engine_signals.sql';
+/** RVOL compares only bars recorded under the v2 reconciler (deployed 7 Nov; first session 9 Nov). */
+export const RVOL_SINCE = Date.parse('2026-11-09T00:00:00+05:30');
+const SUMMARY_LOG_MS = 15 * 60_000;
+
+export type Health = (symbol: string, now: number) => { stale: boolean; mappingValid: boolean };
+
+const state = {
+  evaluated: new Map<string, number>(),
+  busy: false,
+  failures: new Map<string, number>(),
+  recorded: { SIGNAL: 0, NO_TRADE: 0 },
+  summaryAt: 0,
+  rvol: new Map<string, { day: string; bySlot: Map<string, number[]> }>(),
+  gamma: new Map<string, { day: string; samples: GammaSample[]; fired: Set<string> }>(),
+};
+
+const traded = (f: FootprintBar) => f.deltaMode !== 'UNAVAILABLE' && f.high != null && f.low != null && f.close != null;
+const slotOf = (t: number) => new Date(t + 19_800_000).toISOString().slice(11, 16);
+
+/** Daily bars of the contract from its in-memory footprints of earlier sessions (oldest first). */
+export function dailyFromFootprints(fps: readonly FootprintBar[], today: string): EngineBar[] {
+  const days = new Map<string, EngineBar>();
+  for (const f of fps) {
+    if (!traded(f)) continue;
+    const d = istSession(f.barTime);
+    if (d >= today) continue;
+    const x = days.get(d);
+    if (!x) days.set(d, { time: f.barTime, open: f.open ?? f.close!, high: f.high!, low: f.low!, close: f.close! });
+    else (x.high = Math.max(x.high, f.high!)), (x.low = Math.min(x.low, f.low!)), (x.close = f.close!);
+  }
+  return [...days.values()].sort((a, b) => a.time - b.time);
+}
+
+/** Same-slot traded volume of up to 20 earlier sessions (order_flow_bars since RVOL_SINCE), cached per symbol per day. */
+async function rvolReferences(symbol: string, today: string, now: number): Promise<Map<string, number[]>> {
+  const c = state.rvol.get(symbol);
+  if (c && c.day === today) return c.bySlot;
+  const bySlot = new Map<string, number[]>();
+  try {
+    const rows = await sql<Array<{ bar_time: Date; volume: string | null }>>`
+      SELECT bar_time, volume FROM order_flow_bars
+      WHERE symbol = ${symbol} AND bar_time >= ${new Date(Math.max(RVOL_SINCE, now - 45 * 86_400_000))} AND bar_time < ${new Date(now - 12 * 3_600_000)} AND delta_mode <> 'UNAVAILABLE' AND volume IS NOT NULL
+      ORDER BY bar_time`;
+    for (const r of rows) {
+      const t = new Date(r.bar_time).getTime();
+      if (istSession(t) >= today) continue;
+      const s = slotOf(t);
+      bySlot.set(s, [...(bySlot.get(s) ?? []), Number(r.volume)]);
+    }
+  } catch (err: any) {
+    logger.warn({ symbol, error: err.message }, 'Dhan engine shadow: RVOL references unavailable');
+  }
+  state.rvol.set(symbol, { day: today, bySlot });
+  return bySlot;
+}
+
+const rvolOf = (refs: Map<string, number[]>, f: FootprintBar): number | null => {
+  const r = (refs.get(slotOf(f.barTime)) ?? []).slice(-20);
+  const mean = r.reduce((a, x) => a + x, 0) / Math.max(1, r.length);
+  return r.length >= 20 && mean > 0 && f.volume != null ? Math.round((f.volume / mean) * 10000) / 10000 : null;
+};
+
+/** The setups context of one contract from the flow store, or null when it has no closed traded bar today. */
+export async function setupContextFor(symbol: string, now: number, health: Health, withRvol = true): Promise<SetupContext | null> {
+  const st = flowContractBars(symbol);
+  if (!st || !st.tickSize) return null;
+  const fps = st.footprints.filter(traded);
+  if (!fps.length) return null;
+  const today = istSession(fps[fps.length - 1].barTime);
+  if (today !== istSession(now)) return null;
+  const refs = withRvol && schemaFileReady('038_order_blocks_order_flow_of1.sql') ? await rvolReferences(symbol, today, now) : new Map<string, number[]>();
+  const firstToday = fps.find((f) => istSession(f.barTime) === today)!;
+  const bars: EngineBar[] = fps.map((f, k) => ({ time: f.barTime, open: f.open ?? fps[k - 1]?.close ?? f.close!, high: f.high!, low: f.low!, close: f.close!, volume: f.volume ?? 0 }));
+  return {
+    symbol, instrument: st.instrument, kind: st.kind, exchange: st.exchange, tickSize: st.tickSize, bars, fps,
+    vwapSums: fps.map((f) => f.tradeSums ?? null), rvol: fps.map((f) => rvolOf(refs, f)), daily: dailyFromFootprints(st.footprints, today),
+    sessionOpen: firstToday.barTime, health: health(symbol, now),
+  };
+}
+
+async function record(symbol: string, ctx: SetupContext, barTime: number, window: string, regime: string | null, r: SetupResult): Promise<void> {
+  if (!schemaFileReady(DHAN_SIGNALS_MIGRATION)) return;
+  await sql`
+    INSERT INTO dhan_engine_signals (strategy, side, symbol, instrument, exchange, bar_time, status, score, eligibility, entry, stop_loss, target, rr, session_window, regime, checks, gates, no_trade, evidence, version)
+    VALUES (${r.strategy}, ${r.side}, ${symbol}, ${ctx.instrument}, ${ctx.exchange}, ${new Date(barTime)}, ${r.status}, ${r.score?.total ?? null}, ${r.score?.eligibility ?? null},
+      ${r.plan?.entry ?? null}, ${r.plan?.sl ?? null}, ${r.plan?.target ?? null}, ${r.plan?.rr ?? null}, ${window}, ${regime},
+      ${sql.json(r.checks as any)}, ${sql.json(r.gates as any)}, ${sql.json(r.noTrade as any)}, ${sql.json({ ...r.evidence, score: r.score?.lines ?? null, targetKind: r.plan?.targetKind ?? null } as any)}, ${DHAN_SETUP_VERSION})
+    ON CONFLICT (strategy, side, symbol, bar_time) DO NOTHING`;
+}
+
+/** Evaluate every contract whose latest bar closed since its last evaluation. Returns the number evaluated. */
+export async function evaluateDhanShadow(now: number, health: Health): Promise<number> {
+  if (state.busy) return 0;
+  state.busy = true;
+  let n = 0;
+  try {
+    for (const symbol of flowSymbols()) {
+      const st = flowContractBars(symbol);
+      const last = st?.footprints.at(-1)?.barTime;
+      if (last == null || state.evaluated.get(symbol) === last) continue;
+      state.evaluated.set(symbol, last);
+      try {
+        const ctx = await setupContextFor(symbol, now, health);
+        if (!ctx || ctx.bars.at(-1)!.time !== last) continue; // the newest closed bar had no trades: nothing to decide on
+        const ev = evaluateDhanSetups(ctx);
+        n++;
+        for (const r of ev.results) {
+          if (r.status === 'NO_SETUP') { const k = `${r.strategy}:${r.failed}`; state.failures.set(k, (state.failures.get(k) ?? 0) + 1); continue; }
+          state.recorded[r.status]++;
+          if (r.status === 'SIGNAL') logger.info({ event: 'dhanShadowSignal', symbol, strategy: r.strategy, side: r.side, barTime: new Date(last).toISOString(), score: r.score?.total, plan: r.plan, window: ev.sessionWindow }, 'Dhan engine shadow signal (recorded only, no position)');
+          await record(symbol, ctx, last, ev.sessionWindow, ev.regime?.regime ?? null, r).catch((err: any) => logger.warn({ symbol, strategy: r.strategy, error: err.message }, 'Dhan engine shadow: signal write failed'));
+        }
+      } catch (err: any) {
+        logger.warn({ symbol, error: err.message }, 'Dhan engine shadow: evaluation failed');
+      }
+      await new Promise((r) => setImmediate(r));
+    }
+  } finally {
+    state.busy = false;
+  }
+  if (now - state.summaryAt >= SUMMARY_LOG_MS && (n > 0 || state.failures.size)) {
+    state.summaryAt = now;
+    const top = [...state.failures].sort((a, b) => b[1] - a[1]).slice(0, 20).map(([k, c]) => ({ k, c }));
+    logger.info({ event: 'dhanShadowSummary', evaluated: n, recorded: state.recorded, firstFailures: top }, 'Dhan engine shadow: setups A-D summary (shadow only)');
+  }
+  return n;
+}
+
+// ---------------- expiry gamma ----------------
+
+/** True when the chain's expiry is the IST trading day of `now` (accepts ISO dates and anything Date.parse reads). */
+export function chainExpiresToday(expiry: string | null | undefined, now: number): boolean {
+  if (!expiry) return false;
+  if (/^\d{4}-\d{2}-\d{2}/.test(expiry)) return expiry.slice(0, 10) === istSession(now);
+  const t = Date.parse(expiry);
+  return Number.isFinite(t) && istSession(t) === istSession(now);
+}
+
+/**
+ * One option-chain sample of an index (from the fresh-start worker's chain refresh). Keeps today's samples (ATM ± 5
+ * strikes) and, on expiry day inside the module's window, evaluates and records each side's first signal of the day.
+ * The day's spot high / low come from today's earlier samples (about one a minute; labelled CHAIN_SAMPLE_SPOT). R1
+ * needs the previous day's spot high / low / close, which this path does not hold, so it is null (the rule's "day high
+ * or R1" then reads the day high only).
+ */
+export async function recordGammaChain(index: string, chain: Pick<OptionChain, 'spotPrice' | 'expiry' | 'strikes'>, at: number, now: number = Date.now(), previousDay: { high: number; low: number; close: number } | null = null): Promise<void> {
+  try {
+    if (!(chain.spotPrice > 0) || !chain.strikes.length) return;
+    const day = istSession(at);
+    let g = state.gamma.get(index);
+    if (!g || g.day !== day) state.gamma.set(index, (g = { day, samples: [], fired: new Set() }));
+    const sorted = [...chain.strikes].sort((a, b) => a.strike - b.strike);
+    const atmIdx = sorted.reduce((bi, s, k) => (Math.abs(s.strike - chain.spotPrice) < Math.abs(sorted[bi].strike - chain.spotPrice) ? k : bi), 0);
+    const near = sorted.slice(Math.max(0, atmIdx - 5), atmIdx + 6).map((s) => ({ strike: s.strike, callOi: s.call?.oi ?? 0, putOi: s.put?.oi ?? 0 }));
+    g.samples = [...g.samples.filter((s) => s.at !== at), { at, spot: chain.spotPrice, strikes: near }].slice(-400);
+    if (!chainExpiresToday(chain.expiry, now)) return;
+    const steps = near.slice(1).map((s, k) => s.strike - near[k].strike).filter((d) => d > 0);
+    const strikeStep = steps.length ? Math.min(...steps) : 0;
+    if (!(strikeStep > 0)) return;
+    const earlier = g.samples.filter((x) => x.at < at).map((x) => x.spot);
+    const fut = flowSessionState(index, now);
+    const fv = fut?.vwap ? vwapFromSums(fut.vwap.sums, 'TRADES', fut.vwap.unreconciled) : null;
+    const lastFp = fut?.footprints.at(-1);
+    const results = evaluateExpiryGamma({
+      index, expiryToday: true, now, samples: g.samples, strikeStep,
+      dayHigh: earlier.length ? Math.max(...earlier) : null, dayLow: earlier.length ? Math.min(...earlier) : null,
+      r1: pivotR1(previousDay), futuresPrice: lastFp?.close ?? null, futuresVwap: fv?.status === 'ESTIMATED' ? fv.vwap : null,
+    });
+    for (const r of results) {
+      if (r.status !== 'SIGNAL' || g.fired.has(r.side)) continue;
+      g.fired.add(r.side);
+      logger.info({ event: 'dhanShadowSignal', symbol: index, strategy: DHAN_GAMMA_ID, side: r.side, strikes: r.strikes, evidence: r.evidence }, 'Dhan engine shadow signal (recorded only, no position)');
+      if (!schemaFileReady(DHAN_SIGNALS_MIGRATION)) continue;
+      await sql`
+        INSERT INTO dhan_engine_signals (strategy, side, symbol, instrument, exchange, bar_time, status, entry, session_window, checks, evidence, version)
+        VALUES (${DHAN_GAMMA_ID}, ${r.side}, ${index}, ${null}, ${null}, ${new Date(Math.floor(at / 60_000) * 60_000)}, ${'SIGNAL'}, ${chain.spotPrice}, ${'EXPIRY_PM'},
+          ${sql.json(r.checks as any)}, ${sql.json({ ...r.evidence, dayRangeSource: 'CHAIN_SAMPLE_SPOT', strikes: r.strikes, forcedExitAt: r.forcedExitAt } as any)}, ${DHAN_GAMMA_VERSION})
+        ON CONFLICT (strategy, side, symbol, bar_time) DO NOTHING`.catch((err: any) => logger.warn({ index, error: err.message }, 'Dhan engine shadow: gamma write failed'));
+    }
+  } catch (err: any) {
+    logger.warn({ index, error: err.message }, 'Dhan engine shadow: gamma evaluation failed');
+  }
+}
+
+/** Recorded shadow signals of an IST day (diagnostics). */
+export async function dhanShadowSignals(day: string): Promise<unknown[]> {
+  if (!schemaFileReady(DHAN_SIGNALS_MIGRATION)) return [];
+  const from = new Date(`${day}T00:00:00+05:30`), to = new Date(from.getTime() + 86_400_000);
+  const rows = await sql<Array<Record<string, unknown>>>`SELECT strategy, side, symbol, instrument, exchange, bar_time, status, score, eligibility, entry, stop_loss, target, rr, session_window, regime, gates, no_trade, evidence
+             FROM dhan_engine_signals WHERE bar_time >= ${from} AND bar_time < ${to} ORDER BY bar_time, symbol, strategy LIMIT 500`;
+  return [...rows];
+}
+
+export function dhanShadowStatus() {
+  return { recorded: { ...state.recorded }, contracts: state.evaluated.size, firstFailures: [...state.failures].sort((a, b) => b[1] - a[1]).slice(0, 30).map(([k, c]) => ({ k, c })), gamma: [...state.gamma].map(([index, g]) => ({ index, day: g.day, samples: g.samples.length, fired: [...g.fired] })) };
+}
+
+/** Tests only. */
+export function resetDhanShadow(): void {
+  state.evaluated.clear(); state.failures.clear(); state.rvol.clear(); state.gamma.clear();
+  state.recorded = { SIGNAL: 0, NO_TRADE: 0 }; state.summaryAt = 0; state.busy = false;
+}
+
