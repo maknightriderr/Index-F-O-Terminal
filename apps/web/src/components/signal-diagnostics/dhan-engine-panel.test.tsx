@@ -21,10 +21,12 @@ const snap: DhanEngineSnapshot = {
   atr: { value: 30, source: 'MEAN_15M_RANGE' }, structure: { source: 'FLOW_15M_BARS', trend: 'BULLISH', lastSwingHigh: 24110, lastSwingLow: 24050, lastBreak: null },
   absorption: [], exhaustion: [],
 };
+const stats = (trades: number, winRate: number) => ({ trades, wins: Math.round(trades * winRate), losses: trades - Math.round(trades * winRate), open: 0, winRate, expectancyR: 0.5, netExpectancyR: 0.4, profitFactor: 2, maxDrawdownR: 1, totalR: 1, totalNetR: 0.8, sample: 'SMALL_SAMPLE' as const });
 vi.mock('@/lib/api', () => ({ api: {
   getDhanEngineSummary: async () => ({ note: '', contracts: [{ symbol: 'NIFTY', kind: 'INDEX', bars: 3, incompleteBars: 1, cvd: 400, cvdStatus: 'INCOMPLETE', vwap: 24090.5, vwapStatus: 'ESTIMATED', poc: 24087, footprint: 'ESTIMATED', trend: 'BULLISH' }] }),
   getDhanEngineSignals: async () => signals,
   getDhanEngineSnapshot: async () => snap,
+  getDhanEngineValidation: async () => ({ from: '2026-10-11', to: '2026-11-09', signals: 3, ungradable: 1, costBasis: '2 ticks round trip on the futures', candleBacktest: 'NOT_POSSIBLE: setups need footprint.', overall: stats(2, 0.5), byStrategy: [{ strategy: 'DHAN_A_SWEEP_ABSORPTION', stats: stats(2, 0.5), split: { inSample: stats(1, 1), outOfSample: stats(1, 0) } }], rejected: stats(1, 1) }),
 } }));
 
 describe('Dhan engine dashboard', () => {
@@ -35,6 +37,9 @@ describe('Dhan engine dashboard', () => {
     expect(screen.getByText('MIN_RR_2, RR_BELOW_2')).toBeInTheDocument();
     expect(screen.getAllByText('FILLED').length).toBeGreaterThan(0);
     expect(screen.getByText(/b imbalance breakout:b4 rvol expansion: 9/)).toBeInTheDocument();
+    expect(await screen.findByText('Validation: recorded signals graded')).toBeInTheDocument();
+    expect(screen.getByText(/Candle history: not possible/)).toBeInTheDocument();
+    expect(screen.getAllByText('sample').length).toBeGreaterThan(0);
   });
   it('labels estimated and incomplete values and opens a contract\'s footprint ladder', async () => {
     render(<DhanEnginePanel />);

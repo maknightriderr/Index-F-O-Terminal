@@ -51,6 +51,14 @@ export interface DhanSignalsReport {
   signals: DhanSignalRow[];
 }
 
+export interface DhanCohortStats { trades: number; wins: number; losses: number; open: number; winRate: number | null; expectancyR: number | null; netExpectancyR: number | null; profitFactor: number | null; maxDrawdownR: number | null; totalR: number; totalNetR: number; sample: 'OK' | 'SMALL_SAMPLE' }
+/** Mirrors apps/server/src/services/dhan-engine-validation.ts dhanValidation(). */
+export interface DhanValidationReport {
+  from: string; to: string; signals: number; ungradable: number; costBasis?: string; candleBacktest: string; overall: DhanCohortStats;
+  byStrategy: Array<{ strategy: string; stats: DhanCohortStats; split: { inSample: DhanCohortStats; outOfSample: DhanCohortStats } }>;
+  rejected?: DhanCohortStats;
+}
+
 const TONE: Record<string, 'ok' | 'warn' | 'bad' | 'off' | 'info'> = { VERIFIED: 'ok', ESTIMATED: 'warn', APPROXIMATION: 'warn', INCOMPLETE: 'bad', UNAVAILABLE: 'off', SIGNAL: 'ok', NO_TRADE: 'off' };
 const TITLE: Record<string, string> = {
   VERIFIED: 'Exchange-published values.',
@@ -71,9 +79,11 @@ export function DhanEnginePanel() {
   const [selected, setSelected] = useState<string | null>(null);
   const [snap, setSnap] = useState<DhanEngineSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [validation, setValidation] = useState<DhanValidationReport | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    api.getDhanEngineValidation().then((v) => !cancelled && setValidation(v)).catch(() => undefined);
     Promise.all([api.getDhanEngineSummary(), api.getDhanEngineSignals()])
       .then(([s, g]) => { if (cancelled) return; setSummary(s); setSignals(g); setError(null); })
       .catch((e) => !cancelled && setError(e?.message ?? 'Could not load the Dhan engine.'));
@@ -138,6 +148,8 @@ export function DhanEnginePanel() {
       </Section>
 
       {selected && snap && <ContractDetail snap={snap} />}
+
+      {validation && <ValidationSection v={validation} />}
     </div>
   );
 }
@@ -201,5 +213,25 @@ export function CvdSpark({ series }: { series: Array<{ time: number; cvd: number
       <polyline fill="none" stroke="var(--accent-primary, currentColor)" strokeWidth={1.5} points={pts(solid, 0)} />
       {firstGap >= 0 && <polyline fill="none" stroke="var(--status-bad)" strokeDasharray="3 3" strokeWidth={1.5} points={pts(series.slice(Math.max(0, firstGap - 1)), Math.max(0, firstGap - 1))} />}
     </svg>
+  );
+}
+
+const pctOf = (x: number | null) => (x == null ? MISSING : `${(x * 100).toFixed(0)}%`);
+export function ValidationSection({ v }: { v: DhanValidationReport }) {
+  const rows = [{ strategy: 'ALL SIGNALS', stats: v.overall, split: null as DhanValidationReport['byStrategy'][number]['split'] | null }, ...v.byStrategy];
+  const cols: Column<(typeof rows)[number]>[] = [
+    { id: 's', header: 'Setup', cell: (r) => <span className="font-medium">{pretty(r.strategy)}</span> },
+    { id: 'n', header: 'Trades', numeric: true, cell: (r) => <span>{r.stats.trades}{r.stats.sample === 'SMALL_SAMPLE' && <span className="ml-1 text-xs text-[var(--status-warn)]" title="Below 200 trades: a sample, not evidence">sample</span>}</span> },
+    { id: 'w', header: 'Win rate', numeric: true, cell: (r) => pctOf(r.stats.winRate) },
+    { id: 'e', header: 'Expectancy R (net)', numeric: true, cell: (r) => `${formatNumber(r.stats.expectancyR)} (${formatNumber(r.stats.netExpectancyR)})` },
+    { id: 'pf', header: 'Profit factor', numeric: true, cell: (r) => formatNumber(r.stats.profitFactor) },
+    { id: 'dd', header: 'Max DD (R)', numeric: true, cell: (r) => formatNumber(r.stats.maxDrawdownR) },
+    { id: 'oos', header: 'Out-of-sample (last 30%)', cell: (r) => (r.split ? `${r.split.outOfSample.trades} trades · ${pctOf(r.split.outOfSample.winRate)} · ${formatNumber(r.split.outOfSample.expectancyR)} R` : MISSING) },
+  ];
+  return (
+    <Section title="Validation: recorded signals graded" subtitle={`${v.from} to ${v.to}. Each SIGNAL walked forward on the recorded trades of its session (a bar touching stop and target counts the stop). Net = after ${v.costBasis ?? 'slippage'}. No parameter is tuned on this.`}>
+      <DataTable columns={cols} rows={rows} rowKey={(r) => r.strategy} ariaLabel="Dhan engine validation" pageSize={10} emptyTitle="No graded signals yet" />
+      <p className="mt-2 text-xs text-[var(--text-secondary)]">{v.signals} signals in range, {v.ungradable} not gradable (no later trades). {v.rejected ? `Rejected (NO_TRADE) setups, graded separately: ${v.rejected.trades} trades, win rate ${pctOf(v.rejected.winRate)}, expectancy ${formatNumber(v.rejected.expectancyR)} R.` : ''} Candle history: {v.candleBacktest.replace(/^NOT_POSSIBLE: /, 'not possible — ')}</p>
+    </Section>
   );
 }
