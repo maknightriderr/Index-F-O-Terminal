@@ -11,7 +11,8 @@
 
 import type { FreshDirection } from './strategies.js';
 
-export interface FreshFlowBar { time: number; buy: number; sell: number; unclassified: number; trades: number }
+/** `unreconciled` (v2): volume between packets no observed trade explains: it counts against the classified share. */
+export interface FreshFlowBar { time: number; buy: number; sell: number; unclassified: number; trades: number; unreconciled?: number }
 export interface FreshOrderFlowInput { source: string; instrument: string | null; proxy: boolean; bars: readonly FreshFlowBar[] }
 export type FreshFlowAlignment = 'ALIGNED' | 'NEUTRAL' | 'OPPOSED' | 'UNAVAILABLE';
 export interface FreshOrderFlowEvidence {
@@ -46,7 +47,7 @@ export function freshOrderFlowEvidence(flow: FreshOrderFlowInput | undefined, di
     if (!flow) return none('NO_FLOW_FOR_INSTRUMENT');
     const d = direction === 'BULLISH' ? 1 : -1, bar = flow.bars.find(b => b.time === decisionBar);
     if (!bar) return none('NO_FLOW_BAR');
-    const total = bar.buy + bar.sell + bar.unclassified, classifiedShare = total > 0 ? (bar.buy + bar.sell) / total : null;
+    const total = bar.buy + bar.sell + bar.unclassified + (bar.unreconciled ?? 0), classifiedShare = total > 0 ? (bar.buy + bar.sell) / total : null;
     const setup = flow.bars.filter(b => b.time >= Math.min(origin, decisionBar) && b.time <= decisionBar);
     const sb = setup.reduce((n, b) => n + b.buy, 0), ss = setup.reduce((n, b) => n + b.sell, 0);
     const out = { ...base, barDelta: signedDelta(bar.buy, bar.sell, d), setupDelta: signedDelta(sb, ss, d), classifiedShare, trades: bar.trades, reason: null as string | null };

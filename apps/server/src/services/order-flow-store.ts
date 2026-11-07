@@ -8,7 +8,8 @@
 // OF1 paper and shadow read this through the explicit price-alignment boundary.
 // ============================================================
 
-import { buildFootprint, unavailableFootprint, ORDER_FLOW_VERSION, type DeltaMode, type FlowTrade, type FootprintBar } from '@fno/analytics';
+import { gzipSync } from 'node:zlib';
+import { buildFootprint, unavailableFootprint, flowPriceStep, FLOW_MAX_UNRECONCILED_SHARE, ORDER_FLOW_VERSION, type DeltaMode, type FlowTrade, type FootprintBar } from '@fno/analytics';
 import { isMarketOpen, type Exchange } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
@@ -17,8 +18,12 @@ import { schemaFileReady } from './ensure-capture-schema.js';
 import { ORDER_FLOW_PRICE_STEP } from '../config/order-flow-flags.js';
 
 export const ORDER_FLOW_MIGRATION = '038_order_blocks_order_flow_of1.sql';
+/** Dhan engine v2 (7 Nov): unreconciled volume, tick / step columns and recorded flow events. */
+export const ORDER_FLOW_EVENTS_MIGRATION = '052_order_flow_events.sql';
 export const FLOW_BAR_MS = 15 * 60_000;
 const KEEP_BARS = 400;
+/** Stock futures keep fewer closed footprints in memory (~4 sessions; all are persisted). */
+const KEEP_BARS_STOCK = 100;
 
 interface SymbolFlow {
   exchange: string;
@@ -26,6 +31,12 @@ interface SymbolFlow {
   source: string;
   mode: Exclude<DeltaMode, 'UNAVAILABLE'>;
   trades: FlowTrade[];
+  /** Volume between packets no observed trade explains (open bar): time and quantity only. */
+  unreconciled: Array<{ time: number; qty: number }>;
+  kind: 'INDEX' | 'STOCK' | 'COMMODITY' | null;
+  tickSize: number | null;
+  /** The price-row step, fixed for the contract (ORDER_FLOW_PRICE_STEP, else flowPriceStep at its first trade). */
+  priceStep: number | null;
   footprints: Map<number, FootprintBar>;
   /** The newest bar already finalized (written). */
   lastClosed: number | null;
@@ -41,29 +52,53 @@ export function setFlowFeedConnected(v: boolean): void {
 /** The 15m bar a time falls in. IST is UTC+5:30, so the epoch 15-minute grid is the IST grid (09:15, 09:30, …). */
 export const flowBarStart = (t: number) => Math.floor(t / FLOW_BAR_MS) * FLOW_BAR_MS;
 
-export function registerFlowSymbol(symbol: string, args: { exchange: string; instrument: string | null; source: string; mode: Exclude<DeltaMode, 'UNAVAILABLE'>; startedAt: number }): void {
+export function registerFlowSymbol(symbol: string, args: { exchange: string; instrument: string | null; source: string; mode: Exclude<DeltaMode, 'UNAVAILABLE'>; startedAt: number; kind?: 'INDEX' | 'STOCK' | 'COMMODITY'; tickSize?: number | null }): void {
   const f = flows.get(symbol);
   if (f) {
     if (f.instrument !== args.instrument) {
       // Drop the mixed partial bar instead of attributing old-contract trades
       // to the new contract. Closed footprints retain their own identity.
       f.trades = [];
+      f.unreconciled = [];
+      f.priceStep = ORDER_FLOW_PRICE_STEP[symbol] ?? null;
       f.lastClosed = flowBarStart(args.startedAt);
     }
+    f.kind = args.kind ?? f.kind;
+    f.tickSize = args.tickSize ?? f.tickSize;
     f.instrument = args.instrument;
     f.source = args.source;
     f.mode = args.mode;
     return;
   }
   // Never backfill: the first bar finalized is the one after the feed started.
-  flows.set(symbol, { exchange: args.exchange, instrument: args.instrument, source: args.source, mode: args.mode, trades: [], footprints: new Map(), lastClosed: flowBarStart(args.startedAt) });
+  flows.set(symbol, { exchange: args.exchange, instrument: args.instrument, source: args.source, mode: args.mode, trades: [], unreconciled: [], kind: args.kind ?? null, tickSize: args.tickSize ?? null, priceStep: ORDER_FLOW_PRICE_STEP[symbol] ?? null, footprints: new Map(), lastClosed: flowBarStart(args.startedAt) });
 }
 
 export function recordFlowTrade(symbol: string, trade: FlowTrade): void {
   const f = flows.get(symbol);
   if (!f || !(trade.qty > 0)) return;
+  if (f.priceStep == null) f.priceStep = flowPriceStep(trade.price, f.tickSize);
   f.trades.push(trade);
   recordFiveMinute(symbol, f.instrument, trade);
+}
+
+/**
+ * Volume the feed reported between two packets that no observed trade explains (cumulative volume rose by more than
+ * the last trade's quantity). Recorded with its time only: it is never given a price level or an aggressor side.
+ */
+export function recordFlowUnreconciled(symbol: string, time: number, qty: number): void {
+  const f = flows.get(symbol);
+  if (!f || !(qty > 0) || !Number.isFinite(time)) return;
+  f.unreconciled.push({ time, qty });
+  const s = five.get(symbol), start = Math.floor(time / FLOW_FIVE_MS) * FLOW_FIVE_MS;
+  if (!s || s.instrument !== f.instrument) five.set(symbol, { instrument: f.instrument, bars: new Map() });
+  const series = five.get(symbol)!;
+  let b = series.bars.get(start);
+  if (!b) {
+    series.bars.set(start, (b = { time: start, buy: 0, sell: 0, unclassified: 0, trades: 0, unreconciled: 0 }));
+    if (series.bars.size > KEEP_FIVE) series.bars.delete(Math.min(...series.bars.keys()));
+  }
+  b.unreconciled = (b.unreconciled ?? 0) + qty;
 }
 
 // ---------------- five-minute delta bars (fresh-start order-flow shadow evidence, 5 Nov) ----------------
@@ -73,7 +108,7 @@ export function recordFlowTrade(symbol: string, trade: FlowTrade): void {
 
 export const FLOW_FIVE_MS = 5 * 60_000;
 const KEEP_FIVE = 400;
-export interface FlowFiveMinuteBar { time: number; buy: number; sell: number; unclassified: number; trades: number }
+export interface FlowFiveMinuteBar { time: number; buy: number; sell: number; unclassified: number; trades: number; /** v2: unreconciled volume (no side). */ unreconciled?: number }
 const five = new Map<string, { instrument: string | null; bars: Map<number, FlowFiveMinuteBar> }>();
 
 function recordFiveMinute(symbol: string, instrument: string | null, t: FlowTrade): void {
@@ -83,7 +118,7 @@ function recordFiveMinute(symbol: string, instrument: string | null, t: FlowTrad
   const start = Math.floor(t.time / FLOW_FIVE_MS) * FLOW_FIVE_MS;
   let b = s.bars.get(start);
   if (!b) {
-    s.bars.set(start, (b = { time: start, buy: 0, sell: 0, unclassified: 0, trades: 0 }));
+    s.bars.set(start, (b = { time: start, buy: 0, sell: 0, unclassified: 0, trades: 0, unreconciled: 0 }));
     if (s.bars.size > KEEP_FIVE) s.bars.delete(Math.min(...s.bars.keys()));
   }
   if (t.side === 'BUY') b.buy += t.qty;
@@ -111,23 +146,84 @@ export async function closeFlowBars(now: number, connected: boolean = feedConnec
     for (let bar = (f.lastClosed ?? current - FLOW_BAR_MS) + FLOW_BAR_MS; bar < current; bar += FLOW_BAR_MS) {
       f.lastClosed = bar;
       if (!isMarketOpen(f.exchange as Exchange, bar + 1)) continue;
+      const step = ORDER_FLOW_PRICE_STEP[symbol] ?? f.priceStep ?? 5;
       const fp = f.trades.some((t) => t.time >= bar && t.time < bar + FLOW_BAR_MS)
-        ? buildFootprint(f.trades, bar, FLOW_BAR_MS, ORDER_FLOW_PRICE_STEP[symbol] ?? 5, f.mode)
+        ? buildFootprint(f.trades, bar, FLOW_BAR_MS, step, f.mode)
         : unavailableFootprint(bar, FLOW_BAR_MS);
       fp.sourceInstrument = f.instrument;
+      const unrec = f.unreconciled.filter((u) => u.time >= bar && u.time < bar + FLOW_BAR_MS).reduce((n, u) => n + u.qty, 0);
+      applyReconciliation(fp, unrec);
+      fp.tickSize = f.tickSize;
+      fp.priceStep = fp.deltaMode === 'UNAVAILABLE' ? null : step;
       f.footprints.set(bar, fp);
       await persistFootprint(symbol, f, fp, fp.deltaMode === 'UNAVAILABLE' ? unavailableReason ?? (connected ? 'NO_TRADES' : 'FEED_DOWN') : null);
+      await persistFlowEvents(symbol, f, bar, unrec);
       written++;
     }
     f.trades = f.trades.filter((t) => t.time >= current);
-    if (f.footprints.size > KEEP_BARS) for (const k of [...f.footprints.keys()].sort((a, b) => a - b).slice(0, f.footprints.size - KEEP_BARS)) f.footprints.delete(k);
+    f.unreconciled = f.unreconciled.filter((u) => u.time >= current);
+    const keep = f.kind === 'STOCK' ? KEEP_BARS_STOCK : KEEP_BARS;
+    if (f.footprints.size > keep) for (const k of [...f.footprints.keys()].sort((a, b) => a - b).slice(0, f.footprints.size - keep)) f.footprints.delete(k);
   }
   return written;
+}
+
+/**
+ * Pure: records a bar's unreconciled volume on its footprint and, above FLOW_MAX_UNRECONCILED_SHARE of the bar's
+ * reconciled + unreconciled volume, marks it INCOMPLETE and withholds delta and imbalances (the classified volume no
+ * longer represents the bar). Levels, POC and value area stay (they describe the observed trades only).
+ */
+export function applyReconciliation(fp: FootprintBar, unreconciled: number): FootprintBar {
+  fp.unreconciledVolume = unreconciled > 0 ? unreconciled : 0;
+  const total = (fp.volume ?? 0) + fp.unreconciledVolume;
+  fp.incomplete = total > 0 && fp.unreconciledVolume / total > FLOW_MAX_UNRECONCILED_SHARE;
+  if (fp.incomplete) {
+    fp.delta = null;
+    fp.deltaPct = null;
+    fp.buyImbalances = 0;
+    fp.sellImbalances = 0;
+  }
+  return fp;
+}
+
+/** Pure: a bar's trade and unreconciled events, as stored in order_flow_events ('gzip-json-v1', before gzip). */
+export function encodeFlowEvents(trades: readonly FlowTrade[], unreconciled: ReadonlyArray<{ time: number; qty: number }>, bar: number): Array<[number, number | null, number, number]> {
+  const side = (s: FlowTrade['side']) => (s === 'BUY' ? 1 : s === 'SELL' ? -1 : 0);
+  const rows: Array<[number, number | null, number, number]> = [
+    ...trades.map((t) => [t.time - bar, t.price, t.qty, side(t.side)] as [number, number | null, number, number]),
+    ...unreconciled.map((u) => [u.time - bar, null, u.qty, 9] as [number, number | null, number, number]),
+  ];
+  return rows.sort((a, b) => a[0] - b[0]);
+}
+
+async function persistFlowEvents(symbol: string, f: SymbolFlow, bar: number, unrec: number): Promise<void> {
+  if (!schemaFileReady(ORDER_FLOW_EVENTS_MIGRATION)) return;
+  const trades = f.trades.filter((t) => t.time >= bar && t.time < bar + FLOW_BAR_MS), un = f.unreconciled.filter((u) => u.time >= bar && u.time < bar + FLOW_BAR_MS);
+  if (!trades.length && !un.length) return;
+  try {
+    const events = gzipSync(Buffer.from(JSON.stringify(encodeFlowEvents(trades, un, bar))));
+    await sql`INSERT INTO order_flow_events (symbol, exchange, instrument, bar_time, bar_ms, trades, unreconciled_volume, encoding, events, version)
+      VALUES (${symbol}, ${f.exchange}, ${f.instrument}, ${new Date(bar)}, ${FLOW_BAR_MS}, ${trades.length}, ${unrec}, 'gzip-json-v1', ${events}, ${ORDER_FLOW_VERSION})
+      ON CONFLICT (symbol, exchange, bar_time) DO NOTHING`;
+  } catch (err: any) {
+    logger.warn({ error: err.message, symbol }, 'Order flow: event recording failed');
+  }
 }
 
 async function persistFootprint(symbol: string, f: SymbolFlow, fp: FootprintBar, reason: string | null): Promise<void> {
   if (!schemaFileReady(ORDER_FLOW_MIGRATION)) return;
   try {
+    if (schemaFileReady(ORDER_FLOW_EVENTS_MIGRATION)) {
+      await sql`
+      INSERT INTO order_flow_bars (symbol, exchange, instrument, source, bar_time, bar_ms, delta_mode, unavailable_reason, trades, volume, buy_volume, sell_volume,
+        unclassified_volume, delta, delta_pct, poc, vah, val, buy_imbalances, sell_imbalances, levels, version, unreconciled_volume, tick_size, price_step)
+      VALUES (${symbol}, ${f.exchange}, ${f.instrument}, ${f.source}, ${new Date(fp.barTime)}, ${fp.barMs}, ${fp.deltaMode}, ${reason ?? (fp.incomplete ? 'INCOMPLETE_UNRECONCILED_VOLUME' : null)}, ${fp.trades}, ${fp.volume}, ${fp.buyVolume}, ${fp.sellVolume},
+        ${fp.unclassifiedVolume}, ${fp.delta}, ${fp.deltaPct}, ${fp.poc}, ${fp.vah}, ${fp.val}, ${fp.deltaMode === 'UNAVAILABLE' ? null : fp.buyImbalances}, ${fp.deltaMode === 'UNAVAILABLE' ? null : fp.sellImbalances},
+        ${fp.levels.length ? sql.json(fp.levels as any) : null}, ${ORDER_FLOW_VERSION}, ${fp.unreconciledVolume ?? null}, ${fp.tickSize ?? null}, ${fp.priceStep ?? null})
+      ON CONFLICT (symbol, exchange, bar_time) DO NOTHING
+    `;
+      return;
+    }
     await sql`
       INSERT INTO order_flow_bars (symbol, exchange, instrument, source, bar_time, bar_ms, delta_mode, unavailable_reason, trades, volume, buy_volume, sell_volume,
         unclassified_volume, delta, delta_pct, poc, vah, val, buy_imbalances, sell_imbalances, levels, version)

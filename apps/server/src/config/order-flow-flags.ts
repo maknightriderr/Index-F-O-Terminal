@@ -90,6 +90,16 @@ export const ORDER_FLOW_SUPPORTED: Readonly<Record<string, 'NSE' | 'MCX'>> = Obj
 });
 export const ORDER_FLOW_VERIFIED_SYMBOLS: ReadonlySet<string> = new Set(Object.keys(ORDER_FLOW_SUPPORTED));
 
+// ---------------- Dhan order-flow engine v2 (7 Nov 2026) ----------------
+/** Rollback without a deploy: DHAN_FLOW_V2=false keeps the feed on ORDER_FLOW_SYMBOLS only. */
+export const DHAN_FLOW_V2: boolean = parseFlag(process.env.DHAN_FLOW_V2, true);
+/** v2 universe beyond ORDER_FLOW_SYMBOLS (resolved daily from Dhan's master; BSE_FNO = segment 8 per the v2 annexure). */
+export const DHAN_FLOW_V2_SYMBOLS: Readonly<Record<string, 'NSE' | 'BSE' | 'MCX'>> = Object.freeze({
+  SENSEX: 'BSE', BANKEX: 'BSE', GOLDM: 'MCX', SILVERM: 'MCX', COPPER: 'MCX', ZINC: 'MCX', ALUMINIUM: 'MCX', LEAD: 'MCX',
+});
+/** Every NSE stock future's nearest contract (v2). DHAN_FLOW_STOCKS=false leaves stocks out. */
+export const DHAN_FLOW_STOCKS: boolean = DHAN_FLOW_V2 && parseFlag(process.env.DHAN_FLOW_STOCKS, true);
+
 export function parseOrderFlowSymbols(raw: string | undefined): { symbols: string[]; rejected: string[] } {
   const asked = (raw == null || raw.trim() === '' ? [...ORDER_FLOW_DEFAULT_SYMBOLS] : raw.split(',')).map((s) => s.trim().toUpperCase()).filter(Boolean);
   return { symbols: asked.filter((s) => ORDER_FLOW_VERIFIED_SYMBOLS.has(s)), rejected: asked.filter((s) => !ORDER_FLOW_VERIFIED_SYMBOLS.has(s)) };

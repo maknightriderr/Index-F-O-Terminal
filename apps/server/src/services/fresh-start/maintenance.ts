@@ -17,6 +17,16 @@ export const FRESH_EVALUATION_INPUT_RETENTION_DAYS = 10;
 /** Rows per UPDATE, and the most batches in one night (a bounded, interruptible job). */
 export const FRESH_TRIM_BATCH = 2000;
 export const FRESH_TRIM_MAX_BATCHES = 100;
+/**
+ * Dhan engine v2 (7 Nov): recorded order-flow events (order_flow_events, compressed per 15-minute bar) older than this
+ * are deleted nightly. FLOW_EVENT_RETENTION_DAYS overrides it (7-365); the per-bar footprints in order_flow_bars stay.
+ */
+export function flowEventRetentionDays(raw: string | undefined = process.env.FLOW_EVENT_RETENTION_DAYS): number {
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 7 && n <= 365 ? n : 30;
+}
+export const FLOW_EVENT_DELETE_BATCH = 5000;
+const FLOW_EVENTS_MIGRATION = '052_order_flow_events.sql';
 /** Run window, IST hours [from, to): after MCX's last close (23:55 in US winter), before any pre-open. */
 const RUN_FROM_HOUR = 2;
 const RUN_TO_HOUR = 6;
@@ -43,11 +53,23 @@ export async function trimFreshEvaluationInputs(db: Sql, now: number): Promise<n
   return total;
 }
 
+/** Deletes recorded order-flow events older than the retention, in bounded batches. Returns the rows deleted. */
+export async function trimFlowEvents(db: Sql, now: number, days: number = flowEventRetentionDays()): Promise<number> {
+  const cutoff = new Date(now - days * 86_400_000);
+  let total = 0;
+  for (let i = 0; i < FRESH_TRIM_MAX_BATCHES; i++) {
+    const rows = await db<{ symbol: string }[]>`DELETE FROM order_flow_events WHERE (symbol, exchange, bar_time) IN (SELECT symbol, exchange, bar_time FROM order_flow_events WHERE bar_time < ${cutoff} ORDER BY bar_time LIMIT ${FLOW_EVENT_DELETE_BATCH}) RETURNING symbol`;
+    total += rows.length;
+    if (rows.length < FLOW_EVENT_DELETE_BATCH) break;
+  }
+  return total;
+}
+
 /** Database and table sizes in MB (logged so growth is visible without database access). */
-export async function freshStorageFigures(db: Sql): Promise<Record<string, number>> {
-  const [r] = await db<any[]>`SELECT pg_database_size(current_database()) AS db, pg_total_relation_size('fresh_evaluations') AS evaluations, pg_total_relation_size('fresh_adapter_decisions') AS adapter, pg_total_relation_size('fresh_candidates') AS candidates`;
-  const mb = (x: unknown) => Math.round(Number(x) / 1_048_576);
-  return { databaseMb: mb(r.db), evaluationsMb: mb(r.evaluations), adapterDecisionsMb: mb(r.adapter), candidatesMb: mb(r.candidates) };
+export async function freshStorageFigures(db: Sql): Promise<Record<string, number | null>> {
+  const [r] = await db<any[]>`SELECT pg_database_size(current_database()) AS db, pg_total_relation_size('fresh_evaluations') AS evaluations, pg_total_relation_size('fresh_adapter_decisions') AS adapter, pg_total_relation_size('fresh_candidates') AS candidates, pg_total_relation_size(to_regclass('order_flow_events')) AS flow_events, pg_total_relation_size(to_regclass('order_flow_bars')) AS flow_bars`;
+  const mb = (x: unknown) => (x == null ? null : Math.round(Number(x) / 1_048_576));
+  return { databaseMb: mb(r.db), evaluationsMb: mb(r.evaluations), adapterDecisionsMb: mb(r.adapter), candidatesMb: mb(r.candidates), flowEventsMb: mb(r.flow_events), flowBarsMb: mb(r.flow_bars) };
 }
 
 let started = false;
@@ -61,7 +83,9 @@ export function startFreshMaintenance(): void {
     if (!(await redis.set(CLAIM_KEY(date), 'running', 'EX', 2 * 86_400, 'NX'))) return;
     try {
       const before = await freshStorageFigures(sql), t0 = Date.now(), trimmed = await trimFreshEvaluationInputs(sql, t0);
-      logger.info({ event: 'freshMaintenance', trimmed, retentionDays: FRESH_EVALUATION_INPUT_RETENTION_DAYS, ms: Date.now() - t0, before, after: await freshStorageFigures(sql) }, 'Fresh-start nightly maintenance: old evaluation inputs trimmed (results, trades and decisions kept)');
+      // Dhan engine v2: recorded flow events past their retention (the footprints themselves are kept).
+      const flowEventsDeleted = schemaFileReady(FLOW_EVENTS_MIGRATION) ? await trimFlowEvents(sql, t0) : null;
+      logger.info({ event: 'freshMaintenance', trimmed, retentionDays: FRESH_EVALUATION_INPUT_RETENTION_DAYS, flowEventsDeleted, flowEventRetentionDays: flowEventRetentionDays(), ms: Date.now() - t0, before, after: await freshStorageFigures(sql) }, 'Fresh-start nightly maintenance: old evaluation inputs trimmed, old order-flow events deleted (results, trades, decisions and footprints kept)');
       await redis.set(CLAIM_KEY(date), 'done', 'EX', 2 * 86_400);
     } catch (err) {
       await redis.del(CLAIM_KEY(date)).catch(() => undefined);

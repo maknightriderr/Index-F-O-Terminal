@@ -140,7 +140,7 @@ export function OrderFlowPanel({ filter }: { filter: DiagnosticsFilter }) {
           <StatusBadge tone={FEED_TONE[feed.status] ?? 'off'} label={(FEED_TEXT[feed.status] ?? feed.status).toUpperCase()} />
           <span className="text-sm text-[var(--text-secondary)]">
             {feed.lastPacketAt ? `Last packet ${new Date(feed.lastPacketAt).toLocaleString('en-GB', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })} IST` : 'No packet recorded'}
-            {Object.values(feed.instruments).length > 0 ? ` · ${Object.values(feed.instruments).map((i) => i.tradingSymbol).join(', ')}` : ''}
+            {Object.values(feed.instruments).length > 12 ? ` · ${Object.values(feed.instruments).length} contracts (${Object.values(feed.instruments).slice(0, 6).map((i) => i.tradingSymbol).join(', ')}, …)` : Object.values(feed.instruments).length > 0 ? ` · ${Object.values(feed.instruments).map((i) => i.tradingSymbol).join(', ')}` : ''}
           </span>
         </div>
         {totalBars === 0 ? (
