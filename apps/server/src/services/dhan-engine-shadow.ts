@@ -19,6 +19,13 @@ import { schemaFileReady } from './ensure-capture-schema.js';
 import { flowContractBars, flowSessionState, flowSymbols } from './order-flow-store.js';
 
 export const DHAN_SIGNALS_MIGRATION = '053_dhan_engine_signals.sql';
+export const DHAN_PAPER_MIGRATION = '054_dhan_engine_paper.sql';
+
+/** Phase 4: what a recorded SIGNAL is handed to (the fresh-start worker registers it); returns the paper decision. */
+export interface DhanPaperRequest { symbol: string; result: SetupResult; barTime: number; decidedAt: number; atr: number; exchange: string; kind: SetupContext['kind'] }
+export type DhanPaperHandler = (r: DhanPaperRequest) => Promise<{ decision: string; candidateId: string | null }>;
+let paperHandler: DhanPaperHandler | null = null;
+export function setDhanPaperHandler(h: DhanPaperHandler | null): void { paperHandler = h; }
 /** RVOL compares only bars recorded under the v2 reconciler (deployed 7 Nov; first session 9 Nov). */
 export const RVOL_SINCE = Date.parse('2026-11-09T00:00:00+05:30');
 const SUMMARY_LOG_MS = 15 * 60_000;
@@ -33,6 +40,7 @@ const state = {
   summaryAt: 0,
   rvol: new Map<string, { day: string; bySlot: Map<string, number[]> }>(),
   gamma: new Map<string, { day: string; samples: GammaSample[]; fired: Set<string> }>(),
+  paper: new Map<string, number>(),
 };
 
 const traded = (f: FootprintBar) => f.deltaMode !== 'UNAVAILABLE' && f.high != null && f.low != null && f.close != null;
@@ -109,6 +117,17 @@ async function record(symbol: string, ctx: SetupContext, barTime: number, window
     ON CONFLICT (strategy, side, symbol, bar_time) DO NOTHING`;
 }
 
+async function paper(h: DhanPaperHandler, req: DhanPaperRequest): Promise<void> {
+  let out: { decision: string; candidateId: string | null };
+  try { out = await h(req); } catch (err: any) { out = { decision: err instanceof Error && /^[A-Z_]+$/.test(err.message) ? err.message : 'PAPER_PATH_FAILED', candidateId: null }; }
+  state.paper.set(out.decision, (state.paper.get(out.decision) ?? 0) + 1);
+  logger.info({ event: 'dhanPaperDecision', symbol: req.symbol, strategy: req.result.strategy, side: req.result.side, decision: out.decision, candidateId: out.candidateId }, 'Dhan engine: paper decision for a setup signal (options, paper only)');
+  if (!schemaFileReady(DHAN_PAPER_MIGRATION)) return;
+  await sql`UPDATE dhan_engine_signals SET paper_decision = ${out.decision}, paper_candidate_id = ${out.candidateId}
+            WHERE strategy = ${req.result.strategy} AND side = ${req.result.side} AND symbol = ${req.symbol} AND bar_time = ${new Date(req.barTime)}`
+    .catch((err: any) => logger.warn({ symbol: req.symbol, error: err.message }, 'Dhan engine: paper decision write failed'));
+}
+
 /** Evaluate every contract whose latest bar closed since its last evaluation. Returns the number evaluated. */
 export async function evaluateDhanShadow(now: number, health: Health): Promise<number> {
   if (state.busy) return 0;
@@ -130,6 +149,7 @@ export async function evaluateDhanShadow(now: number, health: Health): Promise<n
           state.recorded[r.status]++;
           if (r.status === 'SIGNAL') logger.info({ event: 'dhanShadowSignal', symbol, strategy: r.strategy, side: r.side, barTime: new Date(last).toISOString(), score: r.score?.total, plan: r.plan, window: ev.sessionWindow }, 'Dhan engine shadow signal (recorded only, no position)');
           await record(symbol, ctx, last, ev.sessionWindow, ev.regime?.regime ?? null, r).catch((err: any) => logger.warn({ symbol, strategy: r.strategy, error: err.message }, 'Dhan engine shadow: signal write failed'));
+          if (r.status === 'SIGNAL' && paperHandler) void paper(paperHandler, { symbol, result: r, barTime: last, decidedAt: last + 15 * 60_000, atr: Number(r.evidence.atr) || 0, exchange: ctx.exchange, kind: ctx.kind });
         }
       } catch (err: any) {
         logger.warn({ symbol, error: err.message }, 'Dhan engine shadow: evaluation failed');
@@ -207,18 +227,18 @@ export async function recordGammaChain(index: string, chain: Pick<OptionChain, '
 export async function dhanShadowSignals(day: string): Promise<unknown[]> {
   if (!schemaFileReady(DHAN_SIGNALS_MIGRATION)) return [];
   const from = new Date(`${day}T00:00:00+05:30`), to = new Date(from.getTime() + 86_400_000);
-  const rows = await sql<Array<Record<string, unknown>>>`SELECT strategy, side, symbol, instrument, exchange, bar_time, status, score, eligibility, entry, stop_loss, target, rr, session_window, regime, gates, no_trade, evidence
+  const rows = await sql<Array<Record<string, unknown>>>`SELECT *
              FROM dhan_engine_signals WHERE bar_time >= ${from} AND bar_time < ${to} ORDER BY bar_time, symbol, strategy LIMIT 500`;
   return [...rows];
 }
 
 export function dhanShadowStatus() {
-  return { recorded: { ...state.recorded }, contracts: state.evaluated.size, firstFailures: [...state.failures].sort((a, b) => b[1] - a[1]).slice(0, 30).map(([k, c]) => ({ k, c })), gamma: [...state.gamma].map(([index, g]) => ({ index, day: g.day, samples: g.samples.length, fired: [...g.fired] })) };
+  return { recorded: { ...state.recorded }, paper: Object.fromEntries(state.paper), contracts: state.evaluated.size, firstFailures: [...state.failures].sort((a, b) => b[1] - a[1]).slice(0, 30).map(([k, c]) => ({ k, c })), gamma: [...state.gamma].map(([index, g]) => ({ index, day: g.day, samples: g.samples.length, fired: [...g.fired] })) };
 }
 
 /** Tests only. */
 export function resetDhanShadow(): void {
-  state.evaluated.clear(); state.failures.clear(); state.rvol.clear(); state.gamma.clear();
+  state.evaluated.clear(); state.failures.clear(); state.rvol.clear(); state.gamma.clear(); state.paper.clear();
   state.recorded = { SIGNAL: 0, NO_TRADE: 0 }; state.summaryAt = 0; state.busy = false;
 }
 

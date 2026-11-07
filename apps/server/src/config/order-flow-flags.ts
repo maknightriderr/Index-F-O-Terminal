@@ -103,6 +103,9 @@ export const DHAN_FLOW_STOCKS: boolean = DHAN_FLOW_V2 && parseFlag(process.env.D
 /** Dhan engine v2 phase 3: evaluate setups A-D / expiry gamma on closed bars and record SHADOW signals (no positions). */
 export const DHAN_ENGINE_SHADOW: boolean = parseFlag(process.env.DHAN_ENGINE_SHADOW, true);
 
+/** Dhan engine v2 phase 4: a DHAN_* setup SIGNAL is paper-traded in options through the fresh-start adapter (D3). */
+export const DHAN_ENGINE_PAPER: boolean = DHAN_ENGINE_SHADOW && parseFlag(process.env.DHAN_ENGINE_PAPER, true);
+
 export function parseOrderFlowSymbols(raw: string | undefined): { symbols: string[]; rejected: string[] } {
   const asked = (raw == null || raw.trim() === '' ? [...ORDER_FLOW_DEFAULT_SYMBOLS] : raw.split(',')).map((s) => s.trim().toUpperCase()).filter(Boolean);
   return { symbols: asked.filter((s) => ORDER_FLOW_VERIFIED_SYMBOLS.has(s)), rejected: asked.filter((s) => !ORDER_FLOW_VERIFIED_SYMBOLS.has(s)) };

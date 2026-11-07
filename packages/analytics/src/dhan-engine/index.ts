@@ -9,3 +9,4 @@ export * from './absorption.js';
 export * from './regime.js';
 export * from './setups.js';
 export * from './expiry-gamma.js';
+export * from './paper.js';

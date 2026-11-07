@@ -14,7 +14,7 @@ const db = Object.assign(tag, { json: (x: unknown) => JSON.stringify(x) });
 vi.mock('../../lib/db.js', () => ({ sql: db }));
 vi.mock('../../lib/redis.js', () => ({ redis: {} }));
 vi.mock('../../lib/logger.js', () => ({ logger: { info() {}, warn(o: any, m: string) { throw new Error(`unexpected warn: ${m} ${JSON.stringify(o)}`); }, error() {}, debug() {} } }));
-vi.mock('../ensure-capture-schema.js', () => ({ schemaFileReady: (f: string) => f === '053_dhan_engine_signals.sql' }));
+vi.mock('../ensure-capture-schema.js', () => ({ schemaFileReady: (f: string) => f === '053_dhan_engine_signals.sql' || f === '054_dhan_engine_paper.sql' }));
 
 // The setups themselves are tested in packages/analytics; here a fixed evaluation drives the recorder.
 const fixed = { results: [] as any[], sessionWindow: 'PRIMARY', regime: { regime: 'SIDEWAYS' } };
@@ -32,11 +32,13 @@ beforeAll(async () => {
   pg = new PGlite();
   await pg.exec(readFileSync(new URL('../../../../../database/init/053_dhan_engine_signals.sql', import.meta.url), 'utf8'));
   await pg.exec(readFileSync(new URL('../../../../../database/init/053_dhan_engine_signals.sql', import.meta.url), 'utf8')); // idempotent
+  for (let k = 0; k < 2; k++) await pg.exec(readFileSync(new URL('../../../../../database/init/054_dhan_engine_paper.sql', import.meta.url), 'utf8'));
 }, 30_000);
 
 beforeEach(async () => {
   store.resetFlowStore();
   shadow.resetDhanShadow();
+  shadow.setDhanPaperHandler(null);
   await pg.exec('DELETE FROM dhan_engine_signals');
   store.registerFlowSymbol('NIFTY', { exchange: 'NSE', instrument: 'NIFTY-Nov2026-FUT', source: 'DHAN', mode: 'INFERRED', startedAt: OPEN - 3 * 86_400_000 - Q, kind: 'INDEX', tickSize: 0.1 });
 });
@@ -76,6 +78,21 @@ describe('shadow recorder', () => {
     expect(shadow.dhanShadowStatus()).toMatchObject({ recorded: { SIGNAL: 1, NO_TRADE: 1 }, firstFailures: [{ k: 'DHAN_C_FAILED_AUCTION_CVD:A2_SWEEP', c: 1 }] });
     expect((await shadow.dhanShadowSignals('2026-11-09')).length).toBe(2);
     expect(analytics.evaluateDhanSetups).toHaveBeenCalledTimes(1);
+  });
+  it('phase 4: hands each SIGNAL (only) to the paper handler and records its decision on the row', async () => {
+    fixed.results = [sig('SIGNAL', { evidence: { atr: 12 } }), sig('NO_TRADE', { side: 'BEARISH' })];
+    const handler = vi.fn(async () => ({ decision: 'FILLED', candidateId: 'cand-1' }));
+    shadow.setDhanPaperHandler(handler);
+    await trade(OPEN + 1000, 100, 10, 'BUY');
+    await store.closeFlowBars(OPEN + Q + 1, true);
+    await shadow.evaluateDhanShadow(OPEN + Q + 1, healthy);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(handler).toHaveBeenCalledOnce();
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({ symbol: 'NIFTY', barTime: OPEN, decidedAt: OPEN + Q, atr: 12, exchange: 'NSE', kind: 'INDEX' }));
+    const rows = (await pg.query<any>('SELECT side, paper_decision, paper_candidate_id FROM dhan_engine_signals ORDER BY side')).rows;
+    expect(rows).toEqual([{ side: 'BEARISH', paper_decision: null, paper_candidate_id: null }, { side: 'BULLISH', paper_decision: 'FILLED', paper_candidate_id: 'cand-1' }]);
+    expect(shadow.dhanShadowStatus().paper).toEqual({ FILLED: 1 });
+    expect(store.flowLastTrade('NIFTY')).toEqual({ price: 100, at: OPEN + 1000 });
   });
   it('does not decide on a closed bar without trades', async () => {
     fixed.results = [sig('SIGNAL')];
