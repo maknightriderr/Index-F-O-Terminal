@@ -13,6 +13,8 @@ paper sizing needs one (owner decision pending). `DHAN_ENGINE_PAPER=false` switc
 P5: Signal Diagnostics → "Dhan engine v2" panels: setup board (status, score, rejection reasons, paper decision,
 where setups stopped), contract engines (CVD / VWAP / POC / footprint / structure with status badges) and a
 contract's footprint ladder (diagonal imbalances marked), CVD line (incomplete part dashed), profile and events.
+P5 merged. P6: validation from stored data (recorded signals graded on recorded trades; footprint replay) and the
+final report, `04-final-report.md`.
 
 P3 known limits (recorded, not hidden):
 - A–D decide on 15-minute footprint closes (Part 11 asks for 5-minute confirmation; 5-minute footprints with price

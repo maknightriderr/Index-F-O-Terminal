@@ -56,6 +56,7 @@ import { shadowRulesReport, signalEngineMetrics } from '../services/signal-engin
 import { orderFlowReport } from '../services/order-flow-metrics.js';
 import { dhanEngineSnapshot, dhanEngineSummary } from '../services/dhan-engine-state.js';
 import { dhanShadowSignals, dhanShadowStatus } from '../services/dhan-engine-shadow.js';
+import { dhanReplay, dhanValidation } from '../services/dhan-engine-validation.js';
 import { replayFull } from '../services/full-replay.js';
 import { measurementReport } from '../services/measurement-report.js';
 import { gateValidationReport, logEvaluationFailure, portfolioRiskReport, scorecardReport, signalQualityReport } from '../services/evaluation-reports.js';
@@ -275,6 +276,30 @@ export function createDiagnosticsRoutes(): Router {
     } catch (err: any) {
       logger.error({ error: err.message }, 'Signal diagnostics order-flow report failed');
       res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Dhan engine v2 (phase 6): recorded signals graded on recorded trade events, and a bounded footprint replay.
+  const isDay = (x: unknown): x is string => typeof x === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(x);
+  const istToday = () => new Date(Date.now() + 19_800_000).toISOString().slice(0, 10);
+  router.get('/order-flow/engine/validation', async (req: Request, res: Response) => {
+    try {
+      const to = isDay(req.query.to) ? req.query.to : istToday();
+      const from = isDay(req.query.from) ? req.query.from : new Date(Date.parse(`${to}T00:00:00Z`) - 29 * 86_400_000).toISOString().slice(0, 10);
+      res.json({ success: true, data: { note: SIMULATION_NOTE, ...(await dhanValidation(from, to)) } });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+  router.get('/order-flow/engine/replay', async (req: Request, res: Response) => {
+    try {
+      const symbol = typeof req.query.symbol === 'string' ? req.query.symbol.toUpperCase() : null;
+      if (!symbol) return res.status(400).json({ success: false, error: 'symbol is required' });
+      const to = isDay(req.query.to) ? req.query.to : istToday();
+      const from = isDay(req.query.from) ? req.query.from : to;
+      res.json({ success: true, data: { note: SIMULATION_NOTE, ...(await dhanReplay(symbol, from, to)) } });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
     }
   });
 

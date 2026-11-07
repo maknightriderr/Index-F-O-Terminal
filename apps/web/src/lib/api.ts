@@ -515,6 +515,9 @@ class ApiClient {
   async getDhanEngineSnapshot(symbol: string) {
     return this.get<import('../components/signal-diagnostics/dhan-engine-panel').DhanEngineSnapshot>(`/api/diagnostics/order-flow/engine?symbol=${encodeURIComponent(symbol)}`);
   }
+  async getDhanEngineValidation() {
+    return this.get<import('../components/signal-diagnostics/dhan-engine-panel').DhanValidationReport>('/api/diagnostics/order-flow/engine/validation');
+  }
   async getDhanEngineSignals(date?: string) {
     return this.get<import('../components/signal-diagnostics/dhan-engine-panel').DhanSignalsReport>(`/api/diagnostics/order-flow/engine/signals${date ? `?date=${encodeURIComponent(date)}` : ''}`);
   }
