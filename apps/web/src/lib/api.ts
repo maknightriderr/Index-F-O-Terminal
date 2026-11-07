@@ -508,6 +508,17 @@ class ApiClient {
     return this.get<import('../components/signal-diagnostics/order-flow-panel').OrderFlowReport>(`/api/diagnostics/order-flow${this.diagnosticsQuery(opts)}`);
   }
 
+  /** Dhan engine v2: per-contract engine summary (session), one contract's snapshot, and the day's setup signals. */
+  async getDhanEngineSummary() {
+    return this.get<import('../components/signal-diagnostics/dhan-engine-panel').DhanEngineSummary>('/api/diagnostics/order-flow/engine');
+  }
+  async getDhanEngineSnapshot(symbol: string) {
+    return this.get<import('../components/signal-diagnostics/dhan-engine-panel').DhanEngineSnapshot>(`/api/diagnostics/order-flow/engine?symbol=${encodeURIComponent(symbol)}`);
+  }
+  async getDhanEngineSignals(date?: string) {
+    return this.get<import('../components/signal-diagnostics/dhan-engine-panel').DhanSignalsReport>(`/api/diagnostics/order-flow/engine/signals${date ? `?date=${encodeURIComponent(date)}` : ''}`);
+  }
+
   /** Pre-registered shadow experiments: entry filters and exit rules, measured on the paper trades — never traded. */
   async getShadowRules(opts: DiagnosticsFilter = {}) {
     return this.get<import('../components/signal-diagnostics/signal-engine-panel').ShadowRulesReport>(`/api/diagnostics/shadow-rules${this.diagnosticsQuery(opts)}`);

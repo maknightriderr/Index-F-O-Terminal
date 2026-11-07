@@ -9,7 +9,10 @@ no-trade engine (`setups.ts`) and the tagged expiry-gamma module (`expiry-gamma.
 P4: a DHAN_* SIGNAL becomes an options PAPER candidate through the fresh-start adapter and store (same arming, books,
 fees, IV filter, record-only risk flags); the futures plan is translated to the paper reference by the current basis
 (recorded). The paper decision is written on the signal row. Expiry gamma stays shadow: its rule defines no stop, and
-paper sizing needs one (owner decision pending). `DHAN_ENGINE_PAPER=false` switches paper entries off. P5–P6 next.
+paper sizing needs one (owner decision pending). `DHAN_ENGINE_PAPER=false` switches paper entries off. P4 merged.
+P5: Signal Diagnostics → "Dhan engine v2" panels: setup board (status, score, rejection reasons, paper decision,
+where setups stopped), contract engines (CVD / VWAP / POC / footprint / structure with status badges) and a
+contract's footprint ladder (diagonal imbalances marked), CVD line (incomplete part dashed), profile and events.
 
 P3 known limits (recorded, not hidden):
 - A–D decide on 15-minute footprint closes (Part 11 asks for 5-minute confirmation; 5-minute footprints with price
