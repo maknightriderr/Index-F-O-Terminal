@@ -35,7 +35,7 @@ import { serviceHeartbeat } from '../lib/service-supervisor.js';
 import { DHAN_RESPONSE, DHAN_SEGMENT_CODE, DHAN_MAX_INSTRUMENTS_PER_CONNECTION, dhanFeedUrl, fullSubscriptions, parseDhanFrame, resolveFlowContracts, type DhanFullPacket, type ResolvedFlowContract } from '../lib/dhan-feed-packets.js';
 import { ORDER_BLOCK_MODE, ORDER_BLOCK_MODE_REJECTED, OF1_TRADING_REQUESTED, ORDER_FLOW_SUPPORTED, ORDER_FLOW_SYMBOLS, ORDER_FLOW_SYMBOLS_REJECTED, DHAN_FLOW_V2, DHAN_FLOW_V2_SYMBOLS, DHAN_FLOW_STOCKS, DHAN_ENGINE_SHADOW } from '../config/order-flow-flags.js';
 import { dhanConfigured, dhanSession, dhanSessionStatus, ensureDhanSession, markDhanTokenRejected } from './dhan-session.js';
-import { closeFlowBars, flowContractBars, recordFlowTrade, recordFlowUnreconciled, registerFlowSymbol, setFlowFeedConnected } from './order-flow-store.js';
+import { closeFlowBars, flowContractBars, hydrateFlowSymbols, recordFlowTrade, recordFlowUnreconciled, registerFlowSymbol, setFlowFeedConnected } from './order-flow-store.js';
 import { evaluateDhanShadow } from './dhan-engine-shadow.js';
 
 export const DHAN_SCRIP_MASTER_URL = 'https://images.dhan.co/api-data/api-scrip-master.csv';
@@ -191,6 +191,12 @@ async function resolveInstruments(now: number): Promise<void> {
   }
   const kinds = Object.values(state.resolved).reduce<Record<string, number>>((n, r) => ({ ...n, [r.kind]: (n[r.kind] ?? 0) + 1 }), {});
   logger.info({ total: ordered.length, kinds, legacy: Object.fromEntries(Object.entries(state.resolved).filter(([k]) => legacy.has(k))), v2: DHAN_FLOW_V2, stocks: DHAN_FLOW_STOCKS }, 'Dhan feed: futures resolved for order flow');
+  // Engine v2 (8 Nov): rebuild today's and the previous session's closed bars from the recorded events (background).
+  const started = Date.now();
+  void hydrateFlowSymbols(now).then(
+    (r) => logger.info({ event: 'orderFlowHydration', ...r, seconds: Math.round((Date.now() - started) / 1000) }, 'Order flow: closed bars rebuilt from recorded trade events after start'),
+    (err: any) => logger.warn({ error: err.message }, 'Order flow: restart hydration failed'),
+  );
 }
 
 /** The per-instrument data-quality summary (status counts, reconciled share, the weakest instruments). */

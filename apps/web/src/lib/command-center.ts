@@ -24,7 +24,17 @@ export const STRATEGY_NAMES: Record<string, string> = {
 /** 2.0: the 1.x strategies run in shadow — evaluated and recorded, never traded (packages/analytics FRESH_SHADOW_STRATEGIES). */
 export const SHADOW_STRATEGY_IDS: ReadonlySet<string> = new Set(['NEW_ORB_RETEST_V1', 'NEW_VWAP_PULLBACK_V1', 'NEW_PREVIOUS_SESSION_SWEEP_V1', 'NEW_FIRST_OPENING_PULLBACK_V1', 'NEW_MOMENTUM_BREAKOUT_V1', 'NEW_TREND_FLAG_V1', 'NEW_EVENT_BREAKOUT_V1']);
 export const STRATEGY_IDS = Object.keys(STRATEGY_NAMES);
-export const strategyName = (id: string) => STRATEGY_NAMES[id] ?? id.replace(/^NEW_|_V\d+$/g, '').replaceAll('_', ' ').toLowerCase();
+/** Dhan order-flow engine v2 (separate paper book): paper-traded, never evaluated by the fresh-start radar. */
+export const DHAN_STRATEGY_NAMES: Record<string, string> = {
+  DHAN_A_SWEEP_ABSORPTION: 'Dhan A · sweep + absorption',
+  DHAN_B_IMBALANCE_BREAKOUT: 'Dhan B · imbalance breakout',
+  DHAN_C_FAILED_AUCTION_CVD: 'Dhan C · failed auction + CVD',
+  DHAN_D_VWAP_PROFILE_REJECTION: 'Dhan D · VWAP / profile rejection',
+  DHAN_EXPIRY_GAMMA: 'Dhan expiry gamma',
+};
+/** Every strategy with paper trades (Strategy Lab tabs, heatmap, promotion gates). */
+export const PAPER_STRATEGY_IDS = [...STRATEGY_IDS, ...Object.keys(DHAN_STRATEGY_NAMES)];
+export const strategyName = (id: string) => STRATEGY_NAMES[id] ?? DHAN_STRATEGY_NAMES[id] ?? id.replace(/^NEW_|_V\d+$/g, '').replaceAll('_', ' ').toLowerCase();
 /** A radar / table column header: the name, marked when the strategy now runs in shadow (its past trades keep the plain name). */
 export const strategyHeader = (id: string) => strategyName(id) + (SHADOW_STRATEGY_IDS.has(id) ? ' (shadow)' : '');
 
@@ -245,7 +255,7 @@ const istMinutes = (ms: number) => {
 
 /** Mean R per closed trade by strategy and IST entry time. null = no trades in that cell. */
 export function timeHeatmap(positions: PositionView[]): Array<{ strategy: string; label: string; cells: Array<{ r: number | null; n: number }> }> {
-  return STRATEGY_IDS.map((strategy) => ({
+  return PAPER_STRATEGY_IDS.map((strategy) => ({
     strategy,
     label: strategyName(strategy),
     cells: TIME_SLOTS.map((slot) => {

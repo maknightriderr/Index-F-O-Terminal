@@ -218,8 +218,17 @@ export const FRESH_TREND_MAX_HOLD_BARS = 48;
  * the best price reached is more than trailAtr ATRs beyond entry, then trailAtr ATRs behind that best price. It only
  * ever tightens (the best price is monotone), and it is null for non-trend positions.
  */
+/** Part 14 (STRUCTURE): the trail starts once the move has paid this many R, and then sits 1R behind the best price. */
+export const FRESH_STRUCTURE_TRAIL_START_R = 1.5;
+export const FRESH_STRUCTURE_TRAIL_R = 1;
 export function freshTrailingStop(p: Pick<FreshPaperPosition, 'candidate' | 'maxUnderlyingFavorable'>): number | null {
     const c = p.candidate;
+    if (c.exitProfile === 'STRUCTURE') {
+        const d = c.direction === 'BULLISH' ? 1 : -1, r = Math.abs(c.referenceEntry - c.stop);
+        if (!(r > 0) || !(p.maxUnderlyingFavorable >= FRESH_STRUCTURE_TRAIL_START_R * r)) return null;
+        const trail = c.referenceEntry + d * (p.maxUnderlyingFavorable - FRESH_STRUCTURE_TRAIL_R * r);
+        return d * (trail - c.stop) > 0 ? trail : null;
+    }
     if (c.exitProfile !== 'TREND' || !(c.trailAtr! > 0) || !(c.atr > 0)) return null;
     const d = c.direction === 'BULLISH' ? 1 : -1, distance = c.trailAtr! * c.atr;
     // Inactive until the move has paid trailAtr ATRs, so the trail starts at breakeven and never sits inside entry noise.
@@ -281,8 +290,11 @@ export function advanceFreshPosition(p: FreshPaperPosition, e: {
             : underlyingFresh && d * (e.underlying! - exitLevel) <= 0;
         // A trend position has no fixed objective: its nominal target only sized the admission payoff check.
         const target = !trend && underlyingFresh && d * (e.underlying! - n.candidate.target) >= 0;
-        const noProgress = e.barsSinceFill >= 3 && n.maxUnderlyingFavorable < .25 * Math.abs(n.candidate.referenceEntry - n.candidate.stop) && underlyingFresh && d * (e.underlying! - n.candidate.referenceEntry) < 0;
-        const maxHold = trend ? FRESH_TREND_MAX_HOLD_BARS : 12;
+        // STRUCTURE (Part 14) has no no-progress or max-hold exit: the structural stop, the trail, the target and the
+        // session cutoff manage it.
+        const structure = n.candidate.exitProfile === 'STRUCTURE';
+        const noProgress = !structure && e.barsSinceFill >= 3 && n.maxUnderlyingFavorable < .25 * Math.abs(n.candidate.referenceEntry - n.candidate.stop) && underlyingFresh && d * (e.underlying! - n.candidate.referenceEntry) < 0;
+        const maxHold = structure ? Infinity : trend ? FRESH_TREND_MAX_HOLD_BARS : 12;
         const pe = n.candidate.premiumExit;
         const reason = pe
             ? (e.at >= e.cutoff - 600000 ? 'SESSION_CUTOFF' : reachedStop ? 'PREMIUM_STOP' : e.at >= pe.exitAt ? 'TIME_EXIT' : null)
@@ -313,6 +325,12 @@ export function advanceFreshPosition(p: FreshPaperPosition, e: {
     }
     return n;
 }
+/**
+ * Paper books (owner D4, 7 Nov: the Dhan engine is separate). DHAN_* strategies trade their own account per session —
+ * own capital, cash, risk reservations, one-position-per-instrument and cohort — beside the fresh-start account.
+ */
+export const freshAccountBook = (accountId: string): 'DHAN' | 'FRESH' => (accountId.includes(':DHAN:') ? 'DHAN' : 'FRESH');
+export const freshAccountId = (c: Pick<FreshCandidate, 'strategy' | 'version' | 'session'>): string => (c.strategy.startsWith('DHAN_') ? `${c.version}:DHAN:${c.session}` : `${c.version}:${c.session}`);
 export function canonicalFreshParent(c: FreshCandidate, active: readonly {
     instrument: string;
     direction: string;

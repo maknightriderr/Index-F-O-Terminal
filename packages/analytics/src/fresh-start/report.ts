@@ -1,6 +1,6 @@
-import { FRESH_PACK_VERSION, FRESH_ALL_STRATEGIES as FRESH_STRATEGIES, type FreshStrategy } from './strategies.js';
+import { FRESH_PACK_VERSION, FRESH_REPORTED_STRATEGIES as FRESH_STRATEGIES, type FreshExternalStrategy, type FreshStrategy } from './strategies.js';
 export interface FreshResult {
-    strategy: FreshStrategy;
+    strategy: FreshStrategy | FreshExternalStrategy;
     version: string;
     session: string;
     state: string;

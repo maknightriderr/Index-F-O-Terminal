@@ -1,5 +1,5 @@
 import {getSessionWindow,FO_SEGMENT,type Instrument} from '@fno/shared';
-import {assessFreshPlan,FRESH_PARITY_STRICT,fitFreshParity,type FreshParityTolerance,fitFreshFuturesParity,freshFuturesPremiumScenarios,freshPremiumScenarios,freshRoundTripFees,freshRoundTripFeeBreakdown,type FreshCandidate,type FreshQuote,type FreshContract} from '@fno/analytics';
+import {assessFreshPlan,freshAccountId,FRESH_PARITY_STRICT,fitFreshParity,type FreshParityTolerance,fitFreshFuturesParity,freshFuturesPremiumScenarios,freshPremiumScenarios,freshRoundTripFees,freshRoundTripFeeBreakdown,type FreshCandidate,type FreshQuote,type FreshContract} from '@fno/analytics';
 import type {FreshQualifiedAdapter,FreshPreparedCandidate} from './runtime.js';
 import {FreshSharedFeed} from './feed.js';
 import {FreshEventSource} from './event-source.js';
@@ -60,7 +60,7 @@ export class FreshProductionAdapter implements FreshQualifiedAdapter {
     if(c.premiumExit&&!expiries.length)return reject('NO_EXPIRY_DAY_CONTRACT');
     const spotPrice=spot.price;
     const strikes=[...new Set(universe.filter(x=>expiries.includes(x.expiry!)).map(x=>x.strike!))].sort((a,b)=>Math.abs(a-spotPrice)-Math.abs(b-spotPrice)||a-b).slice(0,5);
-    const rows=await this.store.recover(),marks=this.marks(rows),accountId=`${c.version}:${c.session}`,account=await this.store.accountView(accountId,this.ports.capital,marks,now),eligible:{contract:FreshContract;rr:number;spread:number;tick:number;iv:number|null;expiry:string}[]=[];
+    const rows=await this.store.recover(),marks=this.marks(rows),accountId=freshAccountId(c),account=await this.store.accountView(accountId,this.ports.capital,marks,now),eligible:{contract:FreshContract;rr:number;spread:number;tick:number;iv:number|null;expiry:string}[]=[];
     // 6 Nov: a setup used to price once, at the bar close, and every data gap was a silent `continue` (6 of 7 setups in
     // two days ended NO_ELIGIBLE_CONTRACT_MODEL_OR_PAYOFF with no contract evaluated). It now retries every second while
     // the candidate's entry window lasts, the parity basis may use books up to FRESH_PARITY_RELAXED.maxAgeMs old when

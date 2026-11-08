@@ -9,7 +9,8 @@
 // becomes a candidate. Its plan is in the Dhan FUTURES price space; the paper reference may be the same future or
 // the spot (stocks). Levels are translated by the CURRENT difference between the two (reference price − futures
 // price): a constant-basis translation, recorded in the evidence, never hidden. The candidate exits at the setup's
-// target or stop (exit profile TARGET) and expires FRESH_ENTRY_WINDOW_MS after the decision, like every fresh entry.
+// target, its structural stop on a 5-minute close, or a trail from +1.5R (exit profile STRUCTURE, master prompt Part
+// 14), and may enter for DHAN_ENTRY_WINDOW_MS (a 15-minute setup; the books of a stock may need a few seconds to arrive).
 // Expiry gamma (owner, 8 Nov: 30% stop-loss): paper-traded on the expiry-day option with a PREMIUM-defined exit — a
 // stop 30% below the entry premium and the module's 15:15 time exit; entries until 15:00; |delta| 0.55-0.85 (ATM or
 // one strike ITM, never deep OTM). Its underlying stop / target are model levels for the premium model only.
@@ -25,6 +26,8 @@ export const DHAN_PAPER_STRATEGIES: readonly FreshExternalStrategy[] = ['DHAN_A_
 export const DHAN_PAPER_MAX_PRICE_AGE_MS = 60_000;
 /** A translation larger than this share of price means the two series are not the same underlying: refuse. */
 export const DHAN_PAPER_MAX_BASIS_SHARE = 0.03;
+/** Entry window of a DHAN_* setup candidate (the extended-entry check, 0.25 ATR, still bounds the price). */
+export const DHAN_ENTRY_WINDOW_MS = 45_000;
 
 export interface DhanPaperInput {
   symbol: string;
@@ -63,7 +66,7 @@ export function dhanPaperCandidate(x: DhanPaperInput): DhanPaperOutcome {
       id: `${FRESH_PACK_VERSION}:${x.reference.sourceEpoch}:${parentId}:${r.strategy}:${x.barTime}`,
       parentId, version: FRESH_PACK_VERSION, strategy: r.strategy as FreshExternalStrategy, direction: r.side, instrument: x.reference.id,
       sourceEpoch: x.reference.sourceEpoch, session: x.session, at: x.decidedAt, referenceEntry: entry, stop, target, atr: x.atr, origin,
-      expiresAt: Math.min(x.now + FRESH_ENTRY_WINDOW_MS, x.sessionClose - 3_600_000), exitProfile: 'TARGET',
+      expiresAt: Math.min(x.now + DHAN_ENTRY_WINDOW_MS, x.sessionClose - 3_600_000), exitProfile: 'STRUCTURE',
       evidence: {
         dhan: {
           symbol: x.symbol, setup: r.setup, score: r.score?.total ?? null, eligibility: r.score?.eligibility ?? null, futuresPlan: r.plan,

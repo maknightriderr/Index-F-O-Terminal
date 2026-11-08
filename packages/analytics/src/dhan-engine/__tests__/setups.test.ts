@@ -78,6 +78,15 @@ describe('Setup A: liquidity sweep + absorption reversal', () => {
     const absorptionFails = A_DAY.map((b, k) => (k === 6 ? { ...b, l: 96.5 } : b));
     expect(find(run(contextOf(QUIET, absorptionFails)), 'A', 'BULLISH').failed).toBe('A4_A5_ABSORPTION_CONFIRMED');
   });
+  it('8 Nov: a lost bar of the session (restart gap) ends the session CVD -> no CVD-based setup on incomplete totals', () => {
+    const c = contextOf(QUIET, A_DAY);
+    c.health = { ...c.health, sessionGapAt: OPEN + 2 * Q };
+    expect(find(run(c), 'A', 'BULLISH')).toMatchObject({ status: 'NO_SETUP', failed: 'A6_CVD_IMPROVES' });
+    // A gap after the decision bar changes nothing.
+    const later = contextOf(QUIET, A_DAY);
+    later.health = { ...later.health, sessionGapAt: OPEN + 20 * Q };
+    expect(find(run(later), 'A', 'BULLISH').status).toBe('SIGNAL');
+  });
   it('a stale feed turns the signal into NO_TRADE (gate and no-trade reason both recorded)', () => {
     const a = find(run(contextOf(QUIET, A_DAY, { health: { stale: true, mappingValid: true } })), 'A', 'BULLISH');
     expect(a.status).toBe('NO_TRADE');
@@ -93,6 +102,11 @@ describe('Setup B: footprint imbalance breakout', () => {
     expect(b.checks.map((c) => c.id)).toEqual(['B1_HTF_BULLISH', 'B2_ABOVE_VWAP', 'B3_CONSOLIDATION_BELOW_RESISTANCE', 'B4_RVOL_EXPANSION', 'B5_DELTA_EXPANSION', 'B6_STACKED_BUY_IMBALANCE', 'B7_CLOSE_ABOVE_RESISTANCE', 'B8_RETEST_HOLDS', 'B9_NO_OPPOSING_ABSORPTION']);
     expect(b.score).toMatchObject({ total: 8, eligibility: 'PREFERRED' });
     expect(find(run(reflect(bCtx())), 'B', 'BEARISH')).toMatchObject({ status: 'SIGNAL', plan: { entry: 143, sl: 144.3, target: 130 } });
+  });
+  it('8 Nov: never reads an incomplete session VWAP (restart gap)', () => {
+    const c = bCtx();
+    c.health = { ...c.health, sessionGapAt: OPEN + Q };
+    expect(find(run(c), 'B', 'BULLISH').failed).toBe('B2_ABOVE_VWAP');
   });
   it('never fires without measured participation (RVOL unavailable until 20 sessions are recorded)', () => {
     expect(find(run(bCtx(null)), 'B', 'BULLISH').failed).toBe('B4_RVOL_EXPANSION');

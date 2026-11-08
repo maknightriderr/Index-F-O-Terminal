@@ -83,7 +83,8 @@ export interface SetupContext {
   /** Completed prior daily bars, oldest first. */
   daily: EngineBar[];
   sessionOpen: number;
-  health: { stale: boolean; mappingValid: boolean };
+  /** sessionGapAt: the first lost bar of today's session (restart / unreconciled-only): session totals end there. */
+  health: { stale: boolean; mappingValid: boolean; sessionGapAt?: number | null };
 }
 
 export interface Check { id: string; ok: boolean; value?: unknown }
@@ -153,6 +154,8 @@ interface Derived {
   profile: VolumeProfile;
   regime: MtfRegime;
   m30Trend: Side | 'UNKNOWN';
+  /** Index of the first session bar after a lost bar (Infinity when the session is complete). */
+  fromGap: number;
 }
 
 function meanRange(bars: readonly EngineBar[], n: number, min: number): number | null {
@@ -206,10 +209,16 @@ function derive(c: SetupContext): Derived | null {
   const levels = liquidityLevels(bars, ref, bars[0].time === c.sessionOpen ? 0 : -1);
   const cvdBars = bars.map((b, k) => ({ ...b, delta: fps[k].deltaMode === 'UNAVAILABLE' ? null : fps[k].delta }));
   const cvd = cvdSeries(cvdBars, istSession);
+  // A lost bar of today's session (restart gap): the session CVD / VWAP no longer equal the session's from there on.
+  const gapAt = c.health.sessionGapAt ?? null;
+  const gapIdx = gapAt == null ? -1 : bars.findIndex((b) => b.time > gapAt);
+  const fromGap = gapAt == null ? Infinity : gapIdx < 0 ? bars.length : gapIdx;
+  for (let k = fromGap; k < cvd.length; k++) cvd[k] = { ...cvd[k], status: 'INCOMPLETE' };
   const divergences = cvdDivergences(cvdBars, cvd);
   const diag = fps.map((f) => diagonalImbalances(f));
   const sums = c.vwapSums.slice(s0);
-  const vwap = sums.every((s) => s != null) ? vwapSeries(bars.map((b, k) => ({ time: b.time, high: b.high, low: b.low, close: b.close, sums: sums[k]!, unreconciled: fps[k].unreconciledVolume ?? 0 })), istSession, 'TRADES', atr) : null;
+  const vwapRaw = sums.every((s) => s != null) ? vwapSeries(bars.map((b, k) => ({ time: b.time, high: b.high, low: b.low, close: b.close, sums: sums[k]!, unreconciled: fps[k].unreconciledVolume ?? 0 })), istSession, 'TRADES', atr) : null;
+  const vwap = vwapRaw ? vwapRaw.map((p, k) => (k >= fromGap ? { ...p, status: 'INCOMPLETE' as const } : p)) : null;
   const absorption = atr ? detectAbsorption(c.fps, atr, c.bars).filter((e) => e.index >= s0).map((e) => ({ ...e, index: e.index - s0, resolvedAt: e.resolvedAt == null ? null : e.resolvedAt - s0 })) : [];
   const exhaustion = detectExhaustion(c.fps, c.bars).filter((e) => e.index >= s0).map((e) => ({ ...e, index: e.index - s0, resolvedAt: e.resolvedAt == null ? null : e.resolvedAt - s0 }));
   const profile = profileFromFootprints(fps.filter((f) => f.deltaMode !== 'UNAVAILABLE'));
@@ -219,7 +228,7 @@ function derive(c: SetupContext): Derived | null {
   const dd = { slope: vwap?.[i]?.slopeAtr ?? null, cvdMom: cvd[i]?.momentum ?? null, close: last.close, profile, rvol: c.rvol[c.rvol.length - 1] ?? null };
   const m30In = frameInputs(m30, c.tickSize, dd);
   const regime = combineRegime({ daily: c.daily.length >= 5 ? frameInputs(c.daily, c.tickSize, { ...dd, slope: null, cvdMom: null }) : null, m30: m30In, m15: frameInputs(c.bars, c.tickSize, dd) });
-  return { c, s0, bars, fps, i, atr, buf, structure, levels, named, cvd, divergences, diag, vwap, absorption, exhaustion, profile, regime, m30Trend: m30In.structure === 'RANGE' ? 'UNKNOWN' : m30In.structure };
+  return { c, s0, bars, fps, i, atr, buf, structure, levels, named, cvd, divergences, diag, vwap, absorption, exhaustion, profile, regime, fromGap, m30Trend: m30In.structure === 'RANGE' ? 'UNKNOWN' : m30In.structure };
 }
 
 // ---------------- shared helpers ----------------
@@ -296,7 +305,7 @@ function setupB(d: Derived): Raw {
   }
   const { checks, failed } = run([
     ['B1_HTF_BULLISH', () => d.m30Trend === 'BULLISH' && d.regime.allowed.includes('BULLISH') ? { regime: d.regime.regime } : null],
-    ['B2_ABOVE_VWAP', () => d.vwap?.[i]?.vwap != null && bars[i].close > d.vwap[i].vwap! ? { vwap: d.vwap![i].vwap } : null],
+    ['B2_ABOVE_VWAP', () => d.vwap?.[i]?.vwap != null && d.vwap[i].status !== 'INCOMPLETE' && bars[i].close > d.vwap[i].vwap! ? { vwap: d.vwap![i].vwap } : null],
     ['B3_CONSOLIDATION_BELOW_RESISTANCE', () => b >= 0 ? { boxHigh, boxLow, breakoutIndex: b } : null],
     ['B4_RVOL_EXPANSION', () => { const r = d.c.rvol[d.s0 + b]; return r != null && r >= DHAN_ENGINE_RULES.rvolBreakout ? { rvol: r } : null; }],
     ['B5_DELTA_EXPANSION', () => {
@@ -344,7 +353,9 @@ function setupD(d: Derived): Raw {
   for (const t of [i, i - 1]) {
     if (t < 1 || d.atr == null) continue;
     const prior = profileFromFootprints(fps.slice(0, t).filter((f) => f.deltaMode !== 'UNAVAILABLE'));
-    const zones: Array<[number | null, string]> = [[prior.val, 'VAL'], [d.vwap?.[t - 1]?.vwap ?? null, 'VWAP'], ...prior.lvn.map((p) => [p, 'LVN'] as [number, string])];
+    // Profile and VWAP zones are session totals: none of them after a lost bar of the session.
+    const complete = t - 1 < d.fromGap;
+    const zones: Array<[number | null, string]> = complete ? [[prior.val, 'VAL'], [d.vwap?.[t - 1]?.status !== 'INCOMPLETE' ? d.vwap?.[t - 1]?.vwap ?? null : null, 'VWAP'], ...prior.lvn.map((p) => [p, 'LVN'] as [number, string])] : [];
     const bt = bars[t], range = bt.high - bt.low;
     for (const [z, k] of zones) {
       if (z == null) continue;

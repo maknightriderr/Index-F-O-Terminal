@@ -17,6 +17,11 @@ const STRATEGY: Record<string, string> = {
   NEW_RS_STOCK_V1: 'Stock in play (relative strength)',
   NEW_INDEX_BREADTH_V1: 'Index breadth trend',
   NEW_MCX_FLOW_V1: 'MCX order flow',
+  DHAN_A_SWEEP_ABSORPTION: 'Dhan A: sweep + absorption',
+  DHAN_B_IMBALANCE_BREAKOUT: 'Dhan B: imbalance breakout',
+  DHAN_C_FAILED_AUCTION_CVD: 'Dhan C: failed auction + CVD',
+  DHAN_D_VWAP_PROFILE_REJECTION: 'Dhan D: VWAP / profile rejection',
+  DHAN_EXPIRY_GAMMA: 'Dhan expiry gamma',
 };
 /** Live account limits a paper entry went past (2.0: paper records them instead of refusing). */
 const RISK_FLAG: Record<string, string> = {

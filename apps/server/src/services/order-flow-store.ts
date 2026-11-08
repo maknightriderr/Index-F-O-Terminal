@@ -8,9 +8,9 @@
 // OF1 paper and shadow read this through the explicit price-alignment boundary.
 // ============================================================
 
-import { gzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import { buildFootprint, unavailableFootprint, flowPriceStep, istSession, type VwapSums, FLOW_MAX_UNRECONCILED_SHARE, ORDER_FLOW_VERSION, type DeltaMode, type FlowTrade, type FootprintBar } from '@fno/analytics';
-import { isMarketOpen, type Exchange } from '@fno/shared';
+import { getSessionWindow, isMarketOpen, type Exchange } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
 import { tapedInput } from '../lib/io-tape.js';
@@ -41,9 +41,13 @@ interface SymbolFlow {
   /** The newest bar already finalized (written). */
   lastClosed: number | null;
   /** Dhan engine v2: trade-based session VWAP sums of the current contract (reset per IST session / contract). */
-  vwap?: { session: string; instrument: string | null; sums: VwapSums; unreconciled: number };
+  vwap?: { session: string; instrument: string | null; sums: VwapSums; unreconciled: number; /** A bar of this session was lost (restart): the sums miss its trades. */ incomplete: boolean };
   /** Engine v2 phase 4: the latest observed trade of the current contract. */
   lastTrade?: { price: number; at: number };
+  /** When this process started the series (the bar containing it is never written: its earlier trades are lost). */
+  startedAt?: number;
+  /** Restart hydration ran for the current contract. */
+  hydrated?: string | null;
 }
 
 const flows = new Map<string, SymbolFlow>();
@@ -67,6 +71,8 @@ export function registerFlowSymbol(symbol: string, args: { exchange: string; ins
       f.priceStep = ORDER_FLOW_PRICE_STEP[symbol] ?? null;
       f.lastClosed = flowBarStart(args.startedAt);
       f.lastTrade = undefined;
+      f.startedAt = args.startedAt;
+      f.hydrated = null;
     }
     f.kind = args.kind ?? f.kind;
     f.tickSize = args.tickSize ?? f.tickSize;
@@ -76,7 +82,7 @@ export function registerFlowSymbol(symbol: string, args: { exchange: string; ins
     return;
   }
   // Never backfill: the first bar finalized is the one after the feed started.
-  flows.set(symbol, { exchange: args.exchange, instrument: args.instrument, source: args.source, mode: args.mode, trades: [], unreconciled: [], kind: args.kind ?? null, tickSize: args.tickSize ?? null, priceStep: ORDER_FLOW_PRICE_STEP[symbol] ?? null, footprints: new Map(), lastClosed: flowBarStart(args.startedAt) });
+  flows.set(symbol, { exchange: args.exchange, instrument: args.instrument, source: args.source, mode: args.mode, trades: [], unreconciled: [], kind: args.kind ?? null, tickSize: args.tickSize ?? null, priceStep: ORDER_FLOW_PRICE_STEP[symbol] ?? null, footprints: new Map(), lastClosed: flowBarStart(args.startedAt), startedAt: args.startedAt, hydrated: null });
 }
 
 export function recordFlowTrade(symbol: string, trade: FlowTrade): void {
@@ -93,17 +99,17 @@ export function recordFlowTrade(symbol: string, trade: FlowTrade): void {
 
 function sessionVwap(f: SymbolFlow, time: number): NonNullable<SymbolFlow['vwap']> {
   const session = istSession(time);
-  if (!f.vwap || f.vwap.session !== session || f.vwap.instrument !== f.instrument) f.vwap = { session, instrument: f.instrument, sums: { pv: 0, v: 0, p2v: 0 }, unreconciled: 0 };
+  if (!f.vwap || f.vwap.session !== session || f.vwap.instrument !== f.instrument) f.vwap = { session, instrument: f.instrument, sums: { pv: 0, v: 0, p2v: 0 }, unreconciled: 0, incomplete: false };
   return f.vwap;
 }
 
 /** Engine v2 read: one contract's state for the session of `now` (closed footprints of that session + VWAP sums). */
-export function flowSessionState(symbol: string, now: number): { exchange: string; instrument: string | null; kind: SymbolFlow['kind']; tickSize: number | null; footprints: FootprintBar[]; vwap: { sums: VwapSums; unreconciled: number } | null } | null {
+export function flowSessionState(symbol: string, now: number): { exchange: string; instrument: string | null; kind: SymbolFlow['kind']; tickSize: number | null; footprints: FootprintBar[]; vwap: { sums: VwapSums; unreconciled: number; incomplete: boolean } | null } | null {
   const f = flows.get(symbol);
   if (!f) return null;
   const session = istSession(now);
   const footprints = [...f.footprints.values()].filter((fp) => istSession(fp.barTime) === session && fp.sourceInstrument === f.instrument).sort((a, b) => a.barTime - b.barTime);
-  const v = f.vwap && f.vwap.session === session && f.vwap.instrument === f.instrument ? { sums: { ...f.vwap.sums }, unreconciled: f.vwap.unreconciled } : null;
+  const v = f.vwap && f.vwap.session === session && f.vwap.instrument === f.instrument ? { sums: { ...f.vwap.sums }, unreconciled: f.vwap.unreconciled, incomplete: f.vwap.incomplete } : null;
   return { exchange: f.exchange, instrument: f.instrument, kind: f.kind, tickSize: f.tickSize, footprints, vwap: v };
 }
 
@@ -320,6 +326,108 @@ export function footprintsFor(symbol: string, barTimes: readonly number[]): Prom
     }
     return out;
   });
+}
+
+// ---------------- restart hydration (engine v2, 8 Nov) ----------------
+// The store never backfills from the live feed, so a restart used to start every session-level reading (VWAP, CVD,
+// profile, opening range, previous-day levels, absorption baseline) from the restart. The recorded trade events
+// (order_flow_events: exact observed trades + unreconciled volume per closed bar) rebuild the closed bars of TODAY and
+// the PREVIOUS session with the same rules as live. The bar the process started in is lost (its earlier trades were
+// never recorded): when it falls inside today's session it is kept as an INCOMPLETE gap marker and the session VWAP is
+// flagged incomplete, so nothing downstream reads a running total as complete.
+
+/** Decode one gzip-json-v1 events blob: rows [msFromBar, price|null, qty, side 1 / -1 / 0 / 9 (unreconciled)]. */
+export function decodeFlowEvents(blob: Buffer | Uint8Array, barTime: number): { trades: FlowTrade[]; unreconciled: number } {
+  const rows = JSON.parse(gunzipSync(Buffer.from(blob)).toString()) as Array<[number, number | null, number, number]>;
+  const trades: FlowTrade[] = [];
+  let unreconciled = 0;
+  for (const [ms, price, qty, side] of rows) {
+    if (side === 9 || price == null) { unreconciled += qty; continue; }
+    trades.push({ time: barTime + ms, price, qty, side: side === 1 ? 'BUY' : side === -1 ? 'SELL' : null });
+  }
+  return { trades, unreconciled };
+}
+
+/** Rebuild one recorded bar's footprint exactly as closeFlowBars does (step, reconciliation, first-trade open, VWAP sums). */
+export function footprintFromRecorded(barTime: number, trades: readonly FlowTrade[], unreconciled: number, step: number, mode: Exclude<DeltaMode, 'UNAVAILABLE'>, instrument: string | null, tickSize: number | null): FootprintBar {
+  const fp = trades.length ? buildFootprint(trades, barTime, FLOW_BAR_MS, step, mode) : unavailableFootprint(barTime, FLOW_BAR_MS);
+  fp.sourceInstrument = instrument;
+  applyReconciliation(fp, unreconciled);
+  fp.tickSize = tickSize;
+  fp.priceStep = fp.deltaMode === 'UNAVAILABLE' ? null : step;
+  const s = [...trades].filter((t) => t.qty > 0).sort((a, b) => a.time - b.time);
+  if (s.length) {
+    fp.open = s[0].price;
+    fp.tradeSums = s.reduce((a, t) => ({ pv: a.pv + t.price * t.qty, v: a.v + t.qty, p2v: a.p2v + t.price * t.price * t.qty }), { pv: 0, v: 0, p2v: 0 });
+  }
+  return fp;
+}
+
+/**
+ * Rebuild today's and the previous session's closed bars of a symbol's current contract from the recorded events.
+ * Once per contract per process; never overwrites a bar already in memory. Returns the bars added.
+ */
+export async function hydrateFlowSymbol(symbol: string, now: number): Promise<number> {
+  const f = flows.get(symbol);
+  if (!f || !f.instrument || f.hydrated === f.instrument || !schemaFileReady(ORDER_FLOW_EVENTS_MIGRATION)) return 0;
+  f.hydrated = f.instrument;
+  const instrument = f.instrument, today = istSession(now), started = f.startedAt ?? now, restartBar = flowBarStart(started);
+  const rows = await sql<Array<{ bar_time: Date; events: Buffer; encoding: string; price_step: string | null; tick_size: string | null }>>`
+    SELECT e.bar_time, e.events, e.encoding, b.price_step, b.tick_size FROM order_flow_events e
+    LEFT JOIN order_flow_bars b ON b.symbol = e.symbol AND b.exchange = e.exchange AND b.bar_time = e.bar_time
+    WHERE e.symbol = ${symbol} AND e.instrument = ${instrument} AND e.bar_time >= ${new Date(now - 6 * 86_400_000)} AND e.bar_time < ${new Date(restartBar)}
+    ORDER BY e.bar_time`;
+  if (flows.get(symbol) !== f || f.instrument !== instrument) return 0; // the contract changed meanwhile
+  const sessions = [...new Set(rows.map((r) => istSession(new Date(r.bar_time).getTime())))].filter((d) => d <= today).sort();
+  const keep = new Set([...sessions.filter((d) => d < today).slice(-1), ...(sessions.includes(today) ? [today] : [])]);
+  let added = 0;
+  for (const r of rows) {
+    const t = new Date(r.bar_time).getTime(), day = istSession(t);
+    if (!keep.has(day) || f.footprints.has(t) || r.encoding !== 'gzip-json-v1') continue;
+    const { trades, unreconciled } = decodeFlowEvents(r.events, t);
+    const step = (r.price_step != null ? Number(r.price_step) : null) ?? f.priceStep ?? (trades[0] ? flowPriceStep(trades[0].price, f.tickSize) : null);
+    if (!(step != null && step > 0)) continue;
+    f.footprints.set(t, footprintFromRecorded(t, trades, unreconciled, step, f.mode, instrument, r.tick_size != null ? Number(r.tick_size) : f.tickSize));
+    added++;
+    if (day === today) {
+      const v = sessionVwap(f, t);
+      for (const tr of trades) { v.sums.pv += tr.price * tr.qty; v.sums.v += tr.qty; v.sums.p2v += tr.price * tr.price * tr.qty; recordFiveMinute(symbol, instrument, tr); }
+      v.unreconciled += unreconciled;
+      if (unreconciled > 0) addFiveUnreconciled(symbol, instrument, t, unreconciled);
+    }
+    await new Promise((res) => setImmediate(res));
+  }
+  // The bar the process started in: inside today's session its earlier trades are lost -> an INCOMPLETE gap marker.
+  const open = getSessionWindow(f.exchange as Exchange, today)?.open;
+  if (open != null && istSession(restartBar) === today && restartBar >= open && isMarketOpen(f.exchange as Exchange, restartBar + 1) && !f.footprints.has(restartBar)) {
+    const gap = unavailableFootprint(restartBar, FLOW_BAR_MS);
+    gap.sourceInstrument = instrument;
+    gap.incomplete = true;
+    f.footprints.set(restartBar, gap);
+    sessionVwap(f, restartBar).incomplete = true;
+  }
+  const keepBars = f.kind === 'STOCK' ? KEEP_BARS_STOCK : KEEP_BARS;
+  if (f.footprints.size > keepBars) for (const k of [...f.footprints.keys()].sort((a, b) => a - b).slice(0, f.footprints.size - keepBars)) f.footprints.delete(k);
+  return added;
+}
+
+function addFiveUnreconciled(symbol: string, instrument: string | null, time: number, qty: number): void {
+  let s = five.get(symbol);
+  if (!s || s.instrument !== instrument) five.set(symbol, (s = { instrument, bars: new Map() }));
+  const start = Math.floor(time / FLOW_FIVE_MS) * FLOW_FIVE_MS;
+  let b = s.bars.get(start);
+  if (!b) s.bars.set(start, (b = { time: start, buy: 0, sell: 0, unclassified: 0, trades: 0, unreconciled: 0 }));
+  b.unreconciled = (b.unreconciled ?? 0) + qty;
+}
+
+/** Hydrate every registered symbol, one at a time (bounded work, yields between bars). */
+export async function hydrateFlowSymbols(now: number): Promise<{ contracts: number; bars: number; failed: number }> {
+  let contracts = 0, bars = 0, failed = 0;
+  for (const symbol of [...flows.keys()]) {
+    try { const n = await hydrateFlowSymbol(symbol, now); if (n > 0) (contracts++, (bars += n)); }
+    catch (err: any) { failed++; logger.warn({ symbol, error: err.message }, 'Order flow: restart hydration failed for a contract'); }
+  }
+  return { contracts, bars, failed };
 }
 
 /** For diagnostics and tests. */

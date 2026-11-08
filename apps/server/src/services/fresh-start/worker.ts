@@ -158,6 +158,21 @@ export class FreshPaperWorker {
     void this.scan();
   }
   private pollMonitor(){this.monitor.tick();const held=this.monitor.summary();state.heldPositions=held.open;state.oldestExitPendingAt=held.oldestExitPendingAt;state.marks=this.monitor.marks();if(!this.monitor.healthy){state.entriesArmed=false;if(!state.entryBlockers.includes('BLOCKED_EXIT_PERSISTENCE'))state.entryBlockers.push('BLOCKED_EXIT_PERSISTENCE');}}
+  /** Stocks given priority by a DHAN_* signal (reference id -> until). */
+  private dhanPriority=new Map<string,number>();
+  /** Each prioritised stock replaces the last selected stock that is neither in play nor itself prioritised. */
+  private withDhanPriority(selected:FreshReference[],now:number):FreshReference[]{
+    for(const [id,until] of this.dhanPriority)if(until<=now)this.dhanPriority.delete(id);
+    if(!this.dhanPriority.size)return selected;
+    const out=[...selected];
+    for(const id of this.dhanPriority.keys()){
+      if(out.some(r=>r.id===id))continue;
+      const ref=this.refs.get(id);if(!ref||ref.market!=='NSE_STOCK_OPTIONS')continue;
+      let k=-1;for(let i=out.length-1;i>=0;i--){const r=out[i];if(r.market==='NSE_STOCK_OPTIONS'&&!this.inPlay.includes(r.id)&&!this.dhanPriority.has(r.id)){k=i;break;}}
+      if(k>=0)out[k]=ref;
+    }
+    return out;
+  }
   /** Dhan engine v2 phase 4: a DHAN_* SIGNAL on a futures contract -> a candidate on the matching paper reference. */
   private async dhanPaper(r:DhanPaperRequest|DhanGammaPaperRequest):Promise<{decision:string;candidateId:string|null}>{
     if(!this.ready||this.stopped)return {decision:'PAPER_WORKER_NOT_READY',candidateId:null};
@@ -174,6 +189,12 @@ export class FreshPaperWorker {
     }
     const ref=[...this.refs.values()].find(x=>x.name===r.symbol&&(x.market==='NSE_INDEX_OPTIONS'||x.market==='NSE_STOCK_OPTIONS'||x.market==='BSE_VERIFIED_OPTIONS'||x.market==='MCX_VERIFIED_FUTURES_OPTIONS'));
     if(!ref)return {decision:'DHAN_NO_PAPER_REFERENCE',candidateId:null};
+    // Its option books first in the next plans; a stock not subscribed takes a stock slot and is waited for (<= 30 s).
+    this.urgentBooks.set(ref.id,Date.now()+FRESH_URGENT_BOOK_MS);
+    if(!this.feed.underlying(ref.id)&&ref.market==='NSE_STOCK_OPTIONS'){
+      this.dhanPriority.set(ref.id,Date.now()+5*60_000);
+      for(let k=0;k<30&&!this.stopped&&!this.feed.underlying(ref.id);k++)await new Promise(res=>setTimeout(res,1000));
+    }
     const signal=this.feed.underlying(ref.id),futures=flowLastTrade(r.symbol),now=Date.now(),day=freshIstDay(now),session=getSessionWindow(freshReferenceExchange(ref),day);
     if(!signal)return {decision:'DHAN_REFERENCE_NOT_SUBSCRIBED',candidateId:null};
     if(!futures)return {decision:'DHAN_PRICE_UNAVAILABLE',candidateId:null};
@@ -307,6 +328,8 @@ export class FreshPaperWorker {
       // (intel.ts); slots it cannot fill keep the activity ranking. A missing or stale scan keeps the current selection.
       if(now-this.scanReadAt>=60_000){this.scanReadAt=now;this.scanSnapshot=freshParseScan(await Promise.resolve().then(()=>redis.get(FRESH_SCAN_KEY)).catch(()=>null))??this.scanSnapshot;}
       if(openExchanges.has('NSE')&&now-this.stocksAt>=300_000){this.stocksAt=now;this.selected=this.withStocksInPlay(this.selected,now,day);}
+      // Dhan engine (8 Nov): a stock with a fresh DHAN_* signal takes a stock slot for a few minutes, so it is priced.
+      this.selected=this.withDhanPriority(this.selected,now);
       const refs=this.selected.filter(r=>openExchanges.has(freshReferenceExchange(r)));
       for(const r of refs)this.feed.pairReference(r.id,freshReferenceSpotId(r));
       // Option books (6 Nov): index option books (NSE + BSE, nearest tradable expiry) stay subscribed all session;

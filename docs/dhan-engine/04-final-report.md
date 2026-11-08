@@ -68,3 +68,17 @@ levels are model inputs only). On an index's expiry day, 13:10-15:20 IST, the wo
 books (5 strikes, CE + PE). Every other strategy keeps its own rules (0DTE refused, |delta| 0.45-0.65, 25% emergency
 stop, entries until one hour before the cutoff), checked by tests. Gamma is still not graded in the validation report,
 which grades underlying plans; its paper results are in the paper store under DHAN_EXPIRY_GAMMA.
+
+## Audit fixes (8 Nov)
+
+| # | Gap found | Fix |
+|---|---|---|
+| 1 | A restart / deploy wiped the order-flow memory: session VWAP, CVD and profile restarted from the restart but were still labelled complete; the opening range moved to the first bar after the restart; previous-day levels, absorption baseline and expiry-gamma baseline were lost | On start, today's and the previous session's closed bars are rebuilt from `order_flow_events` (same rules as live). The bar the process started in is kept as an INCOMPLETE gap marker, and the session VWAP / CVD from there are INCOMPLETE. Setups never use incomplete session totals (A6 / C2 / D3 CVD, B2 / D1 VWAP, D1 profile zones). The opening range uses the exchange open. Expiry-gamma samples and fired sides are kept in Redis for the day. |
+| 2 | DHAN paper exits used the fresh-start 5-minute rules (60-min max hold, no-progress exit) | Exit profile `STRUCTURE` (Part 14): structural stop on a 5-minute close, the setup's target, no breakeven at +1R, from +1.5R a stop 1R behind the best price, no max-hold / no-progress exit. Partial booking and exit on opposing absorption / CVD reversal are not implemented: the paper engine closes whole positions and the monitor does not read the engines. |
+| 3 | A DHAN signal on a stock not in the fresh worker's selection could not be priced | The stock takes a stock slot for 5 minutes, its books become urgent, the paper path waits up to 30 s for its price, and the entry window is 45 s. The extended-entry check (0.25 ATR) still bounds the price. |
+| 4 | DHAN and fresh-start strategies shared one paper account (cash, risk, one position per instrument), and the schema allowed one account per day | Separate book per session (`<version>:DHAN:<session>`): own capital, reservations, one-position-per-instrument and cohort. The schema index is now one account per session, version and book. |
+| 5 | DHAN strategies were missing from the performance report, Strategy Lab, the fresh-start panel and Telegram | Added (`FRESH_REPORTED_STRATEGIES`, web `PAPER_STRATEGY_IDS`, labels). |
+| A | The store still refused expiry-gamma entries after 14:30 (one hour before the cutoff) | A premium-exit candidate enters until its own `entryUntil` (15:00), never inside the last 10 minutes. |
+| — | BSE policy text said `zeroDte:false` without noting the gamma exception | Comment added. |
+
+Still open, and needs data: the MCX GOLD option calendar ends on 28 Nov and the SILVER option links on 1 Dec. The next published calendars must be added, or the fresh-start MCX path stops on those dates.

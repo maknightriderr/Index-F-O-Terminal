@@ -38,7 +38,9 @@ export function dhanEngineSnapshot(symbol: string, now: number = Date.now()) {
   // Divergence needs confirmed price pivots: only on a session with no empty bar (pivots on traded bars = the same bars).
   const divergences = tradedFps.length === fps.length ? cvdDivergences(cvdBars, cvd) : [];
   const profile = profileFromFootprints(tradedFps);
-  const vwap = st.vwap ? vwapFromSums(st.vwap.sums, 'TRADES', st.vwap.unreconciled) : vwapFromSums({ pv: 0, v: 0, p2v: 0 }, 'TRADES');
+  const vwapRaw = st.vwap ? vwapFromSums(st.vwap.sums, 'TRADES', st.vwap.unreconciled) : vwapFromSums({ pv: 0, v: 0, p2v: 0 }, 'TRADES');
+  // A bar of this session was lost (process restart): the session sums miss its trades.
+  const vwap = st.vwap?.incomplete && vwapRaw.status !== 'UNAVAILABLE' ? { ...vwapRaw, status: 'INCOMPLETE' as const } : vwapRaw;
   const lastClose = bars.at(-1)?.close ?? null;
   const fp2 = latest ? diagonalImbalances(latest) : null;
   const structure = st.tickSize && bars.length >= 5 ? analyzeStructure(bars, st.tickSize) : null;

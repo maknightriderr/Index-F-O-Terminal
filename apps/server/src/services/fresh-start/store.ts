@@ -1,4 +1,4 @@
-import { freshRoundTripFees, FRESH_PACK_VERSION, admitFreshPaper, advanceFreshPosition, canonicalFreshParent, freshQuoteCode, type FreshCandidate, type FreshContract, type FreshQuote, type FreshPaperPosition } from '@fno/analytics';
+import { freshRoundTripFees, FRESH_PACK_VERSION, admitFreshPaper, freshAccountBook, advanceFreshPosition, canonicalFreshParent, freshQuoteCode, type FreshCandidate, type FreshContract, type FreshQuote, type FreshPaperPosition } from '@fno/analytics';
 import { sql } from '../../lib/db.js';
 import { freshEntriesEnabled } from '../../config/fresh-start.js';
 import { freshTelegramNotifier, type FreshTradeNotifier } from './notify.js';
@@ -67,11 +67,16 @@ export class FreshPaperStore {
                 if(!Number.isFinite(now)||!Number.isFinite(r.now)||now<r.now)throw new FreshEntryTransactionRejected('ENTRY_CLOCK_UNAVAILABLE');
                 const qc=freshQuoteCode(r.quote,r.contract.id,r.contract.source,r.contract.sourceEpoch,now);
                 if(qc)throw new FreshEntryTransactionRejected(qc);
-                if(now>r.candidate.expiresAt||now>=r.cutoff-3600000)throw new FreshEntryTransactionRejected('ENTRY_EXPIRED_OR_EARLY');
+                // A premium-defined exit (expiry gamma) enters until its own entryUntil (never inside the last 10 minutes);
+                // everything else stops one hour before the cutoff.
+                const pe=r.candidate.premiumExit,lastEntry=pe?Math.min(pe.entryUntil,r.cutoff-600000):r.cutoff-3600000;
+                if(now>r.candidate.expiresAt||now>=lastEntry)throw new FreshEntryTransactionRejected('ENTRY_EXPIRED_OR_EARLY');
                 return now;
             };
             r={...r,now:validateTime()};
-            const open: Stored[] = await tx.unsafe("SELECT id,revision,state,risk_group FROM fresh_paper_positions WHERE status<>'CLOSED'", []);
+            // Each paper book (fresh-start / Dhan engine) reserves, marks and limits its own positions only (owner D4).
+            const book = freshAccountBook(r.accountId);
+            const open: Stored[] = (await tx.unsafe("SELECT id,account_id,revision,state,risk_group FROM fresh_paper_positions WHERE status<>'CLOSED'", [])).filter((x: { account_id: string }) => freshAccountBook(x.account_id) === book);
             const parents = await tx.unsafe('SELECT id,instrument,direction,session,origin,ended,traded,evidence FROM fresh_parent_moves WHERE account_id=$1 AND instrument=$2', [r.accountId, r.candidate.instrument]);
             for (const parent of parents) {
                 const c = parent.evidence as FreshCandidate, d = c.direction === 'BULLISH' ? 1 : -1;
@@ -96,8 +101,9 @@ export class FreshPaperStore {
                 const exit=Math.max(0,q.bid-q.tick),units=p.quantity*k.multiplier;
                 unrealized+=(exit-p.entry)*units-(k.feePolicy?freshRoundTripFees(p.entry,exit,p.quantity,k.multiplier,k.feePolicy):k.explicitRoundTripCostPerUnit*units);
             }
-            const [cohort] = await tx.unsafe('SELECT COALESCE(SUM(realized_net),0) AS net FROM fresh_paper_accounts WHERE version=$1', [c.version]);
-            const account = { cohortNet: Number(cohort?.net ?? NaN) + unrealized, capital: a.capital, equity: a.capital + a.realized_net + unrealized, dailyNet: a.realized_net + unrealized, reservedRisk, reservedPremium, openPositions: open.length, consecutiveNetLosses: a.paused ? 3 : a.consecutive_losses, marksComplete };
+            const cohortRows = await tx.unsafe('SELECT id,realized_net FROM fresh_paper_accounts WHERE version=$1', [c.version]);
+            const cohortNet = cohortRows.filter((x: { id: string }) => freshAccountBook(x.id) === book).reduce((n: number, x: { realized_net: unknown }) => n + Number(x.realized_net ?? 0), 0);
+            const account = { cohortNet: cohortNet + unrealized, capital: a.capital, equity: a.capital + a.realized_net + unrealized, dailyNet: a.realized_net + unrealized, reservedRisk, reservedPremium, openPositions: open.length, consecutiveNetLosses: a.paused ? 3 : a.consecutive_losses, marksComplete };
             const admission = admitFreshPaper({ ...r, candidate: c, account,
                 parentAlreadyTraded: parents.some(p => p.id === c.parentId && p.traded),
                 correlatedPositionOpen: open.some(x => x.risk_group === r.riskGroup && x.state.candidate.instrument !== c.instrument),
@@ -129,13 +135,13 @@ export class FreshPaperStore {
     }
     async accountView(accountId:string,capital:number,marks:Readonly<Record<string,FreshQuote>>,now:number){
         const [a]=await this.db.unsafe('SELECT * FROM fresh_paper_accounts WHERE id=$1',[accountId]);
-        const rows=await this.recover();let unrealized=0,reservedRisk=0,reservedPremium=0,marksComplete=!a||(a.capital===capital&&a.version===FRESH_PACK_VERSION);
+        const book=freshAccountBook(accountId),rows=(await this.recover()).filter(x=>freshAccountBook(x.account_id)===book);let unrealized=0,reservedRisk=0,reservedPremium=0,marksComplete=!a||(a.capital===capital&&a.version===FRESH_PACK_VERSION);
         for(const {id,state:p} of rows){const k=p.contract,q=marks[id],units=p.quantity*k.multiplier;reservedRisk+=p.originalRiskCurrency;reservedPremium+=p.entry*units;
             if(!q||freshQuoteCode(q,k.id,k.source,k.sourceEpoch,now)!==null||q.bidUnits<p.quantity){marksComplete=false;continue;}
             const exit=Math.max(0,q.bid-q.tick);unrealized+=(exit-p.entry)*units-(k.feePolicy?freshRoundTripFees(p.entry,exit,p.quantity,k.multiplier,k.feePolicy):k.explicitRoundTripCostPerUnit*units);
         }
         const dailyNet=(a?.realized_net??0)+unrealized;
-        const [cohort]=await this.db.unsafe('SELECT COALESCE(SUM(realized_net),0) AS net FROM fresh_paper_accounts WHERE version=$1',[FRESH_PACK_VERSION]);const cohortNet=Number(cohort?.net??NaN)+unrealized;
+        const cohortRows=await this.db.unsafe('SELECT id,realized_net FROM fresh_paper_accounts WHERE version=$1',[FRESH_PACK_VERSION]);const cohortNet=cohortRows.filter((x:{id:string})=>freshAccountBook(x.id)===book).reduce((n:number,x:{realized_net:unknown})=>n+Number(x.realized_net??0),0)+unrealized;
         return {cohortNet,capital,equity:capital+dailyNet,dailyNet,reservedRisk,reservedPremium,marksComplete,openPositions:rows.length,consecutiveNetLosses:a?.paused?3:a?.consecutive_losses??0};
     }
     /** Exit monitoring is deliberately independent of the entry/activation switch. */
