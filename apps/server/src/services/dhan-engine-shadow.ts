@@ -10,7 +10,7 @@
 
 import {
   evaluateDhanSetups, evaluateExpiryGamma, istSession, pivotR1, vwapFromSums,
-  DHAN_GAMMA_ID, DHAN_GAMMA_VERSION, DHAN_SETUP_VERSION, type EngineBar, type FootprintBar, type GammaSample, type SetupContext, type SetupResult,
+  DHAN_GAMMA_ID, DHAN_GAMMA_VERSION, DHAN_SETUP_VERSION, type EngineBar, type FootprintBar, type GammaResult, type GammaSample, type SetupContext, type SetupResult,
 } from '@fno/analytics';
 import type { OptionChain } from '@fno/shared';
 import { sql } from '../lib/db.js';
@@ -22,8 +22,10 @@ export const DHAN_SIGNALS_MIGRATION = '053_dhan_engine_signals.sql';
 export const DHAN_PAPER_MIGRATION = '054_dhan_engine_paper.sql';
 
 /** Phase 4: what a recorded SIGNAL is handed to (the fresh-start worker registers it); returns the paper decision. */
-export interface DhanPaperRequest { symbol: string; result: SetupResult; barTime: number; decidedAt: number; atr: number; exchange: string; kind: SetupContext['kind'] }
-export type DhanPaperHandler = (r: DhanPaperRequest) => Promise<{ decision: string; candidateId: string | null }>;
+export interface DhanPaperRequest { symbol: string; result: SetupResult; barTime: number; decidedAt: number; atr: number; exchange: string; kind: SetupContext['kind']; gamma?: undefined }
+/** Expiry gamma (8 Nov, 30% premium stop): the index, its signal and the chain sample time. */
+export interface DhanGammaPaperRequest { symbol: string; gamma: GammaResult; at: number }
+export type DhanPaperHandler = (r: DhanPaperRequest | DhanGammaPaperRequest) => Promise<{ decision: string; candidateId: string | null }>;
 let paperHandler: DhanPaperHandler | null = null;
 export function setDhanPaperHandler(h: DhanPaperHandler | null): void { paperHandler = h; }
 /** RVOL compares only bars recorded under the v2 reconciler (deployed 7 Nov; first session 9 Nov). */
@@ -117,14 +119,16 @@ async function record(symbol: string, ctx: SetupContext, barTime: number, window
     ON CONFLICT (strategy, side, symbol, bar_time) DO NOTHING`;
 }
 
-async function paper(h: DhanPaperHandler, req: DhanPaperRequest): Promise<void> {
+async function paper(h: DhanPaperHandler, req: DhanPaperRequest | DhanGammaPaperRequest): Promise<void> {
   let out: { decision: string; candidateId: string | null };
   try { out = await h(req); } catch (err: any) { out = { decision: err instanceof Error && /^[A-Z_]+$/.test(err.message) ? err.message : 'PAPER_PATH_FAILED', candidateId: null }; }
   state.paper.set(out.decision, (state.paper.get(out.decision) ?? 0) + 1);
-  logger.info({ event: 'dhanPaperDecision', symbol: req.symbol, strategy: req.result.strategy, side: req.result.side, decision: out.decision, candidateId: out.candidateId }, 'Dhan engine: paper decision for a setup signal (options, paper only)');
+  const strategy = req.gamma ? DHAN_GAMMA_ID : req.result.strategy, side = req.gamma ? req.gamma.side : req.result.side;
+  const barTime = req.gamma ? Math.floor(req.at / 60_000) * 60_000 : req.barTime;
+  logger.info({ event: 'dhanPaperDecision', symbol: req.symbol, strategy, side, decision: out.decision, candidateId: out.candidateId }, 'Dhan engine: paper decision for a setup signal (options, paper only)');
   if (!schemaFileReady(DHAN_PAPER_MIGRATION)) return;
   await sql`UPDATE dhan_engine_signals SET paper_decision = ${out.decision}, paper_candidate_id = ${out.candidateId}
-            WHERE strategy = ${req.result.strategy} AND side = ${req.result.side} AND symbol = ${req.symbol} AND bar_time = ${new Date(req.barTime)}`
+            WHERE strategy = ${strategy} AND side = ${side} AND symbol = ${req.symbol} AND bar_time = ${new Date(barTime)}`
     .catch((err: any) => logger.warn({ symbol: req.symbol, error: err.message }, 'Dhan engine: paper decision write failed'));
 }
 
@@ -210,13 +214,13 @@ export async function recordGammaChain(index: string, chain: Pick<OptionChain, '
     for (const r of results) {
       if (r.status !== 'SIGNAL' || g.fired.has(r.side)) continue;
       g.fired.add(r.side);
-      logger.info({ event: 'dhanShadowSignal', symbol: index, strategy: DHAN_GAMMA_ID, side: r.side, strikes: r.strikes, evidence: r.evidence }, 'Dhan engine shadow signal (recorded only, no position)');
-      if (!schemaFileReady(DHAN_SIGNALS_MIGRATION)) continue;
-      await sql`
+      logger.info({ event: 'dhanShadowSignal', symbol: index, strategy: DHAN_GAMMA_ID, side: r.side, strikes: r.strikes, evidence: r.evidence }, 'Dhan engine signal (paper decision follows)');
+      if (schemaFileReady(DHAN_SIGNALS_MIGRATION)) await sql`
         INSERT INTO dhan_engine_signals (strategy, side, symbol, instrument, exchange, bar_time, status, entry, session_window, checks, evidence, version)
         VALUES (${DHAN_GAMMA_ID}, ${r.side}, ${index}, ${null}, ${null}, ${new Date(Math.floor(at / 60_000) * 60_000)}, ${'SIGNAL'}, ${chain.spotPrice}, ${'EXPIRY_PM'},
           ${sql.json(r.checks as any)}, ${sql.json({ ...r.evidence, dayRangeSource: 'CHAIN_SAMPLE_SPOT', strikes: r.strikes, forcedExitAt: r.forcedExitAt } as any)}, ${DHAN_GAMMA_VERSION})
         ON CONFLICT (strategy, side, symbol, bar_time) DO NOTHING`.catch((err: any) => logger.warn({ index, error: err.message }, 'Dhan engine shadow: gamma write failed'));
+      if (paperHandler) void paper(paperHandler, { symbol: index, gamma: r, at });
     }
   } catch (err: any) {
     logger.warn({ index, error: err.message }, 'Dhan engine shadow: gamma evaluation failed');

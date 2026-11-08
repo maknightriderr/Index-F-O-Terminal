@@ -114,5 +114,19 @@ export function freshReferenceOptions(master:readonly Instrument[],ref:FreshRefe
   return linked.filter(x=>expiries.includes(x.expiry!)&&strikes.includes(x.strike!)&&['CE','PE'].includes(x.optionType??'')&&(!ref.mcxLinks||resolveFreshMcxLink(x,master)?.futureToken===ref.signal.token)).slice(0,20);
 }
 
+/**
+ * Expiry gamma (8 Nov): the expiry-day (0DTE) contracts of an index reference, the 5 strikes nearest the price, CE + PE
+ * (at most 10). Empty when the reference has no contract expiring on `day`.
+ */
+export function freshExpiryDayOptions(master:readonly Instrument[],ref:FreshReference,day:string,price:number|null){
+  if(price==null||!Number.isFinite(price)||price<=0)return [];
+  const exchange=freshReferenceExchange(ref),rows=master.filter(x=>x.exchange===exchange&&x.segment==='FO'&&x.name===ref.name&&x.instrumentType==='OPTIDX'&&x.expiry===day&&x.strike!=null&&x.strike>0&&Number.isSafeInteger(x.lotSize)&&x.lotSize>0&&Number.isFinite(x.tickSize)&&x.tickSize>0&&(x.optionType==='CE'||x.optionType==='PE'));
+  const strikes=[...new Set(rows.map(x=>x.strike!))].sort((a,b)=>Math.abs(a-price)-Math.abs(b-price)||a-b).slice(0,5);
+  return rows.filter(x=>strikes.includes(x.strike!)).slice(0,10);
+}
+
+/** Expiry-gamma book window (IST 13:10-15:20): the module's 13:30-15:00 entries and 15:15 exit, with margin. */
+export function freshGammaBookWindow(now:number){const d=new Date(now+19_800_000),m=d.getUTCHours()*60+d.getUTCMinutes();return m>=13*60+10&&m<15*60+20;}
+
 /** The stocks the event rules let trade now; all of them when none is clear (an issuer source down), as before. */
 export function freshEventClearStocks<T>(stocks:readonly T[],isClear:(s:T)=>boolean):T[]{const clear=stocks.filter(isClear);return clear.length?clear:[...stocks];}

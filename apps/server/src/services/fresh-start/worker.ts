@@ -1,8 +1,8 @@
 import {randomUUID} from 'node:crypto';
-import { recordGammaChain, setDhanPaperHandler, type DhanPaperRequest } from '../dhan-engine-shadow.js';
+import { recordGammaChain, setDhanPaperHandler, type DhanPaperRequest, type DhanGammaPaperRequest } from '../dhan-engine-shadow.js';
 import { DHAN_ENGINE_SHADOW, DHAN_ENGINE_PAPER } from '../../config/order-flow-flags.js';
 import { flowLastTrade } from '../order-flow-store.js';
-import { dhanPaperCandidate } from '@fno/analytics';
+import { dhanPaperCandidate, dhanGammaCandidate } from '@fno/analytics';
 import {logger} from '../../lib/logger.js';
 import {getSessionWindow,HOLIDAY_CALENDAR_YEARS,FO_SEGMENT,CM_SEGMENT,type Exchange,type Instrument} from '@fno/shared';
 import {evaluateFreshStrategies,FRESH_SHADOW_STRATEGIES,type FreshBar} from '@fno/analytics';
@@ -23,7 +23,7 @@ import {FreshRuntime} from './runtime.js';
 import {flowFiveMinuteBars,footprintsFor,flowBarStart,FLOW_BAR_MS} from '../order-flow-store.js';
 import type {FreshContext} from '@fno/analytics';
 import {logFreshDecisionSummary} from './decision-summary.js';
-import {freshEventClearStocks,freshRankStocks,FRESH_MARKETS,freshMarketBlockers,freshBookSupportsLot,discoverFreshMarkets,freshDiscoveryWindow,freshReferenceOptions,freshReferenceExchange,freshReferenceSpotId,freshEventMarket,freshMarketExchange,freshIndexKey,type FreshMarket} from './markets.js';
+import {freshEventClearStocks,freshRankStocks,FRESH_MARKETS,freshMarketBlockers,freshBookSupportsLot,discoverFreshMarkets,freshDiscoveryWindow,freshReferenceOptions,freshExpiryDayOptions,freshGammaBookWindow,freshReferenceExchange,freshReferenceSpotId,freshEventMarket,freshMarketExchange,freshIndexKey,type FreshMarket} from './markets.js';
 import {freshAdapterState as state} from './adapter-state.js';
 import {freshParseScan,freshStockIntel,freshStocksInPlay,freshInPlayDirection,freshIndexIntel,FRESH_INDEX_HEAVYWEIGHTS,FRESH_SCAN_KEY,type FreshScan,type FreshFuturesSample} from './intel.js';
 import {buildOptionChain} from '../option-chain.js';
@@ -159,8 +159,19 @@ export class FreshPaperWorker {
   }
   private pollMonitor(){this.monitor.tick();const held=this.monitor.summary();state.heldPositions=held.open;state.oldestExitPendingAt=held.oldestExitPendingAt;state.marks=this.monitor.marks();if(!this.monitor.healthy){state.entriesArmed=false;if(!state.entryBlockers.includes('BLOCKED_EXIT_PERSISTENCE'))state.entryBlockers.push('BLOCKED_EXIT_PERSISTENCE');}}
   /** Dhan engine v2 phase 4: a DHAN_* SIGNAL on a futures contract -> a candidate on the matching paper reference. */
-  private async dhanPaper(r:DhanPaperRequest):Promise<{decision:string;candidateId:string|null}>{
+  private async dhanPaper(r:DhanPaperRequest|DhanGammaPaperRequest):Promise<{decision:string;candidateId:string|null}>{
     if(!this.ready||this.stopped)return {decision:'PAPER_WORKER_NOT_READY',candidateId:null};
+    if(r.gamma){
+      // Expiry gamma (8 Nov): the index option reference, a premium-defined exit (30% stop, 15:15 time exit).
+      const ref=[...this.refs.values()].find(x=>x.name===r.symbol&&(x.market==='NSE_INDEX_OPTIONS'||x.market==='BSE_VERIFIED_OPTIONS'));
+      if(!ref)return {decision:'DHAN_NO_PAPER_REFERENCE',candidateId:null};
+      const signal=this.feed.underlying(ref.id),now=Date.now(),day=freshIstDay(now),session=getSessionWindow(freshReferenceExchange(ref),day);
+      if(!signal)return {decision:'DHAN_REFERENCE_NOT_SUBSCRIBED',candidateId:null};
+      if(!session)return {decision:'DHAN_NO_SESSION',candidateId:null};
+      const built=dhanGammaCandidate({index:r.symbol,result:r.gamma,at:r.at,reference:{id:ref.id,sourceEpoch:this.feed.sourceEpoch,price:signal.price,at:signal.at},session:day,sessionClose:session.close,now});
+      if(!built.ok)return {decision:built.code,candidateId:null};
+      return {decision:await this.runtime.onExternalCandidate(built.candidate),candidateId:built.candidate.id};
+    }
     const ref=[...this.refs.values()].find(x=>x.name===r.symbol&&(x.market==='NSE_INDEX_OPTIONS'||x.market==='NSE_STOCK_OPTIONS'||x.market==='BSE_VERIFIED_OPTIONS'||x.market==='MCX_VERIFIED_FUTURES_OPTIONS'));
     if(!ref)return {decision:'DHAN_NO_PAPER_REFERENCE',candidateId:null};
     const signal=this.feed.underlying(ref.id),futures=flowLastTrade(r.symbol),now=Date.now(),day=freshIstDay(now),session=getSessionWindow(freshReferenceExchange(ref),day);
@@ -308,6 +319,8 @@ export class FreshPaperWorker {
         const capacity=freshTokenCapacity(this.exclusiveOwn(this.feed.subscribedTargets),this.subscriptions.getStatus().subscriptionCount);
         let free=capacity-refTokens-heldTokens;const pinned:typeof slices=[];
         for(const ref of refs.filter(r=>FRESH_PINNED_BOOK_MARKETS.has(r.market))){const options=optionsFor(ref,FRESH_TWO_EXPIRY_INDICES.has(ref.name)?2:1);if(options.length<=free){pinned.push({ref,options});free-=options.length;}}
+        // Expiry gamma (8 Nov): on an index's expiry day, 13:10-15:20 IST, its expiry-day contracts too (the module trades them).
+        if(DHAN_ENGINE_PAPER&&freshGammaBookWindow(now))for(const slice of pinned){if(!FRESH_TWO_EXPIRY_INDICES.has(slice.ref.name))continue;const extra=freshExpiryDayOptions(this.master,slice.ref,day,this.feed.underlying(freshReferenceSpotId(slice.ref))?.price??null).filter(x=>!slice.options.some(o=>o.token===x.token));if(extra.length&&extra.length<=free){slice.options=[...slice.options,...extra];free-=extra.length;}}
         const slots=Math.max(0,Math.min(FRESH_MAX_ROTATING_BOOK_SLICES,Math.floor(free/20)));
         slices=[...pinned,...freshRotatingBookRefs(refs,Math.floor(now/FRESH_BOOK_ROTATION_MS),new Set([...this.urgentBooks.keys(),...this.inPlay.slice(0,FRESH_IN_PLAY_BOOK_SLICES)]),slots).map(ref=>({ref,options:optionsFor(ref,2)}))];
         state.bookPlan={capacity,refTokens,heldTokens,slots,tokens:refTokens+heldTokens+slices.reduce((n,x)=>n+x.options.length,0),slices:slices.map(x=>({name:x.ref.name,market:x.ref.market,options:x.options.length,pinned:FRESH_PINNED_BOOK_MARKETS.has(x.ref.market)}))};

@@ -207,7 +207,15 @@ export interface FreshContext {
     footprint15?: FreshFootprintRead | null;
 }
 /** Dhan engine v2 setups paper-traded through the same adapter / store (phase 4). Not evaluated by this module. */
-export type FreshExternalStrategy = 'DHAN_A_SWEEP_ABSORPTION' | 'DHAN_B_IMBALANCE_BREAKOUT' | 'DHAN_C_FAILED_AUCTION_CVD' | 'DHAN_D_VWAP_PROFILE_REJECTION';
+export type FreshExternalStrategy = 'DHAN_A_SWEEP_ABSORPTION' | 'DHAN_B_IMBALANCE_BREAKOUT' | 'DHAN_C_FAILED_AUCTION_CVD' | 'DHAN_D_VWAP_PROFILE_REJECTION' | 'DHAN_EXPIRY_GAMMA';
+/**
+ * A premium-defined exit (owner, 8 Nov, expiry gamma): the position is risked and closed on its OPTION premium only —
+ * a stop at stopFraction below the entry premium, a time exit at exitAt — with no underlying target, structural
+ * invalidation, trailing, no-progress or max-hold exit. Entries are allowed until entryUntil (not the usual one hour
+ * before the session cutoff) on the expiry-day contract, with |delta| in [minAbsDelta, maxAbsDelta]. The candidate's
+ * stop / target are then model levels for the premium model only (never exits).
+ */
+export interface FreshPremiumExit { stopFraction: number; exitAt: number; entryUntil: number; minAbsDelta: number; maxAbsDelta: number; expiryDay: string }
 export interface FreshCandidate {
     id: string;
     parentId: string;
@@ -226,6 +234,7 @@ export interface FreshCandidate {
     /** 'TREND' (1.8): no fixed-target exit; a trailing stop trailAtr ATRs behind the best underlying price instead. */
     exitProfile?: 'TARGET' | 'TREND';
     trailAtr?: number;
+    premiumExit?: FreshPremiumExit;
     origin: number;
     evidence: Record<string, unknown>;
 }
