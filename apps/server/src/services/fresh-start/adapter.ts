@@ -55,7 +55,9 @@ export class FreshProductionAdapter implements FreshQualifiedAdapter {
     if(await this.ports.legacyRisk())return reject('LEGACY_POSITION_OR_INVENTORY_UNAVAILABLE');
     let signal=this.feed.underlying(ref.id),spot=this.feed.underlying(freshReferenceSpotId(ref));if(!signal||!spot)return reject('STALE_EXACT_REFERENCE');
     const market=ref.market,master=this.ports.master(),futureMaster=mcx?master.filter(x=>x.exchange==='MCX'&&x.name===ref.name&&x.instrumentType==='FUTCOM'):[],universe=master.filter(x=>x.exchange===exchange&&x.segment==='FO'&&x.name===ref.name&&x.instrumentType===(mcx?'OPTFUT':market==='NSE_STOCK_OPTIONS'?'OPTSTK':'OPTIDX')&&x.expiry&&x.strike&&x.strike>0&&Number.isSafeInteger(x.lotSize)&&x.lotSize>0&&x.tickSize>0&&(!mcx||resolveFreshMcxLink(x,futureMaster)?.futureToken===ref.signal.token));
-    const expiries=freshTradableExpiries(market,universe.map(x=>x.expiry!),c.session,exchange);
+    // Expiry gamma trades the expiry-day contract (its own rule); everything else the standard tradable expiries.
+    const expiries=c.premiumExit?(universe.some(x=>x.expiry===c.premiumExit!.expiryDay)?[c.premiumExit.expiryDay]:[]):freshTradableExpiries(market,universe.map(x=>x.expiry!),c.session,exchange);
+    if(c.premiumExit&&!expiries.length)return reject('NO_EXPIRY_DAY_CONTRACT');
     const spotPrice=spot.price;
     const strikes=[...new Set(universe.filter(x=>expiries.includes(x.expiry!)).map(x=>x.strike!))].sort((a,b)=>Math.abs(a-spotPrice)-Math.abs(b-spotPrice)||a-b).slice(0,5);
     const rows=await this.store.recover(),marks=this.marks(rows),accountId=`${c.version}:${c.session}`,account=await this.store.accountView(accountId,this.ports.capital,marks,now),eligible:{contract:FreshContract;rr:number;spread:number;tick:number;iv:number|null;expiry:string}[]=[];

@@ -59,6 +59,12 @@ Dhan WS (one socket, ~244 futures contracts, 100 instruments per subscribe messa
 5. Expiry gamma takes the day high and low from the minute chain samples. R1 is not available on that path.
 6. Paper translation shifts the futures plan onto the paper reference by the current basis. It refuses if either price is older than 60 s or the two differ by more than 3%.
 
-## Decision pending from the owner
+## Expiry gamma paper trades (owner decision, 8 Nov: 30% stop-loss)
 
-- **Expiry gamma paper trades.** The rule as given defines no stop-loss, and paper sizing needs one. Until the owner states one, gamma is recorded as SIGNAL rows only. Example choices: the opposite side of the midday range, a fixed premium percentage, or the 15:15 time exit only with a premium stop.
+A gamma SIGNAL is paper-traded on the **expiry-day** index option (ATM or one strike ITM, |delta| 0.55-0.85) with a
+premium-defined exit: a stop **30% below the entry premium** and the module's **15:15 time exit**; entries until 15:00.
+No underlying target, structural invalidation, trailing, no-progress or max-hold exit applies to it (its underlying
+levels are model inputs only). On an index's expiry day, 13:10-15:20 IST, the worker also subscribes that day's option
+books (5 strikes, CE + PE). Every other strategy keeps its own rules (0DTE refused, |delta| 0.45-0.65, 25% emergency
+stop, entries until one hour before the cutoff), checked by tests. Gamma is still not graded in the validation report,
+which grades underlying plans; its paper results are in the paper store under DHAN_EXPIRY_GAMMA.

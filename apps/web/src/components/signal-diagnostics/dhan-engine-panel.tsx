@@ -124,7 +124,7 @@ export function DhanEnginePanel() {
   const st = signals.status;
   return (
     <div className="space-y-5">
-      <Section title="Dhan engine v2: setup board" subtitle={`Setups A–D and expiry gamma, ${signals.day}. Signals are paper-traded in options only (expiry gamma is recorded, not traded). A signal is not evidence of profitability.`}>
+      <Section title="Dhan engine v2: setup board" subtitle={`Setups A–D and expiry gamma, ${signals.day}. Signals are paper-traded in options only (expiry gamma: expiry-day option, 30% premium stop, 15:15 time exit). A signal is not evidence of profitability.`}>
         <MetricGrid>
           <MetricTile label="SIGNAL" value={st.recorded.SIGNAL} sub="every condition, gate, score ≥ 7 and no-trade clear" />
           <MetricTile label="NO_TRADE" value={st.recorded.NO_TRADE} sub="conditions met, then rejected" />

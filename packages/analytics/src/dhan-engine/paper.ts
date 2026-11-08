@@ -10,12 +10,15 @@
 // the spot (stocks). Levels are translated by the CURRENT difference between the two (reference price − futures
 // price): a constant-basis translation, recorded in the evidence, never hidden. The candidate exits at the setup's
 // target or stop (exit profile TARGET) and expires FRESH_ENTRY_WINDOW_MS after the decision, like every fresh entry.
-// The expiry-gamma module is NOT paper-traded: the owner's rule defines no stop, and sizing needs one.
+// Expiry gamma (owner, 8 Nov: 30% stop-loss): paper-traded on the expiry-day option with a PREMIUM-defined exit — a
+// stop 30% below the entry premium and the module's 15:15 time exit; entries until 15:00; |delta| 0.55-0.85 (ATM or
+// one strike ITM, never deep OTM). Its underlying stop / target are model levels for the premium model only.
 // ============================================================
 
 import { FRESH_ENTRY_WINDOW_MS, FRESH_PACK_VERSION, type FreshCandidate, type FreshExternalStrategy } from '../fresh-start/strategies.js';
 import { roundDp } from './common.js';
 import type { SetupResult } from './setups.js';
+import { DHAN_GAMMA_RULES, type GammaResult } from './expiry-gamma.js';
 
 export const DHAN_PAPER_STRATEGIES: readonly FreshExternalStrategy[] = ['DHAN_A_SWEEP_ABSORPTION', 'DHAN_B_IMBALANCE_BREAKOUT', 'DHAN_C_FAILED_AUCTION_CVD', 'DHAN_D_VWAP_PROFILE_REJECTION'];
 /** The futures and reference prices used for the translation must be this fresh. */
@@ -68,6 +71,52 @@ export function dhanPaperCandidate(x: DhanPaperInput): DhanPaperOutcome {
           rrBasis: 'GROSS_UNDERLYING', noTradeNotEvaluated: r.noTrade?.notEvaluated ?? [],
         },
         targetKind: r.plan.targetKind,
+      },
+    },
+  };
+}
+
+/** Owner (8 Nov): the expiry-gamma stop-loss, as a share of the entry premium. */
+export const DHAN_GAMMA_PREMIUM_STOP = 0.3;
+export const DHAN_GAMMA_MIN_ABS_DELTA = 0.55;
+export const DHAN_GAMMA_MAX_ABS_DELTA = 0.85;
+/** Model-only underlying distances for the premium model (never exits). */
+const GAMMA_MODEL_STOP = 0.01, GAMMA_MODEL_TARGET = 0.02;
+
+const istAt = (t: number, min: number) => Math.floor((t + 19_800_000) / 86_400_000) * 86_400_000 - 19_800_000 + min * 60_000;
+
+export interface DhanGammaPaperInput {
+  index: string;
+  result: GammaResult;
+  /** The chain sample time that produced the signal. */
+  at: number;
+  reference: { id: string; sourceEpoch: string; price: number; at: number };
+  session: string;
+  sessionClose: number;
+  now: number;
+}
+
+export function dhanGammaCandidate(x: DhanGammaPaperInput): DhanPaperOutcome {
+  const r = x.result;
+  if (r.status !== 'SIGNAL' || !r.strikes) return { ok: false, code: 'DHAN_NOT_A_SIGNAL' };
+  if (!(x.reference.price > 0)) return { ok: false, code: 'DHAN_PRICE_UNAVAILABLE' };
+  if (x.now - x.reference.at > DHAN_PAPER_MAX_PRICE_AGE_MS) return { ok: false, code: 'DHAN_PRICE_STALE' };
+  const entryUntil = istAt(x.at, DHAN_GAMMA_RULES.entryTo), exitAt = istAt(x.at, DHAN_GAMMA_RULES.forcedExit);
+  if (x.now >= entryUntil) return { ok: false, code: 'DHAN_GAMMA_AFTER_ENTRY_WINDOW' };
+  const d = r.side === 'BULLISH' ? 1 : -1, px = x.reference.price;
+  const stop = roundDp(px * (1 - d * GAMMA_MODEL_STOP), 2), target = roundDp(px * (1 + d * GAMMA_MODEL_TARGET), 2);
+  const origin = x.at, parentId = `${x.reference.id}:${x.session}:${r.side}:${origin}`;
+  return {
+    ok: true,
+    candidate: {
+      id: `${FRESH_PACK_VERSION}:${x.reference.sourceEpoch}:${parentId}:DHAN_EXPIRY_GAMMA:${x.at}`,
+      parentId, version: FRESH_PACK_VERSION, strategy: 'DHAN_EXPIRY_GAMMA', direction: r.side, instrument: x.reference.id, sourceEpoch: x.reference.sourceEpoch,
+      session: x.session, at: x.now, referenceEntry: px, stop, target, atr: roundDp(px * GAMMA_MODEL_STOP, 2), origin,
+      expiresAt: Math.min(x.now + FRESH_ENTRY_WINDOW_MS, entryUntil), exitProfile: 'TARGET',
+      premiumExit: { stopFraction: DHAN_GAMMA_PREMIUM_STOP, exitAt, entryUntil, minAbsDelta: DHAN_GAMMA_MIN_ABS_DELTA, maxAbsDelta: DHAN_GAMMA_MAX_ABS_DELTA, expiryDay: x.session },
+      evidence: {
+        dhan: { symbol: x.index, setup: 'EXPIRY_GAMMA', strikes: r.strikes, gamma: r.evidence, exit: { premiumStop: DHAN_GAMMA_PREMIUM_STOP, timeExitAt: exitAt }, underlyingLevels: 'MODEL_LEVELS_ONLY' },
+        targetKind: 'TIME_EXIT',
       },
     },
   };

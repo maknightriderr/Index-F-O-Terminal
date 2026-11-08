@@ -118,6 +118,17 @@ describe('expiry gamma recorder', () => {
     expect(ev).toMatchObject({ atm: 24000, dCallOi: -300, dPutOi: 300, dayHigh: 24005, dayRangeSource: 'CHAIN_SAMPLE_SPOT', strikes: { atm: 24000, itm: 23900, right: 'CE' } });
     expect(shadow.dhanShadowStatus().gamma).toEqual([{ index: 'NIFTY', day: '2026-11-10', samples: 4, fired: ['BULLISH'] }]);
   });
+  it('8 Nov: hands each gamma signal to the paper handler (30% premium stop) and records the decision', async () => {
+    const handler = vi.fn(async () => ({ decision: 'FILLED', candidateId: 'g-1' }));
+    shadow.setDhanPaperHandler(handler);
+    await shadow.recordGammaChain('NIFTY', chain(24005, [500, 700, 1000, 600, 400], [900, 800, 800, 500, 300]), ist(13, 10), ist(13, 10));
+    await shadow.recordGammaChain('NIFTY', chain(24010, [500, 700, 700, 600, 400], [900, 900, 1100, 500, 300]), ist(13, 58), ist(13, 58));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(handler).toHaveBeenCalledOnce();
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({ symbol: 'NIFTY', at: ist(13, 58), gamma: expect.objectContaining({ side: 'BULLISH', status: 'SIGNAL' }) }));
+    const rows = (await pg.query<any>("SELECT paper_decision, paper_candidate_id FROM dhan_engine_signals WHERE strategy='DHAN_EXPIRY_GAMMA'")).rows;
+    expect(rows).toEqual([{ paper_decision: 'FILLED', paper_candidate_id: 'g-1' }]);
+  });
   it('records nothing when the chain does not expire today', async () => {
     await shadow.recordGammaChain('NIFTY', { ...chain(24005, [500, 700, 1000, 600, 400], [900, 800, 800, 500, 300]), expiry: '2026-11-17' }, ist(13, 10), ist(13, 10));
     await shadow.recordGammaChain('NIFTY', { ...chain(24010, [500, 700, 700, 600, 400], [900, 900, 1100, 500, 300]), expiry: '2026-11-17' }, ist(13, 58), ist(13, 58));

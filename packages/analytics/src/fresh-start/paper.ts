@@ -111,7 +111,8 @@ function assessFreshPaper(args: {
         return refuse('BLOCKED_REQUIRED_CAPABILITY');
     if (k.market !== 'NSE_INDEX_OPTIONS' && k.market !== 'NSE_STOCK_OPTIONS' && !(k.market === 'BSE_VERIFIED_OPTIONS' && k.marketPolicy === 'BSE_INDEX_1_10_PAPER_V1') && !(k.market === 'MCX_VERIFIED_FUTURES_OPTIONS' && k.marketPolicy === 'MCX_EXACT_FUTURE_3_15_PAPER_V1'))
         return refuse('MARKET_DISCOVERY_ONLY');
-    if (!Number.isSafeInteger(k.expiryTradableSessions) || k.expiryTradableSessions < ((k.market === 'NSE_STOCK_OPTIONS' || k.market === 'MCX_VERIFIED_FUTURES_OPTIONS') ? 3 : 1) || k.expiryTradableSessions > FRESH_MONTHLY_MAX_EXPIRY_SESSIONS)
+    // A premium-defined exit (expiry gamma) trades exactly the expiry-day contract (0 sessions left); nothing else may.
+    if (!Number.isSafeInteger(k.expiryTradableSessions) || (c.premiumExit ? (k.expiryTradableSessions !== 0 || (k.market !== 'NSE_INDEX_OPTIONS' && k.market !== 'BSE_VERIFIED_OPTIONS')) : k.expiryTradableSessions < ((k.market === 'NSE_STOCK_OPTIONS' || k.market === 'MCX_VERIFIED_FUTURES_OPTIONS') ? 3 : 1)) || k.expiryTradableSessions > FRESH_MONTHLY_MAX_EXPIRY_SESSIONS)
         return refuse('EXPIRY_INELIGIBLE');
     const qc = freshQuoteCode(q, k.id, k.source, k.sourceEpoch, args.now);
     if (qc)
@@ -123,7 +124,10 @@ function assessFreshPaper(args: {
     const d = c.direction === 'BULLISH' ? 1 : -1;
     if (c.atr <= 0 || c.stop <= 0 || d * (c.referenceEntry - c.stop) <= 0 || d * (c.target - c.referenceEntry) <= 0 || d * (args.currentUnderlying - c.stop) <= 0 || d * (c.target - args.currentUnderlying) <= 0)
         return refuse('INVALIDATED_OR_TARGET_REACHED');
-    if ((!planning && (args.arrivalAt < c.at + 250 || args.now < args.arrivalAt || q.receivedAt < args.arrivalAt || q.eventAt < args.arrivalAt)) || (planning && args.now < c.at) || args.now > c.expiresAt || args.now >= args.cutoff - 3600000)
+    const pe = c.premiumExit;
+    if (pe && !(pe.stopFraction > 0 && pe.stopFraction < 1 && pe.exitAt > pe.entryUntil && pe.minAbsDelta > 0 && pe.maxAbsDelta < 1 && pe.minAbsDelta < pe.maxAbsDelta))
+        return refuse('INVALID_INPUT');
+    if ((!planning && (args.arrivalAt < c.at + 250 || args.now < args.arrivalAt || q.receivedAt < args.arrivalAt || q.eventAt < args.arrivalAt)) || (planning && args.now < c.at) || args.now > c.expiresAt || (pe ? args.now >= pe.entryUntil || args.now >= args.cutoff - 600000 : args.now >= args.cutoff - 3600000))
         return refuse('ENTRY_EXPIRED_OR_EARLY');
     if (d * (args.currentUnderlying - c.referenceEntry) > .25 * c.atr)
         return refuse('EXTENDED_ENTRY');
@@ -145,16 +149,18 @@ function assessFreshPaper(args: {
     if (a.dailyNet <= -FRESH_DAILY_LOSS_LIMIT * a.capital) riskFlags.push('WOULD_PAUSE_DAILY_LOSS');
     // A run of losing days never resets the cohort: each account-day starts fresh, the cumulative drawdown does not.
     if (a.cohortNet <= -FRESH_COHORT_DRAWDOWN_FRACTION * a.capital) riskFlags.push('WOULD_PAUSE_COHORT');
-    if (!Number.isSafeInteger(k.lotQuantity) || k.lotQuantity <= 0 || !Number.isFinite(k.multiplier) || k.multiplier <= 0 || Math.abs(k.delta) < .45 || Math.abs(k.delta) > .65 || (d === 1 ? k.delta <= 0 : k.delta >= 0))
+    const minDelta = pe ? pe.minAbsDelta : .45, maxDelta = pe ? pe.maxAbsDelta : .65;
+    if (!Number.isSafeInteger(k.lotQuantity) || k.lotQuantity <= 0 || !Number.isFinite(k.multiplier) || k.multiplier <= 0 || Math.abs(k.delta) < minDelta || Math.abs(k.delta) > maxDelta || (d === 1 ? k.delta <= 0 : k.delta >= 0))
         return refuse('INVALID_CONTRACT');
     if ((q.ask - q.bid) / ((q.ask + q.bid) / 2) > ((k.market === 'NSE_STOCK_OPTIONS' || k.market === 'MCX_VERIFIED_FUTURES_OPTIONS') ? .015 : .01))
         return refuse('WIDE_SPREAD');
     if (k.targetPremiumScenarios.length !== 2 || k.invalidationPremiumScenarios.length !== 2 || ![...k.targetPremiumScenarios, ...k.invalidationPremiumScenarios].every(x => Number.isFinite(x) && x >= 0) || k.explicitRoundTripCostPerUnit < 0)
         return refuse('MODEL_OR_COST_UNAVAILABLE');
-    const entry = q.ask + q.tick, emergencyStop = Math.ceil(entry * .75 / q.tick - 1e-9) * q.tick;
+    const entry = q.ask + q.tick, emergencyStop = Math.ceil(entry * (pe ? 1 - pe.stopFraction : .75) / q.tick - 1e-9) * q.tick;
     const explicit = k.explicitRoundTripCostPerUnit;
-    // Both adverse exit tick and quantity-level flat brokerage belong in frozen initial R.
-    const baseRisk = Math.max(entry - Math.max(0,Math.min(...k.invalidationPremiumScenarios)-q.tick), entry-Math.max(0,emergencyStop-q.tick));
+    // Both adverse exit tick and quantity-level flat brokerage belong in frozen initial R. A premium-defined exit is
+    // risked on its premium stop alone (its underlying levels are model inputs, not exits).
+    const baseRisk = pe ? entry - Math.max(0, emergencyStop - q.tick) : Math.max(entry - Math.max(0,Math.min(...k.invalidationPremiumScenarios)-q.tick), entry-Math.max(0,emergencyStop-q.tick));
     const targetExit=Math.max(0,Math.min(...k.targetPremiumScenarios)-q.tick),perLot=k.lotQuantity*k.multiplier;
     // Sized on the per-trade risk alone (2.0): the open-risk and daily budgets used to shrink the size to zero after a
     // loss, which refused the trade as surely as a pause. What a live account would have allowed is recorded below.
@@ -169,7 +175,8 @@ function assessFreshPaper(args: {
     const riskFees=k.feePolicy?freshRoundTripFees(entry,entry,quantity,k.multiplier,k.feePolicy):explicit*units;
     const rewardFees=k.feePolicy?freshRoundTripFees(entry,targetExit,quantity,k.multiplier,k.feePolicy):explicit*units;
     const initialRiskCurrency=baseRisk*units+riskFees,rr=((targetExit-entry)*units-rewardFees)/initialRiskCurrency;
-    if(!(initialRiskCurrency>0)||!Number.isFinite(rr)||rr<1.5)return refuse('NET_PAYOFF_TOO_LOW');
+    // A premium-defined exit has no target, so no modeled payoff gate (its rule exits on time); the model rr is kept.
+    if(!(initialRiskCurrency>0)||!Number.isFinite(rr)||(!pe&&rr<1.5))return refuse('NET_PAYOFF_TOO_LOW');
     if(initialRiskCurrency>liveBudget+1e-6)riskFlags.push('WOULD_BLOCK_OPEN_RISK');
     return {ok:true,entry,emergencyStop,quantity,lots,initialRiskPerUnit:initialRiskCurrency/units,initialRiskCurrency,premiumCurrency:entry*units,riskRewardNet:rr,explicitCostPerUnit:riskFees/units,riskFlags};
 }
@@ -252,7 +259,7 @@ export function advanceFreshPosition(p: FreshPaperPosition, e: {
         if (q!.bidUnits >= n.quantity) {
             n.highBid = Math.max(n.highBid, q!.bid);
             // Trend positions always ratchet the premium stop (breakeven at 1R, +1R at 2R): the move is meant to run.
-            if (e.trail || trend) {
+            if ((e.trail || trend) && !p.candidate.premiumExit) {
                 const perUnitR = n.originalRiskCurrency / (n.quantity * n.contract.multiplier), fee = n.contract.explicitRoundTripCostPerUnit;
                 const policy=n.contract.feePolicy,units=n.quantity*n.contract.multiplier;
                 const r = policy?((Math.max(0,q!.bid-q!.tick)-n.entry)*units-freshRoundTripFees(n.entry,Math.max(0,q!.bid-q!.tick),n.quantity,n.contract.multiplier,policy))/n.originalRiskCurrency:(q!.bid-n.entry-fee)/perUnitR;
@@ -276,7 +283,10 @@ export function advanceFreshPosition(p: FreshPaperPosition, e: {
         const target = !trend && underlyingFresh && d * (e.underlying! - n.candidate.target) >= 0;
         const noProgress = e.barsSinceFill >= 3 && n.maxUnderlyingFavorable < .25 * Math.abs(n.candidate.referenceEntry - n.candidate.stop) && underlyingFresh && d * (e.underlying! - n.candidate.referenceEntry) < 0;
         const maxHold = trend ? FRESH_TREND_MAX_HOLD_BARS : 12;
-        const reason = e.at >= e.cutoff - 600000 ? 'SESSION_CUTOFF' : reachedStop ? 'PREMIUM_STOP' : invalid ? (trailing != null ? 'TRAILING_STOP' : 'STRUCTURAL_INVALIDATION') : target ? 'UNDERLYING_TARGET' : e.barsSinceFill >= maxHold ? 'MAX_HOLD' : noProgress ? 'NO_PROGRESS' : null;
+        const pe = n.candidate.premiumExit;
+        const reason = pe
+            ? (e.at >= e.cutoff - 600000 ? 'SESSION_CUTOFF' : reachedStop ? 'PREMIUM_STOP' : e.at >= pe.exitAt ? 'TIME_EXIT' : null)
+            : e.at >= e.cutoff - 600000 ? 'SESSION_CUTOFF' : reachedStop ? 'PREMIUM_STOP' : invalid ? (trailing != null ? 'TRAILING_STOP' : 'STRUCTURAL_INVALIDATION') : target ? 'UNDERLYING_TARGET' : e.barsSinceFill >= maxHold ? 'MAX_HOLD' : noProgress ? 'NO_PROGRESS' : null;
         if (reason) {
             n.state = 'EXIT_PENDING';
             n.exitTriggeredAt = e.at;
