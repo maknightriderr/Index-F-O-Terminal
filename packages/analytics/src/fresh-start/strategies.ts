@@ -240,6 +240,9 @@ export interface FreshCandidate {
     exitProfile?: 'TARGET' | 'TREND' | 'STRUCTURE';
     trailAtr?: number;
     premiumExit?: FreshPremiumExit;
+    /** How long before the session cutoff new entries stop (default one hour; the Dhan engine uses 45 minutes, its
+     *  master prompt Part 17 secondary window ending 14:45 on NSE / BSE). Never under 10 minutes. */
+    lastEntryBeforeCutoffMs?: number;
     origin: number;
     evidence: Record<string, unknown>;
 }

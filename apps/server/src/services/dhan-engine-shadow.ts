@@ -63,6 +63,27 @@ export function dailyFromFootprints(fps: readonly FootprintBar[], today: string)
   return [...days.values()].sort((a, b) => a.time - b.time);
 }
 
+const shiftDay = (day: string, k: number) => istSession(Date.parse(`${day}T12:00:00+05:30`) + k * 86_400_000);
+/** A day's bars cover its session: the first traded bar within 30 minutes of the open, the last within 30 of the close. */
+function dayCovered(byDay: Map<string, number[]>, exchange: Exchange, day: string): boolean {
+  const w = getSessionWindow(exchange, day), t = byDay.get(day);
+  if (!w || !t?.length) return false;
+  return Math.min(...t) <= w.open + 30 * 60_000 && Math.max(...t) + 15 * 60_000 >= w.close - 30 * 60_000;
+}
+/**
+ * 8 Nov audit: PDH / PDL need the previous trading session (exchange calendar) fully in memory, PWH / PWL every trading
+ * day of the previous ISO week; otherwise those levels would come from a partial day / week and are dropped.
+ */
+export function referenceCompleteness(fps: readonly FootprintBar[], exchange: Exchange, today: string): { previousDay: boolean; previousWeek: boolean } {
+  const byDay = new Map<string, number[]>();
+  for (const f of fps) if (traded(f)) { const d = istSession(f.barTime); byDay.set(d, [...(byDay.get(d) ?? []), f.barTime]); }
+  let prev: string | null = null;
+  for (let k = 1; k <= 10 && !prev; k++) { const d = shiftDay(today, -k); if (getSessionWindow(exchange, d)) prev = d; }
+  const weekday = (new Date(`${today}T12:00:00+05:30`).getUTCDay() + 6) % 7; // Monday = 0
+  const lastWeek = Array.from({ length: 7 }, (_, k) => shiftDay(today, -weekday - 7 + k)).filter((d) => getSessionWindow(exchange, d));
+  return { previousDay: prev != null && dayCovered(byDay, exchange, prev), previousWeek: lastWeek.length > 0 && lastWeek.every((d) => dayCovered(byDay, exchange, d)) };
+}
+
 /** Same-slot traded volume of up to 20 earlier sessions (order_flow_bars since RVOL_SINCE), cached per symbol per day. */
 async function rvolReferences(symbol: string, today: string, now: number): Promise<Map<string, number[]>> {
   const c = state.rvol.get(symbol);
@@ -110,7 +131,7 @@ export async function setupContextFor(symbol: string, now: number, health: Healt
   return {
     symbol, instrument: st.instrument, kind: st.kind, exchange: st.exchange, tickSize: st.tickSize, bars, fps,
     vwapSums: fps.map((f) => f.tradeSums ?? null), rvol: fps.map((f) => rvolOf(refs, f)), daily: dailyFromFootprints(st.footprints, today),
-    sessionOpen, health: { ...health(symbol, now), sessionGapAt: gapAt },
+    sessionOpen, referenceComplete: referenceCompleteness(st.footprints, st.exchange as Exchange, today), health: { ...health(symbol, now), sessionGapAt: gapAt },
   };
 }
 

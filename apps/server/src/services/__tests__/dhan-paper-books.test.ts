@@ -49,6 +49,29 @@ describe('separate paper books', () => {
   });
 });
 
+describe('second audit (8 Nov): correlated positions are record-only, schema conflicts are refusals', () => {
+  it('a second index (same risk group, different instrument) fills with WOULD_BLOCK_CORRELATED instead of failing', async () => {
+    const a = request('n1', 'NEW_INDEX_BREADTH_V1');
+    expect(await store.enter(a)).toMatchObject({ ok: true, code: 'FILLED' });
+    const b = { ...request('b1', 'NEW_INDEX_BREADTH_V1', { instrument: 'BANKNIFTY-FUT' }), marks: { n1: a.quote } };
+    expect(await store.enter(b)).toMatchObject({ ok: true, code: 'FILLED' });
+    const row = (await pg.query<any>("SELECT state FROM fresh_paper_positions WHERE id='b1'")).rows[0];
+    expect(row.state.riskFlags).toContain('WOULD_BLOCK_CORRELATED');
+  });
+  it('a uniqueness rule a stale view missed comes back as a refusal, not an exception', async () => {
+    const a = request('c1', 'NEW_INDEX_BREADTH_V1');
+    expect(await store.enter(a)).toMatchObject({ ok: true, code: 'FILLED' });
+    // Close it and forget its parent move: the next entry from the same parent passes admission, the schema refuses it.
+    await pg.exec("UPDATE fresh_paper_positions SET status='CLOSED', closed_at=now(), net_pnl=0; DELETE FROM fresh_parent_moves;");
+    expect(await store.enter(request('c2', 'NEW_INDEX_BREADTH_V1'))).toEqual({ ok: false, code: 'EXPOSURE_OR_PARENT' });
+  });
+  it('DHAN entries run until 45 minutes before the cutoff (14:45), fresh-start ones until one hour', async () => {
+    const near = { cutoff: at + 2_900_000 }; // 48 min left
+    expect(await store.enter({ ...request('d1', 'DHAN_A_SWEEP_ABSORPTION', { lastEntryBeforeCutoffMs: 2_700_000 }), ...near })).toMatchObject({ ok: true, code: 'FILLED' });
+    expect(await store.enter({ ...request('f1', 'NEW_INDEX_BREADTH_V1', { instrument: 'BANKNIFTY-FUT' }), ...near })).toMatchObject({ ok: false, code: 'ENTRY_EXPIRED_OR_EARLY' });
+  });
+});
+
 describe('expiry-gamma entry window at the store', () => {
   const pe = { stopFraction: 0.3, exitAt: at + 3_000_000, entryUntil: at + 1_800_000, minAbsDelta: 0.55, maxAbsDelta: 0.85, expiryDay: session };
   it('enters inside the last hour before the cutoff (its window ends at entryUntil); a normal candidate cannot', async () => {

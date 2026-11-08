@@ -47,6 +47,15 @@ describe('account', () => {
     expect(loss.drawdownUsed).toBeCloseTo(0.3);
     expect(loss.drawdownPct).toBeCloseTo(1.5);
   });
+  it('second audit: each paper book is measured on its own capital (DHAN trades never in the fresh-start account)', () => {
+    const ps = positionViews(status([pos(), pos({ id: 'd1', netPnl: -9000 }, { strategy: 'DHAN_A_SWEEP_ABSORPTION' })]));
+    const fresh = accountView(status([]), ps, NOW);
+    const dhan = accountView(status([]), ps, NOW, 'DHAN');
+    expect(fresh.todayClosed).toBe(1);
+    expect(dhan.todayClosed).toBe(1);
+    expect(dhan.todayNet).toBe(-9000);
+    expect(fresh.todayNet).not.toBe(dhan.todayNet);
+  });
   it('uses the IST calendar day', () => {
     expect(istDay(Date.parse('2026-11-01T19:00:00Z'))).toBe('2026-11-02');
   });

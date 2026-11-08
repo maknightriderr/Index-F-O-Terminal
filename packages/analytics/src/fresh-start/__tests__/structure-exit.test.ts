@@ -1,6 +1,6 @@
 // Dhan engine (master prompt Part 14) exit profile STRUCTURE, and the separate DHAN paper book (owner D4).
 import { describe, expect, it } from 'vitest';
-import { admitFreshPaper, advanceFreshPosition, freshAccountBook, freshAccountId, freshTrailingStop, type FreshPaperPosition, type FreshQuote } from '../paper.js';
+import { admitFreshPaper, advanceFreshPosition, freshAccountBook, freshAccountId, freshLastEntryGap, freshTrailingStop, type FreshPaperPosition, type FreshQuote } from '../paper.js';
 import type { FreshCandidate } from '../strategies.js';
 import { at, candidate, request } from './fixtures.js';
 
@@ -43,5 +43,15 @@ describe('separate paper books', () => {
     expect(freshAccountId(dhan)).toBe(`${dhan.version}:DHAN:${dhan.session}`);
     expect(freshAccountId(candidate)).toBe(`${candidate.version}:${candidate.session}`);
     expect([freshAccountBook(freshAccountId(dhan)), freshAccountBook(freshAccountId(candidate))]).toEqual(['DHAN', 'FRESH']);
+  });
+});
+
+describe('last entry before the cutoff (second audit)', () => {
+  it('default one hour; a DHAN candidate 45 minutes; never under 10 minutes', () => {
+    const near = (c: FreshCandidate) => { const r = request(); r.candidate = c; r.cutoff = at + 2_900_000; return admitFreshPaper(r); }; // 48 min left
+    expect(near(candidate)).toEqual({ ok: false, code: 'ENTRY_EXPIRED_OR_EARLY' });
+    expect(near({ ...dhan, lastEntryBeforeCutoffMs: 2_700_000 }).ok).toBe(true);
+    expect(freshLastEntryGap({ lastEntryBeforeCutoffMs: 60_000 })).toBe(600_000);
+    expect(freshLastEntryGap({})).toBe(3_600_000);
   });
 });

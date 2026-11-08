@@ -87,7 +87,9 @@ export class FreshRuntime {
         if (!this.recovered || !this.adapter?.qualified || !this.adapter.prepare)
             return Promise.resolve('BLOCKED_QUALIFIED_ADAPTER');
         const adapter = this.adapter;
-        return this.evaluations.add(Date.now() + 2000, async () => {
+        // It may start while the candidate's own window lasts (bar closes are when the fresh evaluations queue is busiest).
+        const startBy = Math.max(Date.now() + 2000, Math.min(c.expiresAt - 5000, Date.now() + 15000));
+        return this.evaluations.add(startBy, async () => {
             const plan = await this.builds.add(c.expiresAt, () => adapter.prepare!(c));
             if (!plan) return 'NO_ELIGIBLE_ENTRY';
             const request = await plan.finish();

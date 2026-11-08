@@ -1,4 +1,4 @@
-import { freshRoundTripFees, FRESH_PACK_VERSION, admitFreshPaper, freshAccountBook, advanceFreshPosition, canonicalFreshParent, freshQuoteCode, type FreshCandidate, type FreshContract, type FreshQuote, type FreshPaperPosition } from '@fno/analytics';
+import { freshRoundTripFees, FRESH_PACK_VERSION, admitFreshPaper, freshAccountBook, freshLastEntryGap, advanceFreshPosition, canonicalFreshParent, freshQuoteCode, type FreshCandidate, type FreshContract, type FreshQuote, type FreshPaperPosition } from '@fno/analytics';
 import { sql } from '../../lib/db.js';
 import { freshEntriesEnabled } from '../../config/fresh-start.js';
 import { freshTelegramNotifier, type FreshTradeNotifier } from './notify.js';
@@ -49,6 +49,9 @@ export class FreshPaperStore {
         if (!r.accountId || !r.riskGroup || r.session !== r.candidate.session || !Number.isFinite(r.capital) || r.capital <= 0)
             return { ok: false, code: 'INVALID_ACCOUNT' };
         let filled: FreshPaperPosition | null = null;
+        // A schema uniqueness rule (one open position per instrument, one fill per parent) that a concurrent writer won is
+        // a refusal, never an exception that loses the decision.
+        const unique = (error: unknown) => { const e = error as { code?: string; message?: string }; return e?.code === '23505' || /duplicate key value violates unique constraint/i.test(e?.message ?? ''); };
         const result = await this.db.begin(async (tx) => {
             await tx.unsafe("SELECT id FROM fresh_paper_portfolio WHERE id='terminal-paper' FOR UPDATE");
             if(!this.entriesEnabled())throw new FreshEntryTransactionRejected();
@@ -69,7 +72,7 @@ export class FreshPaperStore {
                 if(qc)throw new FreshEntryTransactionRejected(qc);
                 // A premium-defined exit (expiry gamma) enters until its own entryUntil (never inside the last 10 minutes);
                 // everything else stops one hour before the cutoff.
-                const pe=r.candidate.premiumExit,lastEntry=pe?Math.min(pe.entryUntil,r.cutoff-600000):r.cutoff-3600000;
+                const pe=r.candidate.premiumExit,lastEntry=pe?Math.min(pe.entryUntil,r.cutoff-600000):r.cutoff-freshLastEntryGap(r.candidate);
                 if(now>r.candidate.expiresAt||now>=lastEntry)throw new FreshEntryTransactionRejected('ENTRY_EXPIRED_OR_EARLY');
                 return now;
             };
@@ -128,6 +131,7 @@ export class FreshPaperStore {
             return { ok: true, code: 'FILLED', id: c.id };
         }).catch((error): { ok: boolean; code: string; id?: string } => {
             if(error instanceof FreshEntryTransactionRejected)return {ok:false,code:error.code};
+            if(unique(error))return {ok:false,code:'EXPOSURE_OR_PARENT'};
             throw error;
         });
         if (result.ok && result.code === 'FILLED' && filled) this.announce('ENTRY', filled);

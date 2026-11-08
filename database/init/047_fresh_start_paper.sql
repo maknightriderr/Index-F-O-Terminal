@@ -55,7 +55,11 @@ CREATE TABLE IF NOT EXISTS fresh_paper_positions (
   CHECK((status='CLOSED') = (closed_at IS NOT NULL AND net_pnl IS NOT NULL))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS fresh_one_open_underlying ON fresh_paper_positions(account_id,instrument) WHERE status<>'CLOSED';
-CREATE UNIQUE INDEX IF NOT EXISTS fresh_one_open_group ON fresh_paper_positions(account_id,risk_group) WHERE status<>'CLOSED';
+-- 8 Nov 2026 audit: one open position per RISK GROUP is a record-only flag since 2.0 (owner decision D2,
+-- WOULD_BLOCK_CORRELATED). This index still enforced it, so a second index / same-sector entry passed admission and then
+-- failed with a unique violation (no position, no refusal recorded). Dropped; one position per instrument and one fill
+-- per parent setup stay enforced below.
+DROP INDEX IF EXISTS fresh_one_open_group;
 CREATE UNIQUE INDEX IF NOT EXISTS fresh_one_parent_fill ON fresh_paper_positions(account_id,parent_id);
 CREATE INDEX IF NOT EXISTS fresh_positions_recent ON fresh_paper_positions(opened_at DESC);
 CREATE TABLE IF NOT EXISTS fresh_paper_events (

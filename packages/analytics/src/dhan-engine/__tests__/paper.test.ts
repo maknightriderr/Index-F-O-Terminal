@@ -24,7 +24,7 @@ describe('DHAN signal -> paper candidate', () => {
     expect(out.candidate).toMatchObject({
       strategy: 'DHAN_A_SWEEP_ABSORPTION', direction: 'BULLISH', instrument: 'NFO:123', version: FRESH_PACK_VERSION, sourceEpoch: 'ANGEL-SNAP:1:1', session: '2026-11-09',
       referenceEntry: 24050, stop: 23990, target: 24200, atr: 40, exitProfile: 'STRUCTURE', at: now - 5000, origin: now - 5000, expiresAt: now + DHAN_ENTRY_WINDOW_MS,
-      parentId: `NFO:123:2026-11-09:BULLISH:${now - 5000}`,
+      parentId: `NFO:123:2026-11-09:BULLISH:${now - 5000}`, lastEntryBeforeCutoffMs: 45 * 60_000,
       evidence: { dhan: { setup: 'A', score: 8, translation: { method: 'CONSTANT_BASIS', referenceKind: 'SPOT', shift: -50 }, rrBasis: 'GROSS_UNDERLYING' } },
     });
     expect(out.candidate.id).toBe(`${FRESH_PACK_VERSION}:ANGEL-SNAP:1:1:NFO:123:2026-11-09:BULLISH:${now - 5000}:DHAN_A_SWEEP_ABSORPTION:${now - 905_000}`);
