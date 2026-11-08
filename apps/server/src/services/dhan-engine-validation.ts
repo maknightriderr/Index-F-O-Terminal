@@ -20,7 +20,7 @@ import { sql } from '../lib/db.js';
 import { schemaFileReady } from './ensure-capture-schema.js';
 import { applyReconciliation, decodeFlowEvents, FLOW_BAR_MS, ORDER_FLOW_EVENTS_MIGRATION } from './order-flow-store.js';
 export { decodeFlowEvents };
-import { dailyFromFootprints, DHAN_SIGNALS_MIGRATION } from './dhan-engine-shadow.js';
+import { dailyFromFootprints, referenceCompleteness, DHAN_SIGNALS_MIGRATION } from './dhan-engine-shadow.js';
 
 export const REPLAY_MAX_DAYS = 10;
 export const VALIDATION_MAX_DAYS = 62;
@@ -106,6 +106,7 @@ export async function dhanReplay(symbol: string, fromDay: string, toDay: string)
       symbol, instrument: recorded[0].instrument, kind: null, exchange: recorded[0].exchange, tickSize: tick, bars: bars.slice(lo, i + 1), fps: fps.slice(lo, i + 1),
       vwapSums: fps.slice(lo, i + 1).map((f) => f.tradeSums ?? null), rvol: fps.slice(lo, i + 1).map(() => null), daily: dailyFromFootprints(fps.slice(0, i + 1), today),
       sessionOpen: getSessionWindow(recorded[0].exchange as Exchange, today)?.open ?? fps[first].barTime, health: { stale: false, mappingValid: true },
+      referenceComplete: referenceCompleteness(fps.slice(0, i + 1), recorded[0].exchange as Exchange, today),
     };
     const ev = evaluateDhanSetups(ctx);
     evaluations++;

@@ -127,7 +127,7 @@ function assessFreshPaper(args: {
     const pe = c.premiumExit;
     if (pe && !(pe.stopFraction > 0 && pe.stopFraction < 1 && pe.exitAt > pe.entryUntil && pe.minAbsDelta > 0 && pe.maxAbsDelta < 1 && pe.minAbsDelta < pe.maxAbsDelta))
         return refuse('INVALID_INPUT');
-    if ((!planning && (args.arrivalAt < c.at + 250 || args.now < args.arrivalAt || q.receivedAt < args.arrivalAt || q.eventAt < args.arrivalAt)) || (planning && args.now < c.at) || args.now > c.expiresAt || (pe ? args.now >= pe.entryUntil || args.now >= args.cutoff - 600000 : args.now >= args.cutoff - 3600000))
+    if ((!planning && (args.arrivalAt < c.at + 250 || args.now < args.arrivalAt || q.receivedAt < args.arrivalAt || q.eventAt < args.arrivalAt)) || (planning && args.now < c.at) || args.now > c.expiresAt || (pe ? args.now >= pe.entryUntil || args.now >= args.cutoff - 600000 : args.now >= args.cutoff - freshLastEntryGap(c)))
         return refuse('ENTRY_EXPIRED_OR_EARLY');
     if (d * (args.currentUnderlying - c.referenceEntry) > .25 * c.atr)
         return refuse('EXTENDED_ENTRY');
@@ -325,6 +325,8 @@ export function advanceFreshPosition(p: FreshPaperPosition, e: {
     }
     return n;
 }
+/** How long before the cutoff a candidate's new entries stop (default one hour, never under 10 minutes). */
+export const freshLastEntryGap = (c: Pick<FreshCandidate, 'lastEntryBeforeCutoffMs'>): number => Math.max(600_000, Math.min(3_600_000, c.lastEntryBeforeCutoffMs ?? 3_600_000));
 /**
  * Paper books (owner D4, 7 Nov: the Dhan engine is separate). DHAN_* strategies trade their own account per session —
  * own capital, cash, risk reservations, one-position-per-instrument and cohort — beside the fresh-start account.

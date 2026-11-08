@@ -82,3 +82,30 @@ which grades underlying plans; its paper results are in the paper store under DH
 | — | BSE policy text said `zeroDte:false` without noting the gamma exception | Comment added. |
 
 Still open, and needs data: the MCX GOLD option calendar ends on 28 Nov and the SILVER option links on 1 Dec. The next published calendars must be added, or the fresh-start MCX path stops on those dates.
+
+## Second audit (8 Nov, evening)
+
+| # | Gap found | Fix |
+|---|---|---|
+| 1 | The schema still enforced one open position per **risk group** (`fresh_one_open_group`), although 2.0 made it a record-only flag (owner D2). A second index (NIFTY + BANKNIFTY / SENSEX, all `NSE_INDEX_CORRELATED`) or a same-sector stock passed admission with `WOULD_BLOCK_CORRELATED` and then failed with a unique violation: no position, no refusal recorded. This affected fresh-start since #154, the DHAN book and expiry gamma. | The index is dropped; one position per instrument and one fill per parent stay enforced. The store turns any schema uniqueness conflict into an `EXPOSURE_OR_PARENT` refusal instead of an exception. |
+| 2 | Every fresh-worker scan (10 s) disarmed paper entries at its start and re-armed them only after several awaits (DB, subscription sync, Redis key scan). Candidates arriving in that window (Dhan engine signals, a pricing finishing mid-scan) were refused `PAPER_DISABLED`. | No transient disarm. The armed state is decided once per scan; the closed-market, stop and error paths disarm explicitly. |
+| 3 | DHAN setups recorded SIGNALs until 14:45 (Part 17 secondary window), but paper entries stopped at 14:30 (fresh-start one-hour rule), and a bar closing at 14:45 counted as tradable. | DHAN candidates enter until 45 minutes before the cutoff (`lastEntryBeforeCutoffMs`; 14:45 NSE / BSE). A bar closing at 14:45 is AFTER_CUTOFF. |
+| 4 | PDH / PDL / PWH / PWL were taken from whatever days were in memory, so a partial day or week (late feed, restart, short stock memory) gave false levels. | Levels are used only when the previous trading session (exchange calendar) and every trading day of the previous ISO week are covered (first bar within 30 minutes of the open, last within 30 minutes of the close); otherwise they are dropped. |
+| 5 | An external (DHAN) candidate had to start within 2 s in the evaluations queue, which is busiest at bar closes. | It may start for up to 15 s, inside its own entry window. |
+| 6 | The Command Center account card measured both books' trades against the fresh-start capital. | `accountView` is per book (fresh-start by default). |
+
+Verified, not bugs:
+- Monitor exits for positions on references that leave the selection still work: 5-minute closes are built from live prints, and held tokens stay subscribed.
+- The option chain includes the expiring contract on expiry day (`expiry >= today`).
+- Holiday, fee and MCX calendar horizons are already alerted 30 days ahead (`CALENDAR_HORIZON`).
+- Secrets are never logged.
+
+Calendar facts:
+- NSE is closed on Tue 10 Nov and Tue 24 Nov 2026.
+- The NIFTY weekly expiry is therefore **Mon 9 Nov** (then 17 Nov and Mon 23 Nov), per Dhan's instrument master.
+- SENSEX expires on Thu 12 Nov.
+
+Data still needed:
+- MCX GOLD option calendar (ends 28 Nov) and SILVER option links (end 1 Dec).
+- From 1 Jan 2027: the 2027 NSE / BSE / MCX holiday lists, fee schedule and MCX contract specifications.
+- Without them, the fresh-start worker (and so the DHAN paper path) stops with `BLOCKED_CALENDAR_YEAR` on 1 Jan 2027.

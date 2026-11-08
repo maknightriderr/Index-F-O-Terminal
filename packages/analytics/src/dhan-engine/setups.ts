@@ -83,6 +83,10 @@ export interface SetupContext {
   /** Completed prior daily bars, oldest first. */
   daily: EngineBar[];
   sessionOpen: number;
+  /** Whether the previous session / previous week in `daily` are complete (8 Nov audit): a level from a partial day or
+   *  week (feed connected late, a restart, a short memory) is not the real PDH / PDL / PWH / PWL and is dropped.
+   *  Absent = trust `daily` as given (fixtures, replays that supply full history). */
+  referenceComplete?: { previousDay: boolean; previousWeek: boolean };
   /** sessionGapAt: the first lost bar of today's session (restart / unreconciled-only): session totals end there. */
   health: { stale: boolean; mappingValid: boolean; sessionGapAt?: number | null };
 }
@@ -205,7 +209,8 @@ function derive(c: SetupContext): Derived | null {
   const atr = meanRange(c.bars, DHAN_SETUP_RULES.atrBars, DHAN_SETUP_RULES.minAtrBars);
   const buf = Math.max(DHAN_SETUP_RULES.slBufferTicks * c.tickSize, DHAN_SETUP_RULES.slBufferAtr * (atr ?? 0));
   const structure = analyzeStructure(bars, c.tickSize);
-  const ref = referenceLevels(c.daily, bars, c.sessionOpen, 15);
+  const refRaw = referenceLevels(c.daily, bars, c.sessionOpen, 15);
+  const ref = { ...refRaw, ...(c.referenceComplete && !c.referenceComplete.previousDay ? { pdh: null, pdl: null } : {}), ...(c.referenceComplete && !c.referenceComplete.previousWeek ? { pwh: null, pwl: null } : {}) };
   const levels = liquidityLevels(bars, ref, bars[0].time === c.sessionOpen ? 0 : -1);
   const cvdBars = bars.map((b, k) => ({ ...b, delta: fps[k].deltaMode === 'UNAVAILABLE' ? null : fps[k].delta }));
   const cvd = cvdSeries(cvdBars, istSession);
@@ -455,7 +460,7 @@ export function sessionWindow(exchange: string, barClose: number): string {
   if (m <= 9 * 60 + 30) return 'OPENING_OBSERVATION';
   if (m <= 11 * 60 + 30) return 'PRIMARY';
   if (m <= 13 * 60 + 30) return 'SELECTIVE';
-  if (m <= 14 * 60 + 45) return 'SECONDARY';
+  if (m < 14 * 60 + 45) return 'SECONDARY'; // a bar closing at 14:45 cannot be entered inside the window
   return 'AFTER_CUTOFF';
 }
 const tradableWindow = (w: string) => w === 'PRIMARY' || w === 'SELECTIVE' || w === 'SECONDARY' || w === 'MCX_SESSION';

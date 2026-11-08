@@ -100,3 +100,13 @@ describe('Dhan engine stock priority (8 Nov)',()=>{
   expect(self.dhanPriority.size).toBe(0);
  });
 });
+describe('armed state without a transient disarm (second audit, 8 Nov)',()=>{
+ afterEach(()=>{vi.useRealTimers();});
+ it('a scan with no open exchange still disarms (the start of a scan no longer does)',async()=>{
+  vi.useFakeTimers();vi.setSystemTime(new Date('2026-10-31T06:00:00Z'));mocks.recover.mockResolvedValue(undefined);
+  const {worker}=setup();await worker.start();await vi.waitFor(()=>expect((worker as any).scanning).toBe(false));
+  state.entriesArmed=true;(worker as any).lastScan=0;await (worker as any).scan();
+  expect(state.entriesArmed).toBe(false);expect(state.status).toBe('WAITING_FOR_MARKET');
+  worker.stop();
+ });
+});

@@ -87,6 +87,11 @@ describe('Setup A: liquidity sweep + absorption reversal', () => {
     later.health = { ...later.health, sessionGapAt: OPEN + 20 * Q };
     expect(find(run(later), 'A', 'BULLISH').status).toBe('SIGNAL');
   });
+  it('second audit: previous-day / week levels from an incomplete day are not used (here the swept PDL / PWL)', () => {
+    const c = contextOf(QUIET, A_DAY, { referenceComplete: { previousDay: false, previousWeek: false } });
+    expect(find(run(c), 'A', 'BULLISH')).toMatchObject({ status: 'NO_SETUP', failed: 'A2_SWEEP' });
+    expect(find(run(contextOf(QUIET, A_DAY, { referenceComplete: { previousDay: true, previousWeek: true } })), 'A', 'BULLISH').status).toBe('SIGNAL');
+  });
   it('a stale feed turns the signal into NO_TRADE (gate and no-trade reason both recorded)', () => {
     const a = find(run(contextOf(QUIET, A_DAY, { health: { stale: true, mappingValid: true } })), 'A', 'BULLISH');
     expect(a.status).toBe('NO_TRADE');
@@ -145,6 +150,8 @@ describe('sessions and timeframes', () => {
   it('NSE/BSE windows per Part 17; MCX keeps its own session', () => {
     const at = (h: number, m: number) => Date.parse('2026-11-09T00:00:00Z') - 19_800_000 + (h * 60 + m) * 60_000;
     expect([sessionWindow('NSE', at(9, 30)), sessionWindow('NSE', at(9, 45)), sessionWindow('BSE', at(12, 0)), sessionWindow('NSE', at(14, 0)), sessionWindow('NSE', at(15, 0))]).toEqual(['OPENING_OBSERVATION', 'PRIMARY', 'SELECTIVE', 'SECONDARY', 'AFTER_CUTOFF']);
+    // A bar closing at 14:45 cannot be entered inside the secondary window (it ends at 14:45).
+    expect([sessionWindow('NSE', at(14, 30)), sessionWindow('NSE', at(14, 45))]).toEqual(['SECONDARY', 'AFTER_CUTOFF']);
     expect([sessionWindow('MCX', at(9, 15)), sessionWindow('MCX', at(21, 0))]).toEqual(['MCX_OPENING_OBSERVATION', 'MCX_SESSION']);
   });
   it('30-minute bars pair 15-minute bars from each session open', () => {

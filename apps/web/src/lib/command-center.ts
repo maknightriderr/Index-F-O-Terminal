@@ -174,7 +174,11 @@ export interface AccountView {
   drawdownPct: number;
 }
 
-export function accountView(status: FreshStartStatus | null, positions: PositionView[], now: number): AccountView {
+/** The paper book a position belongs to: the Dhan engine trades its own account (own capital and limits). */
+export const positionBook = (p: Pick<PositionView, 'strategy'>): 'DHAN' | 'FRESH' => (p.strategy.startsWith('DHAN_') ? 'DHAN' : 'FRESH');
+export function accountView(status: FreshStartStatus | null, allPositions: PositionView[], now: number, book: 'FRESH' | 'DHAN' = 'FRESH'): AccountView {
+  // One book's capital is never measured against the other book's trades (8 Nov audit).
+  const positions = allPositions.filter((p) => positionBook(p) === book);
   const capital = status?.capital ?? null;
   const today = istDay(now);
   const closed = positions.filter((p) => p.status === 'CLOSED');

@@ -28,6 +28,8 @@ export const DHAN_PAPER_MAX_PRICE_AGE_MS = 60_000;
 export const DHAN_PAPER_MAX_BASIS_SHARE = 0.03;
 /** Entry window of a DHAN_* setup candidate (the extended-entry check, 0.25 ATR, still bounds the price). */
 export const DHAN_ENTRY_WINDOW_MS = 45_000;
+/** Part 17: new DHAN_* setup entries until 45 minutes before the cutoff (14:45 on NSE / BSE). */
+export const DHAN_LAST_ENTRY_BEFORE_CUTOFF_MS = 45 * 60_000;
 
 export interface DhanPaperInput {
   symbol: string;
@@ -66,7 +68,7 @@ export function dhanPaperCandidate(x: DhanPaperInput): DhanPaperOutcome {
       id: `${FRESH_PACK_VERSION}:${x.reference.sourceEpoch}:${parentId}:${r.strategy}:${x.barTime}`,
       parentId, version: FRESH_PACK_VERSION, strategy: r.strategy as FreshExternalStrategy, direction: r.side, instrument: x.reference.id,
       sourceEpoch: x.reference.sourceEpoch, session: x.session, at: x.decidedAt, referenceEntry: entry, stop, target, atr: x.atr, origin,
-      expiresAt: Math.min(x.now + DHAN_ENTRY_WINDOW_MS, x.sessionClose - 3_600_000), exitProfile: 'STRUCTURE',
+      expiresAt: Math.min(x.now + DHAN_ENTRY_WINDOW_MS, x.sessionClose - DHAN_LAST_ENTRY_BEFORE_CUTOFF_MS), exitProfile: 'STRUCTURE', lastEntryBeforeCutoffMs: DHAN_LAST_ENTRY_BEFORE_CUTOFF_MS,
       evidence: {
         dhan: {
           symbol: x.symbol, setup: r.setup, score: r.score?.total ?? null, eligibility: r.score?.eligibility ?? null, futuresPlan: r.plan,
