@@ -1,8 +1,8 @@
 // Dhan engine v2, phase 4: a setup SIGNAL becomes a fresh-start paper candidate (options, paper only), its futures
 // plan translated to the paper reference by the current basis; everything else is refused with a named code.
 import { describe, expect, it } from 'vitest';
-import { dhanGammaCandidate, dhanPaperCandidate, DHAN_PAPER_MAX_PRICE_AGE_MS, type DhanPaperInput } from '../paper.js';
-import { FRESH_PACK_VERSION, FRESH_ENTRY_WINDOW_MS } from '../../fresh-start/strategies.js';
+import { dhanGammaCandidate, dhanPaperCandidate, DHAN_ENTRY_WINDOW_MS, DHAN_PAPER_MAX_PRICE_AGE_MS, type DhanPaperInput } from '../paper.js';
+import { FRESH_PACK_VERSION } from '../../fresh-start/strategies.js';
 import type { SetupResult } from '../setups.js';
 
 const now = Date.parse('2026-11-09T05:00:05Z');
@@ -23,7 +23,7 @@ describe('DHAN signal -> paper candidate', () => {
     if (!out.ok) return;
     expect(out.candidate).toMatchObject({
       strategy: 'DHAN_A_SWEEP_ABSORPTION', direction: 'BULLISH', instrument: 'NFO:123', version: FRESH_PACK_VERSION, sourceEpoch: 'ANGEL-SNAP:1:1', session: '2026-11-09',
-      referenceEntry: 24050, stop: 23990, target: 24200, atr: 40, exitProfile: 'TARGET', at: now - 5000, origin: now - 5000, expiresAt: now + FRESH_ENTRY_WINDOW_MS,
+      referenceEntry: 24050, stop: 23990, target: 24200, atr: 40, exitProfile: 'STRUCTURE', at: now - 5000, origin: now - 5000, expiresAt: now + DHAN_ENTRY_WINDOW_MS,
       parentId: `NFO:123:2026-11-09:BULLISH:${now - 5000}`,
       evidence: { dhan: { setup: 'A', score: 8, translation: { method: 'CONSTANT_BASIS', referenceKind: 'SPOT', shift: -50 }, rrBasis: 'GROSS_UNDERLYING' } },
     });

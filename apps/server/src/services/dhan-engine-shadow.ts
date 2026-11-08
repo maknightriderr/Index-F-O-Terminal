@@ -12,8 +12,9 @@ import {
   evaluateDhanSetups, evaluateExpiryGamma, istSession, pivotR1, vwapFromSums,
   DHAN_GAMMA_ID, DHAN_GAMMA_VERSION, DHAN_SETUP_VERSION, type EngineBar, type FootprintBar, type GammaResult, type GammaSample, type SetupContext, type SetupResult,
 } from '@fno/analytics';
-import type { OptionChain } from '@fno/shared';
+import { getSessionWindow, type Exchange, type OptionChain } from '@fno/shared';
 import { sql } from '../lib/db.js';
+import { redis } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
 import { schemaFileReady } from './ensure-capture-schema.js';
 import { flowContractBars, flowSessionState, flowSymbols } from './order-flow-store.js';
@@ -101,11 +102,15 @@ export async function setupContextFor(symbol: string, now: number, health: Healt
   if (today !== istSession(now)) return null;
   const refs = withRvol && schemaFileReady('038_order_blocks_order_flow_of1.sql') ? await rvolReferences(symbol, today, now) : new Map<string, number[]>();
   const firstToday = fps.find((f) => istSession(f.barTime) === today)!;
+  // The exchange's session open (not the first traded bar: after a gap the opening range must not move), and the
+  // first lost bar of today's session (a restart gap / unreconciled-only bar): session running totals end there.
+  const sessionOpen = getSessionWindow(st.exchange as Exchange, today)?.open ?? firstToday.barTime;
+  const gapAt = st.footprints.find((f) => istSession(f.barTime) === today && f.incomplete && f.deltaMode === 'UNAVAILABLE')?.barTime ?? null;
   const bars: EngineBar[] = fps.map((f, k) => ({ time: f.barTime, open: f.open ?? fps[k - 1]?.close ?? f.close!, high: f.high!, low: f.low!, close: f.close!, volume: f.volume ?? 0 }));
   return {
     symbol, instrument: st.instrument, kind: st.kind, exchange: st.exchange, tickSize: st.tickSize, bars, fps,
     vwapSums: fps.map((f) => f.tradeSums ?? null), rvol: fps.map((f) => rvolOf(refs, f)), daily: dailyFromFootprints(st.footprints, today),
-    sessionOpen: firstToday.barTime, health: health(symbol, now),
+    sessionOpen, health: { ...health(symbol, now), sessionGapAt: gapAt },
   };
 }
 
@@ -193,11 +198,13 @@ export async function recordGammaChain(index: string, chain: Pick<OptionChain, '
     if (!(chain.spotPrice > 0) || !chain.strikes.length) return;
     const day = istSession(at);
     let g = state.gamma.get(index);
-    if (!g || g.day !== day) state.gamma.set(index, (g = { day, samples: [], fired: new Set() }));
+    // The day's samples (the 11:30-13:15 baseline, the day high / low) and fired sides survive a restart in Redis.
+    if (!g || g.day !== day) state.gamma.set(index, (g = await loadGamma(index, day)));
     const sorted = [...chain.strikes].sort((a, b) => a.strike - b.strike);
     const atmIdx = sorted.reduce((bi, s, k) => (Math.abs(s.strike - chain.spotPrice) < Math.abs(sorted[bi].strike - chain.spotPrice) ? k : bi), 0);
     const near = sorted.slice(Math.max(0, atmIdx - 5), atmIdx + 6).map((s) => ({ strike: s.strike, callOi: s.call?.oi ?? 0, putOi: s.put?.oi ?? 0 }));
     g.samples = [...g.samples.filter((s) => s.at !== at), { at, spot: chain.spotPrice, strikes: near }].slice(-400);
+    saveGamma(index, g);
     if (!chainExpiresToday(chain.expiry, now)) return;
     const steps = near.slice(1).map((s, k) => s.strike - near[k].strike).filter((d) => d > 0);
     const strikeStep = steps.length ? Math.min(...steps) : 0;
@@ -214,6 +221,7 @@ export async function recordGammaChain(index: string, chain: Pick<OptionChain, '
     for (const r of results) {
       if (r.status !== 'SIGNAL' || g.fired.has(r.side)) continue;
       g.fired.add(r.side);
+      saveGamma(index, g);
       logger.info({ event: 'dhanShadowSignal', symbol: index, strategy: DHAN_GAMMA_ID, side: r.side, strikes: r.strikes, evidence: r.evidence }, 'Dhan engine signal (paper decision follows)');
       if (schemaFileReady(DHAN_SIGNALS_MIGRATION)) await sql`
         INSERT INTO dhan_engine_signals (strategy, side, symbol, instrument, exchange, bar_time, status, entry, session_window, checks, evidence, version)
@@ -225,6 +233,19 @@ export async function recordGammaChain(index: string, chain: Pick<OptionChain, '
   } catch (err: any) {
     logger.warn({ index, error: err.message }, 'Dhan engine shadow: gamma evaluation failed');
   }
+}
+
+const gammaKey = (index: string, day: string) => `dhan:gamma:${index}:${day}`;
+async function loadGamma(index: string, day: string): Promise<{ day: string; samples: GammaSample[]; fired: Set<string> }> {
+  try {
+    const raw = await redis.get(gammaKey(index, day));
+    const x = raw ? JSON.parse(raw) : null;
+    if (x && Array.isArray(x.samples)) return { day, samples: x.samples.filter((s: GammaSample) => s && Number.isFinite(s.at) && s.spot > 0 && Array.isArray(s.strikes)).slice(-400), fired: new Set(Array.isArray(x.fired) ? x.fired : []) };
+  } catch { /* no saved samples: start the day empty */ }
+  return { day, samples: [], fired: new Set() };
+}
+function saveGamma(index: string, g: { day: string; samples: GammaSample[]; fired: Set<string> }): void {
+  try { void redis.set(gammaKey(index, g.day), JSON.stringify({ samples: g.samples, fired: [...g.fired] }), 'EX', 2 * 86_400).catch(() => undefined); } catch { /* best effort */ }
 }
 
 /** Recorded shadow signals of an IST day (diagnostics). */

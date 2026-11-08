@@ -78,4 +78,7 @@ CREATE TABLE IF NOT EXISTS fresh_paper_reviews (
   response jsonb,
   completed_at timestamptz
 );
-CREATE UNIQUE INDEX IF NOT EXISTS fresh_account_day_cohort ON fresh_paper_accounts(session,version);
+-- 8 Nov 2026: one account per session, version and paper BOOK (fresh-start / Dhan engine, owner decision D4). The
+-- earlier one-account-per-day index is dropped (statements re-apply every boot, so the drop runs before the create).
+DROP INDEX IF EXISTS fresh_account_day_cohort;
+CREATE UNIQUE INDEX IF NOT EXISTS fresh_account_day_book ON fresh_paper_accounts(session,version,(position(':DHAN:' in id)>0));

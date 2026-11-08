@@ -9,7 +9,7 @@
 
 import React, { useMemo, useState } from 'react';
 import { useFreshStart } from '@/lib/use-fresh-start';
-import { exitReasons, MIN_SAMPLE, orderFlowShadow, positionViews, promotionGate, rHistogram, signedInr, signedR, STRATEGY_IDS, strategyName, timeHeatmap, TIME_SLOTS } from '@/lib/command-center';
+import { exitReasons, MIN_SAMPLE, orderFlowShadow, positionViews, promotionGate, rHistogram, signedInr, signedR, PAPER_STRATEGY_IDS, strategyName, timeHeatmap, TIME_SLOTS } from '@/lib/command-center';
 import { Empty, Kpi, Panel, Pill } from '@/components/command-center/panel';
 import { EquityPanel } from '@/components/command-center';
 
@@ -39,7 +39,7 @@ export function StrategyLabPage() {
   return (
     <div className="cc-page">
       <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Strategy">
-        {['ALL', ...STRATEGY_IDS].map((id) => (
+        {['ALL', ...PAPER_STRATEGY_IDS].map((id) => (
           <button key={id} type="button" role="tab" aria-selected={tab === id} className="cc-chip" onClick={() => setTab(id)}>
             {id === 'ALL' ? 'All strategies' : strategyName(id)}
           </button>
@@ -103,7 +103,7 @@ export function StrategyLabPage() {
         <Panel title={gateFor ? `Promotion gate · ${strategyName(tab)}` : 'Promotion gate'} meta={gateFor ? <Pill tone={promotionGate(gateFor).every((g) => g.ok) ? 'ok' : 'warn'}>{promotionGate(gateFor).every((g) => g.ok) ? 'READY FOR REVIEW' : 'NOT READY'}</Pill> : undefined}>
           {tab === 'ALL' ? (
             <div className="flex flex-col gap-2">
-              {STRATEGY_IDS.map((id) => {
+              {PAPER_STRATEGY_IDS.map((id) => {
                 const g = promotionGate(status?.performance.find((p) => p.strategy === id));
                 const passed = g.filter((x) => x.ok).length;
                 return (

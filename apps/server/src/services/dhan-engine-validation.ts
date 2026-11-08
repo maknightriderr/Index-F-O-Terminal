@@ -11,14 +11,15 @@
 // Nothing here changes a parameter; the report is what the stored data says, with small samples flagged.
 // ============================================================
 
-import { gunzipSync } from 'node:zlib';
 import {
   buildFootprint, evaluateDhanSetups, gradeSignal, istSession, validationReport, unavailableFootprint,
   type EngineBar, type FlowTrade, type FootprintBar, type GradedTrade, type SetupContext, type Side,
 } from '@fno/analytics';
+import { getSessionWindow, type Exchange } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { schemaFileReady } from './ensure-capture-schema.js';
-import { applyReconciliation, FLOW_BAR_MS, ORDER_FLOW_EVENTS_MIGRATION } from './order-flow-store.js';
+import { applyReconciliation, decodeFlowEvents, FLOW_BAR_MS, ORDER_FLOW_EVENTS_MIGRATION } from './order-flow-store.js';
+export { decodeFlowEvents };
 import { dailyFromFootprints, DHAN_SIGNALS_MIGRATION } from './dhan-engine-shadow.js';
 
 export const REPLAY_MAX_DAYS = 10;
@@ -26,18 +27,6 @@ export const VALIDATION_MAX_DAYS = 62;
 const SLIPPAGE_TICKS = 2;
 
 export interface RecordedBar { barTime: number; exchange: string; instrument: string | null; trades: FlowTrade[]; unreconciled: number }
-
-/** Decode one gzip-json-v1 events blob: rows [msFromBar, price|null, qty, side 1 / -1 / 0 / 9 (unreconciled)]. */
-export function decodeFlowEvents(blob: Buffer | Uint8Array, barTime: number): { trades: FlowTrade[]; unreconciled: number } {
-  const rows = JSON.parse(gunzipSync(Buffer.from(blob)).toString()) as Array<[number, number | null, number, number]>;
-  const trades: FlowTrade[] = [];
-  let unreconciled = 0;
-  for (const [ms, price, qty, side] of rows) {
-    if (side === 9 || price == null) { unreconciled += qty; continue; }
-    trades.push({ time: barTime + ms, price, qty, side: side === 1 ? 'BUY' : side === -1 ? 'SELL' : null });
-  }
-  return { trades, unreconciled };
-}
 
 async function loadRecorded(symbol: string, from: number, to: number): Promise<RecordedBar[]> {
   const rows = await sql<Array<{ exchange: string; instrument: string | null; bar_time: Date; events: Buffer; encoding: string }>>`
@@ -116,7 +105,7 @@ export async function dhanReplay(symbol: string, fromDay: string, toDay: string)
     const ctx: SetupContext = {
       symbol, instrument: recorded[0].instrument, kind: null, exchange: recorded[0].exchange, tickSize: tick, bars: bars.slice(lo, i + 1), fps: fps.slice(lo, i + 1),
       vwapSums: fps.slice(lo, i + 1).map((f) => f.tradeSums ?? null), rvol: fps.slice(lo, i + 1).map(() => null), daily: dailyFromFootprints(fps.slice(0, i + 1), today),
-      sessionOpen: fps[first].barTime, health: { stale: false, mappingValid: true },
+      sessionOpen: getSessionWindow(recorded[0].exchange as Exchange, today)?.open ?? fps[first].barTime, health: { stale: false, mappingValid: true },
     };
     const ev = evaluateDhanSetups(ctx);
     evaluations++;

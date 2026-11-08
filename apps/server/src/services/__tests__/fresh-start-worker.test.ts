@@ -89,3 +89,14 @@ describe('one candle feed per reference (5 Nov volume audit)',()=>{
    worker.stop();
  });
 });
+describe('Dhan engine stock priority (8 Nov)',()=>{
+ it('a stock with a DHAN_* signal replaces the last selected stock that is neither in play nor prioritised, until it expires',()=>{
+  const ref=(id:string,market='NSE_STOCK_OPTIONS')=>({id,name:id,market}) as any;
+  const selected=[ref('NIFTY','NSE_INDEX_OPTIONS'),ref('A'),ref('B'),ref('C')],now=1_000_000;
+  const self={dhanPriority:new Map([['X',now+60_000]]),refs:new Map([['X',ref('X')]]),inPlay:['C']};
+  const withDhanPriority=(FreshPaperWorker.prototype as any).withDhanPriority;
+  expect(withDhanPriority.call(self,selected,now).map((r:any)=>r.id)).toEqual(['NIFTY','A','X','C']); // C is in play: B gives way
+  expect(withDhanPriority.call(self,selected,now+60_000).map((r:any)=>r.id)).toEqual(['NIFTY','A','B','C']); // expired
+  expect(self.dhanPriority.size).toBe(0);
+ });
+});

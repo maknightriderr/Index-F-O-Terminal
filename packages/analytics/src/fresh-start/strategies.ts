@@ -207,7 +207,10 @@ export interface FreshContext {
     footprint15?: FreshFootprintRead | null;
 }
 /** Dhan engine v2 setups paper-traded through the same adapter / store (phase 4). Not evaluated by this module. */
-export type FreshExternalStrategy = 'DHAN_A_SWEEP_ABSORPTION' | 'DHAN_B_IMBALANCE_BREAKOUT' | 'DHAN_C_FAILED_AUCTION_CVD' | 'DHAN_D_VWAP_PROFILE_REJECTION' | 'DHAN_EXPIRY_GAMMA';
+export const FRESH_EXTERNAL_STRATEGIES = ['DHAN_A_SWEEP_ABSORPTION', 'DHAN_B_IMBALANCE_BREAKOUT', 'DHAN_C_FAILED_AUCTION_CVD', 'DHAN_D_VWAP_PROFILE_REJECTION', 'DHAN_EXPIRY_GAMMA'] as const;
+export type FreshExternalStrategy = typeof FRESH_EXTERNAL_STRATEGIES[number];
+/** Every strategy whose paper trades the performance report covers (fresh-start + Dhan engine, separate books). */
+export const FRESH_REPORTED_STRATEGIES = [...FRESH_ALL_STRATEGIES, ...FRESH_EXTERNAL_STRATEGIES] as const;
 /**
  * A premium-defined exit (owner, 8 Nov, expiry gamma): the position is risked and closed on its OPTION premium only —
  * a stop at stopFraction below the entry premium, a time exit at exitAt — with no underlying target, structural
@@ -231,8 +234,10 @@ export interface FreshCandidate {
     target: number;
     atr: number;
     expiresAt: number;
-    /** 'TREND' (1.8): no fixed-target exit; a trailing stop trailAtr ATRs behind the best underlying price instead. */
-    exitProfile?: 'TARGET' | 'TREND';
+    /** 'TREND' (1.8): no fixed-target exit; a trailing stop trailAtr ATRs behind the best underlying price instead.
+     *  'STRUCTURE' (Dhan engine, master prompt Part 14): structural stop on a 5-minute close, the setup's target, no
+     *  breakeven move at +1R, from +1.5R a stop 1R behind the best price (5-minute close), no max-hold / no-progress exit. */
+    exitProfile?: 'TARGET' | 'TREND' | 'STRUCTURE';
     trailAtr?: number;
     premiumExit?: FreshPremiumExit;
     origin: number;
