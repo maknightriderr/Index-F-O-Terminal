@@ -2,6 +2,7 @@
 import { atr, ema } from '../indicators/index.js';
 import { freshOrderFlowEvidence, type FreshOrderFlowInput } from './order-flow-evidence.js';
 import { detectOrderBlocks } from '../market-structure/index.js';
+import { flowCoverage, FLOW_MIN_SAMPLED_COVERAGE } from '../order-flow/index.js';
 export const FRESH_PACK_VERSION = 'NEW-INTRADAY-2.0';
 /** Minimum underlying reward / risk for a target, and the furthest target in 5-minute ATR before it is capped (1.5). */
 /**
@@ -759,9 +760,11 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                     reach(1, 'MCX_FLOW_UNAVAILABLE');
                     const flowBars = c.orderFlow?.bars ?? [], fb = (t: number) => flowBars.find(x => x.time === t);
                     const recent = today.slice(-FRESH_MCX_FLOW_BARS).map(x => fb(x.time)), cur = fb(current.time);
-                    const buy = recent.reduce((n, x) => n + (x?.buy ?? 0), 0), sell = recent.reduce((n, x) => n + (x?.sell ?? 0), 0), un = recent.reduce((n, x) => n + (x?.unclassified ?? 0) + (x?.unreconciled ?? 0), 0), trades = recent.reduce((n, x) => n + (x?.trades ?? 0), 0);
+                    const buy = recent.reduce((n, x) => n + (x?.buy ?? 0), 0), sell = recent.reduce((n, x) => n + (x?.sell ?? 0), 0), un = recent.reduce((n, x) => n + (x?.unclassified ?? 0), 0), unrec = recent.reduce((n, x) => n + (x?.unreconciled ?? 0), 0), trades = recent.reduce((n, x) => n + (x?.trades ?? 0), 0);
+                    // Sampled order flow (owner, 9 Nov): classified share of the observed volume, and enough coverage.
+                    const coverage = flowCoverage(buy + sell + un, unrec);
                     const delta = (x: { buy: number; sell: number } | undefined) => x && x.buy + x.sell > 0 ? d * (x.buy - x.sell) / (x.buy + x.sell) : null;
-                    if (cur && recent.every(x => x != null) && buy + sell > 0 && (buy + sell) / (buy + sell + un) >= .5 && trades >= 3 * 5) {
+                    if (cur && recent.every(x => x != null) && buy + sell > 0 && (buy + sell) / (buy + sell + un) >= .5 && coverage != null && coverage >= FLOW_MIN_SAMPLED_COVERAGE && trades >= 3 * 5) {
                         reach(2, 'MCX_FLOW_NOT_ALIGNED');
                         const setupDelta = d * (buy - sell) / (buy + sell), barDelta = delta(cur)!;
                         if (setupDelta >= FRESH_MCX_FLOW_MIN_DELTA && barDelta > -FRESH_MCX_FLOW_MIN_DELTA) {

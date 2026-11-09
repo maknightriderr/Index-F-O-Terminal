@@ -109,3 +109,20 @@ Data still needed:
 - MCX GOLD option calendar (ends 28 Nov) and SILVER option links (end 1 Dec).
 - From 1 Jan 2027: the 2027 NSE / BSE / MCX holiday lists, fee schedule and MCX contract specifications.
 - Without them, the fresh-start worker (and so the DHAN paper path) stops with `BLOCKED_CALENDAR_YEAR` on 1 Jan 2027.
+
+## Sampled order flow + Dhan A–D radar columns (owner, 9 Nov)
+
+Live check (9 Nov, 10:25 IST): the Dhan feed's `reconciledShare` was 0.22–0.25, so nearly every footprint bar crossed
+the 20% unreconciled ceiling and was INCOMPLETE — setups A–D stopped at their first flow check and NEW_MCX_FLOW_V1
+reported MCX_FLOW_UNAVAILABLE. Owner decision: treat observed trades as a **sample**.
+
+- A bar above the 20% unreconciled ceiling is a usable **sampled** bar when observed coverage
+  (observed ÷ (observed + unreconciled)) is ≥ 15% (`FLOW_MIN_SAMPLED_COVERAGE`) and it has ≥ 30 trades
+  (`FLOW_MIN_SAMPLED_TRADES`); otherwise it stays INCOMPLETE (delta and imbalances withheld). `FootprintBar.coverage`
+  / `.sampled` record it; footprint v2 labels such a bar `SAMPLED_COVERAGE_nnPCT`. Status stays ESTIMATED — never VERIFIED.
+- Session VWAP from trades is INCOMPLETE only below 15% coverage.
+- Fresh flow evidence and NEW_MCX_FLOW_V1 measure the classified share over observed volume and require the same
+  coverage floor (refusal `LOW_COVERAGE` / `MCX_FLOW_UNAVAILABLE`).
+- The workspace setup radar shows four Dhan columns (A–D): today's latest outcome per contract
+  (SIGNAL with score, "Rejected: <gate>", or "Stopped at <check>"), from `dhanShadowStatus().latest`.
+- No strategy condition, threshold or gate changed; only what counts as usable flow data.

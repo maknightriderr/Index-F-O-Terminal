@@ -2,8 +2,8 @@
 // VWAP (master prompt 8.1) and RELATIVE VOLUME (8.2)
 // ============================================================
 // Session VWAP = Σ(price × qty) / Σ(qty), reset at the session boundary. Standard-deviation bands use the volume-
-// weighted variance Σ(p²q)/Σq − VWAP². From observed trades it is 'ESTIMATED' coverage-wise (unreconciled volume has
-// no price) and INCOMPLETE above the unreconciled threshold; from candles (typical price × volume) it is labelled
+// weighted variance Σ(p²q)/Σq − VWAP². From observed trades it is 'ESTIMATED' (a sample: unreconciled volume has no
+// price) and INCOMPLETE below the sampled-coverage floor; from candles (typical price × volume) it is labelled
 // 'APPROXIMATION', always.
 // Slope: VWAP change over `vwapSlopeBars` bars ÷ ATR. Distance: (close − VWAP) in SDs and in ATRs.
 // Reclaim: previous close below VWAP, this close above it; rejection (bearish): high reached VWAP from below and the
@@ -12,7 +12,7 @@
 // fewer than 20 sessions -> UNAVAILABLE (never a noisy ratio from 3 days).
 // ============================================================
 
-import { FLOW_MAX_UNRECONCILED_SHARE } from '../order-flow/index.js';
+import { FLOW_MIN_SAMPLED_COVERAGE } from '../order-flow/index.js';
 import { DHAN_ENGINE_RULES, roundDp, type EngineStatus, type Side } from './common.js';
 
 export interface VwapSums {
@@ -41,8 +41,9 @@ export function vwapFromSums(s: VwapSums, source: 'TRADES' | 'CANDLES', unreconc
   if (!(s.v > 0)) return { status: 'UNAVAILABLE', source, vwap: null, sd: null, bands: null };
   const vwap = s.pv / s.v;
   const sd = Math.sqrt(Math.max(0, s.p2v / s.v - vwap * vwap));
-  const share = unreconciled > 0 ? unreconciled / (unreconciled + s.v) : 0;
-  const status: EngineStatus = source === 'CANDLES' ? 'APPROXIMATION' : share > FLOW_MAX_UNRECONCILED_SHARE ? 'INCOMPLETE' : 'ESTIMATED';
+  // Sampled (owner, 9 Nov): observed trades stand for the session's VWAP while they cover enough of its volume.
+  const coverage = unreconciled > 0 ? s.v / (unreconciled + s.v) : 1;
+  const status: EngineStatus = source === 'CANDLES' ? 'APPROXIMATION' : coverage < FLOW_MIN_SAMPLED_COVERAGE ? 'INCOMPLETE' : 'ESTIMATED';
   return { status, source, vwap: roundDp(vwap, 4), sd: roundDp(sd, 4), bands: { upper1: roundDp(vwap + sd, 4), lower1: roundDp(vwap - sd, 4), upper2: roundDp(vwap + 2 * sd, 4), lower2: roundDp(vwap - 2 * sd, 4) } };
 }
 

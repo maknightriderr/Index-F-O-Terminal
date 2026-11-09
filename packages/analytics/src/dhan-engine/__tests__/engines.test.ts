@@ -144,7 +144,9 @@ describe('VWAP and RVOL (Part 8)', () => {
     // (100 x 10) + (102 x 30): VWAP 4060/40 = 101.5; variance 412120/40 - 101.5^2 = 0.75 -> SD 0.866.
     const s = { pv: 4060, v: 40, p2v: 412120 };
     expect(vwapFromSums(s, 'TRADES')).toMatchObject({ status: 'ESTIMATED', vwap: 101.5, sd: 0.866, bands: { upper1: 102.366, lower1: 100.634 } });
-    expect(vwapFromSums(s, 'TRADES', 20).status).toBe('INCOMPLETE'); // 20 / 60 unreconciled > 20%
+    // Sampled (9 Nov): 40 observed of 60 (67%) stands as a sample; 40 of 300 (13%) is below the 15% floor.
+    expect(vwapFromSums(s, 'TRADES', 20).status).toBe('ESTIMATED');
+    expect(vwapFromSums(s, 'TRADES', 260).status).toBe('INCOMPLETE');
     expect(vwapFromSums(s, 'CANDLES').status).toBe('APPROXIMATION');
     expect(vwapFromSums({ pv: 0, v: 0, p2v: 0 }, 'TRADES').status).toBe('UNAVAILABLE');
   });

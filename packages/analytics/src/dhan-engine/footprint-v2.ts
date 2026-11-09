@@ -87,7 +87,7 @@ export function diagonalImbalances(fp: FootprintBar, opts: DiagonalOptions = {})
       sellImbalance: sellRatio != null && l.sell >= minLevel && sellRatio >= ratio,
     };
   });
-  return { ...base, status: 'ESTIMATED', reason: null, minLevelVolume: minLevel, rows, buyImbalances: rows.filter((r) => r.buyImbalance).length, sellImbalances: rows.filter((r) => r.sellImbalance).length, stacks: stacksOf(rows, step, stackedMin) };
+  return { ...base, status: 'ESTIMATED', reason: fp.sampled ? `SAMPLED_COVERAGE_${Math.round((fp.coverage ?? 0) * 100)}PCT` : null, minLevelVolume: minLevel, rows, buyImbalances: rows.filter((r) => r.buyImbalance).length, sellImbalances: rows.filter((r) => r.sellImbalance).length, stacks: stacksOf(rows, step, stackedMin) };
 }
 
 function stacksOf(rows: readonly DiagonalRow[], step: number, min: number): ImbalanceStack[] {
