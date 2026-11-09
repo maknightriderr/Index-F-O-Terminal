@@ -15,7 +15,8 @@ const db = Object.assign(tag, { json: (x: unknown) => JSON.stringify(x) });
 vi.mock('../../lib/db.js', () => ({ sql: db }));
 vi.mock('../../lib/redis.js', () => ({ redis: {} }));
 vi.mock('../../lib/logger.js', () => ({ logger: { info() {}, warn(o: any, m: string) { throw new Error(`unexpected warn: ${m} ${JSON.stringify(o)}`); }, error() {}, debug() {} } }));
-vi.mock('../ensure-capture-schema.js', () => ({ schemaFileReady: (f: string) => f !== '053_dhan_engine_signals.sql' }));
+const schema = { ready: true };
+vi.mock('../ensure-capture-schema.js', () => ({ schemaFileReady: (f: string) => schema.ready && f !== '053_dhan_engine_signals.sql' }));
 const store = await import('../order-flow-store.js');
 const { dhanEngineSnapshot } = await import('../dhan-engine-state.js');
 const { setupContextFor } = await import('../dhan-engine-shadow.js');
@@ -76,6 +77,14 @@ describe('restart hydration', () => {
   it('hydrates every registered symbol and reports totals', async () => {
     store.registerFlowSymbol('NIFTY', { exchange: 'NSE', instrument: INSTR, source: 'DHAN', mode: 'INFERRED', startedAt: OPEN + 52 * 60_000, kind: 'INDEX', tickSize: 0.1 });
     store.registerFlowSymbol('NOFLOW', { exchange: 'NSE', instrument: 'NOFLOW-Nov2026-FUT', source: 'DHAN', mode: 'INFERRED', startedAt: OPEN + 52 * 60_000, kind: 'STOCK', tickSize: 0.05 });
-    expect(await store.hydrateFlowSymbols(OPEN + 53 * 60_000)).toEqual({ contracts: 1, bars: 4, failed: 0 });
+    expect(await store.hydrateFlowSymbols(OPEN + 53 * 60_000)).toEqual({ contracts: 1, bars: 4, failed: 0, schemaReady: true });
+  });
+
+  it('waits for the boot-time schema check before reading (9 Nov: the feed resolved 5 s before it finished)', async () => {
+    store.registerFlowSymbol('NIFTY', { exchange: 'NSE', instrument: INSTR, source: 'DHAN', mode: 'INFERRED', startedAt: OPEN + 52 * 60_000, kind: 'INDEX', tickSize: 0.1 });
+    schema.ready = false;
+    expect(await store.hydrateFlowSymbols(OPEN + 53 * 60_000, { schemaWaitMs: 30, pollMs: 5 })).toEqual({ contracts: 0, bars: 0, failed: 0, schemaReady: false });
+    setTimeout(() => { schema.ready = true; }, 20);
+    expect(await store.hydrateFlowSymbols(OPEN + 53 * 60_000, { schemaWaitMs: 2000, pollMs: 5 })).toEqual({ contracts: 1, bars: 4, failed: 0, schemaReady: true });
   });
 });

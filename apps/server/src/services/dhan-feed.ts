@@ -194,7 +194,9 @@ async function resolveInstruments(now: number): Promise<void> {
   // Engine v2 (8 Nov): rebuild today's and the previous session's closed bars from the recorded events (background).
   const started = Date.now();
   void hydrateFlowSymbols(now).then(
-    (r) => logger.info({ event: 'orderFlowHydration', ...r, seconds: Math.round((Date.now() - started) / 1000) }, 'Order flow: closed bars rebuilt from recorded trade events after start'),
+    (r) => r.schemaReady
+      ? logger.info({ event: 'orderFlowHydration', ...r, seconds: Math.round((Date.now() - started) / 1000) }, 'Order flow: closed bars rebuilt from recorded trade events after start')
+      : logger.warn({ event: 'orderFlowHydration', ...r }, 'Order flow: restart hydration skipped (order_flow_events schema not confirmed)'),
     (err: any) => logger.warn({ error: err.message }, 'Order flow: restart hydration failed'),
   );
 }

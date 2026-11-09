@@ -426,13 +426,19 @@ function addFiveUnreconciled(symbol: string, instrument: string | null, time: nu
 }
 
 /** Hydrate every registered symbol, one at a time (bounded work, yields between bars). */
-export async function hydrateFlowSymbols(now: number): Promise<{ contracts: number; bars: number; failed: number }> {
+export const HYDRATION_SCHEMA_WAIT_MS = 5 * 60_000;
+export async function hydrateFlowSymbols(now: number, opts: { schemaWaitMs?: number; pollMs?: number } = {}): Promise<{ contracts: number; bars: number; failed: number; schemaReady: boolean }> {
+  // The Dhan feed resolves its contracts before the boot-time schema check finishes (9 Nov: 5 s earlier, so the first
+  // restart hydration read nothing). Wait for 052 to be confirmed; the recorded bars stay rebuildable until then.
+  const deadline = Date.now() + (opts.schemaWaitMs ?? HYDRATION_SCHEMA_WAIT_MS);
+  while (!schemaFileReady(ORDER_FLOW_EVENTS_MIGRATION) && Date.now() < deadline) await new Promise((res) => setTimeout(res, opts.pollMs ?? 1000));
+  if (!schemaFileReady(ORDER_FLOW_EVENTS_MIGRATION)) return { contracts: 0, bars: 0, failed: 0, schemaReady: false };
   let contracts = 0, bars = 0, failed = 0;
   for (const symbol of [...flows.keys()]) {
     try { const n = await hydrateFlowSymbol(symbol, now); if (n > 0) (contracts++, (bars += n)); }
     catch (err: any) { failed++; logger.warn({ symbol, error: err.message }, 'Order flow: restart hydration failed for a contract'); }
   }
-  return { contracts, bars, failed };
+  return { contracts, bars, failed, schemaReady: true };
 }
 
 /** For diagnostics and tests. */
