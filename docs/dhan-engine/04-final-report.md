@@ -126,3 +126,14 @@ reported MCX_FLOW_UNAVAILABLE. Owner decision: treat observed trades as a **samp
 - The workspace setup radar shows four Dhan columns (A–D): today's latest outcome per contract
   (SIGNAL with score, "Rejected: <gate>", or "Stopped at <check>"), from `dhanShadowStatus().latest`.
 - No strategy condition, threshold or gate changed; only what counts as usable flow data.
+
+## Setup E — pure order flow + footprint (owner, 9 Nov)
+
+Owner: one strategy from order flow and footprint only. `DHAN_E_ORDER_FLOW` (setups.ts, version DHAN-SETUPS-1.1),
+evaluated on every contract's 15-minute footprint close, paper-traded like A–D (options, separate DHAN book):
+- E1 absorption (5.3 rules) within the last 4 bars, not FAILED; E2 its low at / below VAL or within 0.25 ATR of VAL / POC;
+  E3 summed delta since the absorption bar > 0; E4 stacked buy imbalance (3+ rows) from the absorption bar on;
+  E5 entry bar with positive delta closing up and above the absorption bar's high; E6 target POC, else VAH, above entry.
+- Stop: lowest low since the absorption bar − SL buffer. Bearish = distribution at VAH, the mirror.
+- Gates: valid data (no INCOMPLETE footprint from the absorption bar on), a defined plan, the session window. No VWAP,
+  EMA, trend, RVOL, regime or score. A–D and NEW_MCX_FLOW_V1 keep running for comparison.

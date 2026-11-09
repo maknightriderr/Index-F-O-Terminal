@@ -27,7 +27,7 @@ async function bar(symbol: string, barTime: number) {
   await pg.query(`INSERT INTO order_flow_bars(symbol,exchange,instrument,source,bar_time,bar_ms,delta_mode,trades,version,tick_size,price_step) VALUES($1,'NSE','X-FUT','DHAN',$2,900000,'INFERRED',1,'OF-1.0',0.5,1)`, [symbol, new Date(barTime).toISOString()]);
 }
 async function signal(strategy: string, side: string, symbol: string, barTime: number, status: string, entry: number, sl: number, target: number) {
-  await pg.query(`INSERT INTO dhan_engine_signals(strategy,side,symbol,bar_time,status,entry,stop_loss,target,version) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'DHAN-SETUPS-1.0')`, [strategy, side, symbol, new Date(barTime).toISOString(), status, entry, sl, target]);
+  await pg.query(`INSERT INTO dhan_engine_signals(strategy,side,symbol,bar_time,status,entry,stop_loss,target,version) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'DHAN-SETUPS-1.1')`, [strategy, side, symbol, new Date(barTime).toISOString(), status, entry, sl, target]);
 }
 
 beforeAll(async () => {

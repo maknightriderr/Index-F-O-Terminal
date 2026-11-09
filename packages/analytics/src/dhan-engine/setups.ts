@@ -1,5 +1,5 @@
 // ============================================================
-// DHAN ENGINE v2 — SETUPS A–D, 10-POINT SCORE, MANDATORY GATES, NO-TRADE ENGINE (master prompt Parts 10, 12, 18)
+// DHAN ENGINE v2 — SETUPS A–E (E: pure order flow), 10-POINT SCORE, MANDATORY GATES, NO-TRADE ENGINE (master prompt Parts 10, 12, 18)
 // ============================================================
 // SHADOW ONLY (phase 3): a signal is recorded with its full evidence; nothing here opens a paper or real position.
 //
@@ -29,13 +29,14 @@ import { vwapSeries, type VwapPoint, type VwapSums } from './vwap.js';
 import { detectAbsorption, detectExhaustion, type AbsorptionEvent, type ExhaustionEvent } from './absorption.js';
 import { combineRegime, type MtfRegime, type TimeframeInputs } from './regime.js';
 
-export const DHAN_SETUP_VERSION = 'DHAN-SETUPS-1.0';
+export const DHAN_SETUP_VERSION = 'DHAN-SETUPS-1.1';
 
 export const DHAN_SETUP_IDS = {
   A: 'DHAN_A_SWEEP_ABSORPTION',
   B: 'DHAN_B_IMBALANCE_BREAKOUT',
   C: 'DHAN_C_FAILED_AUCTION_CVD',
   D: 'DHAN_D_VWAP_PROFILE_REJECTION',
+  E: 'DHAN_E_ORDER_FLOW',
 } as const;
 export type DhanSetupKey = keyof typeof DHAN_SETUP_IDS;
 
@@ -65,6 +66,8 @@ export const DHAN_SETUP_RULES = Object.freeze({
   maxUnknownShare: 0.2,
   scorePreferred: 8,
   scoreConditional: 7,
+  /** E: the absorption bar must be at most this many bars before the decision bar. */
+  orderFlowRecencyBars: 4,
 });
 
 export interface SetupContext {
@@ -380,7 +383,52 @@ function setupD(d: Derived): Raw {
   return { checks, failed, plan, from: Math.max(0, touch), zone: touch >= 0 ? zone : null, evidence: { zoneKind, absorption: abs } };
 }
 
-const SETUPS: Record<DhanSetupKey, (d: Derived) => Raw> = { A: setupA, B: setupB, C: setupC, D: setupD };
+// ---------------- Setup E: pure order flow + footprint (owner, 9 Nov) ----------------
+// Only order-flow and footprint evidence: no VWAP, EMA, trend, RVOL, regime or score. Bullish (bearish = distribution,
+// the mirror): sellers absorbed at the value-area low / POC, then buyers take over.
+//   E1 absorption: heavy estimated selling at a row of a recent bar, price barely moved below it (5.3 rules), not FAILED;
+//   E2 location: that bar's low is at / below VAL, or within 0.25 ATR of VAL or POC (today's footprint profile);
+//   E3 delta turns: summed delta of the bars after the absorption bar is positive;
+//   E4 stacked buy imbalance (3+ rows) on the absorption bar or after it;
+//   E5 entry bar: positive delta, closes up and above the absorption bar's high (the sellers failed).
+// Stop below the lowest low since the absorption bar (SL buffer); target the POC, else the VAH, above the entry.
+// Data: every bar from the absorption bar on must be a usable footprint (sampled or complete, never INCOMPLETE).
+
+function setupE(d: Derived): Raw {
+  const { i, bars, fps } = d;
+  const R = DHAN_SETUP_RULES;
+  let abs: AbsorptionEvent | undefined, target: { price: number; kind: string } | null = null;
+  const p = d.profile;
+  const { checks, failed } = run([
+    ['E1_ABSORPTION', () => (abs = d.absorption.filter((e) => e.side === 'BULLISH' && e.state !== 'FAILED' && e.index < i && e.index >= i - R.orderFlowRecencyBars).at(-1)) && { zone: abs.zone, progressAtr: abs.progressAtr, bar: abs.index }],
+    ['E2_AT_VALUE_LOW_OR_POC', () => {
+      const low = bars[abs!.index].low, z = R.zoneAtr * (d.atr ?? 0);
+      const at = p.val != null && low <= p.val + z ? 'VAL' : p.poc != null && Math.abs(low - p.poc) <= z ? 'POC' : null;
+      return at && d.atr != null ? { at, val: p.val, poc: p.poc } : null;
+    }],
+    ['E3_DELTA_TURNS_UP', () => {
+      const after = fps.slice(abs!.index + 1, i + 1);
+      if (!after.length || !after.every(validFp)) return null;
+      const sum = after.reduce((a, f) => a + f.delta!, 0);
+      return sum > 0 ? { deltaSinceAbsorption: sum } : null;
+    }],
+    ['E4_STACKED_BUY_IMBALANCE', () => { const st = d.diag.slice(abs!.index, i + 1).flatMap((x) => x.stacks).find((x) => x.side === 'BUY'); return st ? { rows: st.rows, low: st.low, high: st.high } : null; }],
+    ['E5_ENTRY_BAR', () => validFp(fps[i]) && fps[i].delta! > 0 && bars[i].close > bars[i].open && bars[i].close > bars[abs!.index].high ? { delta: fps[i].delta, close: bars[i].close } : null],
+    ['E6_TARGET_POC_OR_VAH', () => {
+      const entry = bars[i].close, gap = d.c.tickSize;
+      target = p.poc != null && p.poc >= entry + gap ? { price: p.poc, kind: 'POC' } : p.vah != null && p.vah >= entry + gap ? { price: p.vah, kind: 'VAH' } : null;
+      return target;
+    }],
+  ]);
+  let plan: TradePlan | null = null;
+  if (!failed && target) {
+    const entry = bars[i].close, sl = Math.min(...bars.slice(abs!.index, i + 1).map((b) => b.low)) - d.buf, t = target as { price: number; kind: string };
+    plan = entry > sl ? { entry, sl: roundDp(sl, 4), target: t.price, targetKind: t.kind, rr: roundDp((t.price - entry) / (entry - sl), 2) } : null;
+  }
+  return { checks, failed, plan, from: abs ? abs.index : i, zone: abs?.zone ?? null, evidence: { absorption: abs, profile: { poc: p.poc, vah: p.vah, val: p.val } } };
+}
+
+const SETUPS: Record<DhanSetupKey, (d: Derived) => Raw> = { A: setupA, B: setupB, C: setupC, D: setupD, E: setupE };
 
 // ---------------- score, gates, no-trade ----------------
 
@@ -496,7 +544,15 @@ export function evaluateDhanSetups(ctx: SetupContext): SetupsEvaluation {
         checks: flip ? r.checks.map((c) => ({ ...c, value: mirrorValue(c.value) })) : r.checks, plan: flip ? mPlan(r.plan) : r.plan,
         evidence: { zone: r.zone == null ? null : flip ? -r.zone : r.zone, atr: d.atr, window },
       };
-      if (!r.failed) {
+      if (!r.failed && key === 'E') {
+        // Pure order flow (owner, 9 Nov): only data validity, a defined plan and the session window; no score.
+        res.gates = [
+          { id: 'VALID_DATA', ok: !d.c.health.stale && d.c.health.mappingValid && !windowIncomplete(d, r.from) },
+          { id: 'DEFINED_PLAN', ok: r.plan != null && r.plan.sl < r.plan.entry && r.plan.target > r.plan.entry, ...(r.plan ? { value: r.plan.rr } : {}) },
+          { id: 'SESSION_WINDOW', ok: tradableWindow(window), value: window },
+        ];
+        res.status = res.gates.every((g) => g.ok) ? 'SIGNAL' : 'NO_TRADE';
+      } else if (!r.failed) {
         const score = scoreOf(d, key, r)!;
         let noTrade = noTradeOf(d, key, r);
         if (!tradableWindow(window)) noTrade = { ...noTrade, tradeable: false, reasons: [...noTrade.reasons, `SESSION_${window}`] };
