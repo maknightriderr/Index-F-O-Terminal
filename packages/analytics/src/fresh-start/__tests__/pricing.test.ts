@@ -8,6 +8,14 @@ const policy:FreshFeePolicy={version:'test',brokeragePerOrder:20,exchangeFractio
 function pairs(){return [24900,25000,25100].map(strike=>{const quote=(side:'CE'|'PE')=>{const mid=discount*blackScholesPrice({spotPrice:forward,strikePrice:strike,timeToExpiry:t,riskFreeRate:0,iv:.18,optionType:side});return {contract:`${strike}:${side}`,source:'ANGEL',epoch:'e1',eventAt:now,receivedAt:now,bid:mid-.1,ask:mid+.1,bidUnits:1000,askUnits:1000,tick:.05};};return {strike,call:quote('CE'),put:quote('PE')};});}
 describe('observed European parity and explicit pricing scenarios',()=>{
  it('recovers forward and discount from three paired contracts without an invented interest rate',()=>{const b=fitFreshParity(pairs(),expiryAt,now)!;expect(b.forward).toBeCloseTo(forward,6);expect(b.discount).toBeCloseTo(discount,8);});
+ it('expiry day (9 Nov): a fitted slope a little above 1 from quote noise is clamped to 1, not refused; far above is still refused',()=>{
+  const at=(strike:number,y:number)=>{const q=(side:'CE'|'PE',mid:number)=>({contract:`${strike}:${side}`,source:'ANGEL',epoch:'e1',eventAt:now,receivedAt:now,bid:mid-.5,ask:mid+.5,bidUnits:1000,askUnits:1000,tick:.05});return {strike,call:q('CE',100+Math.max(0,y)),put:q('PE',100+Math.max(0,-y))};};
+  const fwd=24900,exp=now+2*3600000;
+  // C-P = 1.0006 x (F-K): the slope a noisy 0DTE chain produces; every pair still fits inside its bid/ask band at D = 1.
+  const noisy=[24800,24900,25000].map(k=>at(k,1.0006*(fwd-k)));
+  const b=fitFreshParity(noisy,exp,now)!;expect(b.discount).toBe(1);expect(b.forward).toBeCloseTo(fwd,0);
+  expect(fitFreshParity([24800,24900,25000].map(k=>at(k,1.02*(fwd-k))),exp,now)).toBeNull();
+ });
  it('rejects stale, mixed-epoch, duplicate-strike and inconsistent parity evidence',()=>{for(const change of [(p:ReturnType<typeof pairs>)=>{p[0].call.eventAt-=2001;},(p:ReturnType<typeof pairs>)=>{p[0].put.epoch='other';},(p:ReturnType<typeof pairs>)=>{p[0].strike=p[1].strike;},(p:ReturnType<typeof pairs>)=>{p[1].call.bid+=10;p[1].call.ask+=10;}]){const p=pairs();change(p);expect(fitFreshParity(p,expiryAt,now)).toBeNull();}});
  it.each(['CE','PE'] as const)('reprices %s on its signal reference and exposes the IV/spread assumptions',side=>{const p=pairs(),basis=fitFreshParity(p,expiryAt,now)!,q=side==='CE'?p[1].call:p[1].put;const r=freshPremiumScenarios({basis,quote:q,strike:25000,side,signalKind:'FUTURES',signalPrice:25010,pricingSpot:25000,target:side==='CE'?25300:24700,stop:side==='CE'?24900:25100,now,cutoff:now+3600000})!;expect(r.targetPremiumScenarios).toHaveLength(2);expect(r.targetPremiumScenarios[0]).toBeGreaterThan(r.invalidationPremiumScenarios[0]);expect(r.targetPremiumScenarios[1]).toBeLessThan(r.targetPremiumScenarios[0]);expect(Math.sign(r.delta)).toBe(side==='CE'?1:-1);expect(r.evidence.ivShocks).toEqual([0,-.02]);});
 });
