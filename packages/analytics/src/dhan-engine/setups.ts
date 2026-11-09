@@ -29,7 +29,7 @@ import { vwapSeries, type VwapPoint, type VwapSums } from './vwap.js';
 import { detectAbsorption, detectExhaustion, type AbsorptionEvent, type ExhaustionEvent } from './absorption.js';
 import { combineRegime, type MtfRegime, type TimeframeInputs } from './regime.js';
 
-export const DHAN_SETUP_VERSION = 'DHAN-SETUPS-1.1';
+export const DHAN_SETUP_VERSION = 'DHAN-SETUPS-1.2';
 
 export const DHAN_SETUP_IDS = {
   A: 'DHAN_A_SWEEP_ABSORPTION',
@@ -68,6 +68,8 @@ export const DHAN_SETUP_RULES = Object.freeze({
   scoreConditional: 7,
   /** E: the absorption bar must be at most this many bars before the decision bar. */
   orderFlowRecencyBars: 4,
+  /** E (owner, 9 Nov): a stacked imbalance is 2+ consecutive rows here (A-D keep the master prompt's 3). */
+  orderFlowStackedMin: 2,
 });
 
 export interface SetupContext {
@@ -389,7 +391,7 @@ function setupD(d: Derived): Raw {
 //   E1 absorption: heavy estimated selling at a row of a recent bar, price barely moved below it (5.3 rules), not FAILED;
 //   E2 location: that bar's low is at / below VAL, or within 0.25 ATR of VAL or POC (today's footprint profile);
 //   E3 delta turns: summed delta of the bars after the absorption bar is positive;
-//   E4 stacked buy imbalance (3+ rows) on the absorption bar or after it;
+//   E4 stacked buy imbalance (2+ consecutive rows, owner 9 Nov) on the absorption bar or after it (the longest is recorded);
 //   E5 entry bar: positive delta, closes up and above the absorption bar's high (the sellers failed).
 // Stop below the lowest low since the absorption bar (SL buffer); target the POC, else the VAH, above the entry.
 // Data: every bar from the absorption bar on must be a usable footprint (sampled or complete, never INCOMPLETE).
@@ -412,7 +414,10 @@ function setupE(d: Derived): Raw {
       const sum = after.reduce((a, f) => a + f.delta!, 0);
       return sum > 0 ? { deltaSinceAbsorption: sum } : null;
     }],
-    ['E4_STACKED_BUY_IMBALANCE', () => { const st = d.diag.slice(abs!.index, i + 1).flatMap((x) => x.stacks).find((x) => x.side === 'BUY'); return st ? { rows: st.rows, low: st.low, high: st.high } : null; }],
+    ['E4_STACKED_BUY_IMBALANCE', () => {
+      const st = fps.slice(abs!.index, i + 1).flatMap((f) => diagonalImbalances(f, { stackedMin: R.orderFlowStackedMin }).stacks).filter((x) => x.side === 'BUY').sort((a, b) => b.rows - a.rows)[0];
+      return st ? { rows: st.rows, low: st.low, high: st.high } : null;
+    }],
     ['E5_ENTRY_BAR', () => validFp(fps[i]) && fps[i].delta! > 0 && bars[i].close > bars[i].open && bars[i].close > bars[abs!.index].high ? { delta: fps[i].delta, close: bars[i].close } : null],
     ['E6_TARGET_POC_OR_VAH', () => {
       const entry = bars[i].close, gap = d.c.tickSize;

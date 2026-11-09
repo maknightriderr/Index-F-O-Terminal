@@ -48,3 +48,14 @@ describe('Setup E: pure order flow', () => {
     expect(e(c).status).not.toBe('SIGNAL');
   });
 });
+
+describe('Setup E: 2-row stacked imbalance (owner, 9 Nov)', () => {
+  it('two consecutive buy-imbalance rows are enough; one is not', () => {
+    // Entry bar: buy imbalances at 100 and 101 only (99's buy is not 3x the sell below it).
+    const two: BarSpec[] = [...DAY.slice(0, 6), { o: 98.6, h: 101, l: 98, c: 100.5, rows: [[98, 10, 40], [99, 60, 30], [100, 130, 10], [101, 60, 5]] }];
+    const r = e(contextOf(QUIET, two));
+    expect(r.checks.find((c) => c.id === 'E4_STACKED_BUY_IMBALANCE')).toMatchObject({ ok: true, value: { rows: 2 } });
+    const one: BarSpec[] = [...DAY.slice(0, 6), { o: 98.6, h: 101, l: 98, c: 100.5, rows: [[98, 10, 40], [99, 60, 30], [100, 130, 10], [101, 20, 5]] }];
+    expect(e(contextOf(QUIET, one)).failed).toBe('E4_STACKED_BUY_IMBALANCE');
+  });
+});
