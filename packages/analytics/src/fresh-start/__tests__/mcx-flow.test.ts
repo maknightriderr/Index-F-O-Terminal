@@ -1,7 +1,7 @@
 // 2.0 NEW_MCX_FLOW_V1 (a commodity trend the inferred aggressive volume confirms), the index order-flow veto and the
 // order-block shadow tag. Same synthetic session as rs-stock.test.ts (ATR ~1.5-2, rising 15-minute trend, VWAP 101.2).
 import { describe, expect, it } from 'vitest';
-import { evaluateFreshStrategies, FRESH_ALL_STRATEGIES, FRESH_SHADOW_STRATEGIES, type FreshBar, type FreshContext, type FreshIndexIntel } from '../strategies.js';
+import { evaluateFreshStrategies, freshMcxFlowDiagnostic, FRESH_ALL_STRATEGIES, FRESH_SHADOW_STRATEGIES, type FreshBar, type FreshContext, type FreshIndexIntel } from '../strategies.js';
 import type { FreshFlowBar } from '../order-flow-evidence.js';
 
 const open = 1800000000000;
@@ -78,5 +78,19 @@ describe('2.0 order-block shadow tag', () => {
         const x = find(context(pullbackDay))!;
         expect(x.evidence.orderBlock).toHaveProperty('near');
         expect(typeof (x.evidence.orderBlock as { near: boolean }).near).toBe('boolean');
+    });
+});
+
+describe('MCX flow diagnostic (9 Nov, log only)', () => {
+    it('reports the flow numbers and agrees with the strategy check', () => {
+        const ok = freshMcxFlowDiagnostic(context(pullbackDay));
+        expect(ok).toMatchObject({ trend: 'BULL', setupDeltaPct: 30, barDeltaPct: 30, flowCheck: 'PASS', trades: 60 });
+        expect(ok.classifiedSharePct).toBeCloseTo(90.9, 1);
+        expect(freshMcxFlowDiagnostic(mirror(context(pullbackDay)))).toMatchObject({ trend: 'BEAR', setupDeltaPct: -30, flowCheck: 'PASS' });
+        // A rising trend with only 55% buying: 10% < 15% -> the strategy's MCX_FLOW_NOT_ALIGNED.
+        const weak = context(pullbackDay); weak.orderFlow = { ...weak.orderFlow!, bars: flowFor(pullbackDay, () => 0.55) };
+        expect(freshMcxFlowDiagnostic(weak)).toMatchObject({ setupDeltaPct: 10, flowCheck: 'SETUP_DELTA_BELOW_15PCT' });
+        expect(refusal(weak)?.detail).toBe('MCX_FLOW_NOT_ALIGNED');
+        expect(freshMcxFlowDiagnostic({ ...context(pullbackDay), orderFlow: undefined }).flowCheck).toBe('NO_FLOW_SOURCE');
     });
 });
