@@ -47,6 +47,12 @@ describe('Setup E: pure order flow', () => {
     c.fps[c.fps.length - 1] = { ...c.fps[c.fps.length - 1], incomplete: true, delta: null };
     expect(e(c).status).not.toBe('SIGNAL');
   });
+  it('refuses when the absorption and confirmation straddle a missing interval', () => {
+    const c = contextOf(QUIET, DAY);
+    c.bars.at(-1)!.time += 900_000;
+    c.fps.at(-1)!.barTime += 900_000;
+    expect(e(c)).toMatchObject({ status: 'NO_TRADE', gates: expect.arrayContaining([{ id: 'VALID_DATA', ok: false }]) });
+  });
 });
 
 describe('Setup E: 2-row stacked imbalance (owner, 9 Nov)', () => {

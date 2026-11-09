@@ -9,15 +9,17 @@
 // ============================================================
 
 import {
-  evaluateDhanSetups, evaluateExpiryGamma, istSession, pivotR1, vwapFromSums,
+  evaluateDhanSetups, evaluateExpiryGamma, gammaBreakObservation, startGammaBreakWatch, istSession, pivotR1, vwapFromSums,
   DHAN_GAMMA_ID, DHAN_GAMMA_VERSION, DHAN_SETUP_VERSION, type EngineBar, type FootprintBar, type GammaResult, type GammaSample, type SetupContext, type SetupResult,
+  DHAN_GAMMA_RULES, type FreshBar, type GammaBreakWatch,
 } from '@fno/analytics';
 import { getSessionWindow, type Exchange, type OptionChain } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { redis } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
 import { schemaFileReady } from './ensure-capture-schema.js';
-import { flowContractBars, flowSessionState, flowSymbols } from './order-flow-store.js';
+import { observedFreshOi } from './fresh-start/intel.js';
+import { flowContractBars, flowLastTrade, flowSessionState, flowSymbols } from './order-flow-store.js';
 
 export const DHAN_SIGNALS_MIGRATION = '053_dhan_engine_signals.sql';
 export const DHAN_PAPER_MIGRATION = '054_dhan_engine_paper.sql';
@@ -42,7 +44,7 @@ const state = {
   recorded: { SIGNAL: 0, NO_TRADE: 0 },
   summaryAt: 0,
   rvol: new Map<string, { day: string; bySlot: Map<string, number[]> }>(),
-  gamma: new Map<string, { day: string; samples: GammaSample[]; fired: Set<string> }>(),
+  gamma: new Map<string, GammaDay>(),
   paper: new Map<string, number>(),
   /** Radar (9 Nov): each contract's latest A-E outcome today (the side that got furthest, SIGNAL first). */
   latest: new Map<string, { at: number; day: string; setups: Record<string, { status: string; side: string | null; failed: string | null; passed: number; score: number | null }> }>(),
@@ -147,17 +149,18 @@ async function record(symbol: string, ctx: SetupContext, barTime: number, window
     ON CONFLICT (strategy, side, symbol, bar_time) DO NOTHING`;
 }
 
-async function paper(h: DhanPaperHandler, req: DhanPaperRequest | DhanGammaPaperRequest): Promise<void> {
+async function paper(h: DhanPaperHandler, req: DhanPaperRequest | DhanGammaPaperRequest): Promise<string> {
   let out: { decision: string; candidateId: string | null };
   try { out = await h(req); } catch (err: any) { out = { decision: err instanceof Error && /^[A-Z_]+$/.test(err.message) ? err.message : 'PAPER_PATH_FAILED', candidateId: null }; }
   state.paper.set(out.decision, (state.paper.get(out.decision) ?? 0) + 1);
   const strategy = req.gamma ? DHAN_GAMMA_ID : req.result.strategy, side = req.gamma ? req.gamma.side : req.result.side;
   const barTime = req.gamma ? Math.floor(req.at / 60_000) * 60_000 : req.barTime;
   logger.info({ event: 'dhanPaperDecision', symbol: req.symbol, strategy, side, decision: out.decision, candidateId: out.candidateId }, 'Dhan engine: paper decision for a setup signal (options, paper only)');
-  if (!schemaFileReady(DHAN_PAPER_MIGRATION)) return;
+  if (!schemaFileReady(DHAN_PAPER_MIGRATION)) return out.decision;
   await sql`UPDATE dhan_engine_signals SET paper_decision = ${out.decision}, paper_candidate_id = ${out.candidateId}
             WHERE strategy = ${strategy} AND side = ${side} AND symbol = ${req.symbol} AND bar_time = ${new Date(barTime)}`
     .catch((err: any) => logger.warn({ symbol: req.symbol, error: err.message }, 'Dhan engine: paper decision write failed'));
+  return out.decision;
 }
 
 const RANK: Record<string, number> = { SIGNAL: 3, NO_TRADE: 2, NO_SETUP: 1 };
@@ -232,56 +235,96 @@ export function chainExpiresToday(expiry: string | null | undefined, now: number
  * needs the previous day's spot high / low / close, which this path does not hold, so it is null (the rule's "day high
  * or R1" then reads the day high only).
  */
-export async function recordGammaChain(index: string, chain: Pick<OptionChain, 'spotPrice' | 'expiry' | 'strikes'>, at: number, now: number = Date.now(), previousDay: { high: number; low: number; close: number } | null = null): Promise<void> {
+export async function recordGammaChain(index: string, chain: Pick<OptionChain, 'spotPrice' | 'expiry' | 'strikes'>, at: number, now: number = Date.now(), previousDay: { high: number; low: number; close: number } | null = null, priceHistory?: { five: readonly FreshBar[]; one: readonly FreshBar[] }): Promise<void> {
   try {
-    if (!(chain.spotPrice > 0) || !chain.strikes.length) return;
+    if (!Number.isFinite(at) || at > now || istSession(at) !== istSession(now)
+      || !(chain.spotPrice > 0) || !chain.strikes.length || !chainExpiresToday(chain.expiry, now)) return;
     const day = istSession(at);
     let g = state.gamma.get(index);
     // The day's samples (the 11:30-13:15 baseline, the day high / low) and fired sides survive a restart in Redis.
-    if (!g || g.day !== day) state.gamma.set(index, (g = await loadGamma(index, day)));
+    if (!g || g.day !== day) {
+      const loaded = await loadGamma(index, day);
+      const current = state.gamma.get(index);
+      g = current?.day === day ? current : loaded;
+      state.gamma.set(index, g);
+    }
+    if (priceHistory) for (const tracked of g.breaks.values()) {
+      const result = gammaBreakObservation(tracked.watch, priceHistory.one, now);
+      const signature = JSON.stringify(result);
+      if (signature !== tracked.signature) {
+        tracked.signature = signature;
+        logger.info({ event: 'dhanGammaBreakShadow', index, day, watch: tracked.watch, result }, 'Gamma shadow: first close and one-hold comparison');
+      }
+    }
+    if ((g.samples.at(-1)?.at ?? -Infinity) >= at) return;
     const sorted = [...chain.strikes].sort((a, b) => a.strike - b.strike);
     const atmIdx = sorted.reduce((bi, s, k) => (Math.abs(s.strike - chain.spotPrice) < Math.abs(sorted[bi].strike - chain.spotPrice) ? k : bi), 0);
-    const near = sorted.slice(Math.max(0, atmIdx - 5), atmIdx + 6).map((s) => ({ strike: s.strike, callOi: s.call?.oi ?? 0, putOi: s.put?.oi ?? 0 }));
-    g.samples = [...g.samples.filter((s) => s.at !== at), { at, spot: chain.spotPrice, strikes: near }].slice(-400);
+    const near = sorted.slice(Math.max(0, atmIdx - 5), atmIdx + 6).map((s) => ({ strike: s.strike, callOi: observedFreshOi(s.call), putOi: observedFreshOi(s.put) }));
+    g.samples = [...g.samples, { at, spot: chain.spotPrice, strikes: near }].slice(-400);
     saveGamma(index, g);
-    if (!chainExpiresToday(chain.expiry, now)) return;
     const steps = near.slice(1).map((s, k) => s.strike - near[k].strike).filter((d) => d > 0);
     const strikeStep = steps.length ? Math.min(...steps) : 0;
     if (!(strikeStep > 0)) return;
     const earlier = g.samples.filter((x) => x.at < at).map((x) => x.spot);
     const fut = flowSessionState(index, now);
     const fv = fut?.vwap ? vwapFromSums(fut.vwap.sums, 'TRADES', fut.vwap.unreconciled) : null;
-    const lastFp = fut?.footprints.at(-1);
+    const lastTrade = flowLastTrade(index);
     const results = evaluateExpiryGamma({
       index, expiryToday: true, now, samples: g.samples, strikeStep,
       dayHigh: earlier.length ? Math.max(...earlier) : null, dayLow: earlier.length ? Math.min(...earlier) : null,
-      r1: pivotR1(previousDay), futuresPrice: lastFp?.close ?? null, futuresVwap: fv?.status === 'ESTIMATED' ? fv.vwap : null,
+      r1: pivotR1(previousDay),
+      futuresPrice: lastTrade && lastTrade.at <= now && now - lastTrade.at <= 60_000 ? lastTrade.price : null,
+      futuresVwap: !fut?.vwap?.incomplete && fv?.status === 'ESTIMATED' ? fv.vwap : null,
     });
     for (const r of results) {
-      if (r.status !== 'SIGNAL' || g.fired.has(r.side)) continue;
-      g.fired.add(r.side);
-      saveGamma(index, g);
-      logger.info({ event: 'dhanShadowSignal', symbol: index, strategy: DHAN_GAMMA_ID, side: r.side, strikes: r.strikes, evidence: r.evidence }, 'Dhan engine signal (paper decision follows)');
-      if (schemaFileReady(DHAN_SIGNALS_MIGRATION)) await sql`
-        INSERT INTO dhan_engine_signals (strategy, side, symbol, instrument, exchange, bar_time, status, entry, session_window, checks, evidence, version)
-        VALUES (${DHAN_GAMMA_ID}, ${r.side}, ${index}, ${null}, ${null}, ${new Date(Math.floor(at / 60_000) * 60_000)}, ${'SIGNAL'}, ${chain.spotPrice}, ${'EXPIRY_PM'},
-          ${sql.json(r.checks as any)}, ${sql.json({ ...r.evidence, dayRangeSource: 'CHAIN_SAMPLE_SPOT', strikes: r.strikes, forcedExitAt: r.forcedExitAt } as any)}, ${DHAN_GAMMA_VERSION})
-        ON CONFLICT (strategy, side, symbol, bar_time) DO NOTHING`.catch((err: any) => logger.warn({ index, error: err.message }, 'Dhan engine shadow: gamma write failed'));
-      if (paperHandler) void paper(paperHandler, { symbol: index, gamma: r, at });
+      if (priceHistory && r.status === 'SIGNAL' && r.forcedExitAt != null && !g.breaks.has(r.side)) {
+        const entryUntil = r.forcedExitAt - (DHAN_GAMMA_RULES.forcedExit - DHAN_GAMMA_RULES.entryTo) * 60_000;
+        const watch = startGammaBreakWatch(r.side, priceHistory.five, now, entryUntil);
+        if (watch) {
+          g.breaks.set(r.side, { watch, signature: '' });
+          logger.info({ event: 'dhanGammaBreakWatch', index, day, watch }, 'Gamma shadow: range frozen before entry comparison');
+        }
+      }
+      const handler = paperHandler;
+      if (r.status !== 'SIGNAL' || g.fired.has(r.side) || g.pending.has(r.side) || (!handler && g.reported.has(r.side))) continue;
+      g.pending.add(r.side);
+      g.reported.add(r.side);
+      try {
+        logger.info({ event: 'dhanShadowSignal', symbol: index, strategy: DHAN_GAMMA_ID, side: r.side, strikes: r.strikes, evidence: r.evidence }, 'Dhan engine signal (paper decision follows)');
+        if (schemaFileReady(DHAN_SIGNALS_MIGRATION)) await sql`
+          INSERT INTO dhan_engine_signals (strategy, side, symbol, instrument, exchange, bar_time, status, entry, session_window, checks, evidence, version)
+          VALUES (${DHAN_GAMMA_ID}, ${r.side}, ${index}, ${null}, ${null}, ${new Date(Math.floor(at / 60_000) * 60_000)}, ${'SIGNAL'}, ${chain.spotPrice}, ${'EXPIRY_PM'},
+            ${sql.json(r.checks as any)}, ${sql.json({ ...r.evidence, dayRangeSource: 'CHAIN_SAMPLE_SPOT', strikes: r.strikes, forcedExitAt: r.forcedExitAt } as any)}, ${DHAN_GAMMA_VERSION})
+          ON CONFLICT (strategy, side, symbol, bar_time) DO NOTHING`.catch((err: any) => logger.warn({ index, error: err.message }, 'Dhan engine shadow: gamma write failed'));
+        if (handler) {
+          const decision = await paper(handler, { symbol: index, gamma: r, at });
+          if (decision === 'FILLED' || decision === 'GAMMA_SIDE_ALREADY_FILLED') {
+            g.fired.add(r.side);
+            saveGamma(index, g);
+          }
+        }
+      } finally {
+        g.pending.delete(r.side);
+      }
     }
   } catch (err: any) {
     logger.warn({ index, error: err.message }, 'Dhan engine shadow: gamma evaluation failed');
   }
 }
 
-const gammaKey = (index: string, day: string) => `dhan:gamma:${index}:${day}`;
-async function loadGamma(index: string, day: string): Promise<{ day: string; samples: GammaSample[]; fired: Set<string> }> {
+type GammaDay = { day: string; samples: GammaSample[]; fired: Set<string>; pending: Set<string>; reported: Set<string>; breaks: Map<string, { watch: GammaBreakWatch; signature: string }> };
+const gammaKey = (index: string, day: string) => `dhan:gamma:${DHAN_GAMMA_VERSION}:${index}:${day}`;
+async function loadGamma(index: string, day: string): Promise<GammaDay> {
+  const state: GammaDay = { day, samples: [], fired: new Set(), pending: new Set(), reported: new Set(), breaks: new Map() };
   try {
     const raw = await redis.get(gammaKey(index, day));
     const x = raw ? JSON.parse(raw) : null;
-    if (x && Array.isArray(x.samples)) return { day, samples: x.samples.filter((s: GammaSample) => s && Number.isFinite(s.at) && s.spot > 0 && Array.isArray(s.strikes)).slice(-400), fired: new Set(Array.isArray(x.fired) ? x.fired : []) };
+    if (x && Array.isArray(x.samples)) {
+      state.samples = x.samples.filter((s: GammaSample) => s && Number.isFinite(s.at) && istSession(s.at) === day && s.spot > 0 && Array.isArray(s.strikes)).slice(-400);
+      state.fired = new Set(Array.isArray(x.fired) ? x.fired : []);
+    }
   } catch { /* no saved samples: start the day empty */ }
-  return { day, samples: [], fired: new Set() };
+  return state;
 }
 function saveGamma(index: string, g: { day: string; samples: GammaSample[]; fired: Set<string> }): void {
   try { void redis.set(gammaKey(index, g.day), JSON.stringify({ samples: g.samples, fired: [...g.fired] }), 'EX', 2 * 86_400).catch(() => undefined); } catch { /* best effort */ }

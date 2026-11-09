@@ -89,7 +89,9 @@ export class FreshPaperStore {
                 }
             }
             const c = { ...r.candidate, parentId: canonicalFreshParent(r.candidate, parents) };
-            const same = await tx.unsafe('SELECT status,closed_at,strategy FROM fresh_paper_positions WHERE account_id=$1 AND instrument=$2 ORDER BY opened_at DESC', [r.accountId, c.instrument]);
+            const same = await tx.unsafe("SELECT status,closed_at,strategy,state#>>'{candidate,direction}' AS direction FROM fresh_paper_positions WHERE account_id=$1 AND instrument=$2 ORDER BY opened_at DESC", [r.accountId, c.instrument]);
+            if (c.strategy === 'DHAN_EXPIRY_GAMMA' && same.some(p => p.strategy === c.strategy && p.direction === c.direction))
+                return { ok: false, code: 'GAMMA_SIDE_ALREADY_FILLED' };
             const lastClose = same.find(x => x.status === 'CLOSED')?.closed_at;
             r={...r,now:validateTime()};
             let unrealized = 0, marksComplete = true, reservedRisk = 0, reservedPremium = 0;

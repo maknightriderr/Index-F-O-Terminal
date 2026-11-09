@@ -23,6 +23,7 @@ describe('fresh-start 2.0 intel', () => {
     expect(x).toMatchObject({ at: now - 60000, relativeStrength: 1.2, oiInterpretation: 'LONG_BUILDUP', sectorRelativeStrength: 0.8, atmSpreadPct: 0.5, ivRank: 40 });
     expect(freshStockIntel(scan([row('HDFCBANK', { timestamp: now - FRESH_INTEL_MAX_AGE_MS - 1 })], now - FRESH_INTEL_MAX_AGE_MS - 1), ref('HDFCBANK'), now)).toBeNull();
     expect(freshStockIntel(scan([row('HDFCBANK', { timestamp: now + 1000 })], now + 1000), ref('HDFCBANK'), now)).toBeNull();
+    expect(freshStockIntel(scan([row('HDFCBANK')], now + 1000), ref('HDFCBANK'), now)).toBeNull();
     expect(freshStockIntel(scan([row('TCS')]), ref('HDFCBANK'), now)).toBeNull();
     expect(freshStockIntel(null, ref('HDFCBANK'), now)).toBeNull();
     expect(freshStockIntel(scan([row('HDFCBANK', { atmSpreadPct: null, ivRank: null })]), ref('HDFCBANK'), now)).toMatchObject({ atmSpreadPct: null, ivRank: null });
@@ -68,9 +69,9 @@ describe('fresh-start 2.0 index intel', () => {
     expect(freshFuturesOiRead([s(25, 100, 1000), s(-1, 101, 1100)], now)).toBeNull(); // a later sample is never read
   });
   it('pairs the latest chain OI with the sample ~15 minutes earlier, and builds point-in-time index intel', () => {
-    const c = (min: number) => ({ at: now - min * 60000, strikes: [{ strike: 100, callOi: min, putOi: 1 }] });
+    const c = (min: number, expiry = '2026-11-10') => ({ at: now - min * 60000, expiry, strikes: [{ strike: 100, callOi: min, putOi: 1 }] });
     expect(freshOiBefore([c(30), c(16), c(14), c(1)], c(1))?.strikes[0].callOi).toBe(16);
-    expect(freshOiBefore([c(5), c(1)], c(1))).toBeNull();
+    expect(freshOiBefore([c(5), c(1), c(16, '2026-11-17')], c(1))).toBeNull();
     const x = freshIndexIntel('BANKNIFTY', heavy(Object.keys(FRESH_INDEX_HEAVYWEIGHTS.BANKNIFTY)), [], [c(16), c(1), c(-1)], now)!;
     expect(x).toMatchObject({ breadth: 1, futuresOi: null });
     expect(x.oiNow?.at).toBe(now - 60000); // the later chain sample is not used

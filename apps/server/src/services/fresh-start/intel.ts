@@ -50,10 +50,10 @@ const sectorOf = (symbol: string): string | null => {
  * FRESH_INTEL_MAX_AGE_MS, or is newer than `now` (an evaluation never reads a later scan).
  */
 export function freshStockIntel(scan: FreshScan | null, ref: FreshReference, now: number, sectors?: ReadonlyMap<string, number>): FreshStockIntel | null {
-  if (!scan) return null;
+  if (!scan || !Number.isFinite(scan.at) || scan.at > now || now - scan.at > FRESH_INTEL_MAX_AGE_MS) return null;
   const symbols = freshRefSymbols(ref), row = scan.rows.find((r) => symbols.includes(r.symbol));
-  const at = row && Number.isFinite(row.timestamp) ? Math.min(row.timestamp, scan.at) : scan.at;
-  if (!row || !Number.isFinite(row.relativeStrength) || !(at <= now) || now - at > FRESH_INTEL_MAX_AGE_MS) return null;
+  const at = row && Number.isFinite(row.timestamp) ? row.timestamp : scan.at;
+  if (!row || !Number.isFinite(row.relativeStrength) || !(at <= scan.at) || now - at > FRESH_INTEL_MAX_AGE_MS) return null;
   const sector = sectorOf(row.symbol), sectorRs = sector ? (sectors ?? freshSectorStrength(scan.rows)).get(sector) ?? null : null;
   return {
     at,
@@ -146,9 +146,17 @@ export function freshFuturesOiRead(samples: readonly FreshFuturesSample[], now: 
 }
 
 /** Pure: the chain OI sample nearest to ~15 minutes before the latest one (within 12-20 min), or null. */
+/** Old cached legs used zero for missing data, so only their positive readings are qualified. */
+export function observedFreshOi(leg: { oi: number; observedOi?: number | null } | null | undefined): number | null {
+  if (!leg) return null;
+  const oi = leg.observedOi === undefined ? (leg.oi > 0 ? leg.oi : null) : leg.observedOi;
+  return typeof oi === 'number' && Number.isFinite(oi) && oi >= 0 ? oi : null;
+}
+
 export function freshOiBefore(samples: readonly FreshOiSample[], latest: FreshOiSample): FreshOiSample | null {
+  if (!latest.expiry) return null;
   const target = latest.at - 15 * 60000;
-  return samples.filter((x) => latest.at - x.at >= FRESH_IDX_OI_LOOKBACK_MS[0] && latest.at - x.at <= FRESH_IDX_OI_LOOKBACK_MS[1]).sort((a, b) => Math.abs(a.at - target) - Math.abs(b.at - target))[0] ?? null;
+  return samples.filter((x) => x.expiry === latest.expiry && latest.at - x.at >= FRESH_IDX_OI_LOOKBACK_MS[0] && latest.at - x.at <= FRESH_IDX_OI_LOOKBACK_MS[1]).sort((a, b) => Math.abs(a.at - target) - Math.abs(b.at - target))[0] ?? null;
 }
 
 /** Pure: an index's intel as of `now` from the scan (breadth), its futures samples and its chain OI samples. */

@@ -178,6 +178,11 @@ describe('expiry gamma module (owner\'s definition)', () => {
     expect(bear).toMatchObject({ status: 'SIGNAL', strikes: { atm: 23900, itm: 24000, right: 'PE' }, evidence: { dPutOi: -300 } });
     expect(bull.status).toBe('NO_SETUP');
   });
+  it('withholds a bearish signal when the ATM put OI was unavailable', () => {
+    const missing = { ...squeeze, strikes: squeeze.strikes.map(x => x.strike === 24000 ? { ...x, putOi: null } : x) };
+    const bear = evaluateExpiryGamma({ ...input, futuresPrice: 23990, samples: [base, missing] })[1];
+    expect(bear).toMatchObject({ status: 'NO_SETUP', failed: 'G5_PUT_WRITERS_EXIT', evidence: { dPutOi: null, pcrNow: null } });
+  });
   it('only on expiry day, 13:30-15:00, on a fresh chain with a midday baseline', () => {
     expect(evaluateExpiryGamma({ ...input, expiryToday: false })[0].failed).toBe('G0_EXPIRY_DAY');
     expect(evaluateExpiryGamma({ ...input, now: ist(15, 5), samples: [base, { ...squeeze, at: ist(15, 4) }] })[0].failed).toBe('G1_ENTRY_WINDOW');

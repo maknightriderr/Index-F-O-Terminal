@@ -197,6 +197,8 @@ export interface OptionChainLeg {
   ask: number;
   volume: number;
   oi: number;
+  /** Raw observed OI for signal decisions, null when the quote did not carry a valid reading. */
+  observedOi?: number | null;
   changeOi: number;
   /**
    * What `changeOi` is measured from. PREV_CLOSE: the settled OI captured
