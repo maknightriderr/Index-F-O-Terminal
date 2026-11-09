@@ -2,7 +2,7 @@ import {randomUUID} from 'node:crypto';
 import { recordGammaChain, setDhanPaperHandler, type DhanPaperRequest, type DhanGammaPaperRequest } from '../dhan-engine-shadow.js';
 import { DHAN_ENGINE_SHADOW, DHAN_ENGINE_PAPER } from '../../config/order-flow-flags.js';
 import { flowLastTrade } from '../order-flow-store.js';
-import { dhanPaperCandidate, dhanGammaCandidate } from '@fno/analytics';
+import { dhanPaperCandidate, dhanGammaCandidate, freshMcxFlowDiagnostic, type FreshMcxFlowDiagnostic } from '@fno/analytics';
 import {logger} from '../../lib/logger.js';
 import {getSessionWindow,HOLIDAY_CALENDAR_YEARS,FO_SEGMENT,CM_SEGMENT,type Exchange,type Instrument} from '@fno/shared';
 import {evaluateFreshStrategies,FRESH_SHADOW_STRATEGIES,type FreshBar} from '@fno/analytics';
@@ -123,9 +123,12 @@ export function freshOrderFlowFor(name:string,from:number,to:number):FreshContex
   return undefined;
 }
 export const FRESH_HISTORY_RETRY_MS = 60_000;
+export const FRESH_MCX_DIAGNOSTIC_LOG_MS = 5 * 60_000;
 export class FreshPaperWorker {
   /** First summary ~immediately after start, then every 15 minutes. */
   private summaryAt=0;
+  /** MCX flow diagnostic (owner, 9 Nov): the latest flow numbers per commodity, logged every 5 minutes; decides nothing. */
+  private mcxDiag=new Map<string,FreshMcxFlowDiagnostic&{at:number}>();private mcxDiagLoggedAt=0;
   private operationalReporter=new FreshOperationalReporter(evidence=>logger.info(evidence,'Fresh-start operational evidence; readiness and paper-only blockers observed'));
   private feed:FreshSharedFeed;private events=createFreshEventSource(persistFreshCalendarSnapshot);private store=new FreshPaperStore(undefined,()=>!this.stopped&&freshEntriesEnabled());private monitor:FreshPositionMonitor;private runtime:FreshRuntime;
   private refs=new Map<string,FreshReference>();private master:Instrument[]=[];private masterDay='';private histories=new Map<string,History>();private lagReadAt=0;private shortlist:SubscriptionTarget[]=[];
@@ -308,9 +311,16 @@ export class FreshPaperWorker {
     if(c)c.eventEvidence=this.events.evidence(receivedAt,freshEventMarket(ref.market),ref.name);
     // 2.0: the stock's universe-scan inputs as of this evaluation (null when no scan row is fresh enough).
     if(c&&ref.market==='NSE_STOCK_OPTIONS')c.stockIntel=freshStockIntel(this.scanSnapshot,ref,receivedAt);
-    if(c&&ref.market==='MCX_VERIFIED_FUTURES_OPTIONS'){c.commodity=true;const flowSymbol=freshFlowSymbol(ref.name,open,receivedAt);c.footprint15=flowSymbol?await freshFootprint15(flowSymbol,receivedAt):null;}
+    if(c&&ref.market==='MCX_VERIFIED_FUTURES_OPTIONS'){c.commodity=true;const flowSymbol=freshFlowSymbol(ref.name,open,receivedAt);c.footprint15=flowSymbol?await freshFootprint15(flowSymbol,receivedAt):null;try{this.mcxDiag.set(ref.name,{at:receivedAt,...freshMcxFlowDiagnostic(c)});}catch{/* diagnostic only */}}
     if(c&&FRESH_PINNED_BOOK_MARKETS.has(ref.market))c.indexIntel=freshIndexIntel(ref.name,this.scanSnapshot,this.futSamples.get(ref.id)??[],this.oiChains.get(ref.id)??[],receivedAt);
     return {context:c,newClose:!!old&&lastSeen>old.lastSeen,lastSeen};
+  }
+  private logMcxDiagnostic(now:number){
+    if(now-this.mcxDiagLoggedAt<FRESH_MCX_DIAGNOSTIC_LOG_MS)return;
+    for(const [k,v] of this.mcxDiag)if(now-v.at>15*60000)this.mcxDiag.delete(k);
+    if(!this.mcxDiag.size)return;
+    this.mcxDiagLoggedAt=now;
+    logger.info({event:'freshMcxFlowDiagnostic',thresholds:{setupDeltaPct:15,barDeltaOpposesPct:-15,classifiedSharePct:50,coveragePct:15,trades:15},contracts:Object.fromEntries([...this.mcxDiag].map(([k,v])=>[k,{...v,at:new Date(v.at).toISOString()}]))},'MCX flow diagnostic: the numbers behind NEW_MCX_FLOW_V1 flow checks (log only, decides nothing)');
   }
   /** The armed state is decided once per scan (no transient disarm at its start: entries that arrive between the
    *  fresh worker's own steps — Dhan engine candidates, a pricing that finishes mid-scan — must not read a false
@@ -407,6 +417,6 @@ export class FreshPaperWorker {
         }else{await auditFreshEvaluation(h.context,evaluateFreshStrategies(h.context));state.lastDecision=blockers[0]??'BLOCKED_REQUIRED_CAPABILITY';}
       }
       state.discovery.historyCache=this.histories.size;state.status=state.entriesArmed?'FORWARD_PAPER_RUNNING':'PAPER_ARMED_DATA_BLOCKED';state.error=null;
-    }catch(error){if(this.stopped)return;state.entriesArmed=false;state.status='BLOCKED_ADAPTER';state.error=error instanceof Error&&/^BLOCKED_[A-Z_]+$/.test(error.message)?error.message:'ADAPTER_INPUT_OR_STORAGE_UNAVAILABLE';state.entryBlockers=[state.error];for(const m of state.marketReadiness){m.eligibleReferences=0;m.blockers=[...new Set([...m.blockers,state.error])];}}finally{this.scanning=false;if(!this.stopped){this.operationalReporter.report(state);const t=Date.now();if(t-this.summaryAt>=FRESH_DECISION_SUMMARY_MS){this.summaryAt=t;void logFreshDecisionSummary(t);this.logMemory();}}}
+    }catch(error){if(this.stopped)return;state.entriesArmed=false;state.status='BLOCKED_ADAPTER';state.error=error instanceof Error&&/^BLOCKED_[A-Z_]+$/.test(error.message)?error.message:'ADAPTER_INPUT_OR_STORAGE_UNAVAILABLE';state.entryBlockers=[state.error];for(const m of state.marketReadiness){m.eligibleReferences=0;m.blockers=[...new Set([...m.blockers,state.error])];}}finally{this.scanning=false;if(!this.stopped){this.operationalReporter.report(state);const t=Date.now();if(t-this.summaryAt>=FRESH_DECISION_SUMMARY_MS){this.summaryAt=t;void logFreshDecisionSummary(t);this.logMemory();}this.logMcxDiagnostic(t);}}
   }
 }

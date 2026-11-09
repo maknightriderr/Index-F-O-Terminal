@@ -866,3 +866,51 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
     }
     return out;
 }
+
+// ---- MCX flow diagnostic (owner, 9 Nov): the numbers behind NEW_MCX_FLOW_V1's flow checks, for the log only. ----
+// Same inputs and windows as the strategy (closed five-minute bars of today's session, the last FRESH_MCX_FLOW_BARS
+// flow bars, the decision bar's own flow); it decides nothing and never feeds a candidate.
+export interface FreshMcxFlowDiagnostic {
+    trend: 'BULL' | 'BEAR' | 'NONE';
+    lastClose: number | null;
+    sessionChangePct: number | null;
+    vwapDistanceAtr: number | null;
+    /** (buy − sell) ÷ (buy + sell) over the last three flow bars, in %, + = buying. */
+    setupDeltaPct: number | null;
+    /** The decision (current) bar's own delta in %. */
+    barDeltaPct: number | null;
+    classifiedSharePct: number | null;
+    coveragePct: number | null;
+    trades: number;
+    /** The flow check for a trade in the trend's direction (no trend: the flow's side): 'PASS' or the first failing reason. */
+    flowCheck: string;
+}
+export function freshMcxFlowDiagnostic(c: FreshContext): FreshMcxFlowDiagnostic {
+    const pct = (x: number) => Math.round(x * 1000) / 10;
+    const b = closed(c.bars5, 300000, c.now), h = closed(c.bars15, 900000, c.now), m = closed(c.bars1, 60000, c.now);
+    const today = b.filter(x => x.time >= c.sessionOpen), minute = m.filter(x => x.time >= c.sessionOpen), current = today.length ? last(today) : null;
+    let trend: FreshMcxFlowDiagnostic['trend'] = 'NONE';
+    if (h.length >= 50) {
+        const e20 = ema(h.map(x => x.close), 20), e50 = ema(h.map(x => x.close), 50);
+        trend = last(h).close > last(e20) && last(e20) > last(e50) ? 'BULL' : last(h).close < last(e20) && last(e20) < last(e50) ? 'BEAR' : 'NONE';
+    }
+    const v = minute.reduce((s, x) => s + x.volume, 0), vwap = v > 0 ? minute.reduce((s, x) => s + (x.high + x.low + x.close) / 3 * x.volume, 0) / v : NaN;
+    const a = b.length >= 15 ? last(atr(b.map(x => x.high), b.map(x => x.low), b.map(x => x.close), 14)) : NaN;
+    const flowBars = c.orderFlow?.bars ?? [], fb = (t: number) => flowBars.find(x => x.time === t);
+    const recent = today.slice(-FRESH_MCX_FLOW_BARS).map(x => fb(x.time)), cur = current ? fb(current.time) : undefined;
+    const buy = recent.reduce((n, x) => n + (x?.buy ?? 0), 0), sell = recent.reduce((n, x) => n + (x?.sell ?? 0), 0), un = recent.reduce((n, x) => n + (x?.unclassified ?? 0), 0);
+    const unrec = recent.reduce((n, x) => n + (x?.unreconciled ?? 0), 0), trades = recent.reduce((n, x) => n + (x?.trades ?? 0), 0);
+    const coverage = flowCoverage(buy + sell + un, unrec), share = buy + sell + un > 0 ? (buy + sell) / (buy + sell + un) : null;
+    const setup = buy + sell > 0 ? (buy - sell) / (buy + sell) : null, bar = cur && cur.buy + cur.sell > 0 ? (cur.buy - cur.sell) / (cur.buy + cur.sell) : null;
+    // The strategy tries both sides unless the 15-minute trend opposes one; without a trend, the flow's own side.
+    const d = trend === 'BULL' ? 1 : trend === 'BEAR' ? -1 : Math.sign(setup ?? 0);
+    const flowCheck = !c.orderFlow ? 'NO_FLOW_SOURCE' : !cur || recent.some(x => x == null) ? 'FLOW_BARS_MISSING' : !(buy + sell > 0) || (share ?? 0) < .5 ? 'LOW_CLASSIFIED_SHARE'
+        : coverage == null || coverage < FLOW_MIN_SAMPLED_COVERAGE ? 'LOW_COVERAGE' : trades < 3 * 5 ? 'FEW_TRADES' : d === 0 ? 'FLOW_FLAT'
+        : d * setup! < FRESH_MCX_FLOW_MIN_DELTA ? 'SETUP_DELTA_BELOW_15PCT' : !(d * (bar ?? 0) > -FRESH_MCX_FLOW_MIN_DELTA) ? 'BAR_DELTA_OPPOSES' : 'PASS';
+    return {
+        trend, lastClose: current?.close ?? null, sessionChangePct: current && today[0].open > 0 ? Math.round((current.close / today[0].open - 1) * 10000) / 100 : null,
+        vwapDistanceAtr: current && finite(vwap) && a > 0 ? Math.round((current.close - vwap) / a * 100) / 100 : null,
+        setupDeltaPct: setup == null ? null : pct(setup), barDeltaPct: bar == null ? null : pct(bar), classifiedSharePct: share == null ? null : pct(share),
+        coveragePct: coverage == null ? null : pct(coverage), trades, flowCheck,
+    };
+}
