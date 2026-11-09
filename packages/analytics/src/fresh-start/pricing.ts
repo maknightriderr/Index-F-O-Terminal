@@ -12,6 +12,8 @@ export interface FreshFuturesParityBasis extends FreshParityBasis {futureContrac
  * still rejects any fit the older quotes cannot all support.
  */
 export interface FreshParityTolerance {maxAgeMs:number;maxSkewMs:number;}
+/** How far above 1 a fitted parity slope may be from quote noise alone before the fit is refused. */
+export const FRESH_PARITY_DISCOUNT_NOISE=0.005;
 export const FRESH_PARITY_STRICT:FreshParityTolerance=Object.freeze({maxAgeMs:2000,maxSkewMs:1000});
 function validFuture(f:FreshFutureObservation,now:number,maxAgeMs=2000){return !!f.contract&&!!f.source&&!!f.epoch&&[f.price,f.tick,f.eventAt,f.receivedAt,now].every(Number.isFinite)&&f.price>0&&f.tick>0&&f.eventAt<=f.receivedAt&&f.receivedAt<=now&&now-f.eventAt<=maxAgeMs;}
 /** C-P=D(F-K), with F fixed to the exact mapped future observation, never a fitted replacement future. */
@@ -21,8 +23,8 @@ export function fitFreshFuturesParity(pairs:readonly ParityPair[],future:FreshFu
   if(!fitted||fitted.source!==future.source||fitted.epoch!==future.epoch||new Set(quotes.map(q=>q.contract)).size!==quotes.length||quotes.some(q=>Math.abs(q.eventAt-future.eventAt)>tolerance.maxSkewMs))return null;
   const xs=pairs.map(x=>future.price-x.strike),ys=pairs.map(x=>(x.call.bid+x.call.ask-x.put.bid-x.put.ask)/2),sumSquares=xs.reduce((s,x)=>s+x*x,0);
   if(!(sumSquares>0&&Number.isFinite(sumSquares)))return null;
-  const discount=xs.reduce((s,x,i)=>s+x*ys[i],0)/sumSquares;
-  if(!(discount>0&&discount<=1)||pairs.some(x=>discount*(future.price-x.strike)<x.call.bid-x.put.ask-1e-8||discount*(future.price-x.strike)>x.call.ask-x.put.bid+1e-8))return null;
+  const slope=xs.reduce((s,x,i)=>s+x*ys[i],0)/sumSquares,discount=Math.min(1,slope);
+  if(!(slope>0&&slope<=1+FRESH_PARITY_DISCOUNT_NOISE)||pairs.some(x=>discount*(future.price-x.strike)<x.call.bid-x.put.ask-1e-8||discount*(future.price-x.strike)>x.call.ask-x.put.bid+1e-8))return null;
   return {...fitted,forward:future.price,discount,futureContract:future.contract,futureAt:future.eventAt};
 }
 /** European parity C-P=D(F-K); the caller verifies exact underlying and expiry identity from the master. */
@@ -34,8 +36,13 @@ export function fitFreshParity(pairs:readonly ParityPair[],expiryAt:number,now:n
   const xs=a.map(x=>x.strike),ys=a.map(x=>(x.call.bid+x.call.ask-x.put.bid-x.put.ask)/2);
   if(xs.some(x=>!Number.isFinite(x)||x<=0))return null;
   const mx=xs.reduce((s,x)=>s+x,0)/xs.length,my=ys.reduce((s,x)=>s+x,0)/ys.length;
-  const v=xs.reduce((s,x)=>s+(x-mx)**2,0),discount=-xs.reduce((s,x,i)=>s+(x-mx)*(ys[i]-my),0)/v;
-  if(!(discount>0&&discount<=1))return null;
+  const v=xs.reduce((s,x)=>s+(x-mx)**2,0),slope=-xs.reduce((s,x,i)=>s+(x-mx)*(ys[i]-my),0)/v;
+  // 9 Nov: near expiry the true discount is ~1 (0DTE: 0.99998), so quote noise puts the fitted slope just above 1 about
+  // half the time and the whole basis was refused (the expiry-gamma signal of 9 Nov 13:31 ended PARITY_FIT_FAILED). A
+  // slope within FRESH_PARITY_DISCOUNT_NOISE above 1 is clamped to 1 (its no-arbitrage maximum); the bid/ask band
+  // below still has to hold for every pair with the clamped value.
+  if(!(slope>0&&slope<=1+FRESH_PARITY_DISCOUNT_NOISE))return null;
+  const discount=Math.min(1,slope);
   const forward=mx+my/discount;if(!(forward>0&&Number.isFinite(forward)))return null;
   if(a.some(x=>discount*(forward-x.strike)<x.call.bid-x.put.ask-1e-8||discount*(forward-x.strike)>x.call.ask-x.put.bid+1e-8))return null;
   return {forward,discount,expiryAt,at:now,epoch:quotes[0].epoch,source:quotes[0].source,strikes:xs};
