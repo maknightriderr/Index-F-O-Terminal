@@ -44,6 +44,8 @@ const state = {
   rvol: new Map<string, { day: string; bySlot: Map<string, number[]> }>(),
   gamma: new Map<string, { day: string; samples: GammaSample[]; fired: Set<string> }>(),
   paper: new Map<string, number>(),
+  /** Radar (9 Nov): each contract's latest A-D outcome today (the side that got furthest, SIGNAL first). */
+  latest: new Map<string, { at: number; day: string; setups: Record<string, { status: string; side: string | null; failed: string | null; passed: number; score: number | null }> }>(),
 };
 
 const traded = (f: FootprintBar) => f.deltaMode !== 'UNAVAILABLE' && f.high != null && f.low != null && f.close != null;
@@ -158,6 +160,18 @@ async function paper(h: DhanPaperHandler, req: DhanPaperRequest | DhanGammaPaper
     .catch((err: any) => logger.warn({ symbol: req.symbol, error: err.message }, 'Dhan engine: paper decision write failed'));
 }
 
+const RANK: Record<string, number> = { SIGNAL: 3, NO_TRADE: 2, NO_SETUP: 1 };
+/** Per setup, the outcome of the side that got furthest (SIGNAL > NO_TRADE > most conditions passed). */
+export function radarOf(results: readonly SetupResult[]): Record<string, { status: string; side: string | null; failed: string | null; passed: number; score: number | null }> {
+  const out: Record<string, { status: string; side: string | null; failed: string | null; passed: number; score: number | null }> = {};
+  for (const r of results) {
+    const passed = r.checks.filter((c) => c.ok).length, cur = out[r.setup];
+    const better = !cur || RANK[r.status] > RANK[cur.status] || (RANK[r.status] === RANK[cur.status] && passed > cur.passed);
+    if (better) out[r.setup] = { status: r.status, side: r.status === 'NO_SETUP' ? null : r.side, failed: r.failed ?? (r.status === 'NO_TRADE' ? [...r.gates.filter((g) => !g.ok).map((g) => g.id), ...(r.noTrade?.reasons ?? [])][0] ?? `SCORE_${r.score?.total ?? 0}` : null), passed, score: r.score?.total ?? null };
+  }
+  return out;
+}
+
 /** Evaluate every contract whose latest bar closed since its last evaluation. Returns the number evaluated. */
 export async function evaluateDhanShadow(now: number, health: Health): Promise<number> {
   if (state.busy) return 0;
@@ -174,6 +188,7 @@ export async function evaluateDhanShadow(now: number, health: Health): Promise<n
         if (!ctx || ctx.bars.at(-1)!.time !== last) continue; // the newest closed bar had no trades: nothing to decide on
         const ev = evaluateDhanSetups(ctx);
         n++;
+        state.latest.set(symbol, { at: last, day: istSession(last), setups: radarOf(ev.results) });
         for (const r of ev.results) {
           if (r.status === 'NO_SETUP') { const k = `${r.strategy}:${r.failed}`; state.failures.set(k, (state.failures.get(k) ?? 0) + 1); continue; }
           state.recorded[r.status]++;
@@ -279,12 +294,13 @@ export async function dhanShadowSignals(day: string): Promise<unknown[]> {
 }
 
 export function dhanShadowStatus() {
-  return { recorded: { ...state.recorded }, paper: Object.fromEntries(state.paper), contracts: state.evaluated.size, firstFailures: [...state.failures].sort((a, b) => b[1] - a[1]).slice(0, 30).map(([k, c]) => ({ k, c })), gamma: [...state.gamma].map(([index, g]) => ({ index, day: g.day, samples: g.samples.length, fired: [...g.fired] })) };
+  const today = istSession(Date.now());
+  return { recorded: { ...state.recorded }, paper: Object.fromEntries(state.paper), latest: Object.fromEntries([...state.latest].filter(([, v]) => v.day === today)), contracts: state.evaluated.size, firstFailures: [...state.failures].sort((a, b) => b[1] - a[1]).slice(0, 30).map(([k, c]) => ({ k, c })), gamma: [...state.gamma].map(([index, g]) => ({ index, day: g.day, samples: g.samples.length, fired: [...g.fired] })) };
 }
 
 /** Tests only. */
 export function resetDhanShadow(): void {
-  state.evaluated.clear(); state.failures.clear(); state.rvol.clear(); state.gamma.clear(); state.paper.clear();
+  state.evaluated.clear(); state.failures.clear(); state.rvol.clear(); state.gamma.clear(); state.paper.clear(); state.latest.clear();
   state.recorded = { SIGNAL: 0, NO_TRADE: 0 }; state.summaryAt = 0; state.busy = false;
 }
 

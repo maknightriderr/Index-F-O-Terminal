@@ -1,3 +1,4 @@
+import { flowCoverage, FLOW_MIN_SAMPLED_COVERAGE } from '../order-flow/index.js';
 // ============================================================
 // ORDER-FLOW SHADOW EVIDENCE (fresh-start 1.8, 5 Nov 2026)
 // ============================================================
@@ -11,7 +12,8 @@
 
 import type { FreshDirection } from './strategies.js';
 
-/** `unreconciled` (v2): volume between packets no observed trade explains: it counts against the classified share. */
+/** `unreconciled` (v2): volume between packets no observed trade explains: the observed flow is a sample of the bar while
+ *  it covers at least FLOW_MIN_SAMPLED_COVERAGE of the volume (owner, 9 Nov). */
 export interface FreshFlowBar { time: number; buy: number; sell: number; unclassified: number; trades: number; unreconciled?: number }
 export interface FreshOrderFlowInput { source: string; instrument: string | null; proxy: boolean; bars: readonly FreshFlowBar[] }
 export type FreshFlowAlignment = 'ALIGNED' | 'NEUTRAL' | 'OPPOSED' | 'UNAVAILABLE';
@@ -47,11 +49,15 @@ export function freshOrderFlowEvidence(flow: FreshOrderFlowInput | undefined, di
     if (!flow) return none('NO_FLOW_FOR_INSTRUMENT');
     const d = direction === 'BULLISH' ? 1 : -1, bar = flow.bars.find(b => b.time === decisionBar);
     if (!bar) return none('NO_FLOW_BAR');
-    const total = bar.buy + bar.sell + bar.unclassified + (bar.unreconciled ?? 0), classifiedShare = total > 0 ? (bar.buy + bar.sell) / total : null;
+    // Sampled order flow (owner, 9 Nov): the classified share is of the OBSERVED volume; unreconciled volume only has to
+    // leave enough coverage (FLOW_MIN_SAMPLED_COVERAGE) for the observed trades to stand as a sample.
+    const observed = bar.buy + bar.sell + bar.unclassified, classifiedShare = observed > 0 ? (bar.buy + bar.sell) / observed : null;
+    const coverage = flowCoverage(observed, bar.unreconciled ?? 0);
     const setup = flow.bars.filter(b => b.time >= Math.min(origin, decisionBar) && b.time <= decisionBar);
     const sb = setup.reduce((n, b) => n + b.buy, 0), ss = setup.reduce((n, b) => n + b.sell, 0);
     const out = { ...base, barDelta: signedDelta(bar.buy, bar.sell, d), setupDelta: signedDelta(sb, ss, d), classifiedShare, trades: bar.trades, reason: null as string | null };
     if (classifiedShare == null || classifiedShare < FRESH_FLOW_MIN_CLASSIFIED) return { ...out, alignment: 'UNAVAILABLE', reason: 'TOO_LITTLE_CLASSIFIED' };
+    if (coverage == null || coverage < FLOW_MIN_SAMPLED_COVERAGE) return { ...out, alignment: 'UNAVAILABLE', reason: 'LOW_COVERAGE' };
     if (bar.trades < FRESH_FLOW_MIN_TRADES) return { ...out, alignment: 'UNAVAILABLE', reason: 'TOO_FEW_TRADES' };
     const x = out.barDelta!;
     return { ...out, alignment: x >= FRESH_FLOW_ALIGN ? 'ALIGNED' : x <= -FRESH_FLOW_ALIGN ? 'OPPOSED' : 'NEUTRAL' };

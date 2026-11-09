@@ -22,6 +22,7 @@ import { useMarketStore, useWorkspaceStore } from '@/stores';
 import { exchangeFor, WORKSPACE_PRESETS, type WorkspaceFocus } from '@/lib/commands';
 import { accountView, inr, istTime, pickContract, positionViews, radarReason, setupRadar, signedInr, signedR, STRATEGY_IDS, strategyHeader, type RadarCell } from '@/lib/command-center';
 import { Empty, Pill, type Tone } from '@/components/command-center/panel';
+import { DHAN_RADAR_SETUPS, dhanCellText, useDhanRadar } from '@/lib/dhan-radar';
 
 const fmt = (v: number | null | undefined, d = 2) => (v == null || !Number.isFinite(v) ? '—' : v.toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d }));
 const lakh = (v: number | null | undefined) => (v == null || !Number.isFinite(v) ? '—' : (v / 1e5).toFixed(1));
@@ -232,6 +233,7 @@ const cellText = (c: RadarCell) => (c.state === 'IN_TRADE' ? 'IN TRADE' : c.stat
 const cellTitle = (c: RadarCell) => [c.code, c.detail].filter(Boolean).join(' · ') || undefined;
 
 function Radar({ rows, names, onOpen, loading }: { rows: ReturnType<typeof setupRadar>; names: Map<string, { name: string; age: number | null }>; onOpen: (name: string) => void; loading: boolean }) {
+  const dhan = useDhanRadar();
   if (loading) return <Empty>Loading the engine status…</Empty>;
   if (!rows.length) return <Empty>No engine evaluation yet today.</Empty>;
   return (
@@ -241,6 +243,7 @@ function Radar({ rows, names, onOpen, loading }: { rows: ReturnType<typeof setup
           <tr>
             <th>Instrument</th>
             {STRATEGY_IDS.map((s) => <th key={s}>{strategyHeader(s)}</th>)}
+            {DHAN_RADAR_SETUPS.map((d) => <th key={d.key} title="Dhan order-flow engine v2 (all futures contracts; sampled order flow)">{d.header}</th>)}
             <th>Last</th>
           </tr>
         </thead>
@@ -256,6 +259,10 @@ function Radar({ rows, names, onOpen, loading }: { rows: ReturnType<typeof setup
                 {STRATEGY_IDS.map((s) => {
                   const c = r.cells[s];
                   return <td key={s} title={cellTitle(c)}>{c.state === 'NOT_EVALUATED' || c.state === 'NO_SETUP' ? <span className="ws-dim">{cellText(c)}</span> : <Pill tone={CELL_TONE[c.state]}>{cellText(c)}</Pill>}</td>;
+                })}
+                {DHAN_RADAR_SETUPS.map((d) => {
+                  const x = dhanCellText(dhan[name]?.setups[d.key]);
+                  return <td key={d.key}>{x.tone ? <Pill tone={x.tone}>{x.text}</Pill> : <span className="ws-dim">{x.text}</span>}</td>;
                 })}
                 <td className="cc-num ws-dim">{r.at ? istTime(r.at) : '—'}</td>
               </tr>

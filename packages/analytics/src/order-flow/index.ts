@@ -83,6 +83,10 @@ export interface FootprintBar {
   /** The instrument tick and the price-row step the levels were bucketed with. */
   tickSize?: number | null;
   priceStep?: number | null;
+  /** Sampled order flow (owner, 9 Nov): observed (reconciled) share of the bar's volume, and whether the bar's delta /
+   *  imbalances are a SAMPLE of its trades (more than the complete-bar threshold unreconciled, enough coverage). */
+  coverage?: number | null;
+  sampled?: boolean;
   /** Dhan engine v2 (memory only): the bar's first trade price and its trade VWAP sums (Σpq, Σq, Σp²q). */
   open?: number | null;
   tradeSums?: { pv: number; v: number; p2v: number } | null;
@@ -100,8 +104,22 @@ export function flowPriceStep(price: number, tick: number | null | undefined): n
   return Math.round(ticks * tick * 1e6) / 1e6;
 }
 
-/** A bar is INCOMPLETE above this share of unreconciled volume (of reconciled + unreconciled). */
+/** A bar is COMPLETE at or below this share of unreconciled volume (of reconciled + unreconciled). */
 export const FLOW_MAX_UNRECONCILED_SHARE = 0.2;
+/**
+ * Sampled order flow (owner decision, 9 Nov 2026). Measured on the live Dhan feed: FULL packets reveal only ~25% of the
+ * volume as observed trades (LTQ), so almost no bar is complete. Above the complete-bar threshold, a bar's observed
+ * trades are used as a SAMPLE of its flow (delta %, imbalances, CVD direction, VWAP) when they cover at least this
+ * share of its volume and number at least FLOW_MIN_SAMPLED_TRADES; below that the bar stays INCOMPLETE. Unreconciled
+ * volume is still never given a price or a side, and every sampled value is labelled with its coverage.
+ */
+export const FLOW_MIN_SAMPLED_COVERAGE = 0.15;
+export const FLOW_MIN_SAMPLED_TRADES = 30;
+/** Observed share of volume (null without volume). */
+export function flowCoverage(observed: number, unreconciled: number): number | null {
+  const total = observed + Math.max(0, unreconciled);
+  return total > 0 ? Math.round((observed / total) * 10000) / 10000 : null;
+}
 
 const bucket = (price: number, step: number) => Math.round(Math.round(price / step) * step * 1e6) / 1e6;
 

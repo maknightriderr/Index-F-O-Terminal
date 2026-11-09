@@ -24,7 +24,9 @@ describe('Dhan engine snapshot', () => {
     const s = dhanEngineSnapshot('NIFTY', OPEN + Q + 1)!;
     expect(s.vwap).toMatchObject({ status: 'ESTIMATED', source: 'TRADES', vwap: 101.5, sd: 0.866 });
     expect(s.bars).toBe(1);
-    store.recordFlowUnreconciled('NIFTY', OPEN + Q + 5000, 20); // 20 of 60 > 20%
+    store.recordFlowUnreconciled('NIFTY', OPEN + Q + 5000, 20); // 40 observed of 60: a usable sample (9 Nov)
+    expect(dhanEngineSnapshot('NIFTY', OPEN + Q + 6000)!.vwap.status).toBe('ESTIMATED');
+    store.recordFlowUnreconciled('NIFTY', OPEN + Q + 5500, 300); // 40 of 360 = 11% < 15%: incomplete
     expect(dhanEngineSnapshot('NIFTY', OPEN + Q + 6000)!.vwap.status).toBe('INCOMPLETE');
     // Next IST session: VWAP restarts.
     store.recordFlowTrade('NIFTY', { time: OPEN + 86_400_000 + 1000, price: 110, qty: 5, side: 'BUY' });

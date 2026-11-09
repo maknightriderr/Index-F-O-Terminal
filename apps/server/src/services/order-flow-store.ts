@@ -9,7 +9,7 @@
 // ============================================================
 
 import { gunzipSync, gzipSync } from 'node:zlib';
-import { buildFootprint, unavailableFootprint, flowPriceStep, istSession, type VwapSums, FLOW_MAX_UNRECONCILED_SHARE, ORDER_FLOW_VERSION, type DeltaMode, type FlowTrade, type FootprintBar } from '@fno/analytics';
+import { buildFootprint, unavailableFootprint, flowPriceStep, flowCoverage, istSession, type VwapSums, FLOW_MAX_UNRECONCILED_SHARE, FLOW_MIN_SAMPLED_COVERAGE, FLOW_MIN_SAMPLED_TRADES, ORDER_FLOW_VERSION, type DeltaMode, type FlowTrade, type FootprintBar } from '@fno/analytics';
 import { getSessionWindow, isMarketOpen, type Exchange } from '@fno/shared';
 import { sql } from '../lib/db.js';
 import { logger } from '../lib/logger.js';
@@ -230,7 +230,12 @@ export async function closeFlowBars(now: number, connected: boolean = feedConnec
 export function applyReconciliation(fp: FootprintBar, unreconciled: number): FootprintBar {
   fp.unreconciledVolume = unreconciled > 0 ? unreconciled : 0;
   const total = (fp.volume ?? 0) + fp.unreconciledVolume;
-  fp.incomplete = total > 0 && fp.unreconciledVolume / total > FLOW_MAX_UNRECONCILED_SHARE;
+  fp.coverage = flowCoverage(fp.volume ?? 0, fp.unreconciledVolume);
+  const over = total > 0 && fp.unreconciledVolume / total > FLOW_MAX_UNRECONCILED_SHARE;
+  // Sampled order flow (owner, 9 Nov): enough observed trades and coverage -> the observed flow stands as a labelled
+  // sample; otherwise the bar is INCOMPLETE and its delta / imbalances are withheld.
+  fp.sampled = over && fp.trades >= FLOW_MIN_SAMPLED_TRADES && (fp.coverage ?? 0) >= FLOW_MIN_SAMPLED_COVERAGE;
+  fp.incomplete = over && !fp.sampled;
   if (fp.incomplete) {
     fp.delta = null;
     fp.deltaPct = null;

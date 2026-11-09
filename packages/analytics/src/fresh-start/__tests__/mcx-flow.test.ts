@@ -51,7 +51,9 @@ describe('2.0 NEW_MCX_FLOW_V1', () => {
         expect(refusal({ ...c, orderFlow: undefined })?.detail).toBe('MCX_FLOW_UNAVAILABLE');
         expect(refusal({ ...c, orderFlow: { ...c.orderFlow!, bars: c.orderFlow!.bars.slice(0, -1) } })?.detail).toBe('MCX_FLOW_UNAVAILABLE'); // the decision bar is missing
         expect(refusal({ ...c, orderFlow: { ...c.orderFlow!, bars: c.orderFlow!.bars.map(x => ({ ...x, unclassified: 5000 })) } })?.detail).toBe('MCX_FLOW_UNAVAILABLE'); // < 50% classified
-        expect(refusal({ ...c, orderFlow: { ...c.orderFlow!, bars: c.orderFlow!.bars.map(x => ({ ...x, unreconciled: 5000 })) } })?.detail).toBe('MCX_FLOW_UNAVAILABLE'); // v2: unreconciled volume counts against it
+        // Sampled order flow (9 Nov): observed 1100 of 12100 = 9% coverage -> unavailable; 1100 of 4100 = 27% -> a usable sample.
+        expect(refusal({ ...c, orderFlow: { ...c.orderFlow!, bars: c.orderFlow!.bars.map(x => ({ ...x, unreconciled: 11000 })) } })?.detail).toBe('MCX_FLOW_UNAVAILABLE');
+        expect(find({ ...c, orderFlow: { ...c.orderFlow!, bars: c.orderFlow!.bars.map(x => ({ ...x, unreconciled: 3000 })) } })).toMatchObject({ evidence: { mcxFlow: { trigger: 'FLOW_HOLD' } } });
         expect(refusal({ ...c, orderFlow: { ...c.orderFlow!, bars: flowFor(pullbackDay, () => 0.52) } })?.detail).toBe('MCX_FLOW_NOT_ALIGNED');
         expect(refusal({ ...c, orderFlow: { ...c.orderFlow!, bars: flowFor(pullbackDay, i => (i === 9 ? 0.4 : 0.8)) } })?.detail).toBe('MCX_FLOW_NOT_ALIGNED'); // decision bar sold
         expect(refusal({ ...c, commodity: undefined })?.detail).toBe('MCX_NOT_A_COMMODITY');
