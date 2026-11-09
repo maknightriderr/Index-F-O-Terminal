@@ -74,6 +74,15 @@ describe('second audit (8 Nov): correlated positions are record-only, schema con
 
 describe('expiry-gamma entry window at the store', () => {
   const pe = { stopFraction: 0.3, exitAt: at + 3_000_000, entryUntil: at + 1_800_000, minAbsDelta: 0.55, maxAbsDelta: 0.85, expiryDay: session };
+  it('refuses off-shortlist strikes and a second same-side fill even after the first position closes', async () => {
+    const gamma = (id: string, strike: number) => request(id, 'DHAN_EXPIRY_GAMMA',
+      { premiumExit: { ...pe, allowedStrikes: [100, 95] }, expiresAt: at + 20_000 },
+      { expiryTradableSessions: 0, delta: 0.7, evidence: { strike } });
+    expect(await store.enter(gamma('outside', 90))).toMatchObject({ ok: false, code: 'GAMMA_STRIKE_NOT_ALLOWED' });
+    expect(await store.enter(gamma('first', 95))).toMatchObject({ ok: true, code: 'FILLED' });
+    await pg.exec("UPDATE fresh_paper_positions SET status='CLOSED', closed_at=now(), net_pnl=0 WHERE id='first'");
+    expect(await store.enter(gamma('retry', 100))).toEqual({ ok: false, code: 'GAMMA_SIDE_ALREADY_FILLED' });
+  });
   it('enters inside the last hour before the cutoff (its window ends at entryUntil); a normal candidate cannot', async () => {
     const near = { cutoff: at + 3_000_000 };
     const g = { ...request('g1', 'DHAN_EXPIRY_GAMMA', { premiumExit: pe, expiresAt: at + 20_000 }, { expiryTradableSessions: 0, delta: 0.7 }), ...near };

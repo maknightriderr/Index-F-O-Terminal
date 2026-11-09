@@ -12,40 +12,81 @@ export interface FreshFuturesParityBasis extends FreshParityBasis {futureContrac
  * still rejects any fit the older quotes cannot all support.
  */
 export interface FreshParityTolerance {maxAgeMs:number;maxSkewMs:number;}
-/** How far above 1 a fitted parity slope may be from quote noise alone before the fit is refused. */
-export const FRESH_PARITY_DISCOUNT_NOISE=0.005;
 export const FRESH_PARITY_STRICT:FreshParityTolerance=Object.freeze({maxAgeMs:2000,maxSkewMs:1000});
 function validFuture(f:FreshFutureObservation,now:number,maxAgeMs=2000){return !!f.contract&&!!f.source&&!!f.epoch&&[f.price,f.tick,f.eventAt,f.receivedAt,now].every(Number.isFinite)&&f.price>0&&f.tick>0&&f.eventAt<=f.receivedAt&&f.receivedAt<=now&&now-f.eventAt<=maxAgeMs;}
-/** C-P=D(F-K), with F fixed to the exact mapped future observation, never a fitted replacement future. */
-export function fitFreshFuturesParity(pairs:readonly ParityPair[],future:FreshFutureObservation,expiryAt:number,now:number,tolerance:FreshParityTolerance=FRESH_PARITY_STRICT):FreshFuturesParityBasis|null {
-  if(!validFuture(future,now,tolerance.maxAgeMs))return null;
-  const fitted=fitFreshParity(pairs,expiryAt,now,tolerance),quotes=pairs.flatMap(x=>[x.call,x.put]);
-  if(!fitted||fitted.source!==future.source||fitted.epoch!==future.epoch||new Set(quotes.map(q=>q.contract)).size!==quotes.length||quotes.some(q=>Math.abs(q.eventAt-future.eventAt)>tolerance.maxSkewMs))return null;
-  const xs=pairs.map(x=>future.price-x.strike),ys=pairs.map(x=>(x.call.bid+x.call.ask-x.put.bid-x.put.ask)/2),sumSquares=xs.reduce((s,x)=>s+x*x,0);
-  if(!(sumSquares>0&&Number.isFinite(sumSquares)))return null;
-  const slope=xs.reduce((s,x,i)=>s+x*ys[i],0)/sumSquares,discount=Math.min(1,slope);
-  if(!(slope>0&&slope<=1+FRESH_PARITY_DISCOUNT_NOISE)||pairs.some(x=>discount*(future.price-x.strike)<x.call.bid-x.put.ask-1e-8||discount*(future.price-x.strike)>x.call.ask-x.put.bid+1e-8))return null;
-  return {...fitted,forward:future.price,discount,futureContract:future.contract,futureAt:future.eventAt};
+
+type ParityBand = { strike: number; low: number; high: number };
+
+function parityInputs(pairs: readonly ParityPair[], expiryAt: number, now: number, tolerance: FreshParityTolerance) {
+  if (pairs.length < 3 || pairs.length > 5 || !Number.isFinite(expiryAt) || !Number.isFinite(now) || expiryAt <= now) return null;
+  const quotes = pairs.flatMap(p => [p.call, p.put]);
+  if (new Set(pairs.map(p => p.strike)).size !== pairs.length
+    || new Set(quotes.map(q => q.contract)).size !== quotes.length
+    || new Set(quotes.map(q => q.epoch)).size !== 1 || new Set(quotes.map(q => q.source)).size !== 1
+    || pairs.some(p => !Number.isFinite(p.strike) || p.strike <= 0)) return null;
+  if (quotes.some(q => ![q.bid, q.ask, q.tick, q.eventAt, q.receivedAt].every(Number.isFinite)
+    || q.tick <= 0 || q.bid <= 0 || q.ask < q.bid || !Number.isSafeInteger(q.bidUnits) || !Number.isSafeInteger(q.askUnits)
+    || q.bidUnits <= 0 || q.askUnits <= 0 || q.eventAt > q.receivedAt || q.receivedAt > now || now - q.eventAt > tolerance.maxAgeMs)
+    || Math.max(...quotes.map(q => q.eventAt)) - Math.min(...quotes.map(q => q.eventAt)) > tolerance.maxSkewMs) return null;
+  const bands = [...pairs].sort((a, b) => a.strike - b.strike).map(p => ({
+    strike: p.strike, low: p.call.bid - p.put.ask, high: p.call.ask - p.put.bid,
+  }));
+  return { quotes, bands, basis: { expiryAt, at: now, epoch: quotes[0].epoch, source: quotes[0].source, strikes: bands.map(b => b.strike) } };
 }
-/** European parity C-P=D(F-K); the caller verifies exact underlying and expiry identity from the master. */
-export function fitFreshParity(pairs:readonly ParityPair[],expiryAt:number,now:number,tolerance:FreshParityTolerance=FRESH_PARITY_STRICT):FreshParityBasis|null {
-  if(pairs.length<3||pairs.length>5||!Number.isFinite(expiryAt)||expiryAt<=now)return null;
-  const a=[...pairs].sort((x,y)=>x.strike-y.strike),quotes=a.flatMap(x=>[x.call,x.put]);
-  if(new Set(a.map(x=>x.strike)).size!==a.length||new Set(quotes.map(x=>x.epoch)).size!==1||new Set(quotes.map(x=>x.source)).size!==1)return null;
-  if(quotes.some(q=>![q.bid,q.ask,q.tick,q.eventAt,q.receivedAt].every(Number.isFinite)||q.tick<=0||q.bid<=0||q.ask<q.bid||!Number.isSafeInteger(q.bidUnits)||!Number.isSafeInteger(q.askUnits)||q.bidUnits<=0||q.askUnits<=0||q.eventAt>q.receivedAt||q.receivedAt>now||now-q.eventAt>tolerance.maxAgeMs)||Math.max(...quotes.map(q=>q.eventAt))-Math.min(...quotes.map(q=>q.eventAt))>tolerance.maxSkewMs)return null;
-  const xs=a.map(x=>x.strike),ys=a.map(x=>(x.call.bid+x.call.ask-x.put.bid-x.put.ask)/2);
-  if(xs.some(x=>!Number.isFinite(x)||x<=0))return null;
-  const mx=xs.reduce((s,x)=>s+x,0)/xs.length,my=ys.reduce((s,x)=>s+x,0)/ys.length;
-  const v=xs.reduce((s,x)=>s+(x-mx)**2,0),slope=-xs.reduce((s,x,i)=>s+(x-mx)*(ys[i]-my),0)/v;
-  // 9 Nov: near expiry the true discount is ~1 (0DTE: 0.99998), so quote noise puts the fitted slope just above 1 about
-  // half the time and the whole basis was refused (the expiry-gamma signal of 9 Nov 13:31 ended PARITY_FIT_FAILED). A
-  // slope within FRESH_PARITY_DISCOUNT_NOISE above 1 is clamped to 1 (its no-arbitrage maximum); the bid/ask band
-  // below still has to hold for every pair with the clamped value.
-  if(!(slope>0&&slope<=1+FRESH_PARITY_DISCOUNT_NOISE))return null;
-  const discount=Math.min(1,slope);
-  const forward=mx+my/discount;if(!(forward>0&&Number.isFinite(forward)))return null;
-  if(a.some(x=>discount*(forward-x.strike)<x.call.bid-x.put.ask-1e-8||discount*(forward-x.strike)>x.call.ask-x.put.bid+1e-8))return null;
-  return {forward,discount,expiryAt,at:now,epoch:quotes[0].epoch,source:quotes[0].source,strikes:xs};
+
+const mid = (b: ParityBand) => (b.low + b.high) / 2;
+const clip = (x: number, low: number, high: number) => Math.max(low, Math.min(x, high));
+const bandContains = (b: ParityBand, x: number) => x >= b.low - 1e-8 && x <= b.high + 1e-8;
+
+/** With an observed future, each quote band bounds D directly in C-P=D(F-K). */
+export function fitFreshFuturesParity(pairs: readonly ParityPair[], future: FreshFutureObservation, expiryAt: number, now: number, tolerance: FreshParityTolerance = FRESH_PARITY_STRICT): FreshFuturesParityBasis | null {
+  if (!validFuture(future, now, tolerance.maxAgeMs)) return null;
+  const inputs = parityInputs(pairs, expiryAt, now, tolerance);
+  if (!inputs || inputs.basis.source !== future.source || inputs.basis.epoch !== future.epoch
+    || inputs.quotes.some(q => Math.abs(q.eventAt - future.eventAt) > tolerance.maxSkewMs)) return null;
+  let minDiscount = Number.EPSILON, maxDiscount = 1, cross = 0, squares = 0;
+  for (const band of inputs.bands) {
+    const distance = future.price - band.strike;
+    if (distance === 0) {
+      if (!bandContains(band, 0)) return null;
+      continue;
+    }
+    const lo = band.low / distance, hi = band.high / distance;
+    minDiscount = Math.max(minDiscount, Math.min(lo, hi));
+    maxDiscount = Math.min(maxDiscount, Math.max(lo, hi));
+    cross += distance * mid(band);
+    squares += distance * distance;
+  }
+  if (minDiscount > maxDiscount || !(squares > 0)) return null;
+  const discount = clip(cross / squares, minDiscount, maxDiscount);
+  if (!inputs.bands.every(b => bandContains(b, discount * (future.price - b.strike)))) return null;
+  return { ...inputs.basis, forward: future.price, discount, futureContract: future.contract, futureAt: future.eventAt };
+}
+
+/** European parity C-P=D(F-K). Find D for which the intercept intervals share a point. */
+export function fitFreshParity(pairs: readonly ParityPair[], expiryAt: number, now: number, tolerance: FreshParityTolerance = FRESH_PARITY_STRICT): FreshParityBasis | null {
+  const inputs = parityInputs(pairs, expiryAt, now, tolerance);
+  if (!inputs) return null;
+  const { bands, basis } = inputs;
+  let minDiscount = Number.EPSILON, maxDiscount = 1;
+  // Each lower intercept bound must be <= each upper intercept bound.
+  for (const lower of bands) for (const upper of bands) {
+    const distance = lower.strike - upper.strike;
+    const bound = upper.high - lower.low;
+    if (distance > 0) maxDiscount = Math.min(maxDiscount, bound / distance);
+    if (distance < 0) minDiscount = Math.max(minDiscount, bound / distance);
+  }
+  if (minDiscount > maxDiscount) return null;
+  const center = bands.reduce((s, b) => s + b.strike, 0) / bands.length;
+  const mean = bands.reduce((s, b) => s + mid(b), 0) / bands.length;
+  const squares = bands.reduce((s, b) => s + (b.strike - center) ** 2, 0);
+  const slope = -bands.reduce((s, b) => s + (b.strike - center) * (mid(b) - mean), 0) / squares;
+  const discount = clip(slope, minDiscount, maxDiscount);
+  const lower = Math.max(...bands.map(b => b.low + discount * (b.strike - center)));
+  const upper = Math.min(...bands.map(b => b.high + discount * (b.strike - center)));
+  const forward = center + clip(mean, lower, upper) / discount;
+  if (!(forward > 0 && Number.isFinite(forward)) || !bands.every(b => bandContains(b, discount * (forward - b.strike)))) return null;
+  return { ...basis, forward, discount };
 }
 export function freshPremiumScenarios(args:{basis:FreshParityBasis;quote:FreshQuote;strike:number;side:'CE'|'PE';signalKind:'SPOT'|'FUTURES';signalPrice:number;pricingSpot:number;target:number;stop:number;now:number;cutoff:number}){
   const {basis:b,quote:q}=args;

@@ -71,8 +71,8 @@ describe('shadow recorder', () => {
     expect(await shadow.evaluateDhanShadow(OPEN + Q + 2, healthy)).toBe(0); // same bar: not re-evaluated
     const rows = (await pg.query<any>('SELECT * FROM dhan_engine_signals ORDER BY side')).rows;
     expect(rows.map((r) => [r.strategy, r.side, r.status, Number(r.entry), Number(r.stop_loss), Number(r.rr), r.score, r.session_window, r.version])).toEqual([
-      ['DHAN_A_SWEEP_ABSORPTION', 'BEARISH', 'NO_TRADE', 101, 99, 2.5, 8, 'PRIMARY', 'DHAN-SETUPS-1.2'],
-      ['DHAN_A_SWEEP_ABSORPTION', 'BULLISH', 'SIGNAL', 101, 99, 2.5, 8, 'PRIMARY', 'DHAN-SETUPS-1.2'],
+      ['DHAN_A_SWEEP_ABSORPTION', 'BEARISH', 'NO_TRADE', 101, 99, 2.5, 8, 'PRIMARY', 'DHAN-SETUPS-1.3'],
+      ['DHAN_A_SWEEP_ABSORPTION', 'BULLISH', 'SIGNAL', 101, 99, 2.5, 8, 'PRIMARY', 'DHAN-SETUPS-1.3'],
     ]);
     expect(new Date(rows[0].bar_time).getTime()).toBe(OPEN);
     expect(shadow.dhanShadowStatus()).toMatchObject({ recorded: { SIGNAL: 1, NO_TRADE: 1 }, firstFailures: [{ k: 'DHAN_C_FAILED_AUCTION_CVD:A2_SWEEP', c: 1 }] });
@@ -113,10 +113,10 @@ describe('expiry gamma recorder', () => {
     await shadow.recordGammaChain('NIFTY', chain(24012, [500, 700, 650, 600, 400], [900, 900, 1150, 500, 300]), ist(13, 59), ist(13, 59));
     const rows = (await pg.query<any>("SELECT * FROM dhan_engine_signals WHERE strategy='DHAN_EXPIRY_GAMMA'")).rows;
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ side: 'BULLISH', symbol: 'NIFTY', status: 'SIGNAL', session_window: 'EXPIRY_PM', version: 'DHAN-GAMMA-1.0' });
+    expect(rows[0]).toMatchObject({ side: 'BULLISH', symbol: 'NIFTY', status: 'SIGNAL', session_window: 'EXPIRY_PM', version: 'DHAN-GAMMA-1.1' });
     const ev = typeof rows[0].evidence === 'string' ? JSON.parse(rows[0].evidence) : rows[0].evidence;
     expect(ev).toMatchObject({ atm: 24000, dCallOi: -300, dPutOi: 300, dayHigh: 24005, dayRangeSource: 'CHAIN_SAMPLE_SPOT', strikes: { atm: 24000, itm: 23900, right: 'CE' } });
-    expect(shadow.dhanShadowStatus().gamma).toEqual([{ index: 'NIFTY', day: '2026-11-10', samples: 4, fired: ['BULLISH'] }]);
+    expect(shadow.dhanShadowStatus().gamma).toEqual([{ index: 'NIFTY', day: '2026-11-10', samples: 4, fired: [] }]);
   });
   it('8 Nov: hands each gamma signal to the paper handler (30% premium stop) and records the decision', async () => {
     const handler = vi.fn(async () => ({ decision: 'FILLED', candidateId: 'g-1' }));
@@ -132,8 +132,23 @@ describe('expiry gamma recorder', () => {
   it('records nothing when the chain does not expire today', async () => {
     await shadow.recordGammaChain('NIFTY', { ...chain(24005, [500, 700, 1000, 600, 400], [900, 800, 800, 500, 300]), expiry: '2026-11-17' }, ist(13, 10), ist(13, 10));
     await shadow.recordGammaChain('NIFTY', { ...chain(24010, [500, 700, 700, 600, 400], [900, 900, 1100, 500, 300]), expiry: '2026-11-17' }, ist(13, 58), ist(13, 58));
+    await shadow.recordGammaChain('NIFTY', chain(24010, [500, 700, 700, 600, 400], [900, 900, 1100, 500, 300]), ist(13, 59), ist(13, 59));
     expect((await pg.query("SELECT 1 FROM dhan_engine_signals")).rows).toHaveLength(0);
     expect(shadow.chainExpiresToday('2026-11-10T00:00:00.000Z', ist(14, 0))).toBe(true);
     expect(shadow.chainExpiresToday(null, ist(14, 0))).toBe(false);
+  });
+  it('retries a rejected fill on a new eligible sample and stops after a durable fill', async () => {
+    const handler = vi.fn()
+      .mockResolvedValueOnce({ decision: 'NO_ELIGIBLE_ENTRY', candidateId: null })
+      .mockResolvedValueOnce({ decision: 'FILLED', candidateId: 'gamma-1' });
+    shadow.setDhanPaperHandler(handler);
+    const base = chain(24005, [500, 700, 1000, 600, 400], [900, 800, 800, 500, 300]);
+    const setup = chain(24010, [500, 700, 700, 600, 400], [900, 900, 1100, 500, 300]);
+    await shadow.recordGammaChain('NIFTY', base, ist(13, 11), ist(13, 11));
+    await shadow.recordGammaChain('NIFTY', setup, ist(13, 58), ist(13, 58));
+    await shadow.recordGammaChain('NIFTY', setup, ist(13, 59), ist(13, 59));
+    await shadow.recordGammaChain('NIFTY', setup, ist(14, 0), ist(14, 0));
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(shadow.dhanShadowStatus().gamma[0].fired).toEqual(['BULLISH']);
   });
 });

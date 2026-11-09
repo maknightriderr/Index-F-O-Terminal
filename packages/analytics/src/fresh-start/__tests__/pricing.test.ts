@@ -1,12 +1,28 @@
 import {describe,it,expect} from 'vitest';
 import {blackScholesPrice} from '../../greeks/index.js';
-import {fitFreshParity,FRESH_PARITY_STRICT,freshPremiumScenarios,freshRoundTripFees,freshPremiumForNet,type FreshFeePolicy} from '../pricing.js';
+import {fitFreshFuturesParity,fitFreshParity,FRESH_PARITY_STRICT,freshPremiumScenarios,freshRoundTripFees,freshPremiumForNet,type FreshFeePolicy} from '../pricing.js';
 import {FRESH_RISK_PER_TRADE,admitFreshPaper,assessFreshPlan,advanceFreshPosition,type FreshContract} from '../paper.js';
 import {request,position} from './fixtures.js';
 const now=Date.parse('2026-10-30T06:00:00Z'),expiryAt=now+7*86400000,t=7/365,forward=25020,discount=.999;
 const policy:FreshFeePolicy={version:'test',brokeragePerOrder:20,exchangeFraction:.0003553,sebiFraction:.000001,stampBuyFraction:.00003,sellTaxFraction:.0015,gstFraction:.18};
 function pairs(){return [24900,25000,25100].map(strike=>{const quote=(side:'CE'|'PE')=>{const mid=discount*blackScholesPrice({spotPrice:forward,strikePrice:strike,timeToExpiry:t,riskFreeRate:0,iv:.18,optionType:side});return {contract:`${strike}:${side}`,source:'ANGEL',epoch:'e1',eventAt:now,receivedAt:now,bid:mid-.1,ask:mid+.1,bidUnits:1000,askUnits:1000,tick:.05};};return {strike,call:quote('CE'),put:quote('PE')};});}
 describe('observed European parity and explicit pricing scenarios',()=>{
+ it('fits both models when quote bands agree but the midpoint fit violates a narrow band', () => {
+  const book = (contract: string, mid: number, half: number) => ({ contract, bid: mid - half, ask: mid + half, tick: .01, bidUnits: 100, askUnits: 100, eventAt: now, receivedAt: now, source: 'ANGEL', epoch: 'e1' });
+  const quotes = [90, 100, 110, 120, 130].map(strike => {
+   const narrow = strike === 110, half = narrow ? .01 : .25;
+   return { strike, call: book(`C${strike}`, 40 + 110 - strike + (narrow ? 0 : .4), half), put: book(`P${strike}`, 40, half) };
+  });
+  const future = { contract: 'F', price: 110, tick: .01, source: 'ANGEL', epoch: 'e1', eventAt: now, receivedAt: now };
+  for (const fitted of [fitFreshParity(quotes, expiryAt, now), fitFreshFuturesParity(quotes, future, expiryAt, now)]) {
+   expect(fitted).not.toBeNull();
+   for (const { strike, call, put } of quotes) {
+    const diff = fitted!.discount * (fitted!.forward - strike);
+    expect(diff).toBeGreaterThanOrEqual(call.bid - put.ask - 1e-8);
+    expect(diff).toBeLessThanOrEqual(call.ask - put.bid + 1e-8);
+   }
+  }
+ });
  it('recovers forward and discount from three paired contracts without an invented interest rate',()=>{const b=fitFreshParity(pairs(),expiryAt,now)!;expect(b.forward).toBeCloseTo(forward,6);expect(b.discount).toBeCloseTo(discount,8);});
  it('expiry day (9 Nov): a fitted slope a little above 1 from quote noise is clamped to 1, not refused; far above is still refused',()=>{
   const at=(strike:number,y:number)=>{const q=(side:'CE'|'PE',mid:number)=>({contract:`${strike}:${side}`,source:'ANGEL',epoch:'e1',eventAt:now,receivedAt:now,bid:mid-.5,ask:mid+.5,bidUnits:1000,askUnits:1000,tick:.05});return {strike,call:q('CE',100+Math.max(0,y)),put:q('PE',100+Math.max(0,-y))};};

@@ -29,7 +29,7 @@ import { vwapSeries, type VwapPoint, type VwapSums } from './vwap.js';
 import { detectAbsorption, detectExhaustion, type AbsorptionEvent, type ExhaustionEvent } from './absorption.js';
 import { combineRegime, type MtfRegime, type TimeframeInputs } from './regime.js';
 
-export const DHAN_SETUP_VERSION = 'DHAN-SETUPS-1.2';
+export const DHAN_SETUP_VERSION = 'DHAN-SETUPS-1.3';
 
 export const DHAN_SETUP_IDS = {
   A: 'DHAN_A_SWEEP_ABSORPTION',
@@ -468,7 +468,9 @@ function liquid(d: Derived): boolean {
 }
 
 function windowIncomplete(d: Derived, from: number): boolean {
-  return d.fps.slice(from, d.i + 1).some((f) => f.incomplete || f.deltaMode === 'UNAVAILABLE');
+  return d.fps.slice(from, d.i + 1).some((f, i, window) =>
+    f.incomplete || f.deltaMode === 'UNAVAILABLE'
+    || (i > 0 && f.barTime - window[i - 1].barTime !== 15 * 60_000));
 }
 
 function gatesOf(d: Derived, r: Raw): Check[] {

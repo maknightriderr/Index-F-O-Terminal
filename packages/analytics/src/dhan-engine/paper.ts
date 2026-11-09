@@ -18,8 +18,8 @@
 
 import { FRESH_ENTRY_WINDOW_MS, FRESH_PACK_VERSION, type FreshCandidate, type FreshExternalStrategy } from '../fresh-start/strategies.js';
 import { roundDp } from './common.js';
-import type { SetupResult } from './setups.js';
-import { DHAN_GAMMA_RULES, type GammaResult } from './expiry-gamma.js';
+import { DHAN_SETUP_VERSION, type SetupResult } from './setups.js';
+import { DHAN_GAMMA_RULES, DHAN_GAMMA_VERSION, type GammaResult } from './expiry-gamma.js';
 
 export const DHAN_PAPER_STRATEGIES: readonly FreshExternalStrategy[] = ['DHAN_A_SWEEP_ABSORPTION', 'DHAN_B_IMBALANCE_BREAKOUT', 'DHAN_C_FAILED_AUCTION_CVD', 'DHAN_D_VWAP_PROFILE_REJECTION', 'DHAN_E_ORDER_FLOW'];
 /** The futures and reference prices used for the translation must be this fresh. */
@@ -71,7 +71,7 @@ export function dhanPaperCandidate(x: DhanPaperInput): DhanPaperOutcome {
       expiresAt: Math.min(x.now + DHAN_ENTRY_WINDOW_MS, x.sessionClose - DHAN_LAST_ENTRY_BEFORE_CUTOFF_MS), exitProfile: 'STRUCTURE', lastEntryBeforeCutoffMs: DHAN_LAST_ENTRY_BEFORE_CUTOFF_MS,
       evidence: {
         dhan: {
-          symbol: x.symbol, setup: r.setup, score: r.score?.total ?? null, eligibility: r.score?.eligibility ?? null, futuresPlan: r.plan,
+          symbol: x.symbol, setup: r.setup, setupVersion: DHAN_SETUP_VERSION, score: r.score?.total ?? null, eligibility: r.score?.eligibility ?? null, futuresPlan: r.plan,
           translation: { method: 'CONSTANT_BASIS', referenceKind: x.reference.kind, shift: roundDp(shift, 4), futuresPrice: x.futures.price, referencePrice: x.reference.price },
           rrBasis: 'GROSS_UNDERLYING', noTradeNotEvaluated: r.noTrade?.notEvaluated ?? [],
         },
@@ -118,9 +118,9 @@ export function dhanGammaCandidate(x: DhanGammaPaperInput): DhanPaperOutcome {
       parentId, version: FRESH_PACK_VERSION, strategy: 'DHAN_EXPIRY_GAMMA', direction: r.side, instrument: x.reference.id, sourceEpoch: x.reference.sourceEpoch,
       session: x.session, at: x.now, referenceEntry: px, stop, target, atr: roundDp(px * GAMMA_MODEL_STOP, 2), origin,
       expiresAt: Math.min(x.now + FRESH_ENTRY_WINDOW_MS, entryUntil), exitProfile: 'TARGET',
-      premiumExit: { stopFraction: DHAN_GAMMA_PREMIUM_STOP, exitAt, entryUntil, minAbsDelta: DHAN_GAMMA_MIN_ABS_DELTA, maxAbsDelta: DHAN_GAMMA_MAX_ABS_DELTA, expiryDay: x.session },
+      premiumExit: { stopFraction: DHAN_GAMMA_PREMIUM_STOP, exitAt, entryUntil, minAbsDelta: DHAN_GAMMA_MIN_ABS_DELTA, maxAbsDelta: DHAN_GAMMA_MAX_ABS_DELTA, expiryDay: x.session, allowedStrikes: [r.strikes.atm, r.strikes.itm] },
       evidence: {
-        dhan: { symbol: x.index, setup: 'EXPIRY_GAMMA', strikes: r.strikes, gamma: r.evidence, exit: { premiumStop: DHAN_GAMMA_PREMIUM_STOP, timeExitAt: exitAt }, underlyingLevels: 'MODEL_LEVELS_ONLY' },
+        dhan: { symbol: x.index, setup: 'EXPIRY_GAMMA', setupVersion: DHAN_GAMMA_VERSION, strikes: r.strikes, gamma: r.evidence, exit: { premiumStop: DHAN_GAMMA_PREMIUM_STOP, timeExitAt: exitAt }, underlyingLevels: 'MODEL_LEVELS_ONLY' },
         targetKind: 'TIME_EXIT',
       },
     },

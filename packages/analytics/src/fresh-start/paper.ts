@@ -125,6 +125,8 @@ function assessFreshPaper(args: {
     if (c.atr <= 0 || c.stop <= 0 || d * (c.referenceEntry - c.stop) <= 0 || d * (c.target - c.referenceEntry) <= 0 || d * (args.currentUnderlying - c.stop) <= 0 || d * (c.target - args.currentUnderlying) <= 0)
         return refuse('INVALIDATED_OR_TARGET_REACHED');
     const pe = c.premiumExit;
+    if (pe?.allowedStrikes && (typeof k.evidence?.strike !== 'number' || !pe.allowedStrikes.includes(k.evidence.strike)))
+        return refuse('GAMMA_STRIKE_NOT_ALLOWED');
     if (pe && !(pe.stopFraction > 0 && pe.stopFraction < 1 && pe.exitAt > pe.entryUntil && pe.minAbsDelta > 0 && pe.maxAbsDelta < 1 && pe.minAbsDelta < pe.maxAbsDelta))
         return refuse('INVALID_INPUT');
     if ((!planning && (args.arrivalAt < c.at + 250 || args.now < args.arrivalAt || q.receivedAt < args.arrivalAt || q.eventAt < args.arrivalAt)) || (planning && args.now < c.at) || args.now > c.expiresAt || (pe ? args.now >= pe.entryUntil || args.now >= args.cutoff - 600000 : args.now >= args.cutoff - freshLastEntryGap(c)))

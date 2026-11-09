@@ -310,6 +310,7 @@ async function buildOptionChainUncached(
       ask: quote?.ask ?? 0,
       volume: quote?.volume ?? 0,
       oi: quote?.oi ?? 0,
+      observedOi: typeof quote?.oi === 'number' && Number.isFinite(quote.oi) && quote.oi >= 0 ? quote.oi : null,
       changeOi,
       changeOiBaseline: oiRead?.baseline ?? null,
       ivPressurePct: pressurePct != null ? Math.round(pressurePct * 100) / 100 : null,

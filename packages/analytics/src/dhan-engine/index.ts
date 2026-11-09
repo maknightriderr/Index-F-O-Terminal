@@ -9,5 +9,6 @@ export * from './absorption.js';
 export * from './regime.js';
 export * from './setups.js';
 export * from './expiry-gamma.js';
+export * from './gamma-break-shadow.js';
 export * from './paper.js';
 export * from './validation.js';
