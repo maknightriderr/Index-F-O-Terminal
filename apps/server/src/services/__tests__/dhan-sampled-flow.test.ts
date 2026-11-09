@@ -34,3 +34,18 @@ describe('radar outcome per setup', () => {
     });
   });
 });
+
+describe('closed-bar counter (9 Nov: a reader closing the bar first starved the shadow pass)', () => {
+  it('counts every bar closed, whoever closes it', async () => {
+    const store = await import('../order-flow-store.js');
+    store.resetFlowStore();
+    const T = Date.parse('2026-11-09T03:45:00Z');
+    store.registerFlowSymbol('CNT', { exchange: 'NSE', instrument: 'CNT-FUT', source: 'DHAN', mode: 'INFERRED', startedAt: T - 900_000, kind: 'STOCK', tickSize: 0.05 });
+    store.recordFlowTrade('CNT', { time: T + 1000, price: 100, qty: 5, side: 'BUY' });
+    const before = store.flowClosedBarCount();
+    await store.closeFlowBars(T + 900_001, true); // e.g. footprintsFor() closing it
+    expect(store.flowClosedBarCount()).toBe(before + 1);
+    expect(await store.closeFlowBars(T + 900_002, true)).toBe(0); // the feed's tick then sees nothing written...
+    expect(store.flowClosedBarCount()).toBe(before + 1); // ...but the counter still shows a bar closed since its last pass
+  });
+});
