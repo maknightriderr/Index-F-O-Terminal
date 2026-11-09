@@ -9,7 +9,7 @@ import {SessionEvidence} from './session-evidence';
 import {ResearchReadiness} from './research-readiness';
 import {EventResearchPolicy} from './event-research-policy';
 import { PublicCalendarSources } from './public-calendar-sources';
-const names: Record<string, string> = { NEW_ORB_RETEST_V1: 'Opening range retest', NEW_VWAP_PULLBACK_V1: 'VWAP pullback', NEW_PREVIOUS_SESSION_SWEEP_V1: 'Previous-session sweep', NEW_FIRST_OPENING_PULLBACK_V1: 'First opening pullback', DHAN_A_SWEEP_ABSORPTION: 'Dhan A: sweep + absorption', DHAN_B_IMBALANCE_BREAKOUT: 'Dhan B: imbalance breakout', DHAN_C_FAILED_AUCTION_CVD: 'Dhan C: failed auction + CVD', DHAN_D_VWAP_PROFILE_REJECTION: 'Dhan D: VWAP / profile rejection', DHAN_EXPIRY_GAMMA: 'Dhan expiry gamma' };
+const names: Record<string, string> = { NEW_ORB_RETEST_V1: 'Opening range retest', NEW_VWAP_PULLBACK_V1: 'VWAP pullback', NEW_PREVIOUS_SESSION_SWEEP_V1: 'Previous-session sweep', NEW_FIRST_OPENING_PULLBACK_V1: 'First opening pullback', DHAN_A_SWEEP_ABSORPTION: 'Dhan A: sweep + absorption', DHAN_B_IMBALANCE_BREAKOUT: 'Dhan B: imbalance breakout', DHAN_C_FAILED_AUCTION_CVD: 'Dhan C: failed auction + CVD', DHAN_D_VWAP_PROFILE_REJECTION: 'Dhan D: VWAP / profile rejection', DHAN_E_ORDER_FLOW: 'Dhan E: pure order flow', DHAN_EXPIRY_GAMMA: 'Dhan expiry gamma' };
 const marketNames:Record<string,string>={NSE_INDEX_OPTIONS:'NSE index options',NSE_STOCK_OPTIONS:'NSE F&O stock options',BSE_VERIFIED_OPTIONS:'BSE index options',MCX_VERIFIED_FUTURES_OPTIONS:'MCX commodity options'};
 const money = (v: number | null) => v == null ? '—' : new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(v);
 export function FreshStartPanel() {

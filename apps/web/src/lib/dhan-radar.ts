@@ -12,11 +12,12 @@ export const DHAN_RADAR_SETUPS = [
   { key: 'B', header: 'Dhan B · imbalance breakout' },
   { key: 'C', header: 'Dhan C · failed auction + CVD' },
   { key: 'D', header: 'Dhan D · VWAP / profile' },
+  { key: 'E', header: 'Dhan E · pure order flow' },
 ] as const;
 
 /** "A3_SELLING_AGGRESSION_UP" -> "A3 selling aggression up". */
 export const dhanCheckLabel = (id: string) => {
-  const m = /^([A-D]\d+(?:_[A-D]\d+)*)_(.*)$/.exec(id);
+  const m = /^([A-E]\d+(?:_[A-E]\d+)*)_(.*)$/.exec(id);
   return m ? `${m[1]} ${m[2].replace(/_/g, ' ').toLowerCase()}` : id.replace(/_/g, ' ').toLowerCase();
 };
 

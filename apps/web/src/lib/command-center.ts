@@ -30,6 +30,7 @@ export const DHAN_STRATEGY_NAMES: Record<string, string> = {
   DHAN_B_IMBALANCE_BREAKOUT: 'Dhan B · imbalance breakout',
   DHAN_C_FAILED_AUCTION_CVD: 'Dhan C · failed auction + CVD',
   DHAN_D_VWAP_PROFILE_REJECTION: 'Dhan D · VWAP / profile rejection',
+  DHAN_E_ORDER_FLOW: 'Dhan E · pure order flow',
   DHAN_EXPIRY_GAMMA: 'Dhan expiry gamma',
 };
 /** Every strategy with paper trades (Strategy Lab tabs, heatmap, promotion gates). */

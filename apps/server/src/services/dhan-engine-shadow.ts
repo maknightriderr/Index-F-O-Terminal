@@ -44,7 +44,7 @@ const state = {
   rvol: new Map<string, { day: string; bySlot: Map<string, number[]> }>(),
   gamma: new Map<string, { day: string; samples: GammaSample[]; fired: Set<string> }>(),
   paper: new Map<string, number>(),
-  /** Radar (9 Nov): each contract's latest A-D outcome today (the side that got furthest, SIGNAL first). */
+  /** Radar (9 Nov): each contract's latest A-E outcome today (the side that got furthest, SIGNAL first). */
   latest: new Map<string, { at: number; day: string; setups: Record<string, { status: string; side: string | null; failed: string | null; passed: number; score: number | null }> }>(),
 };
 
@@ -210,7 +210,7 @@ export async function evaluateDhanShadow(now: number, health: Health): Promise<n
   if (now - state.summaryAt >= SUMMARY_LOG_MS && (n > 0 || state.failures.size)) {
     state.summaryAt = now;
     const top = [...state.failures].sort((a, b) => b[1] - a[1]).slice(0, 20).map(([k, c]) => ({ k, c }));
-    logger.info({ event: 'dhanShadowSummary', evaluated: n, recorded: state.recorded, firstFailures: top }, 'Dhan engine shadow: setups A-D summary (shadow only)');
+    logger.info({ event: 'dhanShadowSummary', evaluated: n, recorded: state.recorded, firstFailures: top }, 'Dhan engine shadow: setups A-E summary (shadow only)');
   }
   return n;
 }

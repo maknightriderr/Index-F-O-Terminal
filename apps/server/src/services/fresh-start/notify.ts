@@ -21,6 +21,7 @@ const STRATEGY: Record<string, string> = {
   DHAN_B_IMBALANCE_BREAKOUT: 'Dhan B: imbalance breakout',
   DHAN_C_FAILED_AUCTION_CVD: 'Dhan C: failed auction + CVD',
   DHAN_D_VWAP_PROFILE_REJECTION: 'Dhan D: VWAP / profile rejection',
+  DHAN_E_ORDER_FLOW: 'Dhan E: pure order flow (absorption / distribution)',
   DHAN_EXPIRY_GAMMA: 'Dhan expiry gamma',
 };
 /** Live account limits a paper entry went past (2.0: paper records them instead of refusing). */
