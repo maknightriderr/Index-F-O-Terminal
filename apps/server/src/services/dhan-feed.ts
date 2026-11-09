@@ -35,8 +35,8 @@ import { serviceHeartbeat } from '../lib/service-supervisor.js';
 import { DHAN_RESPONSE, DHAN_SEGMENT_CODE, DHAN_MAX_INSTRUMENTS_PER_CONNECTION, dhanFeedUrl, fullSubscriptions, parseDhanFrame, resolveFlowContracts, type DhanFullPacket, type ResolvedFlowContract } from '../lib/dhan-feed-packets.js';
 import { ORDER_BLOCK_MODE, ORDER_BLOCK_MODE_REJECTED, OF1_TRADING_REQUESTED, ORDER_FLOW_SUPPORTED, ORDER_FLOW_SYMBOLS, ORDER_FLOW_SYMBOLS_REJECTED, DHAN_FLOW_V2, DHAN_FLOW_V2_SYMBOLS, DHAN_FLOW_STOCKS, DHAN_ENGINE_SHADOW } from '../config/order-flow-flags.js';
 import { dhanConfigured, dhanSession, dhanSessionStatus, ensureDhanSession, markDhanTokenRejected } from './dhan-session.js';
-import { closeFlowBars, flowContractBars, hydrateFlowSymbols, recordFlowTrade, recordFlowUnreconciled, registerFlowSymbol, setFlowFeedConnected } from './order-flow-store.js';
-import { evaluateDhanShadow } from './dhan-engine-shadow.js';
+import { closeFlowBars, flowClosedBarCount, flowContractBars, hydrateFlowSymbols, recordFlowTrade, recordFlowUnreconciled, registerFlowSymbol, setFlowFeedConnected } from './order-flow-store.js';
+import { dhanShadowBusy, evaluateDhanShadow } from './dhan-engine-shadow.js';
 
 export const DHAN_SCRIP_MASTER_URL = 'https://images.dhan.co/api-data/api-scrip-master.csv';
 const TICK_MS = 10_000;
@@ -92,6 +92,8 @@ interface InstrumentState {
 export interface InstrumentQuality { packets: number; lastPacketAt: number | null; tradedQty: number; unreconciledQty: number; ltqInvalid: number }
 
 const state = {
+  /** flowClosedBarCount() at the last Dhan shadow pass. */
+  shadowSeenClosed: -1,
   configured: false,
   connected: false,
   ws: null as WebSocket | null,
@@ -372,8 +374,14 @@ async function tick(): Promise<void> {
     logger.info({ event: 'dhanFeedQuality', ...dhanFeedQuality(now) }, 'Dhan feed: data quality (flow sides are ESTIMATED, never exchange-verified)');
   }
   if (!state.ws && now >= state.reconnectAt && Object.keys(state.resolved).length) connect(creds);
-  const written = await closeFlowBars(now, state.connected).catch((err: any) => { logger.warn({ error: err.message }, 'Order flow: bar close failed'); return 0; });
-  if (written > 0 && DHAN_ENGINE_SHADOW) void evaluateDhanShadow(now, dhanInstrumentHealth).catch((err: any) => logger.warn({ error: err.message }, 'Dhan engine shadow: pass failed'));
+  await closeFlowBars(now, state.connected).catch((err: any) => { logger.warn({ error: err.message }, 'Order flow: bar close failed'); return 0; });
+  // 9 Nov: footprintsFor() (fresh-start readers) also closes bars, so this tick's own count was often 0 and the shadow
+  // pass skipped that bar. Evaluate whenever any bar closed since the last pass, whoever closed it.
+  const closed = flowClosedBarCount();
+  if (closed !== state.shadowSeenClosed && DHAN_ENGINE_SHADOW && !dhanShadowBusy()) {
+    state.shadowSeenClosed = closed;
+    void evaluateDhanShadow(now, dhanInstrumentHealth).catch((err: any) => logger.warn({ error: err.message }, 'Dhan engine shadow: pass failed'));
+  }
 }
 
 /** Engine v2 setups: is the contract's feed live, and is the flow series the contract the feed resolved? */

@@ -172,6 +172,9 @@ export function radarOf(results: readonly SetupResult[]): Record<string, { statu
   return out;
 }
 
+/** True while a shadow pass runs (a bar closed meanwhile is picked up by the next pass). */
+export const dhanShadowBusy = () => state.busy;
+
 /** Evaluate every contract whose latest bar closed since its last evaluation. Returns the number evaluated. */
 export async function evaluateDhanShadow(now: number, health: Health): Promise<number> {
   if (state.busy) return 0;

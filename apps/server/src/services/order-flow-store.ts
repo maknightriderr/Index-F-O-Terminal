@@ -188,6 +188,10 @@ export function flowFiveMinuteBars(symbol: string, from: number, to: number): { 
  * (inside the NSE session). `connected` says whether the feed was up — it
  * only labels an empty bar's reason.
  */
+/** Bars closed by this process so far, whoever closed them (the feed's tick or a reader such as footprintsFor). */
+let closedBars = 0;
+export const flowClosedBarCount = () => closedBars;
+
 export async function closeFlowBars(now: number, connected: boolean = feedConnected, unavailableReason: string | null = null): Promise<number> {
   let written = 0;
   for (const [symbol, f] of flows) {
@@ -210,6 +214,7 @@ export async function closeFlowBars(now: number, connected: boolean = feedConnec
         fp.tradeSums = inBar.reduce((a, t) => ({ pv: a.pv + t.price * t.qty, v: a.v + t.qty, p2v: a.p2v + t.price * t.price * t.qty }), { pv: 0, v: 0, p2v: 0 });
       }
       f.footprints.set(bar, fp);
+      closedBars++;
       await persistFootprint(symbol, f, fp, fp.deltaMode === 'UNAVAILABLE' ? unavailableReason ?? (connected ? 'NO_TRADES' : 'FEED_DOWN') : null);
       await persistFlowEvents(symbol, f, bar, unrec);
       written++;
