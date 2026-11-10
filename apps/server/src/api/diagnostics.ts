@@ -28,6 +28,7 @@
 // returned SEPARATELY — never pooled).
 // ============================================================
 
+import { DHAN_ENGINE_PAPER } from '../config/order-flow-flags.js';
 import { Router, type Request, type Response } from 'express';
 import { logger } from '../lib/logger.js';
 import { redis, scanKeys } from '../lib/redis.js';
@@ -307,7 +308,7 @@ export function createDiagnosticsRoutes(): Router {
   router.get('/order-flow/engine/signals', async (req: Request, res: Response) => {
     try {
       const day = typeof req.query.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : new Date(Date.now() + 19_800_000).toISOString().slice(0, 10);
-      res.json({ success: true, data: { note: SIMULATION_NOTE, mode: 'SHADOW_ONLY', day, status: dhanShadowStatus(), signals: await dhanShadowSignals(day) } });
+      res.json({ success: true, data: { note: SIMULATION_NOTE, mode: DHAN_ENGINE_PAPER ? 'PAPER' : 'SHADOW_ONLY', day, status: dhanShadowStatus(), signals: await dhanShadowSignals(day) } });
     } catch (err: any) {
       logger.error({ error: err.message }, 'Signal diagnostics order-flow engine signals failed');
       res.status(500).json({ success: false, error: err.message });

@@ -1,5 +1,6 @@
 'use client';
 
+import { biasCaveat } from '@/lib/bias-read';
 import React from 'react';
 import { isMarketOpen } from '@fno/shared';
 import type { Exchange, StructureBlock } from '@fno/shared';
@@ -74,6 +75,7 @@ export function RegimeSummary({ label, exchange, state, sentiment, vix, atmIv, b
                 <div className="text-xs text-[var(--text-secondary)]">
                   Engine confidence {formatNumber(bias.confidence, 0)} / 100{origin === 'ENGINE_CACHE' && score.score > 0 ? ` · intelligence score ${formatNumber(score.score, 0)} / 100` : ''}
                 </div>
+                {biasCaveat(bias.direction, bias.confidence, bias.regime) && <div className="text-xs text-amber-400 light:text-amber-700">{biasCaveat(bias.direction, bias.confidence, bias.regime)}</div>}
               </div>
             </div>
             <Disclosure summary="What do the confidence and score mean?">

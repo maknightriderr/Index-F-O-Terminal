@@ -584,7 +584,10 @@ function LegCells({
   const ltpCell = <td className={`text-right px-2 py-1.5 tabular-nums font-medium text-gray-200 light:text-slate-800 ${bg}`}>{leg.ltp.toFixed(2)}</td>;
   const activityCell = (
     <td className={`px-2 py-1.5 ${bg} ${side === 'call' ? 'text-right border-r border-gray-800/50 light:border-slate-200' : 'text-left border-l border-gray-800/50 light:border-slate-200'}`}>
-      <OIBadge type={leg.oiInterpretation} />
+      <OIBadge type={leg.oiInterpretationRaw ?? leg.oiInterpretation} />
+      {leg.oiInterpretationRaw && leg.oiInterpretationRaw !== leg.oiInterpretation && leg.oiInterpretation !== 'NEUTRAL' && (
+        <div className="text-[10px] leading-tight text-gray-500 light:text-slate-500" title="After removing the underlying's move and time decay (IV pressure)">IV: {leg.oiInterpretation.replaceAll('_', ' ').toLowerCase()}</div>
+      )}
     </td>
   );
 
@@ -725,8 +728,8 @@ interface OiShiftRow {
 function buildOiShiftRows(strikes: OptionChainStrike[], limit = 8): OiShiftRow[] {
   const rows: OiShiftRow[] = [];
   for (const s of strikes) {
-    if (s.call && s.call.changeOi !== 0) rows.push({ strike: s.strike, side: 'CE', changeOi: s.call.changeOi, interpretation: s.call.oiInterpretation });
-    if (s.put && s.put.changeOi !== 0) rows.push({ strike: s.strike, side: 'PE', changeOi: s.put.changeOi, interpretation: s.put.oiInterpretation });
+    if (s.call && s.call.changeOi !== 0) rows.push({ strike: s.strike, side: 'CE', changeOi: s.call.changeOi, interpretation: s.call.oiInterpretationRaw ?? s.call.oiInterpretation });
+    if (s.put && s.put.changeOi !== 0) rows.push({ strike: s.strike, side: 'PE', changeOi: s.put.changeOi, interpretation: s.put.oiInterpretationRaw ?? s.put.oiInterpretation });
   }
   return rows.sort((a, b) => Math.abs(b.changeOi) - Math.abs(a.changeOi)).slice(0, limit);
 }

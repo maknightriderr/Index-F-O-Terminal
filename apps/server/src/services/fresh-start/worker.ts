@@ -270,7 +270,8 @@ export class FreshPaperWorker {
           if(strikes.length)this.oiChains.set(r.id,[...(this.oiChains.get(r.id)??[]).filter(x=>at-x.at<=FRESH_INDEX_SAMPLE_KEEP_MS),{at,expiry:chain.expiry,strikes}]);
           // Dhan engine v2 expiry-gamma module (shadow): its own day-long chain samples; never throws, never trades.
           if(strikes.length&&DHAN_ENGINE_SHADOW)void recordGammaChain(r.name,chain,at,Date.now(),null,this.histories.get(r.id));
-        }catch{/* this index's OI stays as it was; the strategy refuses IDX_OI_UNAVAILABLE once it is stale */}
+        }catch(err){/* this index's OI stays as it was; the strategy refuses IDX_OI_UNAVAILABLE once it is stale */
+          logger.info({event:'freshChainRefreshFailed',index:r.name,error:err instanceof Error?err.message:String(err)},'Fresh-start: option chain refresh failed for an index (OI stays as it was)');}
       }
     }finally{this.chainsBusy=false;}
   }
