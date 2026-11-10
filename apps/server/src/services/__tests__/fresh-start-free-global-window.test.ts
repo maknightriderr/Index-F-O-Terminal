@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { FreshFreeGlobalEvents, FREE_GLOBAL_UNCERTAIN_WINDOW_MS } from '../fresh-start/free-global-events.js';
+import { FreshFreeGlobalEvents, FREE_GLOBAL_UNCERTAIN_WINDOW_MS, FREE_GLOBAL_UNCERTAIN_DATA_WINDOW_MS } from '../fresh-start/free-global-events.js';
 
 // 3 Nov 2026, 09:30 IST. A tentative USD event reported for 20:00 IST used to block the whole IST day.
 const now = Date.parse('2026-11-03T04:00:00Z');
@@ -19,10 +19,12 @@ describe('free global events: uncertain time blocks a window, not the whole day 
     expect(s.blockers(now)).toEqual([]);
     expect(s.evidence(now)!.uncertainDays).toEqual(['2026-11-03']); // still recorded as evidence
   });
-  it('blocks within ±2 h of an uncertain time and ±15 min of a confirmed one', async () => {
-    const s = await source([ev('tentative', now + FREE_GLOBAL_UNCERTAIN_WINDOW_MS - 60000, { status: 'tentative' }), ev('confirmed', now + 30 * 60000)]);
+  it('blocks within ±30 min of an uncertain data release (owner, 10 Nov), ±2 h of an uncertain speech, ±15 min of a confirmed one', async () => {
+    const s = await source([ev('tentative', now + FREE_GLOBAL_UNCERTAIN_DATA_WINDOW_MS - 60000, { status: 'tentative' }), ev('confirmed', now + 30 * 60000)]);
     expect(s.blockers(now)).toEqual(['FREE_GLOBAL_EVENT_TIME_UNCERTAIN']);
     expect(s.blocking(now).map((e) => e.id)).toEqual(['tentative']);
+    expect((await source([ev('tentative', now + FREE_GLOBAL_UNCERTAIN_DATA_WINDOW_MS + 60000, { status: 'tentative' })])).blockers(now)).toEqual([]);
+    expect((await source([ev('talk', now + FREE_GLOBAL_UNCERTAIN_WINDOW_MS - 60000, { status: 'tentative', title: "Fed's Chair speech" })])).blockers(now)).toEqual(['FREE_GLOBAL_EVENT_TIME_UNCERTAIN']);
     const c = await source([ev('confirmed', now + 10 * 60000)]);
     expect(c.blockers(now)).toEqual(['FREE_GLOBAL_RELEASE_BLACKOUT']);
   });
@@ -41,7 +43,7 @@ describe('free global events: uncertain time blocks a window, not the whole day 
     expect(usd.blockers(now, 'COMMODITY')).toEqual(['FREE_GLOBAL_RELEASE_BLACKOUT']);
   });
   it('treats disputed sources as uncertain and checks both the old and new time of a moved release', async () => {
-    const s = await source([ev('disputed', now + 90 * 60000, { confidence: 'sources_disagree' })]);
+    const s = await source([ev('disputed', now + 25 * 60000, { confidence: 'sources_disagree' })]);
     expect(s.blockers(now)).toEqual(['FREE_GLOBAL_EVENT_TIME_UNCERTAIN']);
     const m = await source([ev('moved', now + 5 * 3600000, { status: 'moved', moved_from: iso(now + 5 * 60000) })]);
     expect(m.blockers(now)).toEqual(['FREE_GLOBAL_RELEASE_BLACKOUT']);

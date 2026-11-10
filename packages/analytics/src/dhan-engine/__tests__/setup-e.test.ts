@@ -1,14 +1,15 @@
 // Setup E (owner, 9 Nov): pure order flow + footprint — absorption at VAL / POC, delta turns, stacked imbalance,
 // an entry bar that closes above the absorption bar; no VWAP / EMA / trend / RVOL / score.
 import { describe, expect, it } from 'vitest';
-import { evaluateDhanSetups, type SetupContext } from '../setups.js';
-import { contextOf, QUIET, type BarSpec } from './fixture.js';
+import { evaluateDhanSetups, sessionWindow, type SetupContext } from '../setups.js';
+import { contextOf, QUIET, even, type BarSpec } from './fixture.js';
 
 const DAY: BarSpec[] = [
-  { o: 100, h: 101, l: 99, c: 100 },
-  { o: 100, h: 102, l: 99, c: 101 },
-  { o: 101, h: 103, l: 100, c: 102 },
-  { o: 102, h: 102, l: 99, c: 99.5 },
+  // The session's volume sits at 104-106 first (POC there), then price falls: the target (POC) pays more than 1R.
+  { o: 105, h: 106, l: 104, c: 105, rows: even(104, 106, 300, 300) },
+  { o: 105, h: 106, l: 103, c: 104, rows: even(103, 106, 200, 200) },
+  { o: 104, h: 104, l: 100, c: 101 },
+  { o: 101, h: 102, l: 99, c: 99.5 },
   { o: 99.5, h: 101, l: 98.5, c: 99 },
   { o: 99, h: 100, l: 97, c: 98.5, rows: [[97, 20, 120], [98, 30, 40], [99, 30, 20], [100, 10, 10]] }, // sellers absorbed at 97
   { o: 98.6, h: 101, l: 98, c: 100.5, rows: [[98, 10, 40], [99, 130, 10], [100, 60, 10], [101, 40, 5]] }, // buyers: stacked 99-101
@@ -63,5 +64,29 @@ describe('Setup E: 2-row stacked imbalance (owner, 9 Nov)', () => {
     expect(r.checks.find((c) => c.id === 'E4_STACKED_BUY_IMBALANCE')).toMatchObject({ ok: true, value: { rows: 2 } });
     const one: BarSpec[] = [...DAY.slice(0, 6), { o: 98.6, h: 101, l: 98, c: 100.5, rows: [[98, 10, 40], [99, 60, 30], [100, 130, 10], [101, 20, 5]] }];
     expect(e(contextOf(QUIET, one)).failed).toBe('E4_STACKED_BUY_IMBALANCE');
+  });
+});
+
+describe('Setup E admission (owner, 10 Nov)', () => {
+  it('a target closer than 1R is not a signal (10 Nov: CRUDEOILM R:R 0.04)', () => {
+    const r = e(contextOf(QUIET, DAY));
+    expect(r.status).toBe('SIGNAL');
+    expect(r.plan!.rr).toBeGreaterThanOrEqual(1);
+    // Same day, but the entry bar closes far above the absorption low: POC / VAH no longer pay 1R.
+    const far: BarSpec[] = [...DAY.slice(0, 6), { o: 98.6, h: 101.9, l: 98, c: 101.8, rows: [[98, 10, 40], [99, 130, 10], [100, 60, 10], [101, 40, 5]] }];
+    const x = e(contextOf(QUIET, far));
+    if (x.status === 'SIGNAL') expect(x.plan!.rr).toBeGreaterThanOrEqual(1); else expect(x.failed).toBe('E6_TARGET_POC_OR_VAH');
+  });
+  it('MCX: a bar closing inside the last 45 minutes is NO_TRADE, never a signal; NSE is unchanged', () => {
+    const c = contextOf(QUIET, DAY), close = c.bars.at(-1)!.time + 900_000;
+    const late = e({ ...c, exchange: 'MCX', sessionClose: close + 30 * 60_000 });
+    expect(late.status).toBe('NO_TRADE');
+    expect(late.gates.find((g) => g.id === 'SESSION_WINDOW')).toMatchObject({ ok: false, value: 'AFTER_CUTOFF' });
+    expect(e({ ...c, exchange: 'MCX', sessionClose: close + 3 * 3_600_000 }).status).toBe('SIGNAL');
+    expect(sessionWindow('MCX', close)).toBe('MCX_SESSION'); // no close given: as before
+  });
+  it('the bearish target is labelled from the real profile (VAL, not the mirrored VAH)', () => {
+    const r = e(reflect(contextOf(QUIET, DAY)), 'BEARISH');
+    expect(['POC', 'VAL']).toContain(r.plan!.targetKind);
   });
 });

@@ -105,7 +105,7 @@ export async function dhanReplay(symbol: string, fromDay: string, toDay: string)
     const ctx: SetupContext = {
       symbol, instrument: recorded[0].instrument, kind: null, exchange: recorded[0].exchange, tickSize: tick, bars: bars.slice(lo, i + 1), fps: fps.slice(lo, i + 1),
       vwapSums: fps.slice(lo, i + 1).map((f) => f.tradeSums ?? null), rvol: fps.slice(lo, i + 1).map(() => null), daily: dailyFromFootprints(fps.slice(0, i + 1), today),
-      sessionOpen: getSessionWindow(recorded[0].exchange as Exchange, today)?.open ?? fps[first].barTime, health: { stale: false, mappingValid: true },
+      sessionOpen: getSessionWindow(recorded[0].exchange as Exchange, today)?.open ?? fps[first].barTime, sessionClose: getSessionWindow(recorded[0].exchange as Exchange, today)?.close, health: { stale: false, mappingValid: true },
       referenceComplete: referenceCompleteness(fps.slice(0, i + 1), recorded[0].exchange as Exchange, today),
     };
     const ev = evaluateDhanSetups(ctx);

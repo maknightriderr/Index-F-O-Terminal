@@ -71,8 +71,8 @@ describe('shadow recorder', () => {
     expect(await shadow.evaluateDhanShadow(OPEN + Q + 2, healthy)).toBe(0); // same bar: not re-evaluated
     const rows = (await pg.query<any>('SELECT * FROM dhan_engine_signals ORDER BY side')).rows;
     expect(rows.map((r) => [r.strategy, r.side, r.status, Number(r.entry), Number(r.stop_loss), Number(r.rr), r.score, r.session_window, r.version])).toEqual([
-      ['DHAN_A_SWEEP_ABSORPTION', 'BEARISH', 'NO_TRADE', 101, 99, 2.5, 8, 'PRIMARY', 'DHAN-SETUPS-1.3'],
-      ['DHAN_A_SWEEP_ABSORPTION', 'BULLISH', 'SIGNAL', 101, 99, 2.5, 8, 'PRIMARY', 'DHAN-SETUPS-1.3'],
+      ['DHAN_A_SWEEP_ABSORPTION', 'BEARISH', 'NO_TRADE', 101, 99, 2.5, 8, 'PRIMARY', 'DHAN-SETUPS-1.4'],
+      ['DHAN_A_SWEEP_ABSORPTION', 'BULLISH', 'SIGNAL', 101, 99, 2.5, 8, 'PRIMARY', 'DHAN-SETUPS-1.4'],
     ]);
     expect(new Date(rows[0].bar_time).getTime()).toBe(OPEN);
     expect(shadow.dhanShadowStatus()).toMatchObject({ recorded: { SIGNAL: 1, NO_TRADE: 1 }, firstFailures: [{ k: 'DHAN_C_FAILED_AUCTION_CVD:A2_SWEEP', c: 1 }] });

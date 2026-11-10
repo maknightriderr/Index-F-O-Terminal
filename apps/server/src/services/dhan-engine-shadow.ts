@@ -30,7 +30,9 @@ export interface DhanPaperRequest { symbol: string; result: SetupResult; barTime
 export interface DhanGammaPaperRequest { symbol: string; gamma: GammaResult; at: number }
 export type DhanPaperHandler = (r: DhanPaperRequest | DhanGammaPaperRequest) => Promise<{ decision: string; candidateId: string | null }>;
 let paperHandler: DhanPaperHandler | null = null;
-export function setDhanPaperHandler(h: DhanPaperHandler | null): void { paperHandler = h; }
+/** Whether a Dhan symbol has a paper reference (10 Nov: SILVERM signalled and could never trade). Absent = all do. */
+let hasPaperReference: ((symbol: string) => boolean) | null = null;
+export function setDhanPaperHandler(h: DhanPaperHandler | null, hasReference: ((symbol: string) => boolean) | null = null): void { paperHandler = h; hasPaperReference = h ? hasReference : null; }
 /** RVOL compares only bars recorded under the v2 reconciler (deployed 7 Nov; first session 9 Nov). */
 export const RVOL_SINCE = Date.parse('2026-11-09T00:00:00+05:30');
 const SUMMARY_LOG_MS = 15 * 60_000;
@@ -135,7 +137,7 @@ export async function setupContextFor(symbol: string, now: number, health: Healt
   return {
     symbol, instrument: st.instrument, kind: st.kind, exchange: st.exchange, tickSize: st.tickSize, bars, fps,
     vwapSums: fps.map((f) => f.tradeSums ?? null), rvol: fps.map((f) => rvolOf(refs, f)), daily: dailyFromFootprints(st.footprints, today),
-    sessionOpen, referenceComplete: referenceCompleteness(st.footprints, st.exchange as Exchange, today), health: { ...health(symbol, now), sessionGapAt: gapAt },
+    sessionOpen, sessionClose: getSessionWindow(st.exchange as Exchange, today)?.close, referenceComplete: referenceCompleteness(st.footprints, st.exchange as Exchange, today), health: { ...health(symbol, now), sessionGapAt: gapAt },
   };
 }
 
@@ -189,6 +191,8 @@ export async function evaluateDhanShadow(now: number, health: Health): Promise<n
       const last = st?.footprints.at(-1)?.barTime;
       if (last == null || state.evaluated.get(symbol) === last) continue;
       state.evaluated.set(symbol, last);
+      // No paper reference for this contract (e.g. GOLDM, SILVERM, base metals): a signal could never be traded.
+      if (hasPaperReference && !hasPaperReference(symbol)) { state.failures.set('ALL:NO_PAPER_REFERENCE', (state.failures.get('ALL:NO_PAPER_REFERENCE') ?? 0) + 1); continue; }
       try {
         const ctx = await setupContextFor(symbol, now, health);
         if (!ctx || ctx.bars.at(-1)!.time !== last) continue; // the newest closed bar had no trades: nothing to decide on
@@ -198,7 +202,7 @@ export async function evaluateDhanShadow(now: number, health: Health): Promise<n
         for (const r of ev.results) {
           if (r.status === 'NO_SETUP') { const k = `${r.strategy}:${r.failed}`; state.failures.set(k, (state.failures.get(k) ?? 0) + 1); continue; }
           state.recorded[r.status]++;
-          if (r.status === 'SIGNAL') logger.info({ event: 'dhanShadowSignal', symbol, strategy: r.strategy, side: r.side, barTime: new Date(last).toISOString(), score: r.score?.total, plan: r.plan, window: ev.sessionWindow }, 'Dhan engine shadow signal (recorded only, no position)');
+          if (r.status === 'SIGNAL') logger.info({ event: 'dhanShadowSignal', symbol, strategy: r.strategy, side: r.side, barTime: new Date(last).toISOString(), score: r.score?.total, plan: r.plan, window: ev.sessionWindow }, 'Dhan engine setup signal (recorded; paper decision follows when paper is on)');
           await record(symbol, ctx, last, ev.sessionWindow, ev.regime?.regime ?? null, r).catch((err: any) => logger.warn({ symbol, strategy: r.strategy, error: err.message }, 'Dhan engine shadow: signal write failed'));
           if (r.status === 'SIGNAL' && paperHandler) void paper(paperHandler, { symbol, result: r, barTime: last, decidedAt: last + 15 * 60_000, atr: Number(r.evidence.atr) || 0, exchange: ctx.exchange, kind: ctx.kind });
         }
