@@ -657,16 +657,20 @@ function OiTrapCard({ trap }: { trap: OiTrapAnalysis }) {
   );
 }
 
-function TrapPill({ label, side, color }: { label: string; side: { active: boolean; strike: number | null; strength: number }; color: 'emerald' | 'red' }) {
+const TRAP_STATE_LABEL: Record<string, string> = { TRAPPED: 'Trapped', DEFENDED: 'Defended', RECOVERING: 'Recovering', CLEAR: 'Inactive', NO_HISTORY: 'Collecting' };
+
+function TrapPill({ label, side, color }: { label: string; side: OiTrapAnalysis['call']; color: 'emerald' | 'red' }) {
   const activeClass = color === 'emerald' ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' : 'bg-red-500/15 text-red-400 border-red-500/30';
+  const oi = side.wallOiChangePct;
   return (
     <div className={`flex-1 text-center rounded-lg border px-2 py-2 ${side.active ? activeClass : 'bg-gray-900/40 light:bg-slate-100 text-gray-400 light:text-slate-600 border-gray-800/60 light:border-slate-200'}`}>
-      <div className="text-xs font-medium mb-0.5">{label}</div>
+      <div className="text-xs font-medium mb-0.5">{label}{side.strike != null ? ` · ${side.strike}` : ''}</div>
       {side.active ? (
         <div className="text-sm font-bold tabular-nums">{side.strength}</div>
       ) : (
-        <div className="text-xs tracking-wide">Inactive</div>
+        <div className="text-xs tracking-wide">{TRAP_STATE_LABEL[side.state ?? 'CLEAR'] ?? 'Inactive'}</div>
       )}
+      {oi != null && <div className="text-[11px] tabular-nums opacity-80">OI {oi > 0 ? '+' : ''}{oi}% · 15m</div>}
     </div>
   );
 }

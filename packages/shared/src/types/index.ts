@@ -323,6 +323,23 @@ export interface OiTrapSide {
   active: boolean;
   strike: number | null;
   strength: number; // 0-100
+  /**
+   * 10 Nov: TRAPPED = spot at / through the wall, moving into it, and the wall's OI falling (writers covering).
+   * DEFENDED = spot at the wall but its OI is not falling. RECOVERING = spot through the wall but moving back out
+   * (the writers' loss is shrinking). CLEAR = spot away from the wall. NO_HISTORY = no chain from ~15 min ago yet.
+   */
+  state?: 'TRAPPED' | 'DEFENDED' | 'RECOVERING' | 'CLEAR' | 'NO_HISTORY';
+  /** The wall strike's OI change over ~15 min, %; null without history. */
+  wallOiChangePct?: number | null;
+  /** Spot change over the same ~15 min, %; null without history. */
+  spotMovePct?: number | null;
+}
+
+/** A chain read from ~15 minutes earlier: spot and each strike's call / put OI. */
+export interface OiTrapHistory {
+  at: number;
+  spot: number;
+  oi: ReadonlyArray<{ strike: number; callOi: number; putOi: number }>;
 }
 
 export interface OiTrapAnalysis {
