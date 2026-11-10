@@ -13,6 +13,7 @@ import type {
   OiSideActivity,
   OiTrapAnalysis,
   OiTrapSide,
+  OiTrapHistory,
 } from '@fno/shared';
 
 interface OIClassificationInput {
@@ -242,56 +243,59 @@ export function analyzePositionMomentum(strikes: OptionChainStrike[]): PositionM
 
 // --- OI Trapping ---
 
+/** A wall's own OI must fall at least this much over ~15 minutes for its writers to count as covering. */
+export const OI_TRAP_MIN_UNWIND_PCT = 5;
+/** Spot counts as at the wall within this % of the strike (or through it). */
+export const OI_TRAP_NEAR_PCT = 0.2;
+
 /**
- * Flags when spot is pushing through (or sitting right at) the strike
- * carrying the heaviest OI on a side — the "wall" writers on that side
- * were leaning on. Call writers profit while spot stays below their
- * strike; when spot pushes up through it, they're underwater and a
- * short-covering squeeze can accelerate the move (and symmetrically for
- * put writers on the downside). This only needs the current chain — no
- * separate premium-history feed — so it stays reliable even when a
- * symbol's OI-baseline history is thin (a new listing, first day, etc).
+ * OI trapping (10 Nov, owner): writers at the heaviest-OI strike of a side are TRAPPED only when all three hold:
+ *  1. spot is at the wall (within 0.2%) or through it (call: above, put: below);
+ *  2. spot is moving INTO the wall over ~15 minutes (call: rising, put: falling);
+ *  3. the wall's own OI fell >= 5% over the same ~15 minutes (writers covering, the move that accelerates).
+ * Spot through the wall but moving back out is RECOVERING (the writers' loss shrinks: no acceleration); spot at the
+ * wall with OI not falling is DEFENDED. Before (until 10 Nov) the position alone flagged a trap, so a put wall left
+ * above spot by yesterday's fall read "downside can accelerate" while price climbed back up.
+ * Without a chain from ~15 minutes earlier nothing is active (NO_HISTORY).
  */
-export function analyzeOiTrap(strikes: OptionChainStrike[], spotPrice: number): OiTrapAnalysis {
+export function analyzeOiTrap(strikes: OptionChainStrike[], spotPrice: number, history?: OiTrapHistory | null): OiTrapAnalysis {
   let callWall: { strike: number; oi: number } | null = null;
   let putWall: { strike: number; oi: number } | null = null;
-
   for (const s of strikes) {
     if (s.call && (!callWall || s.call.oi > callWall.oi)) callWall = { strike: s.strike, oi: s.call.oi };
     if (s.put && (!putWall || s.put.oi > putWall.oi)) putWall = { strike: s.strike, oi: s.put.oi };
   }
+  const hist = history && history.spot > 0 ? history : null;
+  const spotMovePct = hist ? Math.round(((spotPrice - hist.spot) / hist.spot) * 10000) / 100 : null;
 
-  const BREACH_BUFFER_PCT = -0.2; // strike counts as "under pressure" once spot is within 0.2% of it
+  const side = (wall: { strike: number; oi: number } | null, d: 1 | -1): OiTrapSide => {
+    if (!wall || !(wall.strike > 0)) return { active: false, strike: null, strength: 0, state: 'CLEAR', wallOiChangePct: null, spotMovePct };
+    // d = +1 call (pressure from below, spot rising through), -1 put (pressure from above, spot falling through).
+    const breachPct = (d * (spotPrice - wall.strike) / wall.strike) * 100;
+    const atWall = breachPct > -OI_TRAP_NEAR_PCT;
+    const before = hist?.oi.find((x) => x.strike === wall.strike);
+    const was = before ? (d === 1 ? before.callOi : before.putOi) : null;
+    const wallOiChangePct = was != null && was > 0 ? Math.round(((wall.oi - was) / was) * 10000) / 100 : null;
+    const base = { strike: wall.strike, wallOiChangePct, spotMovePct };
+    if (!atWall) return { ...base, active: false, strength: 0, state: 'CLEAR' };
+    if (!hist || wallOiChangePct == null || spotMovePct == null) return { ...base, active: false, strength: 0, state: 'NO_HISTORY' };
+    const movingIn = d * spotMovePct > 0;
+    if (!movingIn) return { ...base, active: false, strength: 0, state: breachPct > 0 ? 'RECOVERING' : 'DEFENDED' };
+    if (!(wallOiChangePct <= -OI_TRAP_MIN_UNWIND_PCT)) return { ...base, active: false, strength: 0, state: 'DEFENDED' };
+    return { ...base, active: true, strength: clamp(Math.round(50 + breachPct * 50 - wallOiChangePct), 10, 100), state: 'TRAPPED' };
+  };
+  const callTrap = side(callWall, 1), putTrap = side(putWall, -1);
 
-  const callTrap: OiTrapSide =
-    callWall && callWall.strike > 0
-      ? (() => {
-          const breachPct = ((spotPrice - callWall!.strike) / callWall!.strike) * 100;
-          return breachPct > BREACH_BUFFER_PCT
-            ? { active: true, strike: callWall!.strike, strength: clamp(Math.round(50 + breachPct * 50), 10, 100) }
-            : { active: false, strike: callWall!.strike, strength: 0 };
-        })()
-      : { active: false, strike: null, strength: 0 };
-
-  const putTrap: OiTrapSide =
-    putWall && putWall.strike > 0
-      ? (() => {
-          const breachPct = ((putWall!.strike - spotPrice) / putWall!.strike) * 100;
-          return breachPct > BREACH_BUFFER_PCT
-            ? { active: true, strike: putWall!.strike, strength: clamp(Math.round(50 + breachPct * 50), 10, 100) }
-            : { active: false, strike: putWall!.strike, strength: 0 };
-        })()
-      : { active: false, strike: null, strength: 0 };
-
-  const summary =
-    callTrap.active && putTrap.active
-      ? `Spot is pressuring both the call wall (${callWall!.strike}) and put wall (${putWall!.strike}) — heavy OI writers on both sides are under pressure.`
-      : callTrap.active
-      ? `Call writers concentrated at ${callWall!.strike} are under pressure — a short-covering squeeze can accelerate upside.`
-      : putTrap.active
-      ? `Put writers concentrated at ${putWall!.strike} are under pressure — unwinding can accelerate downside.`
-      : 'No OI wall is currently under pressure — spot sits comfortably between the call and put walls.';
-
+  const oiTxt = (x: OiTrapSide) => (x.wallOiChangePct == null ? '' : ` (OI ${x.wallOiChangePct > 0 ? '+' : ''}${x.wallOiChangePct}% in ~15 min)`);
+  const lines: string[] = [];
+  if (callTrap.state === 'TRAPPED') lines.push(`Call writers at ${callTrap.strike} are trapped: spot is rising through the wall and its OI is falling${oiTxt(callTrap)} — short covering can accelerate upside.`);
+  if (putTrap.state === 'TRAPPED') lines.push(`Put writers at ${putTrap.strike} are trapped: spot is falling through the wall and its OI is falling${oiTxt(putTrap)} — unwinding can accelerate downside.`);
+  if (putTrap.state === 'RECOVERING') lines.push(`Spot is below the put wall at ${putTrap.strike} but rising${oiTxt(putTrap)} — those put writers' loss is shrinking; not a downside signal.`);
+  if (callTrap.state === 'RECOVERING') lines.push(`Spot is above the call wall at ${callTrap.strike} but falling${oiTxt(callTrap)} — those call writers' loss is shrinking; not an upside signal.`);
+  if (putTrap.state === 'DEFENDED') lines.push(`Put wall at ${putTrap.strike} is being defended${oiTxt(putTrap)} — writers are not covering.`);
+  if (callTrap.state === 'DEFENDED') lines.push(`Call wall at ${callTrap.strike} is being defended${oiTxt(callTrap)} — writers are not covering.`);
+  if (!lines.length && (callTrap.state === 'NO_HISTORY' || putTrap.state === 'NO_HISTORY')) lines.push('Spot is at an OI wall; OI change is being collected (about 15 minutes of chain history needed).');
+  const summary = lines.length ? lines.join(' ') : 'No OI wall is currently under pressure — spot sits comfortably between the call and put walls.';
   return { call: callTrap, put: putTrap, summary };
 }
 

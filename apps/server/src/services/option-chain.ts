@@ -21,7 +21,7 @@ import {
   isExpiryActive,
   getLatestSessionWindow,
 } from '@fno/shared';
-import type { Exchange, Instrument, OptionChain, OptionChainStrike, OptionChainLeg, OptionType } from '@fno/shared';
+import type { Exchange, Instrument, OptionChain, OptionChainStrike, OptionChainLeg, OptionType, OiTrapHistory } from '@fno/shared';
 import {
   calculatePCR,
   calculateMaxPain,
@@ -425,7 +425,7 @@ async function buildOptionChainUncached(
   const expectedMoveDetail = calculateExpectedMove(spotPrice, atmIv, tteAtQuote * 365, underlying);
 
   const positionMomentum = analyzePositionMomentum(strikes);
-  const oiTrap = analyzeOiTrap(strikes, spotPrice);
+  const oiTrap = analyzeOiTrap(strikes, spotPrice, oiTrapHistory(`${exchange}:${underlying}:${expiry}`, now, spotPrice, strikes));
   const decay = analyzeTimeDecay(strikes, atmStrike, dte);
   const gammaExposure = calculateGammaExposure(strikes, spotPrice);
 
@@ -466,6 +466,24 @@ async function buildOptionChainUncached(
     timestamp: now,
   };
 }
+
+// --- OI trap history (10 Nov) ---
+// Each built chain's spot and per-strike OI, kept ~40 minutes per underlying + expiry, so the OI trap can read the
+// wall's OI change and the spot move over ~15 minutes (the snapshot 12-20 minutes old closest to 15).
+const OI_TRAP_KEEP_MS = 40 * 60_000;
+const OI_TRAP_LOOKBACK_MS: readonly [number, number, number] = [12 * 60_000, 15 * 60_000, 20 * 60_000];
+const oiTrapSnapshots = new Map<string, OiTrapHistory[]>();
+export function oiTrapHistory(key: string, now: number, spot: number, strikes: readonly OptionChainStrike[]): OiTrapHistory | null {
+  const list = (oiTrapSnapshots.get(key) ?? []).filter((x) => now - x.at <= OI_TRAP_KEEP_MS && x.at < now);
+  const [min, target, max] = OI_TRAP_LOOKBACK_MS;
+  const prior = list.filter((x) => now - x.at >= min && now - x.at <= max).sort((a, b) => Math.abs(now - a.at - target) - Math.abs(now - b.at - target))[0] ?? null;
+  if (spot > 0 && (!list.length || now - list[list.length - 1].at >= 10_000)) {
+    list.push({ at: now, spot, oi: strikes.map((x) => ({ strike: x.strike, callOi: x.call?.oi ?? 0, putOi: x.put?.oi ?? 0 })) });
+  }
+  oiTrapSnapshots.set(key, list);
+  return prior;
+}
+export function resetOiTrapHistory(): void { oiTrapSnapshots.clear(); }
 
 // --- Helpers ---
 
