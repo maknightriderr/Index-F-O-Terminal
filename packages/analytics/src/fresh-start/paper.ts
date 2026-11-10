@@ -48,7 +48,8 @@ export interface FreshAccount {
 }
 /** PROPOSED_NOT_APPROVED: a cumulative cohort loss of this fraction of capital pauses new entries until reviewed. */
 /**
- * 1.5 risk policy for the fixed INR 5,00,000 paper account. At 0.25% (INR 1,250) the 75% emergency stop made one
+ * 1.5 risk policy, written for the first INR 5,00,000 paper account (the account is INR 30,00,000 since 1 Nov:
+ * FRESH_CONFIG.capital; 0.5% risk = INR 15,000 per trade). At 0.25% (INR 1,250) the 75% emergency stop made one
  * lot unaffordable on most NSE index ATM premiums and on every MCX contract, so almost every signal was refused
  * ZERO_PERMITTED_LOTS. Per-trade risk is 0.5%; open risk stays bounded by two positions (1%), the daily loss
  * limit stays 1%, and the cohort pause keeps the same ~10-loss tolerance (5% at 0.5% per trade, was 3% at 0.25%).

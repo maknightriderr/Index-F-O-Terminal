@@ -223,6 +223,9 @@ export interface OptionChainLeg {
   theta: number;
   vega: number;
   oiInterpretation: OIInterpretation;
+  /** 11 Nov (audit F-22): the standard read from this leg's raw premium change vs OI change (premium down + OI up =
+   *  writing). Shown on screen; `oiInterpretation` (IV-pressure based) stays the engines' input. */
+  oiInterpretationRaw?: OIInterpretation;
   /** ITM/ATM/OTM for THIS leg's own option type — calls and puts at the
    * same strike are never both ITM or both OTM, so this lives per-leg
    * rather than once per strike row. */

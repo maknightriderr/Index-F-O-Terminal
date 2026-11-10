@@ -327,6 +327,7 @@ async function buildOptionChainUncached(
       // read as BUYING. What's left after repricing for the underlying's
       // move and decay is whether the option was bid up or pressed down.
       oiInterpretation: classifyOptionOI({ priceChange: pressurePct ?? 0, oiChange: changeOi }, optionType, IV_PRESSURE_MIN_PCT),
+      oiInterpretationRaw: classifyOptionOI({ priceChange: legChangePercent, oiChange: changeOi }, optionType),
       // Calls and puts at the same strike are moneyness-opposite (a strike
       // below spot is ITM for a call but OTM for the put at that same
       // strike) — must be classified per-leg with its own optionType, not
