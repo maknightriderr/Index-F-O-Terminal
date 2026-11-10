@@ -60,6 +60,7 @@ export class FreshProductionAdapter implements FreshQualifiedAdapter {
     if(c.premiumExit&&!expiries.length)return reject('NO_EXPIRY_DAY_CONTRACT');
     const spotPrice=spot.price;
     const strikes=[...new Set(universe.filter(x=>expiries.includes(x.expiry!)).map(x=>x.strike!))].sort((a,b)=>Math.abs(a-spotPrice)-Math.abs(b-spotPrice)||a-b).slice(0,5);
+    if(c.premiumExit?.allowedStrikes&&!strikes.some(strike=>c.premiumExit!.allowedStrikes!.includes(strike)))return reject('GAMMA_STRIKE_OUTSIDE_BOOK_WINDOW');
     const rows=await this.store.recover(),marks=this.marks(rows),accountId=freshAccountId(c),account=await this.store.accountView(accountId,this.ports.capital,marks,now),eligible:{contract:FreshContract;rr:number;spread:number;tick:number;iv:number|null;expiry:string}[]=[];
     // 6 Nov: a setup used to price once, at the bar close, and every data gap was a silent `continue` (6 of 7 setups in
     // two days ended NO_ELIGIBLE_CONTRACT_MODEL_OR_PAYOFF with no contract evaluated). It now retries every second while
@@ -82,6 +83,7 @@ export class FreshProductionAdapter implements FreshQualifiedAdapter {
       if(!basis){misses.push({expiry,code:mcx&&!future?'NO_FRESH_FUTURE':relaxed.length<3?'NO_FRESH_PARITY_PAIRS':'PARITY_FIT_FAILED',pairs:relaxed.length});continue;}
       parityModes[expiry]=mode;
       for(const strike of strikes){const side=c.direction==='BULLISH'?'CE':'PE',instrument=exact(strike,side);if(!instrument)continue;
+        if(c.premiumExit?.allowedStrikes&&!c.premiumExit.allowedStrikes.includes(strike))continue;
         const selectedFees=freshFeePolicyFor(instrument,c.session);if(!selectedFees)continue;
         const sizing=freshContractUnits(instrument);if(!sizing)continue;
         const units=instrument.contractUnits!;

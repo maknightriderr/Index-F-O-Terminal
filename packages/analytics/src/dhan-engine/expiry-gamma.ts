@@ -16,7 +16,7 @@
 import type { Side } from './common.js';
 
 export const DHAN_GAMMA_ID = 'DHAN_EXPIRY_GAMMA';
-export const DHAN_GAMMA_VERSION = 'DHAN-GAMMA-1.0';
+export const DHAN_GAMMA_VERSION = 'DHAN-GAMMA-1.1';
 
 export const DHAN_GAMMA_RULES = Object.freeze({
   baselineFrom: 11 * 60 + 30,
@@ -32,7 +32,7 @@ export const DHAN_GAMMA_RULES = Object.freeze({
   pinFraction: 0.25,
 });
 
-export interface GammaStrike { strike: number; callOi: number; putOi: number }
+export interface GammaStrike { strike: number; callOi: number | null; putOi: number | null }
 export interface GammaSample { at: number; spot: number; strikes: GammaStrike[] }
 
 export interface GammaInput {
@@ -71,10 +71,19 @@ export function pivotR1(prev: { high: number; low: number; close: number } | nul
   return Math.round((2 * p - prev.low) * 100) / 100;
 }
 
+const knownOi = (oi: number | null | undefined): oi is number =>
+  typeof oi === 'number' && Number.isFinite(oi) && oi >= 0;
+
 function pcr(s: GammaSample, atm: number, step: number, n: number): number | null {
-  const w = s.strikes.filter((x) => Math.abs(x.strike - atm) <= n * step + 1e-9);
-  const c = w.reduce((a, x) => a + x.callOi, 0), p = w.reduce((a, x) => a + x.putOi, 0);
-  return c > 0 ? p / c : null;
+  if (!(step > 0)) return null;
+  let calls = 0, puts = 0;
+  for (let k = -n; k <= n; k++) {
+    const row = s.strikes.find((x) => Math.abs(x.strike - (atm + k * step)) <= 1e-9);
+    if (!knownOi(row?.callOi) || !knownOi(row?.putOi)) return null;
+    calls += row.callOi;
+    puts += row.putOi;
+  }
+  return calls > 0 ? puts / calls : null;
 }
 
 export function evaluateExpiryGamma(x: GammaInput): GammaResult[] {
@@ -85,11 +94,12 @@ export function evaluateExpiryGamma(x: GammaInput): GammaResult[] {
   const atm = latest ? latest.strikes.reduce((a, s) => (Math.abs(s.strike - latest.spot) < Math.abs(a.strike - latest.spot) ? s : a)).strike : null;
   const nowAtm = latest && atm != null ? latest.strikes.find((s) => s.strike === atm) ?? null : null;
   const baseAtm = base && atm != null ? base.strikes.find((s) => s.strike === atm) ?? null : null;
-  const dCe = nowAtm && baseAtm ? nowAtm.callOi - baseAtm.callOi : null;
-  const dPe = nowAtm && baseAtm ? nowAtm.putOi - baseAtm.putOi : null;
+  const dCe = knownOi(nowAtm?.callOi) && knownOi(baseAtm?.callOi) ? nowAtm.callOi - baseAtm.callOi : null;
+  const dPe = knownOi(nowAtm?.putOi) && knownOi(baseAtm?.putOi) ? nowAtm.putOi - baseAtm.putOi : null;
   const pcrNow = latest && atm != null ? pcr(latest, atm, x.strikeStep, R.pcrStrikes) : null;
   const pcrBase = base && atm != null ? pcr(base, atm, x.strikeStep, R.pcrStrikes) : null;
-  const maxOi = latest ? latest.strikes.reduce((a, s) => (s.callOi + s.putOi > a.callOi + a.putOi ? s : a)) : null;
+  const maxOi = latest?.strikes.flatMap((s) => knownOi(s.callOi) && knownOi(s.putOi)
+    ? [{ strike: s.strike, total: s.callOi + s.putOi }] : []).sort((a, b) => b.total - a.total)[0] ?? null;
   const evidence = {
     atm, spot: latest?.spot ?? null, sampleAt: latest?.at ?? null, baselineAt: base?.at ?? null, dCallOi: dCe, dPutOi: dPe,
     pcrBase: pcrBase == null ? null : Math.round(pcrBase * 1000) / 1000, pcrNow: pcrNow == null ? null : Math.round(pcrNow * 1000) / 1000,

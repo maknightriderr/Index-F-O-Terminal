@@ -70,14 +70,19 @@ export function detectAbsorption(fps: readonly FootprintBar[], atr: number, bars
       const classified = (f.buyVolume ?? 0) + (f.sellVolume ?? 0);
       if (bar && base.length >= nObs && classified > 0 && aggressive / classified > share) {
         const threshold = quantile(base, pct)!;
-        const rows = f.levels.map((l) => ({ price: l.price, v: side === 'BULLISH' ? l.sell : l.buy })).filter((r) => r.v >= threshold && r.v > 0);
+        // Only rank rows that qualify as absorption zones. A larger row away from the extreme
+        // must not hide a qualifying row where aggression failed to move price further.
+        const rows = f.levels.flatMap((level) => {
+          const volume = side === 'BULLISH' ? level.sell : level.buy;
+          if (!(volume > 0 && volume >= threshold)) return [];
+          const progress = side === 'BULLISH' ? level.price - bar.low : bar.high - level.price;
+          const progressAtr = roundDp(Math.max(0, progress) / atr, 4);
+          if (!(progressAtr <= maxProg && Math.abs(bar.close - level.price) <= near * atr)) return [];
+          return [{ price: level.price, v: volume, progressAtr }];
+        });
         if (rows.length) {
           const zone = rows.reduce((a, r) => (r.v > a.v || (r.v === a.v && (side === 'BULLISH' ? r.price < a.price : r.price > a.price)) ? r : a));
-          const progress = side === 'BULLISH' ? zone.price - bar.low : bar.high - zone.price;
-          const progressAtr = roundDp(Math.max(0, progress) / atr, 4);
-          if (progressAtr <= maxProg && Math.abs(bar.close - zone.price) <= near * atr) {
-            out.push({ side, index: i, zone: zone.price, zoneVolume: zone.v, threshold: roundDp(threshold, 4), progressAtr, ...resolve(fps, bars, i, bar, side, nConf) });
-          }
+          out.push({ side, index: i, zone: zone.price, zoneVolume: zone.v, threshold: roundDp(threshold, 4), progressAtr: zone.progressAtr, ...resolve(fps, bars, i, bar, side, nConf) });
         }
       }
     }

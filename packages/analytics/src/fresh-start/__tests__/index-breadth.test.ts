@@ -6,7 +6,7 @@ import { evaluateFreshStrategies, FRESH_ALL_STRATEGIES, FRESH_SHADOW_STRATEGIES,
 const open = 1800000000000;
 const bar = (i: number, o: number, h: number, l: number, c: number, v = 1000): FreshBar => ({ time: open + i * 300000, availableAt: open + (i + 1) * 300000, open: o, high: h, low: l, close: c, volume: v });
 const VWAP = 101.2;
-const chain = (at: number, xs: Array<[number, number, number]>): FreshOiSample => ({ at, strikes: xs.map(([strike, callOi, putOi]) => ({ strike, callOi, putOi })) });
+const chain = (at: number, xs: Array<[number, number, number]>): FreshOiSample => ({ at, expiry: '2026-11-10', strikes: xs.map(([strike, callOi, putOi]) => ({ strike, callOi, putOi })) });
 // Walls far away by default: call wall 110 above, put wall 92 below.
 const farWalls = (at: number) => chain(at, [[92, 100, 1000], [100, 300, 500], [103, 300, 300], [110, 1000, 100]]);
 const intel = (now: number, x: Partial<FreshIndexIntel> = {}): FreshIndexIntel => ({ at: now - 60000, breadth: 0.8, breadthCoverage: 0.95, futuresOi: 'LONG_BUILDUP', oiNow: farWalls(now - 60000), oiBefore: farWalls(now - 60000 - 15 * 60000), ...x });
@@ -16,7 +16,7 @@ function context(today: FreshBar[], extra: Partial<FreshContext> = {}): FreshCon
     const bars15 = Array.from({ length: 80 }, (_, i) => ({ time: open + Math.floor((now - open) / 900000) * 900000 - (80 - i) * 900000, availableAt: 0, open: 96 + i * .1, high: 97 + i * .1, low: 95 + i * .1, close: 96 + i * .1, volume: 1000 }));
     return { now, session: '2026-10-30', sessionOpen: open, sessionClose: open + 21600000, instrument: 'NSE_FO:NIFTY', sourceEpoch: 'e1', bars5: [...prior, ...today], bars15: bars15.map(x => ({ ...x, availableAt: x.time + 900000 })), bars1: Array.from({ length: today.length * 5 }, (_, i) => ({ time: open + i * 60000, availableAt: open + (i + 1) * 60000, open: VWAP, high: VWAP, low: VWAP, close: VWAP, volume: 1000 })), rvolReferences: Object.fromEntries(Array.from({ length: 40 }, (_, i) => [i, Array(20).fill(1000)])), openingVolumeReferences: Array(20).fill(1000), levels: [{ price: 125, role: 'RESISTANCE', knownAt: open - 1, kind: 'PDH' }], previousHigh: 125, previousLow: 95, referenceVerified: true, eventClear: true, calendarVerified: true, indexIntel: intel(now), ...extra };
 }
-const mirrorChain = (x: FreshOiSample | null): FreshOiSample | null => x && { at: x.at, strikes: x.strikes.map(s => ({ strike: 250 - s.strike, callOi: s.putOi, putOi: s.callOi })) };
+const mirrorChain = (x: FreshOiSample | null): FreshOiSample | null => x && { at: x.at, expiry: x.expiry, strikes: x.strikes.map(s => ({ strike: 250 - s.strike, callOi: s.putOi, putOi: s.callOi })) };
 const mirror = (c: FreshContext): FreshContext => {
     const m = (b: FreshBar) => ({ ...b, open: 250 - b.open, high: 250 - b.low, low: 250 - b.high, close: 250 - b.close });
     const ix = c.indexIntel!;

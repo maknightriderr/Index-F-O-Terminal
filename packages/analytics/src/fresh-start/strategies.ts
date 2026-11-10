@@ -114,7 +114,7 @@ export const FRESH_RS_TOUCH_ATR = 0.15;
 export const FRESH_RS_BASE_MAX_ATR = 0.6;
 export const FRESH_RS_MAX_RISK_ATR = 1.2;
 /** One option-chain OI sample (nearest expiry), as of `at`. */
-export interface FreshOiSample { at: number; strikes: ReadonlyArray<{ strike: number; callOi: number; putOi: number }> }
+export interface FreshOiSample { at: number; expiry?: string; strikes: ReadonlyArray<{ strike: number; callOi: number | null; putOi: number | null }> }
 /**
  * 2.0 index inputs, as of `at`. breadth: the weight share (0-1) of the index's heavyweights trading above their own
  * VWAP (null when under 70% of the weight has data). futuresOi: the index future's 30-minute price / OI read
@@ -219,7 +219,7 @@ export const FRESH_REPORTED_STRATEGIES = [...FRESH_ALL_STRATEGIES, ...FRESH_EXTE
  * before the session cutoff) on the expiry-day contract, with |delta| in [minAbsDelta, maxAbsDelta]. The candidate's
  * stop / target are then model levels for the premium model only (never exits).
  */
-export interface FreshPremiumExit { stopFraction: number; exitAt: number; entryUntil: number; minAbsDelta: number; maxAbsDelta: number; expiryDay: string }
+export interface FreshPremiumExit { stopFraction: number; exitAt: number; entryUntil: number; minAbsDelta: number; maxAbsDelta: number; expiryDay: string; allowedStrikes?: readonly number[] }
 export interface FreshCandidate {
     id: string;
     parentId: string;
@@ -256,7 +256,7 @@ export interface FreshEvaluation {
         detail?: string;
     }>;
 }
-const finite = (x: number) => Number.isFinite(x);
+const finite = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x);
 const last = <T>(a: readonly T[]) => a[a.length - 1];
 const median = (v: readonly number[]) => { const a = [...v].sort((x, y) => x - y); return a.length ? (a[Math.floor((a.length - 1) / 2)] + a[Math.floor(a.length / 2)]) / 2 : NaN; };
 const body = (b: FreshBar) => b.high > b.low ? Math.abs(b.close - b.open) / (b.high - b.low) : 0;
@@ -688,8 +688,11 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                                 if (last6.length === 6 && last6.filter(x => d * (x.close - vw(x)) < 0).length <= 1 && favorable(current.close, vwap)) {
                                     reach(5, 'IDX_NO_TRIGGER');
                                     const nowOi = ix!.oiNow && finite(ix!.oiNow.at) && ix!.oiNow.at <= c.now && c.now - ix!.oiNow.at <= FRESH_IDX_OI_MAX_AGE_MS ? ix!.oiNow : null;
-                                    const before = nowOi && ix!.oiBefore && nowOi.at - ix!.oiBefore.at >= FRESH_IDX_OI_LOOKBACK_MS[0] && nowOi.at - ix!.oiBefore.at <= FRESH_IDX_OI_LOOKBACK_MS[1] ? ix!.oiBefore : null;
-                                    const side = (sample: FreshOiSample, call: boolean) => sample.strikes.map(x => ({ strike: x.strike, oi: call ? x.callOi : x.putOi })).filter(x => finite(x.strike) && finite(x.oi) && x.oi >= 0);
+                                    const before = nowOi?.expiry && ix!.oiBefore?.expiry === nowOi.expiry && nowOi.at - ix!.oiBefore.at >= FRESH_IDX_OI_LOOKBACK_MS[0] && nowOi.at - ix!.oiBefore.at <= FRESH_IDX_OI_LOOKBACK_MS[1] ? ix!.oiBefore : null;
+                                    const side = (sample: FreshOiSample, call: boolean) => sample.strikes.flatMap(x => {
+                                        const oi = call ? x.callOi : x.putOi;
+                                        return finite(x.strike) && finite(oi) && oi >= 0 ? [{ strike: x.strike, oi }] : [];
+                                    });
                                     const walls = (sample: FreshOiSample, call: boolean) => { const xs = side(sample, call), max = Math.max(0, ...xs.map(x => x.oi)); return max > 0 ? xs.filter(x => x.oi >= FRESH_IDX_WALL_SHARE * max) : []; };
                                     const prior = today[today.length - 2];
                                     const touches = (x: FreshBar) => [vw(x), ema5.get(x.time)].some(L => L != null && finite(L) && d * ((d === 1 ? x.low : x.high) - L) <= FRESH_RS_TOUCH_ATR * a && d * (x.close - L) >= -FRESH_RS_TOUCH_ATR * a);
@@ -701,6 +704,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                                             const nowW = nowOi!.strikes.find(x => x.strike === w.strike), wasW = before.strikes.find(x => x.strike === w.strike);
                                             if (!nowW || !wasW) continue;
                                             const own = d === 1 ? [nowW.callOi, wasW.callOi] : [nowW.putOi, wasW.putOi], other = d === 1 ? [nowW.putOi, wasW.putOi] : [nowW.callOi, wasW.callOi];
+                                            if (!own.every(finite) || !other.every(finite) || own.some(x => x < 0) || other.some(x => x < 0)) continue;
                                             if (d * (prior.close - w.strike) <= 0 && d * (current.close - w.strike) > .05 * a && own[0] <= (1 - FRESH_IDX_WALL_UNWIND) * own[1] && other[0] > other[1]) {
                                                 s = lo([prior, current]) - d * .1 * a; o = prior.time; maxRisk = FRESH_IDX_WALL_BREAK_MAX_RISK_ATR; trigger = `WALL_BREAK_${w.strike}`;
                                                 break;

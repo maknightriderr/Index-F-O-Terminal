@@ -185,6 +185,13 @@ describe('absorption (5.3) and exhaustion (5.4)', () => {
     // Low 97 is 2 points (0.5 ATR) below the zone: sellers made progress.
     expect(detectAbsorption([...baseline, abs], 4, [...bars0, bar(10, 101, 97, 100.5)])).toEqual([]);
   });
+  it.each([
+    { side: 'BULLISH', footprint: fp(10, [[99, 20, 80], [101, 20, 120]]), candle: bar(10, 101, 99, 100.5), confirmation: bar(11, 101.5, 99.5, 101.2), zone: 99 },
+    { side: 'BEARISH', footprint: fp(10, [[99, 120, 20], [101, 80, 20]]), candle: bar(10, 101, 99, 99.5), confirmation: bar(11, 100.5, 98.5, 98.8), zone: 101 },
+  ])('finds $side absorption when the highest volume row fails the location rules', ({ side, footprint, candle, confirmation, zone }) => {
+    const events = detectAbsorption([...baseline, footprint, after], 4, [...bars0, candle, confirmation]);
+    expect(events).toMatchObject([{ side, index: 10, zone, zoneVolume: 80, progressAtr: 0, state: 'CONFIRMED' }]);
+  });
   it('buying exhaustion at a new high, confirmed by a close below the bar', () => {
     // bar 2: top row 102 traded 3 of an average 57.7 per row (0.05 <= 0.3); buys 102 < 200; delta 31 < 120; then a close below 100.
     const f = [fp(0, [[98, 50, 25], [99, 50, 25]]), fp(1, [[100, 100, 40], [101, 100, 40]]), fp(2, [[100, 40, 40], [101, 60, 30], [102, 2, 1]]), fp(3, [[99, 30, 30], [100, 30, 30]])];

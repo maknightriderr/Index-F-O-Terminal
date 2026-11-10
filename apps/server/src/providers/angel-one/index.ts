@@ -699,6 +699,8 @@ export class AngelOneProvider implements MarketDataProvider {
 
         if (response.data?.status && response.data?.data?.fetched) {
           for (const item of response.data.data.fetched) {
+            const rawOi = item.opnInterest;
+            const oi = typeof rawOi === 'number' || (typeof rawOi === 'string' && rawOi.trim()) ? Number(rawOi) : NaN;
             results.push({
               token: item.symbolToken || item.token,
               ltp: parseFloat(item.ltp) || 0,
@@ -707,7 +709,7 @@ export class AngelOneProvider implements MarketDataProvider {
               low: parseFloat(item.low) || 0,
               close: parseFloat(item.close) || 0,
               volume: parseInt(item.tradeVolume) || 0,
-              oi: item.opnInterest !== undefined ? parseInt(item.opnInterest) || 0 : undefined,
+              oi: Number.isFinite(oi) && oi >= 0 ? oi : undefined,
               netChange: item.netChange !== undefined ? parseFloat(item.netChange) : undefined,
               percentChange: item.percentChange !== undefined ? parseFloat(item.percentChange) : undefined,
               avgPrice: item.avgPrice !== undefined ? parseFloat(item.avgPrice) : undefined,
