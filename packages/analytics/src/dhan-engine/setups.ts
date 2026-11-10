@@ -29,7 +29,7 @@ import { vwapSeries, type VwapPoint, type VwapSums } from './vwap.js';
 import { detectAbsorption, detectExhaustion, type AbsorptionEvent, type ExhaustionEvent } from './absorption.js';
 import { combineRegime, type MtfRegime, type TimeframeInputs } from './regime.js';
 
-export const DHAN_SETUP_VERSION = 'DHAN-SETUPS-1.3';
+export const DHAN_SETUP_VERSION = 'DHAN-SETUPS-1.4';
 
 export const DHAN_SETUP_IDS = {
   A: 'DHAN_A_SWEEP_ABSORPTION',
@@ -70,6 +70,10 @@ export const DHAN_SETUP_RULES = Object.freeze({
   orderFlowRecencyBars: 4,
   /** E (owner, 9 Nov): a stacked imbalance is 2+ consecutive rows here (A-D keep the master prompt's 3). */
   orderFlowStackedMin: 2,
+  /** E (owner, 10 Nov): the target must pay at least this many times the risk (10 Nov: a signal with R:R 0.04). */
+  orderFlowMinRr: 1,
+  /** New setup entries end this long before the session close (the paper path's cutoff: 14:45 on NSE / BSE). */
+  lastEntryBeforeCloseMs: 45 * 60_000,
 });
 
 export interface SetupContext {
@@ -88,6 +92,8 @@ export interface SetupContext {
   /** Completed prior daily bars, oldest first. */
   daily: EngineBar[];
   sessionOpen: number;
+  /** The exchange's session close (DST-aware for MCX). Absent = no close-based cutoff (fixtures). */
+  sessionClose?: number;
   /** Whether the previous session / previous week in `daily` are complete (8 Nov audit): a level from a partial day or
    *  week (feed connected late, a restart, a short memory) is not the real PDH / PDL / PWH / PWL and is dropped.
    *  Absent = trust `daily` as given (fixtures, replays that supply full history). */
@@ -419,9 +425,12 @@ function setupE(d: Derived): Raw {
       return st ? { rows: st.rows, low: st.low, high: st.high } : null;
     }],
     ['E5_ENTRY_BAR', () => validFp(fps[i]) && fps[i].delta! > 0 && bars[i].close > bars[i].open && bars[i].close > bars[abs!.index].high ? { delta: fps[i].delta, close: bars[i].close } : null],
+    // E6 (owner, 10 Nov): POC, else VAH, whichever first pays >= orderFlowMinRr times the risk to the stop.
     ['E6_TARGET_POC_OR_VAH', () => {
-      const entry = bars[i].close, gap = d.c.tickSize;
-      target = p.poc != null && p.poc >= entry + gap ? { price: p.poc, kind: 'POC' } : p.vah != null && p.vah >= entry + gap ? { price: p.vah, kind: 'VAH' } : null;
+      const entry = bars[i].close, risk = entry - (Math.min(...bars.slice(abs!.index, i + 1).map((b) => b.low)) - d.buf);
+      if (!(risk > 0)) return null;
+      const pays = (x: number | null): x is number => x != null && (x - entry) / risk >= R.orderFlowMinRr;
+      target = pays(p.poc) ? { price: p.poc, kind: 'POC' } : pays(p.vah) ? { price: p.vah, kind: 'VAH' } : null;
       return target;
     }],
   ]);
@@ -509,9 +518,10 @@ function noTradeOf(d: Derived, key: DhanSetupKey, r: Raw): NoTradeReport {
 // ---------------- session windows (Part 17) ----------------
 
 /** NSE / BSE: 09:15-09:30 observation only; new setups 09:30-14:45. MCX: the first 15 minutes are observation. */
-export function sessionWindow(exchange: string, barClose: number): string {
+export function sessionWindow(exchange: string, barClose: number, sessionClose?: number): string {
   const d = new Date(barClose + 19_800_000), m = d.getUTCHours() * 60 + d.getUTCMinutes();
-  if (exchange === 'MCX') return m <= 9 * 60 + 15 ? 'MCX_OPENING_OBSERVATION' : 'MCX_SESSION';
+  // 10 Nov: MCX signals at 23:15 IST were emitted although paper entries had ended at close - 45 min (DEADLINE_EXPIRED).
+  if (exchange === 'MCX') return m <= 9 * 60 + 15 ? 'MCX_OPENING_OBSERVATION' : sessionClose != null && barClose >= sessionClose - DHAN_SETUP_RULES.lastEntryBeforeCloseMs ? 'AFTER_CUTOFF' : 'MCX_SESSION';
   if (m <= 9 * 60 + 30) return 'OPENING_OBSERVATION';
   if (m <= 11 * 60 + 30) return 'PRIMARY';
   if (m <= 13 * 60 + 30) return 'SELECTIVE';
@@ -522,7 +532,8 @@ const tradableWindow = (w: string) => w === 'PRIMARY' || w === 'SELECTIVE' || w 
 
 // ---------------- entry point ----------------
 
-const mPlan = (p: TradePlan | null): TradePlan | null => (p ? { ...p, entry: -p.entry, sl: -p.sl, target: -p.target } : null);
+const MIRROR_KIND: Record<string, string> = { VAH: 'VAL', VAL: 'VAH' };
+const mPlan = (p: TradePlan | null): TradePlan | null => (p ? { ...p, entry: -p.entry, sl: -p.sl, target: -p.target, targetKind: MIRROR_KIND[p.targetKind] ?? p.targetKind } : null);
 function mirrorValue(v: unknown): unknown {
   // Evidence prices are mirrored back where they are plain price fields; structures are kept as recorded on the mirror.
   if (v && typeof v === 'object' && !Array.isArray(v)) {
@@ -536,7 +547,7 @@ function mirrorValue(v: unknown): unknown {
 
 export function evaluateDhanSetups(ctx: SetupContext): SetupsEvaluation {
   const last = ctx.bars.at(-1);
-  const window = last ? sessionWindow(ctx.exchange, last.time + 900_000) : 'NO_DATA';
+  const window = last ? sessionWindow(ctx.exchange, last.time + 900_000, ctx.sessionClose) : 'NO_DATA';
   const base: SetupsEvaluation = { version: DHAN_SETUP_VERSION, symbol: ctx.symbol, barTime: last?.time ?? null, sessionWindow: window, regime: null, results: [] };
   const up = derive(ctx);
   if (!up) return base;

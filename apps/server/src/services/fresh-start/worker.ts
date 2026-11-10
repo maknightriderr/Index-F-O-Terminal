@@ -142,7 +142,7 @@ export class FreshPaperWorker {
     state.entriesArmed=false;state.recovered=false;state.monitorRunning=false;state.scannerRunning=false;state.status='RECOVERING_POSITIONS';state.entryBlockers=['BLOCKED_POSITION_RECOVERY'];
     this.feed.start();this.removeObservation=this.feed.onObservation(()=>{if(this.ready)this.pollMonitor();});
     // Dhan engine v2 phase 4: DHAN_* setup signals are priced and entered through this worker's adapter and store.
-    if(DHAN_ENGINE_PAPER)setDhanPaperHandler(r=>this.dhanPaper(r));
+    if(DHAN_ENGINE_PAPER)setDhanPaperHandler(r=>this.dhanPaper(r),symbol=>!this.refs.size||[...this.refs.values()].some(x=>x.name===symbol));
     // Registered synchronously so the service supervisor owns every timer, including during recovery.
     this.timers=[setInterval(()=>{if(this.ready)this.pollMonitor();},250),setInterval(()=>void this.scan(),1000)];
     return this.bootstrap();
