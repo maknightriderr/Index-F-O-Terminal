@@ -76,6 +76,8 @@ export const DHAN_SETUP_RULES = Object.freeze({
   orderFlowMinRr: 1,
   /** Setup E1: the target is the previous day's POC (else VAH), capped at this many R ("POC or 1.5R, whichever first"). */
   valueReentryCapR: 1.5,
+  /** Setup E1: stacked imbalance rows (owner, 11 Nov: 3, as the strategy it came from). */
+  valueReentryStackedMin: 3,
   /** New setup entries end this long before the session close (the paper path's cutoff: 14:45 on NSE / BSE). */
   lastEntryBeforeCloseMs: 45 * 60_000,
 });
@@ -99,6 +101,8 @@ export interface SetupContext {
   /** The bar length of `bars` / `fps` in ms. Absent = 15 minutes (the live engine). The 5-minute order-flow shadow
    *  (11 Nov) passes 300 000: only the contiguity check and the decision time use it; no rule changes with it. */
   barMs?: number;
+  /** Setup E1: the futures contract's daily trend from its own daily candles (null / absent = unknown). */
+  dailyTrend?: DailyTrend | null;
   /** The exchange's session close (DST-aware for MCX). Absent = no close-based cutoff (fixtures). */
   sessionClose?: number;
   /** Whether the previous session / previous week in `daily` are complete (8 Nov audit): a level from a partial day or
@@ -151,7 +155,7 @@ function mFp(f: FootprintBar): FootprintBar {
   };
 }
 export function mirrorContext(c: SetupContext): SetupContext {
-  return { ...c, bars: c.bars.map(mBar), fps: c.fps.map(mFp), daily: c.daily.map(mBar), vwapSums: c.vwapSums.map((s) => (s ? { pv: -s.pv, v: s.v, p2v: s.p2v } : null)) };
+  return { ...c, bars: c.bars.map(mBar), fps: c.fps.map(mFp), daily: c.daily.map(mBar), vwapSums: c.vwapSums.map((s) => (s ? { pv: -s.pv, v: s.v, p2v: s.p2v } : null)), dailyTrend: c.dailyTrend === 'BULLISH' ? 'BEARISH' : c.dailyTrend === 'BEARISH' ? 'BULLISH' : c.dailyTrend };
 }
 
 // ---------------- derived state (one side) ----------------
@@ -466,9 +470,10 @@ function setupE(d: Derived): Raw {
 //   F1 the previous session's value area is known (complete previous day)
 //   F2 a bullish absorption in the last 4 bars whose bar traded at / below the previous VAL (+ 0.25 ATR)
 //   F3 the entry bar closes back above the previous VAL (inside the value area)
-//   F4 a stacked buy imbalance (>= 2 rows, as setup E) between the absorption bar and the entry bar
+//   F4 a stacked buy imbalance (>= 3 rows, owner 11 Nov) between the absorption bar and the entry bar
 //   F5 confirmation: the entry bar closes up, above the absorption bar's high, with positive delta
-//   F6 the 30-minute trend is not against the trade (their "daily trend" filter: only ~2 sessions are in memory)
+//   F6 the futures' DAILY trend (20-day EMA, own daily candles) is not against the trade; when the daily candles could
+//      not be read, the 30-minute trend instead (recorded as M30_FALLBACK)
 //   F7 target: the previous POC (else the previous VAH) if it pays >= 1R, capped at 1.5R - whichever comes first
 function setupF(d: Derived): Raw {
   const { i, bars, fps } = d;
@@ -485,11 +490,15 @@ function setupF(d: Derived): Raw {
     }],
     ['F3_BACK_INSIDE_VALUE', () => (bars[i].close > p!.val! ? { close: bars[i].close, level: p!.val } : null)],
     ['F4_STACKED_BUY_IMBALANCE', () => {
-      const st = fps.slice(abs!.index, i + 1).flatMap((f) => diagonalImbalances(f, { stackedMin: R.orderFlowStackedMin }).stacks).filter((x) => x.side === 'BUY').sort((a, b) => b.rows - a.rows)[0];
+      const st = fps.slice(abs!.index, i + 1).flatMap((f) => diagonalImbalances(f, { stackedMin: R.valueReentryStackedMin }).stacks).filter((x) => x.side === 'BUY').sort((a, b) => b.rows - a.rows)[0];
       return st ? { rows: st.rows, low: st.low, high: st.high } : null;
     }],
     ['F5_CONFIRMATION_BAR', () => validFp(fps[i]) && fps[i].delta! > 0 && bars[i].close > bars[i].open && bars[i].close > bars[abs!.index].high ? { delta: fps[i].delta, close: bars[i].close } : null],
-    ['F6_TREND_NOT_AGAINST', () => (d.m30Trend !== 'BEARISH' ? { m30: d.m30Trend } : null)],
+    ['F6_DAILY_TREND_NOT_AGAINST', () => {
+      const t = d.c.dailyTrend;
+      if (t != null && t !== 'UNKNOWN') return t !== 'BEARISH' ? { source: 'DAILY', daily: t } : null;
+      return d.m30Trend !== 'BEARISH' ? { source: 'M30_FALLBACK', m30: d.m30Trend } : null;
+    }],
     ['F7_TARGET_PREVIOUS_POC_OR_1_5R', () => {
       const entry = bars[i].close, risk = entry - stopOf();
       if (!(risk > 0)) return null;
@@ -507,6 +516,21 @@ function setupF(d: Derived): Raw {
     plan = entry > sl ? { entry, sl: roundDp(sl, 4), target: t.price, targetKind: t.kind, rr: roundDp((t.price - entry) / (entry - sl), 2) } : null;
   }
   return { checks, failed, plan, from: abs ? abs.index : i, zone: abs?.zone ?? null, evidence: { absorption: abs, previousProfile: p ? { poc: p.poc, vah: p.vah, val: p.val } : null } };
+}
+
+/**
+ * Daily trend from completed daily bars (oldest first): BULLISH when the last close is above the 20-day EMA and the EMA
+ * is higher than five days earlier, BEARISH the mirror, RANGE otherwise; UNKNOWN with fewer than 25 bars.
+ */
+export type DailyTrend = 'BULLISH' | 'BEARISH' | 'RANGE' | 'UNKNOWN';
+export const DAILY_TREND_EMA = 20;
+export function dailyTrend(bars: ReadonlyArray<{ close: number }>): DailyTrend {
+  if (bars.length < DAILY_TREND_EMA + 5 || !bars.every((b) => Number.isFinite(b.close) && b.close > 0)) return 'UNKNOWN';
+  const k = 2 / (DAILY_TREND_EMA + 1), ema: number[] = [];
+  let e = bars.slice(0, DAILY_TREND_EMA).reduce((a, b) => a + b.close, 0) / DAILY_TREND_EMA;
+  for (let j = DAILY_TREND_EMA; j < bars.length; j++) { e = bars[j].close * k + e * (1 - k); ema.push(e); }
+  const last = bars[bars.length - 1].close, now = ema[ema.length - 1], before = ema[ema.length - 6];
+  return last > now && now > before ? 'BULLISH' : last < now && now < before ? 'BEARISH' : 'RANGE';
 }
 
 const SETUPS: Record<DhanSetupKey, (d: Derived) => Raw> = { A: setupA, B: setupB, C: setupC, D: setupD, E: setupE, F: setupF };

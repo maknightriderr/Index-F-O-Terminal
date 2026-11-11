@@ -19,6 +19,7 @@ import { redis } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
 import { schemaFileReady } from './ensure-capture-schema.js';
 import { observedFreshOi } from './fresh-start/intel.js';
+import { dhanDailyTrend } from './dhan-daily.js';
 import { flowContractBars, flowContractFiveBars, flowLastTrade, flowSessionState, flowSymbols, FLOW_FIVE_MS } from './order-flow-store.js';
 
 export const DHAN_SIGNALS_MIGRATION = '053_dhan_engine_signals.sql';
@@ -139,6 +140,7 @@ export async function setupContextFor(symbol: string, now: number, health: Healt
   return {
     symbol, instrument: st.instrument, kind: st.kind, exchange: st.exchange, tickSize: st.tickSize, bars, fps, ...(five ? { barMs: FLOW_FIVE_MS } : {}),
     vwapSums: fps.map((f) => f.tradeSums ?? null), rvol: fps.map((f) => rvolOf(refs, f)), daily: dailyFromFootprints(st.footprints, today),
+    dailyTrend: dhanDailyTrend(symbol, now, st.instrument)?.trend ?? null,
     sessionOpen, sessionClose: getSessionWindow(st.exchange as Exchange, today)?.close, referenceComplete: referenceCompleteness(st.footprints, st.exchange as Exchange, today), health: { ...health(symbol, now), sessionGapAt: gapAt },
   };
 }
