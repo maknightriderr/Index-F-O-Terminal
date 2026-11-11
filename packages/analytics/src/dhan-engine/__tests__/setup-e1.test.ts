@@ -1,7 +1,7 @@
 // Setup E1 (owner, 11 Nov): previous-day value re-entry. Absorption (the engine's own) at the previous day's value-area
 // low, a close back inside the value area, stacked imbalance, a confirmation bar; target the previous POC capped at 1.5R.
 import { describe, expect, it } from 'vitest';
-import { evaluateDhanSetups, type SetupContext } from '../setups.js';
+import { dailyTrend, evaluateDhanSetups, type SetupContext } from '../setups.js';
 import { DHAN_PAPER_STRATEGIES } from '../paper.js';
 import { contextOf, even, type BarSpec } from './fixture.js';
 
@@ -25,13 +25,32 @@ describe('Setup E1: previous-day value re-entry', () => {
   it('signals on absorption at the previous VAL, a close back inside, stacked buying and a confirmation bar', () => {
     const r = f(contextOf(YESTERDAY, TODAY));
     expect(r.strategy).toBe('DHAN_E1_VALUE_REENTRY');
-    expect(r.checks.map((c) => [c.id, c.ok])).toEqual([['F1_PREVIOUS_VALUE_AREA', true], ['F2_ABSORPTION_AT_PREVIOUS_VAL', true], ['F3_BACK_INSIDE_VALUE', true], ['F4_STACKED_BUY_IMBALANCE', true], ['F5_CONFIRMATION_BAR', true], ['F6_TREND_NOT_AGAINST', true], ['F7_TARGET_PREVIOUS_POC_OR_1_5R', true]]);
+    expect(r.checks.map((c) => [c.id, c.ok])).toEqual([['F1_PREVIOUS_VALUE_AREA', true], ['F2_ABSORPTION_AT_PREVIOUS_VAL', true], ['F3_BACK_INSIDE_VALUE', true], ['F4_STACKED_BUY_IMBALANCE', true], ['F5_CONFIRMATION_BAR', true], ['F6_DAILY_TREND_NOT_AGAINST', true], ['F7_TARGET_PREVIOUS_POC_OR_1_5R', true]]);
     expect(r.checks[0].value).toMatchObject({ level: 105, poc: 108 }); // yesterday's VAL and POC, not today's
     expect(r.status).toBe('SIGNAL');
     expect(r.score).toBeNull();
     expect(r.plan).toMatchObject({ entry: 106.6, targetKind: 'R1_5', rr: 1.5 }); // the POC is under 1R away -> the VAH, capped at 1.5R
     expect(r.plan!.sl).toBeLessThan(104); // under the absorption low, not a full ATR away
     expect(r.gates.map((g) => g.id)).toEqual(['VALID_DATA', 'DEFINED_PLAN', 'SESSION_WINDOW']);
+  });
+  it('F4 needs a stacked imbalance of at least 3 rows (owner, 11 Nov)', () => {
+    const two = TODAY.map((b, k) => (k === TODAY.length - 1 ? { ...b, rows: [[104, 10, 40], [105, 130, 10], [106, 60, 10], [107, 5, 5]] as Array<[number, number, number]> } : b));
+    expect(f(contextOf(YESTERDAY, two))).toMatchObject({ status: 'NO_SETUP', failed: 'F4_STACKED_BUY_IMBALANCE' });
+  });
+  it('F6 follows the daily trend; without daily candles it falls back to the 30-minute trend (recorded)', () => {
+    expect(f(contextOf(YESTERDAY, TODAY, { dailyTrend: 'BEARISH' }))).toMatchObject({ status: 'NO_SETUP', failed: 'F6_DAILY_TREND_NOT_AGAINST' });
+    expect(f(contextOf(YESTERDAY, TODAY, { dailyTrend: 'BULLISH' })).checks[5].value).toEqual({ source: 'DAILY', daily: 'BULLISH' });
+    expect(f(contextOf(YESTERDAY, TODAY, { dailyTrend: 'RANGE' })).status).toBe('SIGNAL');
+    expect(f(contextOf(YESTERDAY, TODAY)).checks[5].value).toMatchObject({ source: 'M30_FALLBACK' });
+    expect(f(contextOf(YESTERDAY, TODAY, { dailyTrend: 'UNKNOWN' })).checks[5].value).toMatchObject({ source: 'M30_FALLBACK' });
+  });
+  it('dailyTrend: 20-day EMA, rising and price above -> BULLISH; the mirror BEARISH; flat RANGE; short history UNKNOWN', () => {
+    const series = (f: (k: number) => number, n = 40) => Array.from({ length: n }, (_, k) => ({ close: f(k) }));
+    expect(dailyTrend(series((k) => 100 + k))).toBe('BULLISH');
+    expect(dailyTrend(series((k) => 200 - k))).toBe('BEARISH');
+    expect(dailyTrend(series(() => 100))).toBe('RANGE');
+    expect(dailyTrend([...series((k) => 100 + k), { close: 120 }])).toBe('RANGE'); // EMA still rising, close fell below it
+    expect(dailyTrend(series((k) => 100 + k, 24))).toBe('UNKNOWN');
   });
   it('needs the previous day: none in memory, or an incomplete one, stops at F1', () => {
     expect(f(contextOf([], TODAY))).toMatchObject({ status: 'NO_SETUP', failed: 'F1_PREVIOUS_VALUE_AREA' });

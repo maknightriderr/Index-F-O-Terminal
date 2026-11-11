@@ -36,6 +36,7 @@ import { DHAN_RESPONSE, DHAN_SEGMENT_CODE, DHAN_MAX_INSTRUMENTS_PER_CONNECTION, 
 import { ORDER_BLOCK_MODE, ORDER_BLOCK_MODE_REJECTED, OF1_TRADING_REQUESTED, ORDER_FLOW_SUPPORTED, ORDER_FLOW_SYMBOLS, ORDER_FLOW_SYMBOLS_REJECTED, DHAN_FLOW_V2, DHAN_FLOW_V2_SYMBOLS, DHAN_FLOW_STOCKS, DHAN_ENGINE_SHADOW } from '../config/order-flow-flags.js';
 import { dhanConfigured, dhanSession, dhanSessionStatus, ensureDhanSession, markDhanTokenRejected } from './dhan-session.js';
 import { flowClosedFiveCount, checkpointOpenFlowBars, OPEN_BAR_CHECKPOINT_MS, closeFlowBars, flowClosedBarCount, flowContractBars, hydrateFlowSymbols, recordFlowTrade, recordFlowUnreconciled, registerFlowSymbol, setFlowFeedConnected } from './order-flow-store.js';
+import { prefetchDhanDaily } from './dhan-daily.js';
 import { dhanShadowBusy, evaluateDhanShadow, dhanShadowFiveBusy, evaluateDhanShadowFive } from './dhan-engine-shadow.js';
 
 export const DHAN_SCRIP_MASTER_URL = 'https://images.dhan.co/api-data/api-scrip-master.csv';
@@ -91,7 +92,9 @@ interface InstrumentState {
 /** v2 per-instrument data quality since the process started (reset daily with the instrument map). */
 export interface InstrumentQuality { packets: number; lastPacketAt: number | null; tradedQty: number; unreconciledQty: number; ltqInvalid: number }
 
-let checkpointAt = 0, checkpointBusy = false;
+let checkpointAt = 0, checkpointBusy = false, dailyAt = 0;
+/** Setup E1: contracts whose daily candles failed are read again this often (the read skips those already read today). */
+const DAILY_RETRY_MS = 30 * 60_000;
 const state = {
   /** flowClosedBarCount() at the last Dhan shadow pass. */
   shadowSeenClosed: -1,
@@ -195,6 +198,9 @@ async function resolveInstruments(now: number): Promise<void> {
   }
   const kinds = Object.values(state.resolved).reduce<Record<string, number>>((n, r) => ({ ...n, [r.kind]: (n[r.kind] ?? 0) + 1 }), {});
   logger.info({ total: ordered.length, kinds, legacy: Object.fromEntries(Object.entries(state.resolved).filter(([k]) => legacy.has(k))), v2: DHAN_FLOW_V2, stocks: DHAN_FLOW_STOCKS }, 'Dhan feed: futures resolved for order flow');
+  // Setup E1 (11 Nov): each future's daily trend from its own daily candles (background, one call a second).
+  dailyAt = Date.now();
+  void prefetchDhanDaily(state.resolved, now).catch(() => undefined);
   // Engine v2 (8 Nov): rebuild today's and the previous session's closed bars from the recorded events (background).
   const started = Date.now();
   void hydrateFlowSymbols(now).then(
@@ -377,6 +383,7 @@ async function tick(): Promise<void> {
   }
   if (!state.ws && now >= state.reconnectAt && Object.keys(state.resolved).length) connect(creds);
   await closeFlowBars(now, state.connected).catch((err: any) => { logger.warn({ error: err.message }, 'Order flow: bar close failed'); return 0; });
+  if (Object.keys(state.resolved).length && now - dailyAt >= DAILY_RETRY_MS) { dailyAt = now; void prefetchDhanDaily(state.resolved, now).catch(() => undefined); }
   // F-08: once a minute, save each contract's open bar so a restart inside the bar does not lose it (background).
   if (anyOpen && !checkpointBusy && now - checkpointAt >= OPEN_BAR_CHECKPOINT_MS) {
     checkpointAt = now; checkpointBusy = true;
