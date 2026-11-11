@@ -225,7 +225,7 @@ export interface FreshContext {
     footprint15?: FreshFootprintRead | null;
 }
 /** Dhan engine v2 setups paper-traded through the same adapter / store (phase 4). Not evaluated by this module. */
-export const FRESH_EXTERNAL_STRATEGIES = ['DHAN_A_SWEEP_ABSORPTION', 'DHAN_B_IMBALANCE_BREAKOUT', 'DHAN_C_FAILED_AUCTION_CVD', 'DHAN_D_VWAP_PROFILE_REJECTION', 'DHAN_E_ORDER_FLOW', 'DHAN_EXPIRY_GAMMA'] as const;
+export const FRESH_EXTERNAL_STRATEGIES = ['DHAN_A_SWEEP_ABSORPTION', 'DHAN_B_IMBALANCE_BREAKOUT', 'DHAN_C_FAILED_AUCTION_CVD', 'DHAN_D_VWAP_PROFILE_REJECTION', 'DHAN_E_ORDER_FLOW', 'DHAN_E1_VALUE_REENTRY', 'DHAN_EXPIRY_GAMMA'] as const;
 export type FreshExternalStrategy = typeof FRESH_EXTERNAL_STRATEGIES[number];
 /** Every strategy whose paper trades the performance report covers (fresh-start + Dhan engine, separate books). */
 export const FRESH_REPORTED_STRATEGIES = [...FRESH_ALL_STRATEGIES, ...FRESH_EXTERNAL_STRATEGIES] as const;

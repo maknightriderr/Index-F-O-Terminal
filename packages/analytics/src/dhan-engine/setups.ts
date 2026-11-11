@@ -29,7 +29,7 @@ import { vwapSeries, type VwapPoint, type VwapSums } from './vwap.js';
 import { detectAbsorption, detectExhaustion, type AbsorptionEvent, type ExhaustionEvent } from './absorption.js';
 import { combineRegime, type MtfRegime, type TimeframeInputs } from './regime.js';
 
-export const DHAN_SETUP_VERSION = 'DHAN-SETUPS-1.4';
+export const DHAN_SETUP_VERSION = 'DHAN-SETUPS-1.5';
 
 export const DHAN_SETUP_IDS = {
   A: 'DHAN_A_SWEEP_ABSORPTION',
@@ -37,6 +37,8 @@ export const DHAN_SETUP_IDS = {
   C: 'DHAN_C_FAILED_AUCTION_CVD',
   D: 'DHAN_D_VWAP_PROFILE_REJECTION',
   E: 'DHAN_E_ORDER_FLOW',
+  /** Setup E1 (owner, 11 Nov): shown as "E1"; its checks are F1..F7 because E1..E6 already name setup E's checks. */
+  F: 'DHAN_E1_VALUE_REENTRY',
 } as const;
 export type DhanSetupKey = keyof typeof DHAN_SETUP_IDS;
 
@@ -72,6 +74,8 @@ export const DHAN_SETUP_RULES = Object.freeze({
   orderFlowStackedMin: 2,
   /** E (owner, 10 Nov): the target must pay at least this many times the risk (10 Nov: a signal with R:R 0.04). */
   orderFlowMinRr: 1,
+  /** Setup E1: the target is the previous day's POC (else VAH), capped at this many R ("POC or 1.5R, whichever first"). */
+  valueReentryCapR: 1.5,
   /** New setup entries end this long before the session close (the paper path's cutoff: 14:45 on NSE / BSE). */
   lastEntryBeforeCloseMs: 45 * 60_000,
 });
@@ -170,6 +174,8 @@ interface Derived {
   absorption: AbsorptionEvent[];
   exhaustion: ExhaustionEvent[];
   profile: VolumeProfile;
+  /** The previous session's volume profile (null: no previous session in memory, or it is not complete). */
+  prevProfile: VolumeProfile | null;
   regime: MtfRegime;
   m30Trend: Side | 'UNKNOWN';
   /** Index of the first session bar after a lost bar (Infinity when the session is complete). */
@@ -241,13 +247,19 @@ function derive(c: SetupContext): Derived | null {
   const absorption = atr ? detectAbsorption(c.fps, atr, c.bars).filter((e) => e.index >= s0).map((e) => ({ ...e, index: e.index - s0, resolvedAt: e.resolvedAt == null ? null : e.resolvedAt - s0 })) : [];
   const exhaustion = detectExhaustion(c.fps, c.bars).filter((e) => e.index >= s0).map((e) => ({ ...e, index: e.index - s0, resolvedAt: e.resolvedAt == null ? null : e.resolvedAt - s0 }));
   const profile = profileFromFootprints(fps.filter((f) => f.deltaMode !== 'UNAVAILABLE'));
+  // Setup E1: the previous session's value area. Only from a previous day that is fully in memory (a partial day's
+  // VAH / VAL / POC is not the real one).
+  const prevSession = s0 > 0 ? istSession(c.bars[s0 - 1].time) : null;
+  const prevFps = prevSession == null || c.referenceComplete?.previousDay === false ? [] : c.fps.slice(0, s0).filter((f) => istSession(f.barTime) === prevSession && f.deltaMode !== 'UNAVAILABLE');
+  const prevRaw = prevFps.length ? profileFromFootprints(prevFps) : null;
+  const prevProfile = prevRaw && prevRaw.poc != null && prevRaw.vah != null && prevRaw.val != null ? prevRaw : null;
   const named = [ref.pdh, ref.pdl, ref.pwh, ref.pwl, ref.orHigh, ref.orLow, profile.poc, profile.vah, profile.val, vwap?.[i]?.vwap ?? null, ...profile.lvn, ...profile.hvn].filter((x): x is number => x != null);
   const m30 = thirtyMinuteBars(c.bars);
   const last = bars[i];
   const dd = { slope: vwap?.[i]?.slopeAtr ?? null, cvdMom: cvd[i]?.momentum ?? null, close: last.close, profile, rvol: c.rvol[c.rvol.length - 1] ?? null };
   const m30In = frameInputs(m30, c.tickSize, dd);
   const regime = combineRegime({ daily: c.daily.length >= 5 ? frameInputs(c.daily, c.tickSize, { ...dd, slope: null, cvdMom: null }) : null, m30: m30In, m15: frameInputs(c.bars, c.tickSize, dd) });
-  return { c, s0, bars, fps, i, atr, buf, structure, levels, named, cvd, divergences, diag, vwap, absorption, exhaustion, profile, regime, fromGap, m30Trend: m30In.structure === 'RANGE' ? 'UNKNOWN' : m30In.structure };
+  return { c, s0, bars, fps, i, atr, buf, structure, levels, named, cvd, divergences, diag, vwap, absorption, exhaustion, profile, prevProfile, regime, fromGap, m30Trend: m30In.structure === 'RANGE' ? 'UNKNOWN' : m30In.structure };
 }
 
 // ---------------- shared helpers ----------------
@@ -445,7 +457,59 @@ function setupE(d: Derived): Raw {
   return { checks, failed, plan, from: abs ? abs.index : i, zone: abs?.zone ?? null, evidence: { absorption: abs, profile: { poc: p.poc, vah: p.vah, val: p.val } } };
 }
 
-const SETUPS: Record<DhanSetupKey, (d: Derived) => Raw> = { A: setupA, B: setupB, C: setupC, D: setupD, E: setupE };
+// ---- Setup E1 — previous-day value re-entry (owner, 11 Nov; long side; the short side is the mirror at the VAH) ----
+// The level and the story are the outside strategy the owner was shown: price trades at / below the PREVIOUS day's
+// value-area low, the selling there is absorbed, price closes back inside the value area, and the trade goes for the
+// previous day's POC. Its weak parts are replaced by ours: absorption is the engine's own detection (one-sided
+// aggression in its top 20% with price not progressing), not "volume > 1.5x average" (true of a breakdown bar too);
+// the stop is under the lowest low since the absorption bar, not a full ATR away; and the target must pay >= 1R.
+//   F1 the previous session's value area is known (complete previous day)
+//   F2 a bullish absorption in the last 4 bars whose bar traded at / below the previous VAL (+ 0.25 ATR)
+//   F3 the entry bar closes back above the previous VAL (inside the value area)
+//   F4 a stacked buy imbalance (>= 2 rows, as setup E) between the absorption bar and the entry bar
+//   F5 confirmation: the entry bar closes up, above the absorption bar's high, with positive delta
+//   F6 the 30-minute trend is not against the trade (their "daily trend" filter: only ~2 sessions are in memory)
+//   F7 target: the previous POC (else the previous VAH) if it pays >= 1R, capped at 1.5R - whichever comes first
+function setupF(d: Derived): Raw {
+  const { i, bars, fps } = d;
+  const R = DHAN_SETUP_RULES;
+  const p = d.prevProfile;
+  let abs: AbsorptionEvent | undefined, target: { price: number; kind: string } | null = null;
+  const stopOf = () => Math.min(...bars.slice(abs!.index, i + 1).map((b) => b.low)) - d.buf;
+  const { checks, failed } = run([
+    ['F1_PREVIOUS_VALUE_AREA', () => (p ? { level: p.val, poc: p.poc } : null)],
+    ['F2_ABSORPTION_AT_PREVIOUS_VAL', () => {
+      const z = R.zoneAtr * (d.atr ?? 0);
+      abs = d.atr == null ? undefined : d.absorption.filter((e) => e.side === 'BULLISH' && e.state !== 'FAILED' && e.index < i && e.index >= i - R.orderFlowRecencyBars && bars[e.index].low <= p!.val! + z).at(-1);
+      return abs && { zone: abs.zone, progressAtr: abs.progressAtr, bar: abs.index };
+    }],
+    ['F3_BACK_INSIDE_VALUE', () => (bars[i].close > p!.val! ? { close: bars[i].close, level: p!.val } : null)],
+    ['F4_STACKED_BUY_IMBALANCE', () => {
+      const st = fps.slice(abs!.index, i + 1).flatMap((f) => diagonalImbalances(f, { stackedMin: R.orderFlowStackedMin }).stacks).filter((x) => x.side === 'BUY').sort((a, b) => b.rows - a.rows)[0];
+      return st ? { rows: st.rows, low: st.low, high: st.high } : null;
+    }],
+    ['F5_CONFIRMATION_BAR', () => validFp(fps[i]) && fps[i].delta! > 0 && bars[i].close > bars[i].open && bars[i].close > bars[abs!.index].high ? { delta: fps[i].delta, close: bars[i].close } : null],
+    ['F6_TREND_NOT_AGAINST', () => (d.m30Trend !== 'BEARISH' ? { m30: d.m30Trend } : null)],
+    ['F7_TARGET_PREVIOUS_POC_OR_1_5R', () => {
+      const entry = bars[i].close, risk = entry - stopOf();
+      if (!(risk > 0)) return null;
+      const pays = (x: number | null): x is number => x != null && (x - entry) / risk >= R.orderFlowMinRr;
+      const base = pays(p!.poc) ? { price: p!.poc, kind: 'PD_POC' } : pays(p!.vah) ? { price: p!.vah, kind: 'PD_VAH' } : null;
+      if (!base) return null;
+      const cap = entry + R.valueReentryCapR * risk;
+      target = base.price <= cap ? base : { price: roundDp(cap, 4), kind: 'R1_5' };
+      return target;
+    }],
+  ]);
+  let plan: TradePlan | null = null;
+  if (!failed && target) {
+    const entry = bars[i].close, sl = stopOf(), t = target as { price: number; kind: string };
+    plan = entry > sl ? { entry, sl: roundDp(sl, 4), target: t.price, targetKind: t.kind, rr: roundDp((t.price - entry) / (entry - sl), 2) } : null;
+  }
+  return { checks, failed, plan, from: abs ? abs.index : i, zone: abs?.zone ?? null, evidence: { absorption: abs, previousProfile: p ? { poc: p.poc, vah: p.vah, val: p.val } : null } };
+}
+
+const SETUPS: Record<DhanSetupKey, (d: Derived) => Raw> = { A: setupA, B: setupB, C: setupC, D: setupD, E: setupE, F: setupF };
 
 // ---------------- score, gates, no-trade ----------------
 
@@ -535,7 +599,7 @@ const tradableWindow = (w: string) => w === 'PRIMARY' || w === 'SELECTIVE' || w 
 
 // ---------------- entry point ----------------
 
-const MIRROR_KIND: Record<string, string> = { VAH: 'VAL', VAL: 'VAH' };
+const MIRROR_KIND: Record<string, string> = { VAH: 'VAL', VAL: 'VAH', PD_VAH: 'PD_VAL', PD_VAL: 'PD_VAH' };
 const mPlan = (p: TradePlan | null): TradePlan | null => (p ? { ...p, entry: -p.entry, sl: -p.sl, target: -p.target, targetKind: MIRROR_KIND[p.targetKind] ?? p.targetKind } : null);
 function mirrorValue(v: unknown): unknown {
   // Evidence prices are mirrored back where they are plain price fields; structures are kept as recorded on the mirror.
@@ -565,7 +629,7 @@ export function evaluateDhanSetups(ctx: SetupContext): SetupsEvaluation {
         checks: flip ? r.checks.map((c) => ({ ...c, value: mirrorValue(c.value) })) : r.checks, plan: flip ? mPlan(r.plan) : r.plan,
         evidence: { zone: r.zone == null ? null : flip ? -r.zone : r.zone, atr: d.atr, window },
       };
-      if (!r.failed && key === 'E') {
+      if (!r.failed && (key === 'E' || key === 'F')) {
         // Pure order flow (owner, 9 Nov): only data validity, a defined plan and the session window; no score.
         res.gates = [
           { id: 'VALID_DATA', ok: !d.c.health.stale && d.c.health.mappingValid && !windowIncomplete(d, r.from) },
