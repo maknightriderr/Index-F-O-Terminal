@@ -340,7 +340,7 @@ export class FreshPaperWorker {
     for(const [k,v] of this.mcxDiag)if(now-v.at>15*60000)this.mcxDiag.delete(k);
     if(!this.mcxDiag.size)return;
     this.mcxDiagLoggedAt=now;
-    logger.info({event:'freshMcxFlowDiagnostic',thresholds:{setupDeltaPct:15,barDeltaOpposesPct:-15,classifiedSharePct:50,coveragePct:15,trades:15},contracts:Object.fromEntries([...this.mcxDiag].map(([k,v])=>[k,{...v,at:new Date(v.at).toISOString()}]))},'MCX flow diagnostic: the numbers behind NEW_MCX_FLOW_V1 flow checks (log only, decides nothing)');
+    logger.info({event:'freshMcxFlowDiagnostic',thresholds:{setupDeltaPct:8,barDeltaOpposesPct:-8,classifiedSharePct:50,coveragePct:15,trades:15},contracts:Object.fromEntries([...this.mcxDiag].map(([k,v])=>[k,{...v,at:new Date(v.at).toISOString()}]))},'MCX flow diagnostic: the numbers behind NEW_MCX_FLOW_V1 flow checks (log only, decides nothing)');
   }
   /** The armed state is decided once per scan (no transient disarm at its start: entries that arrive between the
    *  fresh worker's own steps — Dhan engine candidates, a pricing that finishes mid-scan — must not read a false

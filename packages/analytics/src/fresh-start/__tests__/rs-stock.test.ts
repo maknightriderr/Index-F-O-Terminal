@@ -58,8 +58,8 @@ describe('2.0 NEW_RS_STOCK_V1', () => {
         expect(refusal({ ...c, stockIntel: null })?.detail).toBe('RS_INTEL_STALE');
         expect(refusal({ ...c, stockIntel: intel(c.now, { at: c.now + 1000 }) })?.detail).toBe('RS_INTEL_STALE'); // never a later scan
         expect(refusal({ ...c, stockIntel: undefined })?.detail).toBe('RS_NOT_A_STOCK');
-        // A weak resumption bar (normal volume) is no trigger; nor is a session before 10:00 (45 minutes).
-        const quiet = [...pullbackDay.slice(0, -1), bar(9, 101.8, 102.7, 101.75, 102.6, 1000)];
+        // A resumption bar on below-average volume is no trigger (2.1: average volume is enough); nor is a session before 10:00.
+        const quiet = [...pullbackDay.slice(0, -1), bar(9, 101.8, 102.7, 101.75, 102.6, 700)];
         expect(refusal(context(quiet))?.detail).toBe('RS_NO_TRIGGER');
         const early = pullbackDay.slice(2).map((b, i) => ({ ...b, time: open + i * 300000, availableAt: open + (i + 1) * 300000 }));
         expect(refusal(context(early))?.detail).toBe('RS_BEFORE_10_00');
@@ -68,9 +68,19 @@ describe('2.0 NEW_RS_STOCK_V1', () => {
         const wide = [...pullbackDay.slice(0, -1), bar(9, 101.8, 103.6, 101.75, 103.5, 1600)];
         expect(refusal(context(wide))?.detail).toBe('RS_RISK_TOO_WIDE');
     });
-    it('needs the stock holding VWAP: more than one close on the wrong side in the last six bars is refused', () => {
-        const below = pullbackDay.map((b, i) => i === 5 || i === 6 ? { ...b, low: 100.5, close: 100.9 } : b);
+    it('needs the stock holding VWAP: more than two closes on the wrong side in the last six bars are refused (2.1)', () => {
+        const below = pullbackDay.map((b, i) => i === 4 || i === 5 || i === 6 ? { ...b, low: 100.5, close: 100.9 } : b);
+        expect(find(context(pullbackDay.map((b, i) => i === 5 || i === 6 ? { ...b, low: 100.5, close: 100.9 } : b)))).toBeDefined(); // two are tolerated
         expect(refusal(context(below))?.detail).toBe('RS_NOT_HOLDING_VWAP');
+    });
+    it('2.1: a plain continuation (a close beyond the last six bars on rvol >= 1.2) is a trigger of its own', () => {
+        // A steady climb well above VWAP: no pullback touch, no tight base; the last bar closes past every prior high.
+        const climb = [...trend.slice(0, 5), bar(5, 102.8, 103.4, 102.7, 103.3), bar(6, 103.3, 104.0, 103.2, 103.9), bar(7, 103.9, 104.6, 103.8, 104.5), bar(8, 104.5, 105.2, 104.4, 105.1), bar(9, 105.1, 105.8, 105.0, 105.7), bar(10, 105.7, 106.6, 105.65, 106.5, 1300)];
+        const x = find(context(climb));
+        expect(x, JSON.stringify(refusal(context(climb)))).toMatchObject({ direction: 'BULLISH', exitProfile: 'TREND' });
+        expect(x!.stop).toBeLessThan(105.0); // under the last two bars
+        const quiet = [...climb.slice(0, -1), bar(10, 105.7, 106.6, 105.65, 106.5, 1000)];
+        expect(refusal(context(quiet))?.detail).toBe('RS_NO_TRIGGER');
     });
     it('is exempt from the choppy-index filter that stands the pullback strategies aside', () => {
         const c = context(pullbackDay), r = evaluateFreshStrategies(c).refusals;
