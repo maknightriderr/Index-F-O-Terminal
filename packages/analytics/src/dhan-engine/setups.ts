@@ -92,6 +92,9 @@ export interface SetupContext {
   /** Completed prior daily bars, oldest first. */
   daily: EngineBar[];
   sessionOpen: number;
+  /** The bar length of `bars` / `fps` in ms. Absent = 15 minutes (the live engine). The 5-minute order-flow shadow
+   *  (11 Nov) passes 300 000: only the contiguity check and the decision time use it; no rule changes with it. */
+  barMs?: number;
   /** The exchange's session close (DST-aware for MCX). Absent = no close-based cutoff (fixtures). */
   sessionClose?: number;
   /** Whether the previous session / previous week in `daily` are complete (8 Nov audit): a level from a partial day or
@@ -479,7 +482,7 @@ function liquid(d: Derived): boolean {
 function windowIncomplete(d: Derived, from: number): boolean {
   return d.fps.slice(from, d.i + 1).some((f, i, window) =>
     f.incomplete || f.deltaMode === 'UNAVAILABLE'
-    || (i > 0 && f.barTime - window[i - 1].barTime !== 15 * 60_000));
+    || (i > 0 && f.barTime - window[i - 1].barTime !== (d.c.barMs ?? 15 * 60_000)));
 }
 
 function gatesOf(d: Derived, r: Raw): Check[] {
@@ -547,7 +550,7 @@ function mirrorValue(v: unknown): unknown {
 
 export function evaluateDhanSetups(ctx: SetupContext): SetupsEvaluation {
   const last = ctx.bars.at(-1);
-  const window = last ? sessionWindow(ctx.exchange, last.time + 900_000, ctx.sessionClose) : 'NO_DATA';
+  const window = last ? sessionWindow(ctx.exchange, last.time + (ctx.barMs ?? 900_000), ctx.sessionClose) : 'NO_DATA';
   const base: SetupsEvaluation = { version: DHAN_SETUP_VERSION, symbol: ctx.symbol, barTime: last?.time ?? null, sessionWindow: window, regime: null, results: [] };
   const up = derive(ctx);
   if (!up) return base;

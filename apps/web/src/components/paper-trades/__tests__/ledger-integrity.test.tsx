@@ -1,8 +1,9 @@
+import type { LooseJson } from '@/lib/loose-json';
 import React from 'react';
 import {describe,it,expect,afterEach} from 'vitest';
 import {render,screen,cleanup} from '@testing-library/react';
 import {LedgerIntegrity} from '../ledger-integrity';
-const report:any={scope:'LATEST_100_CURRENT_VERSION',sampled:0,sampleTruncated:false,consistent:0,incomplete:0,inconsistent:0,closedChecked:0,rows:[],note:'Recorded first/latest evidence only; actual fills and profitability are not certified.'};
+const report:LooseJson={scope:'LATEST_100_CURRENT_VERSION',sampled:0,sampleTruncated:false,consistent:0,incomplete:0,inconsistent:0,closedChecked:0,rows:[],note:'Recorded first/latest evidence only; actual fills and profitability are not certified.'};
 afterEach(cleanup);
 describe('recorded paper ledger quality disclosure',()=>{
  it('does not mistake an empty sample for a passed lifecycle validation',()=>{render(<LedgerIntegrity report={report}/>);expect(screen.getByText('No filled paper records have been checked yet.')).toBeInTheDocument();expect(screen.queryByRole('table')).toBeNull();expect(screen.getByText(/not certified/)).toBeInTheDocument();});

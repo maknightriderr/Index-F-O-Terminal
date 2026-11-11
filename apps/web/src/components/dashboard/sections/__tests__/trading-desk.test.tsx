@@ -1,3 +1,4 @@
+import type { LooseJson } from '@/lib/loose-json';
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
@@ -8,7 +9,7 @@ import type { SetupRow } from '@/lib/setups';
 import type { PaperTradeView } from '@fno/shared';
 
 const mocks = vi.hoisted(() => ({ openTab: vi.fn(), setActiveTab: vi.fn(), rows: [] as SetupRow[], error: null as string | null, loading: false, trades: [] as PaperTradeView[] }));
-vi.mock('@/stores', () => ({ useAssetTabsStore: (s: any) => s({ openTab: mocks.openTab }), useMarketStore: (s: any) => s({ setActiveTab: mocks.setActiveTab }) }));
+vi.mock('@/stores', () => ({ useAssetTabsStore: (s: LooseJson) => s({ openTab: mocks.openTab }), useMarketStore: (s: LooseJson) => s({ setActiveTab: mocks.setActiveTab }) }));
 vi.mock('@/lib/use-best-setups', () => ({ useBestSetups: () => ({ rows: mocks.rows, error: mocks.error, loading: mocks.loading }) }));
 vi.mock('@/lib/use-health', () => ({ useNow: () => Date.parse('2026-10-25T10:00:00Z') }));
 vi.mock('@/lib/use-feed-summary', () => ({ useFeedSummary: () => ({ now: Date.parse('2026-10-25T10:00:00Z'), apiReachable: true }) }));

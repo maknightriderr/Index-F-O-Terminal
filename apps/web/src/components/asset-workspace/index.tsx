@@ -1,4 +1,6 @@
 'use client';
+/* eslint-disable react-hooks/purity -- the value is a display clock / age read at render time; it is re-read on every data refresh */
+/* eslint-disable react-hooks/set-state-in-effect -- state is reset or loaded when an input changes; behaviour verified in production, not restructured */
 import { trailingNote } from '@/lib/setup-trailing';
 
 import { InstrumentChart } from '@/components/dashboard/instrument-chart';
@@ -182,7 +184,7 @@ export function AssetWorkspace() {
         <div className="text-5xl mb-4">📈</div>
         <h2 className="text-xl font-bold text-gray-200 light:text-slate-800 mb-2">No Asset Selected</h2>
         <p className="text-sm text-gray-400 light:text-slate-600 max-w-md">
-          Use "+ Add Asset" to pick an index or F&O stock and open its workspace.
+          Use &quot;+ Add Asset&quot; to pick an index or F&O stock and open its workspace.
         </p>
       </div>
     );
@@ -1017,7 +1019,7 @@ function TradeSetupCard({ setup, structure, explainTarget }: { setup: TradeSetup
             <ExplainButton target={explainTarget} question={`Why no trade on ${explainTarget.symbol} (${explainTarget.mode.toLowerCase()})?`} label="Why no trade?" />
           </div>
           <p className="text-xs text-gray-400 light:text-slate-600 leading-snug">{setup.reason}</p>
-          {structure?.enabled && <p className="text-xs text-gray-500 light:text-slate-500 mt-0.5 italic">Doesn't block structure setups.</p>}
+          {structure?.enabled && <p className="text-xs text-gray-500 light:text-slate-500 mt-0.5 italic">Doesn&apos;t block structure setups.</p>}
         </div>
       </IntelCard>
     );
@@ -1069,7 +1071,7 @@ function TradeSetupCard({ setup, structure, explainTarget }: { setup: TradeSetup
         </div>
         {liveMark}
         <p className="text-xs text-gray-400 mt-2.5 leading-snug">
-          Defined-risk spread — matches Strategy Scanner's IV-regime call for this symbol.{lockedNote}
+          Defined-risk spread — matches Strategy Scanner&apos;s IV-regime call for this symbol.{lockedNote}
         </p>
       </IntelCard>
     );

@@ -35,8 +35,8 @@ import { serviceHeartbeat } from '../lib/service-supervisor.js';
 import { DHAN_RESPONSE, DHAN_SEGMENT_CODE, DHAN_MAX_INSTRUMENTS_PER_CONNECTION, dhanFeedUrl, fullSubscriptions, parseDhanFrame, resolveFlowContracts, type DhanFullPacket, type ResolvedFlowContract } from '../lib/dhan-feed-packets.js';
 import { ORDER_BLOCK_MODE, ORDER_BLOCK_MODE_REJECTED, OF1_TRADING_REQUESTED, ORDER_FLOW_SUPPORTED, ORDER_FLOW_SYMBOLS, ORDER_FLOW_SYMBOLS_REJECTED, DHAN_FLOW_V2, DHAN_FLOW_V2_SYMBOLS, DHAN_FLOW_STOCKS, DHAN_ENGINE_SHADOW } from '../config/order-flow-flags.js';
 import { dhanConfigured, dhanSession, dhanSessionStatus, ensureDhanSession, markDhanTokenRejected } from './dhan-session.js';
-import { checkpointOpenFlowBars, OPEN_BAR_CHECKPOINT_MS, closeFlowBars, flowClosedBarCount, flowContractBars, hydrateFlowSymbols, recordFlowTrade, recordFlowUnreconciled, registerFlowSymbol, setFlowFeedConnected } from './order-flow-store.js';
-import { dhanShadowBusy, evaluateDhanShadow } from './dhan-engine-shadow.js';
+import { flowClosedFiveCount, checkpointOpenFlowBars, OPEN_BAR_CHECKPOINT_MS, closeFlowBars, flowClosedBarCount, flowContractBars, hydrateFlowSymbols, recordFlowTrade, recordFlowUnreconciled, registerFlowSymbol, setFlowFeedConnected } from './order-flow-store.js';
+import { dhanShadowBusy, evaluateDhanShadow, dhanShadowFiveBusy, evaluateDhanShadowFive } from './dhan-engine-shadow.js';
 
 export const DHAN_SCRIP_MASTER_URL = 'https://images.dhan.co/api-data/api-scrip-master.csv';
 const TICK_MS = 10_000;
@@ -95,6 +95,7 @@ let checkpointAt = 0, checkpointBusy = false;
 const state = {
   /** flowClosedBarCount() at the last Dhan shadow pass. */
   shadowSeenClosed: -1,
+  shadowSeenClosedFive: -1,
   configured: false,
   connected: false,
   ws: null as WebSocket | null,
@@ -387,6 +388,12 @@ async function tick(): Promise<void> {
   if (closed !== state.shadowSeenClosed && DHAN_ENGINE_SHADOW && !dhanShadowBusy()) {
     state.shadowSeenClosed = closed;
     void evaluateDhanShadow(now, dhanInstrumentHealth).catch((err: any) => logger.warn({ error: err.message }, 'Dhan engine shadow: pass failed'));
+  }
+  // 11 Nov: the 5-minute order-flow shadow (index and commodity futures; recorded only, never traded).
+  const closedFive = flowClosedFiveCount();
+  if (closedFive !== state.shadowSeenClosedFive && DHAN_ENGINE_SHADOW && !dhanShadowFiveBusy()) {
+    state.shadowSeenClosedFive = closedFive;
+    void evaluateDhanShadowFive(now, dhanInstrumentHealth).catch((err: any) => logger.warn({ error: err.message }, 'Dhan engine 5-minute shadow: pass failed'));
   }
 }
 

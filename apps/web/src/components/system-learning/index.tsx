@@ -1,4 +1,5 @@
 'use client';
+import type { LooseJson } from '@/lib/loose-json';
 
 import { PageHeader } from '@/components/ui/card';
 
@@ -84,7 +85,7 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <p className="text-xs text-gray-500 light:text-slate-500 italic py-2">{children}</p>;
 }
 
-function EventCard({ e }: { e: any }) {
+function EventCard({ e }: { e: LooseJson }) {
   // Days seen, never audit runs — and an expected finding has nothing
   // protecting against it, so it is neither active nor failed.
   const daysSeen = e.audit_days_seen ?? e.occurrence_count;
@@ -126,7 +127,7 @@ function EventCard({ e }: { e: any }) {
             {e.root_cause ?? <span className="text-amber-400 light:text-amber-600">not established — routed to human review, never guessed</span>}
           </dd>
         </div>
-        <div><dt className="text-gray-500 light:text-slate-500 inline">protection </dt><dd className="inline"><Pill tone={protectionTone as any}>{e.protection_id == null ? 'none' : daysSeen > 1 && e.status !== 'EXPECTED' ? 'failed' : 'active'}</Pill></dd></div>
+        <div><dt className="text-gray-500 light:text-slate-500 inline">protection </dt><dd className="inline"><Pill tone={protectionTone as LooseJson}>{e.protection_id == null ? 'none' : daysSeen > 1 && e.status !== 'EXPECTED' ? 'failed' : 'active'}</Pill></dd></div>
         <div><dt className="text-gray-500 light:text-slate-500 inline">regression </dt><dd className="inline"><Pill tone={e.regression_test_status === 'FAIL' ? 'bad' : e.regression_test_status === 'PASS' ? 'good' : 'flat'}>{e.regression_test_status ?? 'none'}</Pill></dd></div>
       </dl>
 
@@ -155,7 +156,7 @@ export function SystemLearningPage() {
   const data = summary?.data ?? null;
   const counts = data?.counts ?? {};
   const learning = data?.learning ?? null;
-  const alerts: any[] = data?.repeated_failure_alerts ?? [];
+  const alerts: LooseJson[] = data?.repeated_failure_alerts ?? [];
 
   const decide = async (eventId: number, decision: string) => {
     if (reviewer.trim() === '') {
@@ -167,7 +168,7 @@ export function SystemLearningPage() {
       const r = await api.submitLearningReview(eventId, { decision, reviewer: reviewer.trim() });
       setMessage(r?.message ?? 'recorded');
       refresh();
-    } catch (err: any) {
+    } catch (err: LooseJson) {
       setMessage(err?.message ?? 'failed');
     } finally {
       setBusy(null);
@@ -233,7 +234,7 @@ export function SystemLearningPage() {
             {TAB_LABELS[t]}
             {t === 'review' && review.length > 0 && <span className="ml-1 text-amber-400 light:text-amber-600">({review.length})</span>}
             {t === 'expected' && expected.length > 0 && <span className="ml-1 text-emerald-400 light:text-emerald-600">({expected.length})</span>}
-            {t === 'regressions' && regressions.some((r: any) => r.status === 'FAIL') && <span className="ml-1 text-red-400 light:text-red-600">!</span>}
+            {t === 'regressions' && regressions.some((r: LooseJson) => r.status === 'FAIL') && <span className="ml-1 text-red-400 light:text-red-600">!</span>}
           </button>
         ))}
       </div>
@@ -350,7 +351,7 @@ export function SystemLearningPage() {
       {tab === 'errors' && !loading && (
         <Section title={`Errors detected — ${data?.date ?? ''}`} subtitle="Every finding recorded for this audit day.">
           {events.length === 0 ? <Empty>nothing recorded for this date</Empty> : (
-            <div className="space-y-2">{events.map((e: any) => <EventCard key={e.event_id} e={e} />)}</div>
+            <div className="space-y-2">{events.map((e: LooseJson) => <EventCard key={e.event_id} e={e} />)}</div>
           )}
         </Section>
       )}
@@ -359,7 +360,7 @@ export function SystemLearningPage() {
       {tab === 'recurring' && !loading && (
         <Section title="Recurring errors" subtitle="Seen more than once. Where a protection existed and the fault returned, the protection has failed — which is a different and worse finding than the fault itself.">
           {recurring.length === 0 ? <Empty>no fault has been seen more than once</Empty> : (
-            <div className="space-y-2">{recurring.map((e: any) => <EventCard key={e.event_id} e={e} />)}</div>
+            <div className="space-y-2">{recurring.map((e: LooseJson) => <EventCard key={e.event_id} e={e} />)}</div>
           )}
         </Section>
       )}
@@ -371,7 +372,7 @@ export function SystemLearningPage() {
           subtitle="Real observations whose verdict is decided by the contract generation that wrote the rows. Not suppressed, and not defects — if the governing contract changes, the same observation becomes a defect again."
         >
           {expected.length === 0 ? <Empty>none</Empty> : (
-            <div className="space-y-2">{expected.map((e: any) => <EventCard key={e.event_id} e={e} />)}</div>
+            <div className="space-y-2">{expected.map((e: LooseJson) => <EventCard key={e.event_id} e={e} />)}</div>
           )}
         </Section>
       )}
@@ -380,13 +381,13 @@ export function SystemLearningPage() {
       {tab === 'root-causes' && !loading && (
         <div className="space-y-5">
           <Section title="Established root causes" subtitle="Findings whose cause is on the record.">
-            {unresolved.filter((e: any) => e.root_cause_known).length === 0 ? <Empty>none established</Empty> : (
-              <div className="space-y-2">{unresolved.filter((e: any) => e.root_cause_known).map((e: any) => <EventCard key={e.event_id} e={e} />)}</div>
+            {unresolved.filter((e: LooseJson) => e.root_cause_known).length === 0 ? <Empty>none established</Empty> : (
+              <div className="space-y-2">{unresolved.filter((e: LooseJson) => e.root_cause_known).map((e: LooseJson) => <EventCard key={e.event_id} e={e} />)}</div>
             )}
           </Section>
           <Section title="Unknown root cause" subtitle="These stay open. A cause is never invented to close a record, and the symptom going quiet does not count as an explanation.">
-            {unresolved.filter((e: any) => !e.root_cause_known).length === 0 ? <Empty>none — every open finding has a cause on the record</Empty> : (
-              <div className="space-y-2">{unresolved.filter((e: any) => !e.root_cause_known).map((e: any) => <EventCard key={e.event_id} e={e} />)}</div>
+            {unresolved.filter((e: LooseJson) => !e.root_cause_known).length === 0 ? <Empty>none — every open finding has a cause on the record</Empty> : (
+              <div className="space-y-2">{unresolved.filter((e: LooseJson) => !e.root_cause_known).map((e: LooseJson) => <EventCard key={e.event_id} e={e} />)}</div>
             )}
           </Section>
         </div>
@@ -407,7 +408,7 @@ export function SystemLearningPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {protections.map((p: any) => (
+                  {protections.map((p: LooseJson) => (
                     <tr key={p.protection_id} className="border-t border-gray-700/40 light:border-slate-200 align-top">
                       <td className="px-3 py-1.5"><Pill>{p.protection_type}</Pill></td>
                       <td className="px-3 py-1.5 text-gray-200 light:text-slate-800">
@@ -445,7 +446,7 @@ export function SystemLearningPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {regressions.map((r: any) => (
+                  {regressions.map((r: LooseJson) => (
                     <tr key={r.test_id} className="border-t border-gray-700/40 light:border-slate-200 align-top">
                       <td className="px-3 py-1.5"><Pill tone={r.status === 'FAIL' ? 'bad' : r.status === 'PASS' ? 'good' : 'flat'}>{r.status}</Pill></td>
                       <td className="px-3 py-1.5 text-gray-200 light:text-slate-800">
@@ -492,7 +493,7 @@ export function SystemLearningPage() {
 
           {review.length === 0 ? <Empty>empty — nothing is waiting on a person</Empty> : (
             <div className="space-y-2">
-              {review.map((r: any) => (
+              {review.map((r: LooseJson) => (
                 <div key={r.event_id} className="border border-gray-700/60 light:border-slate-300 rounded-lg bg-gray-800/30 light:bg-white p-3 space-y-2">
                   <div className="flex items-start justify-between gap-2 flex-wrap">
                     <div>
@@ -555,7 +556,7 @@ export function SystemLearningPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {history.map((r: any) => (
+                  {history.map((r: LooseJson) => (
                     <tr key={r.audit_run_id} className="border-t border-gray-700/40 light:border-slate-200">
                       <td className="px-3 py-1.5 font-mono text-gray-300 light:text-slate-700">{r.event_date}</td>
                       <td className="px-3 py-1.5"><Pill tone={r.status === 'SUCCESS' ? 'good' : r.status === 'PARTIAL' ? 'warn' : 'bad'}>{r.status}</Pill></td>

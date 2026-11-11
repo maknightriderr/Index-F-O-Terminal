@@ -79,6 +79,32 @@ describe('shadow recorder', () => {
     expect((await shadow.dhanShadowSignals('2026-11-09')).length).toBe(2);
     expect(analytics.evaluateDhanSetups).toHaveBeenCalledTimes(1);
   });
+  it('11 Nov: the 5-minute shadow records setup E under its own id, per 5-minute bar, and never reaches the paper path', async () => {
+    const paper = vi.fn(async () => ({ decision: 'FILLED', candidateId: 'c1' }));
+    shadow.setDhanPaperHandler(paper);
+    const e = (status: string, extra: object = {}) => sig(status, { setup: 'E', strategy: 'DHAN_E_ORDER_FLOW', score: null, noTrade: null, failed: status === 'NO_SETUP' ? 'E1_ABSORPTION' : null, ...extra });
+    fixed.results = [sig('SIGNAL'), e('SIGNAL'), e('NO_SETUP', { side: 'BEARISH' })];
+    const F = 300_000;
+    await trade(OPEN + 1000, 100, 10, 'BUY'); await trade(OPEN + F + 1000, 101, 10, 'BUY');
+    await store.closeFlowBars(OPEN + F + 1, true); // the first 5-minute bar closes; the 15-minute bar is still open
+    expect(store.flowContractFiveBars('NIFTY')!.footprints.filter((f) => f.deltaMode !== 'UNAVAILABLE').map((f) => [f.barTime, f.volume])).toEqual([[OPEN, 10]]);
+    expect(await shadow.evaluateDhanShadowFive(OPEN + F + 1, healthy)).toBe(1);
+    expect(await shadow.evaluateDhanShadowFive(OPEN + F + 2, healthy)).toBe(0); // same 5-minute bar
+    expect((analytics.evaluateDhanSetups as any).mock.calls.at(-1)[0]).toMatchObject({ barMs: F, bars: [{ time: OPEN, close: 100 }] });
+    await store.closeFlowBars(OPEN + 2 * F + 1, true);
+    expect(await shadow.evaluateDhanShadowFive(OPEN + 2 * F + 1, healthy)).toBe(1);
+    const rows = (await pg.query<any>('SELECT strategy, side, status, paper_decision, bar_time FROM dhan_engine_signals ORDER BY bar_time')).rows;
+    expect(rows.map((r) => [r.strategy, r.side, r.status, r.paper_decision, new Date(r.bar_time).getTime() - OPEN])).toEqual([
+      ['DHAN_E_ORDER_FLOW_5M', 'BULLISH', 'SIGNAL', null, 0], ['DHAN_E_ORDER_FLOW_5M', 'BULLISH', 'SIGNAL', null, F],
+    ]);
+    expect(paper).not.toHaveBeenCalled();
+    expect(shadow.dhanShadowFiveStatus()).toEqual({ recorded: { SIGNAL: 2, NO_TRADE: 0 }, firstFailures: [{ k: 'E1_ABSORPTION', c: 2 }] });
+    // Stock futures keep no 5-minute footprints (bounded memory).
+    store.registerFlowSymbol('RELIANCE', { exchange: 'NSE', instrument: 'RELIANCE-Nov2026-FUT', source: 'DHAN', mode: 'INFERRED', startedAt: OPEN - Q, kind: 'STOCK', tickSize: 0.1 });
+    store.recordFlowTrade('RELIANCE', { time: OPEN + 2 * F + 1000, price: 50, qty: 5, side: 'BUY' });
+    await store.closeFlowBars(OPEN + 3 * F + 1, true);
+    expect(store.flowContractFiveBars('RELIANCE')).toBeNull();
+  });
   it('phase 4: hands each SIGNAL (only) to the paper handler and records its decision on the row', async () => {
     fixed.results = [sig('SIGNAL', { evidence: { atr: 12 } }), sig('NO_TRADE', { side: 'BEARISH' })];
     const handler = vi.fn(async () => ({ decision: 'FILLED', candidateId: 'cand-1' }));

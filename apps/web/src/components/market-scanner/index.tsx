@@ -50,7 +50,7 @@ export function MarketScannerPage() {
 
   return (
     <div className="terminal-page mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
-      <PageHeader title={"Structure Scanner"} subtitle={<>The market scan (the Market Scanner): NIFTY trend → strongest/weakest sector → top liquid F&amp;O stocks, scored 0-100 across 8 categories, plus the structure engine's developing setups. For stock-by-stock option-buying leans see Option-Buying Leans; for one ranked list see Best Setups.</>} actions={<><div className="flex flex-wrap items-center gap-2">
+      <PageHeader title={"Structure Scanner"} subtitle={<>The market scan (the Market Scanner): NIFTY trend → strongest/weakest sector → top liquid F&amp;O stocks, scored 0-100 across 8 categories, plus the structure engine&apos;s developing setups. For stock-by-stock option-buying leans see Option-Buying Leans; for one ranked list see Best Setups.</>} actions={<><div className="flex flex-wrap items-center gap-2">
           <FreshnessBadge state={freshness.state} detail={freshness.detail} />
           <span className="text-xs text-gray-400 light:text-slate-600">{scannedAt ? `Scan recorded ${formatIstDateTime(scannedAt, now)}${meta?.source === 'LAST_KNOWN' ? ' (last known)' : ''}` : ''}</span>
           <ActionButton onClick={() => void runScan()} disabled={running || !isMarketOpen('NSE', now)} title={isMarketOpen('NSE', now) ? 'Runs the market scan now. It records the same decision rows as the background scan (every 5 minutes while NSE is open), so it only happens when you press this; opening this page never runs a scan.' : 'NSE is closed: a scan only runs in session, so there is nothing to run now. The last recorded scan stays on screen.'}>
@@ -168,8 +168,8 @@ export function MarketScannerPage() {
           <div>
             <h2 className="text-xs font-bold text-gray-300 light:text-slate-700 uppercase tracking-wide">Stock-Specific Movers</h2>
             <p className="text-sm text-gray-400 light:text-slate-600 mt-1">
-              Setups moving on their own strength, independent of (or against) today's overall market read — their
-              Market Trend score is zeroed since the broader tape doesn't confirm them.
+              Setups moving on their own strength, independent of (or against) today&apos;s overall market read — their
+              Market Trend score is zeroed since the broader tape doesn&apos;t confirm them.
             </p>
           </div>
           {data.stockSpecificMovers.map((c) => (

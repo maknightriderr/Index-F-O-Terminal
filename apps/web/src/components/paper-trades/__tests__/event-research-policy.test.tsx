@@ -1,9 +1,10 @@
+import type { LooseJson } from '@/lib/loose-json';
 import React from 'react';
 import {describe,it,expect,afterEach} from 'vitest';
 import {render,screen,within,cleanup} from '@testing-library/react';
 import {EventResearchPolicy} from '../event-research-policy';
 const performance={strategy:'NEW_ORB_RETEST_V1',filled:1,closed:1,netPnl:-100,expectancyR:-.1,winRate:0};
-const data:any={eventPolicy:{id:'PAPER_EVENT_UNVERIFIED_V1',allowMissingMacroCoverage:true},eventCohorts:[],positions:[]};
+const data:LooseJson={eventPolicy:{id:'PAPER_EVENT_UNVERIFIED_V1',allowMissingMacroCoverage:true},eventCohorts:[],positions:[]};
 afterEach(cleanup);
 describe('paper-only incomplete event research disclosure',()=>{
  it('shows the approved missing-data exception without claiming all execution gates or entries are ready',()=>{render(<EventResearchPolicy data={data} names={{}}/>);const banner=screen.getByRole('status',{name:'Paper event policy'});expect(banner).toHaveTextContent('EVENT_DATA_UNVERIFIED');expect(banner).toHaveTextContent('No paid calendar key is required');expect(banner).toHaveTextContent('Other qualification gates can still prevent a trade');expect(screen.getByText(/No fresh fills recorded yet/)).toBeInTheDocument();});

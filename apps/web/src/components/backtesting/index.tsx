@@ -147,7 +147,7 @@ export function BacktestingPage() {
       )}
       {analytics && analytics.offSessionExcludedCount > 0 && (
         <div className="bg-gray-500/10 border border-gray-500/20 rounded-xl px-4 py-2 text-gray-400 light:text-slate-600 text-xs">
-          {analytics.offSessionExcludedCount} setup{analytics.offSessionExcludedCount === 1 ? '' : 's'} generated while the market was closed (after hours, weekend, or holiday) {analytics.offSessionExcludedCount === 1 ? 'is' : 'are'} excluded from these stats — priced off frozen quotes nobody could trade. They're still listed below, marked OFF-HRS.
+          {analytics.offSessionExcludedCount} setup{analytics.offSessionExcludedCount === 1 ? '' : 's'} generated while the market was closed (after hours, weekend, or holiday) {analytics.offSessionExcludedCount === 1 ? 'is' : 'are'} excluded from these stats — priced off frozen quotes nobody could trade. They&apos;re still listed below, marked OFF-HRS.
         </div>
       )}
 

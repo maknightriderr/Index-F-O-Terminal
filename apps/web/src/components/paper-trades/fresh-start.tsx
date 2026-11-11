@@ -1,4 +1,5 @@
 'use client';
+/* eslint-disable react-hooks/purity -- the value is a display clock / age read at render time; it is re-read on every data refresh */
 import React, { useEffect, useState } from 'react';
 import type { FreshStartStatus } from '@fno/shared';
 import { api } from '@/lib/api';

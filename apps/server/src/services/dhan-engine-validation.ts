@@ -41,7 +41,17 @@ export function barOfTrades(barTime: number, trades: readonly FlowTrade[]): Engi
   return { time: barTime, open: s[0].price, high: Math.max(...s.map((t) => t.price)), low: Math.min(...s.map((t) => t.price)), close: s[s.length - 1].price, volume: s.reduce((a, t) => a + t.qty, 0) };
 }
 
-const sessionAfter = (bars: readonly EngineBar[], barTime: number) => bars.filter((b) => b.time >= barTime + FLOW_BAR_MS && istSession(b.time) === istSession(barTime));
+const sessionAfter = (bars: readonly EngineBar[], barTime: number, barMs = FLOW_BAR_MS) => bars.filter((b) => b.time >= barTime + barMs && istSession(b.time) === istSession(barTime));
+const FIVE_MS = 300_000;
+/** The recorded 15-minute event bars cut into 5-minute price bars (grading of the 5-minute shadow signals). */
+export function fiveMinuteBars(recorded: readonly RecordedBar[]): EngineBar[] {
+  const out: EngineBar[] = [];
+  for (const r of recorded) for (let b = r.barTime; b < r.barTime + FLOW_BAR_MS; b += FIVE_MS) {
+    const bar = barOfTrades(b, r.trades.filter((t) => t.time >= b && t.time < b + FIVE_MS));
+    if (bar) out.push(bar);
+  }
+  return out;
+}
 const day = (s: string) => Date.parse(`${s}T00:00:00+05:30`);
 
 /** Grade the recorded A–D signals of [fromDay, toDay] (IST dates, inclusive). */
@@ -61,9 +71,10 @@ export async function dhanValidation(fromDay: string, toDay: string) {
     const mine = signals.filter((s) => s.symbol === symbol);
     const recorded = await loadRecorded(symbol, Math.min(...mine.map((s) => new Date(s.bar_time).getTime())), to);
     const bars = recorded.map((r) => barOfTrades(r.barTime, r.trades)).filter((b): b is EngineBar => b != null);
+    const bars5 = mine.some((s) => s.strategy.endsWith('_5M')) ? fiveMinuteBars(recorded) : [];
     for (const s of mine) {
-      const t = new Date(s.bar_time).getTime();
-      const g = gradeSignal({ side: s.side, entry: Number(s.entry), stop: Number(s.stop_loss), target: Number(s.target), costPoints: SLIPPAGE_TICKS * (ticks.get(symbol) ?? 0) }, sessionAfter(bars, t));
+      const t = new Date(s.bar_time).getTime(), fiveMin = s.strategy.endsWith('_5M');
+      const g = gradeSignal({ side: s.side, entry: Number(s.entry), stop: Number(s.stop_loss), target: Number(s.target), costPoints: SLIPPAGE_TICKS * (ticks.get(symbol) ?? 0) }, fiveMin ? sessionAfter(bars5, t, FIVE_MS) : sessionAfter(bars, t));
       if (g.r == null) { ungradable++; continue; }
       (graded[s.status] ??= []).push({ key: `${s.strategy}:${s.side}:${symbol}:${t}`, strategy: s.strategy, symbol, side: s.side, time: t, regime: s.regime, status: s.status, r: g.r, netR: g.netR, outcome: g.outcome });
     }

@@ -19,7 +19,7 @@ import { redis } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
 import { schemaFileReady } from './ensure-capture-schema.js';
 import { observedFreshOi } from './fresh-start/intel.js';
-import { flowContractBars, flowLastTrade, flowSessionState, flowSymbols } from './order-flow-store.js';
+import { flowContractBars, flowContractFiveBars, flowLastTrade, flowSessionState, flowSymbols, FLOW_FIVE_MS } from './order-flow-store.js';
 
 export const DHAN_SIGNALS_MIGRATION = '053_dhan_engine_signals.sql';
 export const DHAN_PAPER_MIGRATION = '054_dhan_engine_paper.sql';
@@ -120,10 +120,12 @@ const rvolOf = (refs: Map<string, number[]>, f: FootprintBar): number | null => 
 };
 
 /** The setups context of one contract from the flow store, or null when it has no closed traded bar today. */
-export async function setupContextFor(symbol: string, now: number, health: Health, withRvol = true): Promise<SetupContext | null> {
+export async function setupContextFor(symbol: string, now: number, health: Health, withRvol = true, five = false): Promise<SetupContext | null> {
   const st = flowContractBars(symbol);
   if (!st || !st.tickSize) return null;
-  const fps = st.footprints.filter(traded);
+  // five: the 5-minute footprints as the bar series (shadow); daily bars and reference completeness stay 15-minute.
+  const series = five ? flowContractFiveBars(symbol)?.footprints ?? [] : st.footprints;
+  const fps = series.filter(traded);
   if (!fps.length) return null;
   const today = istSession(fps[fps.length - 1].barTime);
   if (today !== istSession(now)) return null;
@@ -132,10 +134,10 @@ export async function setupContextFor(symbol: string, now: number, health: Healt
   // The exchange's session open (not the first traded bar: after a gap the opening range must not move), and the
   // first lost bar of today's session (a restart gap / unreconciled-only bar): session running totals end there.
   const sessionOpen = getSessionWindow(st.exchange as Exchange, today)?.open ?? firstToday.barTime;
-  const gapAt = st.footprints.find((f) => istSession(f.barTime) === today && f.incomplete && f.deltaMode === 'UNAVAILABLE')?.barTime ?? null;
+  const gapAt = series.find((f) => istSession(f.barTime) === today && f.incomplete && f.deltaMode === 'UNAVAILABLE')?.barTime ?? null;
   const bars: EngineBar[] = fps.map((f, k) => ({ time: f.barTime, open: f.open ?? fps[k - 1]?.close ?? f.close!, high: f.high!, low: f.low!, close: f.close!, volume: f.volume ?? 0 }));
   return {
-    symbol, instrument: st.instrument, kind: st.kind, exchange: st.exchange, tickSize: st.tickSize, bars, fps,
+    symbol, instrument: st.instrument, kind: st.kind, exchange: st.exchange, tickSize: st.tickSize, bars, fps, ...(five ? { barMs: FLOW_FIVE_MS } : {}),
     vwapSums: fps.map((f) => f.tradeSums ?? null), rvol: fps.map((f) => rvolOf(refs, f)), daily: dailyFromFootprints(st.footprints, today),
     sessionOpen, sessionClose: getSessionWindow(st.exchange as Exchange, today)?.close, referenceComplete: referenceCompleteness(st.footprints, st.exchange as Exchange, today), health: { ...health(symbol, now), sessionGapAt: gapAt },
   };
@@ -218,6 +220,53 @@ export async function evaluateDhanShadow(now: number, health: Health): Promise<n
     state.summaryAt = now;
     const top = [...state.failures].sort((a, b) => b[1] - a[1]).slice(0, 20).map(([k, c]) => ({ k, c }));
     logger.info({ event: 'dhanShadowSummary', evaluated: n, recorded: state.recorded, firstFailures: top }, 'Dhan engine shadow: setups A-E summary (shadow only)');
+  }
+  return n;
+}
+
+// ---------------- 5-minute order-flow shadow (11 Nov) ----------------
+// Setup E (pure order flow) evaluated on the 5-minute footprints of index and commodity futures, with exactly the
+// same rules and thresholds as the live 15-minute setup. SHADOW ONLY: rows are written to dhan_engine_signals under
+// DHAN_E_ORDER_FLOW_5M and never handed to the paper path. The point is evidence: does the 5-minute read find the
+// moves earlier, and does the sampled feed give a 5-minute bar enough trades to be trusted (VALID_DATA says so).
+export const DHAN_E_5M_ID = 'DHAN_E_ORDER_FLOW_5M';
+const five = { busy: false, evaluated: new Map<string, number>(), failures: new Map<string, number>(), recorded: { SIGNAL: 0, NO_TRADE: 0 }, summaryAt: 0 };
+export const dhanShadowFiveBusy = () => five.busy;
+export const dhanShadowFiveStatus = () => ({ recorded: { ...five.recorded }, firstFailures: [...five.failures].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([k, c]) => ({ k, c })) });
+
+export async function evaluateDhanShadowFive(now: number, health: Health): Promise<number> {
+  if (five.busy) return 0;
+  five.busy = true;
+  let n = 0;
+  try {
+    for (const symbol of flowSymbols()) {
+      const last = flowContractFiveBars(symbol)?.footprints.at(-1)?.barTime;
+      if (last == null || five.evaluated.get(symbol) === last) continue;
+      five.evaluated.set(symbol, last);
+      try {
+        const ctx = await setupContextFor(symbol, now, health, false, true);
+        if (!ctx || ctx.bars.at(-1)!.time !== last) continue;
+        const ev = evaluateDhanSetups(ctx);
+        n++;
+        for (const raw of ev.results) {
+          if (raw.setup !== 'E') continue;
+          const r: SetupResult = { ...raw, strategy: DHAN_E_5M_ID };
+          if (r.status === 'NO_SETUP') { five.failures.set(String(r.failed), (five.failures.get(String(r.failed)) ?? 0) + 1); continue; }
+          five.recorded[r.status]++;
+          if (r.status === 'SIGNAL') logger.info({ event: 'dhanShadowSignal5m', symbol, strategy: r.strategy, side: r.side, barTime: new Date(last).toISOString(), plan: r.plan, window: ev.sessionWindow }, 'Dhan engine 5-minute order-flow signal (SHADOW: recorded only, never traded)');
+          await record(symbol, ctx, last, ev.sessionWindow, ev.regime?.regime ?? null, r).catch((err: any) => logger.warn({ symbol, strategy: r.strategy, error: err.message }, 'Dhan engine 5-minute shadow: signal write failed'));
+        }
+      } catch (err: any) {
+        logger.warn({ symbol, error: err.message }, 'Dhan engine 5-minute shadow: evaluation failed');
+      }
+      await new Promise((r) => setImmediate(r));
+    }
+  } finally {
+    five.busy = false;
+  }
+  if (now - five.summaryAt >= SUMMARY_LOG_MS && (n > 0 || five.failures.size)) {
+    five.summaryAt = now;
+    logger.info({ event: 'dhanShadowSummary5m', evaluated: n, ...dhanShadowFiveStatus() }, 'Dhan engine 5-minute order-flow shadow: summary (shadow only)');
   }
   return n;
 }
@@ -352,5 +401,6 @@ export function dhanShadowStatus() {
 export function resetDhanShadow(): void {
   state.evaluated.clear(); state.failures.clear(); state.rvol.clear(); state.gamma.clear(); state.paper.clear(); state.latest.clear();
   state.recorded = { SIGNAL: 0, NO_TRADE: 0 }; state.summaryAt = 0; state.busy = false;
+  five.evaluated.clear(); five.failures.clear(); five.recorded = { SIGNAL: 0, NO_TRADE: 0 }; five.summaryAt = 0; five.busy = false;
 }
 

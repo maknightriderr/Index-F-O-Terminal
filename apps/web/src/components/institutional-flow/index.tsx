@@ -24,7 +24,7 @@ export function InstitutionalFlowPage() {
 
   return (
     <div className="terminal-page mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
-      <PageHeader title={"Institutional Flow Intelligence"} subtitle={<>Sentiment, next-day bias, and prediction tracking built from what's genuinely live — India VIX, PCR, F&O universe OI activity, and the existing market-bias engine.</>} actions={<><span role="status" aria-live="polite" className="flex items-center gap-1.5 text-xs text-gray-400 light:text-slate-600">
+      <PageHeader title={"Institutional Flow Intelligence"} subtitle={<>Sentiment, next-day bias, and prediction tracking built from what&apos;s genuinely live — India VIX, PCR, F&O universe OI activity, and the existing market-bias engine.</>} actions={<><span role="status" aria-live="polite" className="flex items-center gap-1.5 text-xs text-gray-400 light:text-slate-600">
           <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
           {isLive ? 'Live' : loading ? 'Loading…' : 'Unreachable'}
         </span></>} />
@@ -516,7 +516,7 @@ function NotConnectedPanel() {
         ))}
       </div>
       <p className="text-xs text-gray-400 light:text-slate-600 mt-3 pt-3 border-t border-gray-800/60 light:border-slate-200">
-        None of this is available through Angel One's API. Connecting an NSE data source (official feed, paid vendor, or a manual daily import) would unlock these sections without changing anything else on this page.
+        None of this is available through Angel One&apos;s API. Connecting an NSE data source (official feed, paid vendor, or a manual daily import) would unlock these sections without changing anything else on this page.
       </p>
     </Card>
   );

@@ -1,4 +1,5 @@
 'use client';
+import type { LooseJson } from '@/lib/loose-json';
 
 import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
@@ -8,15 +9,15 @@ import { api } from './api';
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
 
 export interface LearningData {
-  summary: any | null;
-  events: any[];
-  recurring: any[];
-  expected: any[];
-  unresolved: any[];
-  regressions: any[];
-  protections: any[];
-  review: any[];
-  history: any[];
+  summary: LooseJson | null;
+  events: LooseJson[];
+  recurring: LooseJson[];
+  expected: LooseJson[];
+  unresolved: LooseJson[];
+  regressions: LooseJson[];
+  protections: LooseJson[];
+  review: LooseJson[];
+  history: LooseJson[];
   loading: boolean;
   /** False when the backend could not be reached — distinct from "nothing found". */
   isLive: boolean;
@@ -75,7 +76,7 @@ export function useLearning(date?: string): LearningData {
             error: null,
           });
         })
-        .catch((err: any) => {
+        .catch((err: LooseJson) => {
           if (cancelled) return;
           // Surfaced rather than swallowed: an unreachable backend must not
           // render as a clean audit.

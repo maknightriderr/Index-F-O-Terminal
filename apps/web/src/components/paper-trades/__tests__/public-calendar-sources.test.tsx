@@ -1,3 +1,4 @@
+import type { LooseJson } from '@/lib/loose-json';
 import React from 'react';
 import {describe,it,expect} from 'vitest';
 import {render,screen,within,cleanup} from '@testing-library/react';
@@ -5,7 +6,7 @@ import {afterEach} from 'vitest';
 import {PublicCalendarSources} from '../public-calendar-sources';
 const now=Date.parse('2026-10-31T06:00:00Z');
 const source={source:'BLS_PUBLIC_ICS_V1',status:'SELECTED_RELEASE_SCHEDULE_OBSERVED',failureCode:null,snapshotId:'immutable-bls-proof',fetchedAt:now,expiresAt:now+600000,nextAttemptAt:now+300000,nextReleaseAt:Date.parse('2026-11-03T15:00:00Z'),eventCount:20,completeMacroCoverage:false};
-const sources=(publicMacro:any,commodity:any[]=[])=>({publicMacro,commodity,macro:{},issuer:null} as any);
+const sources=(publicMacro:LooseJson,commodity:LooseJson[]=[])=>({publicMacro,commodity,macro:{},issuer:null} as LooseJson);
 afterEach(cleanup);
 describe('public schedule evidence and coverage limits',()=>{
  it('labels the free global feed as partial third-party coverage and shows its source credit',()=>{render(<PublicCalendarSources sources={{...sources(undefined),freeGlobal:{...source,source:'SHOWMYTRADES_PUBLIC_V1'}}} now={now}/>);expect(screen.getByRole('rowheader',{name:'Global high-impact · ShowMyTrades (partial)'})).toBeInTheDocument();expect(screen.getByText(/excludes INR and is a third-party source/)).toBeInTheDocument();expect(screen.getByRole('link',{name:'Economic calendar by ShowMyTrades'})).toHaveAttribute('href','https://showmytrades.com/tools/economic-calendar');});

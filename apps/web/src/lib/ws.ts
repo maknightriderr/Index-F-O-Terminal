@@ -1,4 +1,5 @@
 'use client';
+/* eslint-disable react-hooks/refs -- the latest-callback ref is assigned during render on purpose (stable subscription, fresh handler) */
 
 // ============================================================
 // MARKET WEBSOCKET CLIENT

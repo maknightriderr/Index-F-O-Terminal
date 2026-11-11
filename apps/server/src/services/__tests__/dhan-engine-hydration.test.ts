@@ -55,6 +55,8 @@ describe('restart hydration', () => {
     const fps = store.flowContractBars('NIFTY')!.footprints;
     expect(fps.map((f) => [f.barTime, f.deltaMode, !!f.incomplete])).toEqual([[FRI, 'INFERRED', false], [FRI + Q, 'INFERRED', false], [OPEN, 'INFERRED', false], [OPEN + Q, 'INFERRED', false], [OPEN + 3 * Q, 'UNAVAILABLE', true]]);
     expect(fps[2]).toMatchObject({ open: 110, high: 112, low: 110, close: 112, delta: 10, unreconciledVolume: 5, priceStep: 1, tickSize: 0.1, sourceInstrument: INSTR, tradeSums: { pv: 110 * 20 + 112 * 10, v: 30 } });
+    // 11 Nov: the same recorded events also rebuild the 5-minute footprints (index / commodity futures).
+    expect(store.flowContractFiveBars('NIFTY')!.footprints.filter((f) => f.deltaMode !== 'UNAVAILABLE').map((f) => [f.barTime, f.volume, f.unreconciledVolume])).toEqual([[FRI, 20, 0], [FRI + Q, 20, 0], [OPEN, 30, 5], [OPEN + Q, 40, 0]]);
     const s = store.flowSessionState('NIFTY', started + 3000)!;
     expect(s.vwap).toMatchObject({ sums: { pv: 110 * 20 + 112 * 10 + 112 * 10 + 113 * 30, v: 70 }, unreconciled: 5, incomplete: true });
     expect(store.flowFiveMinuteBars('NIFTY', OPEN, OPEN + 2 * Q)!.bars.map((b) => [b.buy, b.sell, b.unreconciled])).toEqual([[20, 10, 5], [40, 0, 0]]);

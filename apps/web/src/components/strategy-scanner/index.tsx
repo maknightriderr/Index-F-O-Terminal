@@ -144,7 +144,7 @@ export function StrategyScannerPage() {
             emptyHint="Clear the filters to see every lean."
           />
           <p className="mt-3 max-w-4xl text-sm leading-relaxed text-[var(--text-secondary)]">
-            Strategy shapes are matched from bias direction, score, IV rank and ATM theta only: the same lightweight signals as the other universe scanners, with no historical technicals or ADX. This is not strike selection or a real reward-to-risk number; open a stock's option chain to size an actual trade.
+            Strategy shapes are matched from bias direction, score, IV rank and ATM theta only: the same lightweight signals as the other universe scanners, with no historical technicals or ADX. This is not strike selection or a real reward-to-risk number; open a stock&apos;s option chain to size an actual trade.
           </p>
         </Section>
       </DataState>

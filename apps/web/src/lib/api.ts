@@ -1,3 +1,4 @@
+import type { LooseJson } from '@/lib/loose-json';
 // ============================================================
 // API CLIENT
 // ============================================================
@@ -167,11 +168,11 @@ class ApiClient {
     const params = new URLSearchParams({ q: query });
     if (exchange) params.set('exchange', exchange);
     if (segment) params.set('segment', segment);
-    return this.get<any[]>(`/api/instruments?${params}`);
+    return this.get<LooseJson[]>(`/api/instruments?${params}`);
   }
 
   async getFnOStocks() {
-    return this.get<any[]>('/api/instruments/fno');
+    return this.get<LooseJson[]>('/api/instruments/fno');
   }
 
   /** The newest F&O scan the server has recorded (read-only; `meta` says where it came from and how old it is). */
@@ -234,7 +235,7 @@ class ApiClient {
   }
 
   async getMarketStatus(exchange = 'NSE') {
-    return this.get<any>(`/api/market/status?exchange=${exchange}`);
+    return this.get<LooseJson>(`/api/market/status?exchange=${exchange}`);
   }
 
   async getIndexQuotes() {
@@ -280,13 +281,13 @@ class ApiClient {
   }
 
   async getHistoricalData(token: string, from: string, to: string, exchange = 'NSE', interval = 'ONE_DAY', segment?: 'CM' | 'FO') {
-    return this.get<any[]>(
+    return this.get<LooseJson[]>(
       `/api/market/historical/${token}?exchange=${exchange}&interval=${interval}&from=${from}&to=${to}${segment ? `&segment=${segment}` : ''}`
     );
   }
 
   async getOptionGreeks(name: string, expiry: string) {
-    return this.get<any[]>(`/api/market/greeks/${name}?expiry=${expiry}`);
+    return this.get<LooseJson[]>(`/api/market/greeks/${name}?expiry=${expiry}`);
   }
 
   async getOptionChain(
@@ -323,7 +324,7 @@ class ApiClient {
   }
 
   async getHealth() {
-    return this.get<any>('/api/health');
+    return this.get<LooseJson>('/api/health');
   }
 
   async getAlerts(limit = 50, opts: { type?: string; severity?: string } = {}) {
@@ -350,39 +351,39 @@ class ApiClient {
   // --- System learning / self-audit ---
 
   async getLearningSummary(date?: string) {
-    return this.get<any>(`/api/learning/summary${date ? `?date=${date}` : ''}`);
+    return this.get<LooseJson>(`/api/learning/summary${date ? `?date=${date}` : ''}`);
   }
 
   async getLearningEvents(date?: string) {
-    return this.get<any>(`/api/learning/events${date ? `?date=${date}` : ''}`);
+    return this.get<LooseJson>(`/api/learning/events${date ? `?date=${date}` : ''}`);
   }
 
   async getLearningRecurring() {
-    return this.get<any>('/api/learning/recurring');
+    return this.get<LooseJson>('/api/learning/recurring');
   }
 
   async getLearningExpected() {
-    return this.get<any>('/api/learning/expected');
+    return this.get<LooseJson>('/api/learning/expected');
   }
 
   async getLearningUnresolved() {
-    return this.get<any>('/api/learning/unresolved');
+    return this.get<LooseJson>('/api/learning/unresolved');
   }
 
   async getLearningRegressions() {
-    return this.get<any>('/api/learning/regressions');
+    return this.get<LooseJson>('/api/learning/regressions');
   }
 
   async getLearningProtections() {
-    return this.get<any>('/api/learning/protections');
+    return this.get<LooseJson>('/api/learning/protections');
   }
 
   async getLearningReviewQueue() {
-    return this.get<any>('/api/learning/review');
+    return this.get<LooseJson>('/api/learning/review');
   }
 
   async getLearningHistory(days = 30) {
-    return this.get<any>(`/api/learning/history?days=${days}`);
+    return this.get<LooseJson>(`/api/learning/history?days=${days}`);
   }
 
   /**
