@@ -23,6 +23,7 @@ import {FreshRuntime} from './runtime.js';
 import {flowFiveMinuteBars,footprintsFor,flowBarStart,FLOW_BAR_MS} from '../order-flow-store.js';
 import type {FreshContext} from '@fno/analytics';
 import {logFreshDecisionSummary} from './decision-summary.js';
+import {noteChainRefresh,noteScanStatus} from './health-counters.js';
 import {freshEventClearStocks,freshRankStocks,FRESH_MARKETS,freshMarketBlockers,freshBookSupportsLot,discoverFreshMarkets,freshDiscoveryWindow,freshReferenceOptions,freshExpiryDayOptions,freshGammaBookWindow,freshReferenceExchange,freshReferenceSpotId,freshEventMarket,freshMarketExchange,freshIndexKey,type FreshMarket} from './markets.js';
 import {freshAdapterState as state} from './adapter-state.js';
 import {observedFreshOi,freshParseScan,freshStockIntel,freshStocksInPlay,freshInPlayDirection,freshIndexIntel,FRESH_INDEX_HEAVYWEIGHTS,FRESH_SCAN_KEY,type FreshScan,type FreshFuturesSample} from './intel.js';
@@ -265,12 +266,14 @@ export class FreshPaperWorker {
         if(this.stopped)return;
         try{
           const chain=await buildOptionChain(this.provider,r.name,freshReferenceExchange(r)),at=chain.timestamp;
-          if(!Number.isFinite(at)||at>Date.now()||!chain.expiry)continue;
+          if(!Number.isFinite(at)||at>Date.now()||!chain.expiry){noteChainRefresh(r.name,'CHAIN_WITHOUT_EXPIRY_OR_VALID_TIME');continue;}
           const strikes=chain.strikes.map(x=>({strike:x.strike,callOi:observedFreshOi(x.call),putOi:observedFreshOi(x.put)})).filter(x=>Number.isFinite(x.strike)&&x.strike>0);
+          noteChainRefresh(r.name,strikes.length?null:'CHAIN_WITHOUT_STRIKES');
           if(strikes.length)this.oiChains.set(r.id,[...(this.oiChains.get(r.id)??[]).filter(x=>at-x.at<=FRESH_INDEX_SAMPLE_KEEP_MS),{at,expiry:chain.expiry,strikes}]);
           // Dhan engine v2 expiry-gamma module (shadow): its own day-long chain samples; never throws, never trades.
           if(strikes.length&&DHAN_ENGINE_SHADOW)void recordGammaChain(r.name,chain,at,Date.now(),null,this.histories.get(r.id));
         }catch(err){/* this index's OI stays as it was; the strategy refuses IDX_OI_UNAVAILABLE once it is stale */
+          noteChainRefresh(r.name,err instanceof Error?err.message:String(err));
           logger.info({event:'freshChainRefreshFailed',index:r.name,error:err instanceof Error?err.message:String(err)},'Fresh-start: option chain refresh failed for an index (OI stays as it was)');}
       }
     }finally{this.chainsBusy=false;}
@@ -419,6 +422,6 @@ export class FreshPaperWorker {
         }else{await auditFreshEvaluation(h.context,evaluateFreshStrategies(h.context));state.lastDecision=blockers[0]??'BLOCKED_REQUIRED_CAPABILITY';}
       }
       state.discovery.historyCache=this.histories.size;state.status=state.entriesArmed?'FORWARD_PAPER_RUNNING':'PAPER_ARMED_DATA_BLOCKED';state.error=null;
-    }catch(error){if(this.stopped)return;state.entriesArmed=false;state.status='BLOCKED_ADAPTER';state.error=error instanceof Error&&/^BLOCKED_[A-Z_]+$/.test(error.message)?error.message:'ADAPTER_INPUT_OR_STORAGE_UNAVAILABLE';state.entryBlockers=[state.error];for(const m of state.marketReadiness){m.eligibleReferences=0;m.blockers=[...new Set([...m.blockers,state.error])];}}finally{this.scanning=false;if(!this.stopped){this.operationalReporter.report(state);const t=Date.now();if(t-this.summaryAt>=FRESH_DECISION_SUMMARY_MS){this.summaryAt=t;void logFreshDecisionSummary(t);this.logMemory();}this.logMcxDiagnostic(t);}}
+    }catch(error){if(this.stopped)return;state.entriesArmed=false;state.status='BLOCKED_ADAPTER';state.error=error instanceof Error&&/^BLOCKED_[A-Z_]+$/.test(error.message)?error.message:'ADAPTER_INPUT_OR_STORAGE_UNAVAILABLE';state.entryBlockers=[state.error];for(const m of state.marketReadiness){m.eligibleReferences=0;m.blockers=[...new Set([...m.blockers,state.error])];}}finally{this.scanning=false;if(!this.stopped){this.operationalReporter.report(state);const t=Date.now();noteScanStatus(state.status,t);if(t-this.summaryAt>=FRESH_DECISION_SUMMARY_MS){this.summaryAt=t;void logFreshDecisionSummary(t);this.logMemory();}this.logMcxDiagnostic(t);}}
   }
 }

@@ -4,6 +4,7 @@ import { FRESH_PACK_VERSION } from '@fno/analytics';
 import { sql } from '../../lib/db.js';
 import { logger } from '../../lib/logger.js';
 import { schemaFileReady } from '../ensure-capture-schema.js';
+import { healthCounters } from './health-counters.js';
 
 /** IST session start (00:00 IST) for the given instant. */
 export function istDayStart(now: number): Date {
@@ -42,5 +43,36 @@ export async function logFreshDecisionSummary(now = Date.now()): Promise<void> {
     logger.info({ event: 'freshDecisionSummary', adapterDetail, v2GatesLast60Min: v2Gates, riskFlagsToday: riskFlags, breakoutGatesLast60Min: breakoutGates, vwapPullbackGatesLast2h: vwapGates, since: since.toISOString(), evaluations, refusals, candidates, adapter, positionsOpened: positions[0]?.n ?? 0, orderFlowShadow: flowOutcomes, dataRefusalsLast30Min: dataRefusals }, 'Fresh-start decisions today, grouped by code');
   } catch (err: any) {
     logger.warn({ event: 'freshDecisionSummary', error: err?.message }, 'Fresh-start decision summary unavailable');
+  }
+  await logFreshDailyFunnel(now);
+}
+
+/**
+ * Today's funnel in one short line (audit F-06 / F-12): per strategy, how many setups were found, what the paper
+ * engine decided, how many died at option-contract selection, and how many paper positions opened / closed; the Dhan
+ * engine's signals with their paper decisions; how the scans were split between armed and blocked; and each index's
+ * option-chain refresh health. Counts only.
+ */
+export async function logFreshDailyFunnel(now = Date.now()): Promise<void> {
+  const since = istDayStart(now);
+  try {
+    const dhanReady = schemaFileReady('053_dhan_engine_signals.sql') && schemaFileReady('054_dhan_engine_paper.sql');
+    const [evaluations, candidates, adapter, positions, dhan] = await Promise.all([
+      sql<any[]>`SELECT count(*)::int AS n, count(DISTINCT instrument)::int AS instruments FROM fresh_evaluations WHERE version=${FRESH_PACK_VERSION} AND at >= ${since}`,
+      sql<any[]>`SELECT strategy, decision, count(*)::int AS n FROM fresh_candidates WHERE version=${FRESH_PACK_VERSION} AND at >= ${since} GROUP BY 1,2`,
+      sql<any[]>`SELECT strategy, code, count(*)::int AS n FROM fresh_adapter_decisions WHERE version=${FRESH_PACK_VERSION} AND at >= ${since} GROUP BY 1,2`,
+      sql<any[]>`SELECT strategy, count(*)::int AS opened, count(*) FILTER (WHERE status='CLOSED')::int AS closed, round(coalesce(sum(net_pnl) FILTER (WHERE status='CLOSED'),0)::numeric, 0)::float AS net FROM fresh_paper_positions WHERE version=${FRESH_PACK_VERSION} AND opened_at >= ${since} GROUP BY 1`,
+      dhanReady ? sql<any[]>`SELECT strategy, status, coalesce(paper_decision,'NOT_SENT') AS paper, count(*)::int AS n FROM dhan_engine_signals WHERE bar_time >= ${since} GROUP BY 1,2,3` : Promise.resolve([] as any[]),
+    ]);
+    const strategies: Record<string, { candidates: Record<string, number>; contractRefused: Record<string, number>; opened: number; closed: number; net: number }> = {};
+    const of = (k: string) => (strategies[k] ??= { candidates: {}, contractRefused: {}, opened: 0, closed: 0, net: 0 });
+    for (const r of candidates) of(r.strategy).candidates[r.decision] = r.n;
+    for (const r of adapter) of(r.strategy).contractRefused[r.code] = r.n;
+    for (const r of positions) Object.assign(of(r.strategy), { opened: r.opened, closed: r.closed, net: r.net });
+    const dhanSignals: Record<string, Record<string, number>> = {};
+    for (const r of dhan) (dhanSignals[r.strategy] ??= {})[r.status === 'SIGNAL' ? `SIGNAL:${r.paper}` : r.status] = r.n;
+    logger.info({ event: 'freshDailyFunnel', since: since.toISOString(), evaluations: evaluations[0]?.n ?? 0, instruments: evaluations[0]?.instruments ?? 0, strategies, dhanSignals, opened: positions.reduce((a, r) => a + r.opened, 0), ...healthCounters(now) }, 'Fresh-start daily funnel: setups found -> paper decision -> contract selection -> positions (counts only)');
+  } catch (err: any) {
+    logger.warn({ event: 'freshDailyFunnel', error: err?.message }, 'Fresh-start daily funnel unavailable');
   }
 }

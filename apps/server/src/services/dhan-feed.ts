@@ -35,7 +35,7 @@ import { serviceHeartbeat } from '../lib/service-supervisor.js';
 import { DHAN_RESPONSE, DHAN_SEGMENT_CODE, DHAN_MAX_INSTRUMENTS_PER_CONNECTION, dhanFeedUrl, fullSubscriptions, parseDhanFrame, resolveFlowContracts, type DhanFullPacket, type ResolvedFlowContract } from '../lib/dhan-feed-packets.js';
 import { ORDER_BLOCK_MODE, ORDER_BLOCK_MODE_REJECTED, OF1_TRADING_REQUESTED, ORDER_FLOW_SUPPORTED, ORDER_FLOW_SYMBOLS, ORDER_FLOW_SYMBOLS_REJECTED, DHAN_FLOW_V2, DHAN_FLOW_V2_SYMBOLS, DHAN_FLOW_STOCKS, DHAN_ENGINE_SHADOW } from '../config/order-flow-flags.js';
 import { dhanConfigured, dhanSession, dhanSessionStatus, ensureDhanSession, markDhanTokenRejected } from './dhan-session.js';
-import { closeFlowBars, flowClosedBarCount, flowContractBars, hydrateFlowSymbols, recordFlowTrade, recordFlowUnreconciled, registerFlowSymbol, setFlowFeedConnected } from './order-flow-store.js';
+import { checkpointOpenFlowBars, OPEN_BAR_CHECKPOINT_MS, closeFlowBars, flowClosedBarCount, flowContractBars, hydrateFlowSymbols, recordFlowTrade, recordFlowUnreconciled, registerFlowSymbol, setFlowFeedConnected } from './order-flow-store.js';
 import { dhanShadowBusy, evaluateDhanShadow } from './dhan-engine-shadow.js';
 
 export const DHAN_SCRIP_MASTER_URL = 'https://images.dhan.co/api-data/api-scrip-master.csv';
@@ -91,6 +91,7 @@ interface InstrumentState {
 /** v2 per-instrument data quality since the process started (reset daily with the instrument map). */
 export interface InstrumentQuality { packets: number; lastPacketAt: number | null; tradedQty: number; unreconciledQty: number; ltqInvalid: number }
 
+let checkpointAt = 0, checkpointBusy = false;
 const state = {
   /** flowClosedBarCount() at the last Dhan shadow pass. */
   shadowSeenClosed: -1,
@@ -375,6 +376,11 @@ async function tick(): Promise<void> {
   }
   if (!state.ws && now >= state.reconnectAt && Object.keys(state.resolved).length) connect(creds);
   await closeFlowBars(now, state.connected).catch((err: any) => { logger.warn({ error: err.message }, 'Order flow: bar close failed'); return 0; });
+  // F-08: once a minute, save each contract's open bar so a restart inside the bar does not lose it (background).
+  if (anyOpen && !checkpointBusy && now - checkpointAt >= OPEN_BAR_CHECKPOINT_MS) {
+    checkpointAt = now; checkpointBusy = true;
+    void checkpointOpenFlowBars(now).finally(() => { checkpointBusy = false; });
+  }
   // 9 Nov: footprintsFor() (fresh-start readers) also closes bars, so this tick's own count was often 0 and the shadow
   // pass skipped that bar. Evaluate whenever any bar closed since the last pass, whoever closed it.
   const closed = flowClosedBarCount();

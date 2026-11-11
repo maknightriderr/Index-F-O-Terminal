@@ -311,9 +311,14 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
     const today = b.filter(x => x.time >= c.sessionOpen), minute = m.filter(x => x.time >= c.sessionOpen);
     if (!today.length || !minute.length)
         return refuseAll('MISSING_SESSION_DATA');
-    if (today[0].time !== c.sessionOpen || today.some((x, i) => i > 0 && x.time - today[i - 1].time !== 300000)
-        || minute[0].time !== c.sessionOpen || minute.some((x, i) => i > 0 && x.time - minute[i - 1].time !== 60000))
-        return refuseAll('MISSING_BARS');
+    // Which series is broken and how (detail only; the refusal itself is unchanged): the session's first bar missing,
+    // or a gap inside the session, on the 5-minute or the 1-minute series.
+    const missing = today[0].time !== c.sessionOpen ? '5M_OPEN_BAR_MISSING'
+        : today.some((x, i) => i > 0 && x.time - today[i - 1].time !== 300000) ? '5M_GAP'
+            : minute[0].time !== c.sessionOpen ? '1M_OPEN_BAR_MISSING'
+                : minute.some((x, i) => i > 0 && x.time - minute[i - 1].time !== 60000) ? '1M_GAP' : null;
+    if (missing)
+        return refuseAll('MISSING_BARS', missing);
     const current = last(today), decisionAt = Math.max(current.time + 300000, current.availableAt);
     // The opening range belongs to the latest anchor that has started: the session open, or for MCX the evening open of
     // the US energy/metals session (1.7). ORB retest and the first opening pullback run in the two hours after it.

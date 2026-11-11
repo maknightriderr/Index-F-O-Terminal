@@ -142,6 +142,7 @@ export const FILES = [
   '052_order_flow_events.sql',
   '053_dhan_engine_signals.sql',
   '054_dhan_engine_paper.sql',
+  '055_order_flow_open_bars.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */
