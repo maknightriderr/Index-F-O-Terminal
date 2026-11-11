@@ -58,6 +58,9 @@ export const FRESH_MAX_ROTATING_BOOK_SLICES=8;
 export const FRESH_ROTATION_MIN_SLICES:Readonly<Record<string,number>>=Object.freeze({NSE_STOCK_OPTIONS:1,MCX_VERIFIED_FUTURES_OPTIONS:2});
 /** How long a reference with a fresh setup keeps its books ahead of the rotation. */
 export const FRESH_URGENT_BOOK_MS=5*60_000;
+/** Dhan signal -> paper: how long the reference and its option books are waited for, and the pause for first quotes. */
+export const FRESH_DHAN_REFERENCE_WAIT_MS=90_000;
+export const FRESH_DHAN_FIRST_QUOTES_MS=3_000;
 /** The leading stocks in play whose option books go ahead of the rotation (2 leaders + 2 laggards, alternating). */
 export const FRESH_IN_PLAY_BOOK_SLICES=4;
 /** Index future / chain OI samples are kept this long (the strategy reads 30 min of futures and ~15 min of chain OI). */
@@ -195,9 +198,21 @@ export class FreshPaperWorker {
     if(!ref)return {decision:'DHAN_NO_PAPER_REFERENCE',candidateId:null};
     // Its option books first in the next plans; a stock not subscribed takes a stock slot and is waited for (<= 30 s).
     this.urgentBooks.set(ref.id,Date.now()+FRESH_URGENT_BOOK_MS);
-    if(!this.feed.underlying(ref.id)&&ref.market==='NSE_STOCK_OPTIONS'){
-      this.dhanPriority.set(ref.id,Date.now()+5*60_000);
-      for(let k=0;k<30&&!this.stopped&&!this.feed.underlying(ref.id);k++)await new Promise(res=>setTimeout(res,1000));
+    // 11 Nov: six setup E signals on stock futures were all lost here. The stock was waited for 30 s, but the scan that
+    // subscribes it runs at most every 10 s and is at its slowest right after a bar close (4x REFERENCE_NOT_SUBSCRIBED);
+    // and when the stock was there, its option books were not yet (2x NO_ELIGIBLE_ENTRY: NO_FRESH_QUOTE / stale plan).
+    // Now: ask for an immediate rescan, wait (<= 90 s) until the reference ticks AND its option books are in the book
+    // plan, give the first quotes a few seconds, and only then build the candidate (priced at that moment, as before).
+    if(ref.market==='NSE_STOCK_OPTIONS')this.dhanPriority.set(ref.id,Date.now()+5*60_000);
+    const booked=()=>state.bookPlan?.slices?.some((x:{name:string;options:number})=>x.name===ref.name&&x.options>0)===true;
+    if(!this.feed.underlying(ref.id)||!booked()){
+      const until=Date.now()+FRESH_DHAN_REFERENCE_WAIT_MS;let ticked=!!this.feed.underlying(ref.id);
+      this.lastScan=0; // the next timer tick rescans at once
+      while(!this.stopped&&Date.now()<until&&!(this.feed.underlying(ref.id)&&booked())){
+        if(!ticked&&this.feed.underlying(ref.id)){ticked=true;this.lastScan=0;} // its price is known now: plan its books
+        await new Promise(res=>setTimeout(res,1000));
+      }
+      if(this.feed.underlying(ref.id)&&booked())await new Promise(res=>setTimeout(res,FRESH_DHAN_FIRST_QUOTES_MS));
     }
     const signal=this.feed.underlying(ref.id),futures=flowLastTrade(r.symbol),now=Date.now(),day=freshIstDay(now),session=getSessionWindow(freshReferenceExchange(ref),day);
     if(!signal)return {decision:'DHAN_REFERENCE_NOT_SUBSCRIBED',candidateId:null};
