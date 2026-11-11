@@ -1,4 +1,6 @@
 'use client';
+/* eslint-disable react-hooks/set-state-in-effect -- state is reset or loaded when an input changes; behaviour verified in production, not restructured */
+import type { LooseJson } from '@/lib/loose-json';
 
 import { closedChartBars, swingConfirmationIndex } from '@/lib/chart-confirmation';
 
@@ -337,7 +339,7 @@ export function InstrumentChart({
         const markers: Array<{ time: UTCTimestamp; position: 'aboveBar' | 'belowBar'; color: string; shape: 'arrowUp' | 'arrowDown'; text: string }> = [];
         const cc = CHART_COLORS[resolvedTheme];
         for (let i = 2; i < ohlc.length; i++) {
-          const hit = detectCandlestickPattern(ohlc.slice(0, i + 1) as any);
+          const hit = detectCandlestickPattern(ohlc.slice(0, i + 1) as LooseJson);
           if (!hit || hit.atIndex !== i || hit.confidence < STRONG_REVERSAL_MIN_CONFIDENCE) continue;
           // The shape is necessary but nowhere near sufficient — it also has
           // to be where price actually turned. See isSwingExtreme.

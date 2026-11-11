@@ -1,4 +1,5 @@
 'use client';
+/* eslint-disable react-hooks/purity -- the value is a display clock / age read at render time; it is re-read on every data refresh */
 
 // ============================================================
 // COMMAND CENTER — the terminal's home screen

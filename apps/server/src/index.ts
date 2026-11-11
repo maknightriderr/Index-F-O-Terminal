@@ -46,6 +46,7 @@ import { legacyEntriesAllowed } from './config/legacy-entry-policy.js';
 import { createFreshStartRoutes } from './api/fresh-start.js';
 import { createPaperTradesRoutes } from './api/paper-trades.js';
 import { orderFlowFeedStatus } from './services/dhan-feed.js';
+import { checkpointOpenFlowBars } from './services/order-flow-store.js';
 import { STRUCTURE, STRUCTURE_ENTRY_TF, STRUCTURE_ENTRY_TF_REJECTED, STRUCTURE_PARAMS, INDICATOR_CONFIDENCE_MODE, INDICATOR_CONFIDENCE_MODE_REJECTED, INDICATOR_LOCATION_MODE, INDICATOR_LOCATION_MODE_REJECTED, RESEARCH_PAPER_TRADING } from './config/trading-flags.js';
 import { startAbandonedSetupSweep } from './services/backtesting.js';
 import { createNewsRoutes } from './api/news.js';
@@ -508,6 +509,14 @@ const shutdown = async (signal: string) => {
 
   try {
     await provider.logout();
+  } catch {
+    // Best effort
+  }
+
+  // Order flow: save every contract's open 15-minute bar so the next process can pick it up (bounded to 4 s).
+  try {
+    const saved = await Promise.race([checkpointOpenFlowBars(Date.now()), new Promise<number>((res) => setTimeout(() => res(-1), 4000))]);
+    logger.info({ event: 'orderFlowOpenBarCheckpoint', saved, at: 'shutdown' }, 'Order flow: open bars saved at shutdown');
   } catch {
     // Best effort
   }

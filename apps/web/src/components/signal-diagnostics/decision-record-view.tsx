@@ -1,4 +1,5 @@
 'use client';
+import type { LooseJson } from '@/lib/loose-json';
 
 // ============================================================
 // SIGNAL DIAGNOSTICS — Decision Record (Phase 8)
@@ -131,7 +132,7 @@ function DecisionDetail({ view }: { view: DecisionDiagnosticsView }) {
           <Panel title="Events" subtitle="The session's market events (event engine).">
             <Table
               head={['Event', 'Type', 'Dir', 'Bar', 'Price', 'Level', 'From']}
-              rows={(r.families.events as any[]).map((e) => [e.id, e.type, e.direction ?? '—', ist(e.time), n(e.price), e.level ? `${e.level.kind} ${n(e.level.price)}` : '—', e.parentId ?? '—'])}
+              rows={(r.families.events as LooseJson[]).map((e) => [e.id, e.type, e.direction ?? '—', ist(e.time), n(e.price), e.level ? `${e.level.kind} ${n(e.level.price)}` : '—', e.parentId ?? '—'])}
             />
           </Panel>
 
@@ -148,7 +149,7 @@ function DecisionDetail({ view }: { view: DecisionDiagnosticsView }) {
           <Panel title="Common metrics" subtitle="The decision-time metrics every slot candidate is ranked on (NOT_MEASURED is never invented).">
             <Table
               head={['Candidate', 'Timing', 'Move consumed', 'Move potential', 'Objective (ATR)', 'Net R:R', 'Entry quality', 'Evidence', 'Lost on']}
-              rows={r.metrics.map((m: any) => [m.candidateId, String(m.timingClass), n(m.moveConsumedPct), String(m.movePotential), n(m.objectiveDistanceAtr), n(m.netRR), n(m.entryQuality), String(m.evidence), lostOn[m.candidateId] ?? (r.selectedCandidateId === m.candidateId ? 'selected' : '—')])}
+              rows={r.metrics.map((m: LooseJson) => [m.candidateId, String(m.timingClass), n(m.moveConsumedPct), String(m.movePotential), n(m.objectiveDistanceAtr), n(m.netRR), n(m.entryQuality), String(m.evidence), lostOn[m.candidateId] ?? (r.selectedCandidateId === m.candidateId ? 'selected' : '—')])}
             />
           </Panel>
 
@@ -164,7 +165,7 @@ function DecisionDetail({ view }: { view: DecisionDiagnosticsView }) {
                 </p>
                 <Table
                   head={['Strike', 'Status', 'Rank', 'Δ', 'Spread %', 'Premium', 'Net R:R', 'Rejected at', 'Reason']}
-                  rows={(p.candidates as any[]).map((c) => [n(c.strike, 0), c.status, c.rank ?? '—', n(c.delta), n(c.spreadPct), n(c.premium), n(c.netRR), c.rejectedAt ?? '—', c.rejectionReason ?? '—'])}
+                  rows={(p.candidates as LooseJson[]).map((c) => [n(c.strike, 0), c.status, c.rank ?? '—', n(c.delta), n(c.spreadPct), n(c.premium), n(c.netRR), c.rejectedAt ?? '—', c.rejectionReason ?? '—'])}
                 />
               </div>
             ))}

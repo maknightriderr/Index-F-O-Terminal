@@ -35,7 +35,7 @@ beforeAll(async () => {
   pg = new PGlite();
   await pg.exec('CREATE EXTENSION IF NOT EXISTS "uuid-ossp";').catch(() => undefined);
   await pg.exec("CREATE OR REPLACE FUNCTION uuid_generate_v4() RETURNS uuid AS 'SELECT gen_random_uuid()' LANGUAGE SQL;").catch(() => undefined);
-  for (const f of ['038_order_blocks_order_flow_of1.sql', '052_order_flow_events.sql']) await pg.exec(readFileSync(new URL(`../../../../../database/init/${f}`, import.meta.url), 'utf8'));
+  for (const f of ['038_order_blocks_order_flow_of1.sql', '052_order_flow_events.sql', '055_order_flow_open_bars.sql']) await pg.exec(readFileSync(new URL(`../../../../../database/init/${f}`, import.meta.url), 'utf8'));
   await recorded('NIFTY', THU, [[1000, 90, 10, 1]]); // two sessions back: not rebuilt
   await recorded('NIFTY', FRI, [[1000, 100, 10, 1], [2000, 104, 10, -1]]);
   await recorded('NIFTY', FRI + Q, [[1000, 103, 10, 1], [2000, 102, 10, -1]]);
@@ -55,6 +55,8 @@ describe('restart hydration', () => {
     const fps = store.flowContractBars('NIFTY')!.footprints;
     expect(fps.map((f) => [f.barTime, f.deltaMode, !!f.incomplete])).toEqual([[FRI, 'INFERRED', false], [FRI + Q, 'INFERRED', false], [OPEN, 'INFERRED', false], [OPEN + Q, 'INFERRED', false], [OPEN + 3 * Q, 'UNAVAILABLE', true]]);
     expect(fps[2]).toMatchObject({ open: 110, high: 112, low: 110, close: 112, delta: 10, unreconciledVolume: 5, priceStep: 1, tickSize: 0.1, sourceInstrument: INSTR, tradeSums: { pv: 110 * 20 + 112 * 10, v: 30 } });
+    // 11 Nov: the same recorded events also rebuild the 5-minute footprints (index / commodity futures).
+    expect(store.flowContractFiveBars('NIFTY')!.footprints.filter((f) => f.deltaMode !== 'UNAVAILABLE').map((f) => [f.barTime, f.volume, f.unreconciledVolume])).toEqual([[FRI, 20, 0], [FRI + Q, 20, 0], [OPEN, 30, 5], [OPEN + Q, 40, 0]]);
     const s = store.flowSessionState('NIFTY', started + 3000)!;
     expect(s.vwap).toMatchObject({ sums: { pv: 110 * 20 + 112 * 10 + 112 * 10 + 113 * 30, v: 70 }, unreconciled: 5, incomplete: true });
     expect(store.flowFiveMinuteBars('NIFTY', OPEN, OPEN + 2 * Q)!.bars.map((b) => [b.buy, b.sell, b.unreconciled])).toEqual([[20, 10, 5], [40, 0, 0]]);
@@ -74,17 +76,47 @@ describe('restart hydration', () => {
     expect(fps.every((f) => !f.incomplete)).toBe(true);
     expect(store.flowSessionState('NIFTY', started + 1000)!.vwap).toBeNull();
   });
+  it('F-08: a restart inside a bar restores its checkpointed events, and the bar closes whole', async () => {
+    const BAR = OPEN + 4 * Q, reg = (startedAt: number) => store.registerFlowSymbol('NIFTY', { exchange: 'NSE', instrument: INSTR, source: 'DHAN', mode: 'INFERRED', startedAt, kind: 'INDEX', tickSize: 0.1 });
+    reg(OPEN - 25 * 60_000);
+    store.recordFlowTrade('NIFTY', { time: BAR + 60_000, price: 120, qty: 10, side: 'BUY' });
+    store.recordFlowTrade('NIFTY', { time: BAR + 120_000, price: 121, qty: 4, side: 'SELL' });
+    store.recordFlowUnreconciled('NIFTY', BAR + 130_000, 3);
+    expect(await store.checkpointOpenFlowBars(BAR + 300_000)).toBe(1);
+    expect(await store.checkpointOpenFlowBars(BAR + 310_000)).toBe(0); // nothing new since the last save
+    // The process restarts one minute after the checkpoint, inside the same bar.
+    store.resetFlowStore();
+    const started = BAR + 360_000;
+    reg(started);
+    store.recordFlowTrade('NIFTY', { time: BAR + 420_000, price: 122, qty: 6, side: 'BUY' });
+    expect(await store.hydrateFlowSymbols(started + 1000)).toMatchObject({ openBars: 1, failed: 0 });
+    expect(store.flowContractBars('NIFTY')!.footprints.some((f) => f.barTime === BAR)).toBe(false); // no gap marker
+    expect(store.flowSessionState('NIFTY', started + 2000)!.vwap).toMatchObject({ incomplete: false, unreconciled: 5 + 3 });
+    await store.closeFlowBars(BAR + Q + 1000, true);
+    const fp = store.flowContractBars('NIFTY')!.footprints.find((f) => f.barTime === BAR)!;
+    expect(fp).toMatchObject({ open: 120, volume: 20, delta: 12, unreconciledVolume: 3, deltaMode: 'INFERRED' });
+    expect(fp.incomplete).toBeFalsy();
+    await pg.query(`DELETE FROM order_flow_events WHERE bar_time = $1`, [new Date(BAR).toISOString()]);
+    await pg.query(`DELETE FROM order_flow_bars WHERE bar_time = $1`, [new Date(BAR).toISOString()]);
+  });
+  it('F-08: a checkpoint older than the allowed gap is not restored (the bar stays an INCOMPLETE gap)', async () => {
+    const BAR = OPEN + 4 * Q, started = BAR + 300_000 + store.OPEN_BAR_MAX_GAP_MS + 1000; // saved at BAR + 5 min above
+    store.registerFlowSymbol('NIFTY', { exchange: 'NSE', instrument: INSTR, source: 'DHAN', mode: 'INFERRED', startedAt: started, kind: 'INDEX', tickSize: 0.1 });
+    expect(await store.hydrateFlowSymbols(started + 1000)).toMatchObject({ openBars: 0 });
+    expect(store.flowContractBars('NIFTY')!.footprints.find((f) => f.barTime === BAR)).toMatchObject({ deltaMode: 'UNAVAILABLE', incomplete: true });
+    expect(await store.checkpointOpenFlowBars(started + 5000)).toBe(0); // a gap bar is never saved as if it were whole
+  });
   it('hydrates every registered symbol and reports totals', async () => {
     store.registerFlowSymbol('NIFTY', { exchange: 'NSE', instrument: INSTR, source: 'DHAN', mode: 'INFERRED', startedAt: OPEN + 52 * 60_000, kind: 'INDEX', tickSize: 0.1 });
     store.registerFlowSymbol('NOFLOW', { exchange: 'NSE', instrument: 'NOFLOW-Nov2026-FUT', source: 'DHAN', mode: 'INFERRED', startedAt: OPEN + 52 * 60_000, kind: 'STOCK', tickSize: 0.05 });
-    expect(await store.hydrateFlowSymbols(OPEN + 53 * 60_000)).toEqual({ contracts: 1, bars: 4, failed: 0, schemaReady: true });
+    expect(await store.hydrateFlowSymbols(OPEN + 53 * 60_000)).toMatchObject({ contracts: 1, bars: 4, failed: 0, schemaReady: true });
   });
 
   it('waits for the boot-time schema check before reading (9 Nov: the feed resolved 5 s before it finished)', async () => {
     store.registerFlowSymbol('NIFTY', { exchange: 'NSE', instrument: INSTR, source: 'DHAN', mode: 'INFERRED', startedAt: OPEN + 52 * 60_000, kind: 'INDEX', tickSize: 0.1 });
     schema.ready = false;
-    expect(await store.hydrateFlowSymbols(OPEN + 53 * 60_000, { schemaWaitMs: 30, pollMs: 5 })).toEqual({ contracts: 0, bars: 0, failed: 0, schemaReady: false });
+    expect(await store.hydrateFlowSymbols(OPEN + 53 * 60_000, { schemaWaitMs: 30, pollMs: 5 })).toMatchObject({ contracts: 0, bars: 0, failed: 0, schemaReady: false });
     setTimeout(() => { schema.ready = true; }, 20);
-    expect(await store.hydrateFlowSymbols(OPEN + 53 * 60_000, { schemaWaitMs: 2000, pollMs: 5 })).toEqual({ contracts: 1, bars: 4, failed: 0, schemaReady: true });
+    expect(await store.hydrateFlowSymbols(OPEN + 53 * 60_000, { schemaWaitMs: 2000, pollMs: 5 })).toMatchObject({ contracts: 1, bars: 4, failed: 0, schemaReady: true });
   });
 });

@@ -56,7 +56,7 @@ import { EVENT_ENGINE_VERSION } from '../config/trading-flags.js';
 import { shadowRulesReport, signalEngineMetrics } from '../services/signal-engine-metrics.js';
 import { orderFlowReport } from '../services/order-flow-metrics.js';
 import { dhanEngineSnapshot, dhanEngineSummary } from '../services/dhan-engine-state.js';
-import { dhanShadowSignals, dhanShadowStatus } from '../services/dhan-engine-shadow.js';
+import { dhanShadowFiveStatus, dhanShadowSignals, dhanShadowStatus } from '../services/dhan-engine-shadow.js';
 import { dhanReplay, dhanValidation } from '../services/dhan-engine-validation.js';
 import { replayFull } from '../services/full-replay.js';
 import { measurementReport } from '../services/measurement-report.js';
@@ -308,7 +308,7 @@ export function createDiagnosticsRoutes(): Router {
   router.get('/order-flow/engine/signals', async (req: Request, res: Response) => {
     try {
       const day = typeof req.query.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : new Date(Date.now() + 19_800_000).toISOString().slice(0, 10);
-      res.json({ success: true, data: { note: SIMULATION_NOTE, mode: DHAN_ENGINE_PAPER ? 'PAPER' : 'SHADOW_ONLY', day, status: dhanShadowStatus(), signals: await dhanShadowSignals(day) } });
+      res.json({ success: true, data: { note: SIMULATION_NOTE, mode: DHAN_ENGINE_PAPER ? 'PAPER' : 'SHADOW_ONLY', day, status: dhanShadowStatus(), fiveMinuteShadow: dhanShadowFiveStatus(), signals: await dhanShadowSignals(day) } });
     } catch (err: any) {
       logger.error({ error: err.message }, 'Signal diagnostics order-flow engine signals failed');
       res.status(500).json({ success: false, error: err.message });

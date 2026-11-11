@@ -1,4 +1,5 @@
 'use client';
+import type { LooseJson } from '@/lib/loose-json';
 
 import { useCallback, useEffect, useState } from 'react';
 import { api, type DiagnosticsFilter } from './api';
@@ -260,24 +261,24 @@ export function useSignalDiagnostics(opts: DiagnosticsFilter = {}): SignalDiagno
           api.getDiagnosticsShadow(opts),
         ]);
         if (cancelled) return;
-        setSummary(((summaryRes as any)?.data?.byInstrument ?? []) as DiagnosticsSummaryRow[]);
-        setRejections(((rejectionsRes as any)?.data?.rows ?? []) as DiagnosticsRejectionRow[]);
-        setCensus(((censusRes as any)?.data?.rows ?? []) as DiagnosticsCensusRow[]);
-        setGrades(((gradesRes as any)?.data?.rows ?? []) as DiagnosticsGradeRow[]);
-        setLeakage(((leakageRes as any)?.data?.rows ?? []) as DiagnosticsLeakageRow[]);
-        const perf = (performanceRes as any)?.data;
+        setSummary(((summaryRes as LooseJson)?.data?.byInstrument ?? []) as DiagnosticsSummaryRow[]);
+        setRejections(((rejectionsRes as LooseJson)?.data?.rows ?? []) as DiagnosticsRejectionRow[]);
+        setCensus(((censusRes as LooseJson)?.data?.rows ?? []) as DiagnosticsCensusRow[]);
+        setGrades(((gradesRes as LooseJson)?.data?.rows ?? []) as DiagnosticsGradeRow[]);
+        setLeakage(((leakageRes as LooseJson)?.data?.rows ?? []) as DiagnosticsLeakageRow[]);
+        const perf = (performanceRes as LooseJson)?.data;
         setPerformance({ byInstrument: perf?.byInstrument ?? [], bySegment: perf?.bySegment ?? [] });
-        const opp = (opportunityRes as any)?.data;
+        const opp = (opportunityRes as LooseJson)?.data;
         setOpportunity({ byInstrument: opp?.byInstrument ?? [], bySegment: opp?.bySegment ?? [] });
-        const ver = (versionsRes as any)?.data;
+        const ver = (versionsRes as LooseJson)?.data;
         setVersions({ strategyVersions: ver?.strategyVersions ?? [], costVersions: ver?.costVersions ?? [] });
-        setMajorMoves(((majorMovesRes as any)?.data?.rows ?? []) as DiagnosticsMajorMoveRow[]);
-        setTriggers(((triggersRes as any)?.data?.triggers ?? []) as DiagnosticsTrigger[]);
-        setTriggerStages(((triggersRes as any)?.data?.stages ?? {}) as Record<string, string>);
-        setDisplacementRequiredBy(((triggersRes as any)?.data?.displacementRequiredBy ?? []) as string[]);
-        setShadow(((shadowRes as any)?.data?.rows ?? []) as DiagnosticsShadowRow[]);
+        setMajorMoves(((majorMovesRes as LooseJson)?.data?.rows ?? []) as DiagnosticsMajorMoveRow[]);
+        setTriggers(((triggersRes as LooseJson)?.data?.triggers ?? []) as DiagnosticsTrigger[]);
+        setTriggerStages(((triggersRes as LooseJson)?.data?.stages ?? {}) as Record<string, string>);
+        setDisplacementRequiredBy(((triggersRes as LooseJson)?.data?.displacementRequiredBy ?? []) as string[]);
+        setShadow(((shadowRes as LooseJson)?.data?.rows ?? []) as DiagnosticsShadowRow[]);
         setError(null);
-      } catch (err: any) {
+      } catch (err: LooseJson) {
         if (!cancelled) setError(err?.message ?? 'Failed to load signal diagnostics');
       } finally {
         if (!cancelled) setLoading(false);

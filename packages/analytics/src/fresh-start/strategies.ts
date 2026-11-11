@@ -3,7 +3,7 @@ import { atr, ema } from '../indicators/index.js';
 import { freshOrderFlowEvidence, type FreshOrderFlowInput } from './order-flow-evidence.js';
 import { detectOrderBlocks } from '../market-structure/index.js';
 import { flowCoverage, FLOW_MIN_SAMPLED_COVERAGE } from '../order-flow/index.js';
-export const FRESH_PACK_VERSION = 'NEW-INTRADAY-2.0';
+export const FRESH_PACK_VERSION = 'NEW-INTRADAY-2.1';
 /** Minimum underlying reward / risk for a target, and the furthest target in 5-minute ATR before it is capped (1.5). */
 /**
  * 1.5 regime filter: the trend strategies (ORB, VWAP pullback, opening pullback) stand aside on a choppy day, where a
@@ -110,9 +110,26 @@ export const FRESH_RS_MIN_PCT = 0.7;
 export const FRESH_RS_SECTOR_TOLERANCE_PCT = 0.3;
 export const FRESH_RS_MAX_SPREAD_PCT = 1;
 export const FRESH_RS_MAX_IV_RANK = 80;
-export const FRESH_RS_TOUCH_ATR = 0.15;
-export const FRESH_RS_BASE_MAX_ATR = 0.6;
-export const FRESH_RS_MAX_RISK_ATR = 1.2;
+export const FRESH_RS_TOUCH_ATR = 0.25;
+export const FRESH_RS_BASE_MAX_ATR = 0.9;
+export const FRESH_RS_MAX_RISK_ATR = 1.5;
+/**
+ * 2.1 (owner, 11 Nov: "design the strategies so that trades come"). In a week of 2.0 the three active strategies found
+ * no setup at all: each asked for seven or eight conditions at once and the entry trigger was the narrowest of them.
+ * 2.1 keeps the direction filters (relative strength, breadth, order flow, the 15-minute trend, VWAP side, option
+ * liquidity, the risk cap) and widens the entry: a pullback may be up to five bars back and need not be a perfect
+ * touch, the resumption bar needs average (not above-average) volume, a base may be wider, and a plain continuation
+ * (a close beyond the last six bars) is a third trigger. Paper hypothesis: more entries, not a claim of better ones.
+ */
+export const FRESH_HOLD_WINDOW_BARS = 5;
+export const FRESH_HOLD_CLOSE_LOCATION = 0.55;
+export const FRESH_HOLD_RVOL = 1.0;
+export const FRESH_BASE_RVOL = 1.2;
+export const FRESH_BASE_BODY = 0.4;
+/** Of the last six five-minute closes, how many may be on the wrong side of VWAP. */
+export const FRESH_VWAP_MISSES = 2;
+export const FRESH_CONTINUATION_BARS = 6;
+export const FRESH_CONTINUATION_RVOL = 1.2;
 /** One option-chain OI sample (nearest expiry), as of `at`. */
 export interface FreshOiSample { at: number; expiry?: string; strikes: ReadonlyArray<{ strike: number; callOi: number | null; putOi: number | null }> }
 /**
@@ -130,9 +147,9 @@ export interface FreshIndexIntel {
     oiBefore: FreshOiSample | null;
 }
 /** 2.0 NEW_INDEX_BREADTH_V1 parameters (paper hypothesis). */
-export const FRESH_IDX_BREADTH_BULL = 0.7;
-export const FRESH_IDX_BREADTH_BEAR = 0.3;
-export const FRESH_IDX_MIN_ROOM_R = 1.5;
+export const FRESH_IDX_BREADTH_BULL = 0.6;
+export const FRESH_IDX_BREADTH_BEAR = 0.4;
+export const FRESH_IDX_MIN_ROOM_R = 1.0;
 /** A strike is an OI wall when its OI is at least this share of the largest OI on that side of the chain. */
 export const FRESH_IDX_WALL_SHARE = 0.6;
 /** A wall break needs the wall's own OI down at least this much over ~15 minutes (writers covering). */
@@ -144,9 +161,9 @@ export const FRESH_IDX_WALL_BREAK_MAX_RISK_ATR = 1.5;
 export interface FreshFootprintRead { barTime: number; deltaPct: number | null; buyImbalances: number; sellImbalances: number; trades: number }
 /** 2.0 NEW_MCX_FLOW_V1 parameters (paper hypothesis). Flow sides are INFERRED by the feed, never exact. */
 export const FRESH_MCX_FLOW_BARS = 3;
-export const FRESH_MCX_FLOW_MIN_DELTA = 0.15;
-export const FRESH_MCX_TRIGGER_DELTA = 0.15;
-export const FRESH_MCX_BREAK_DELTA = 0.2;
+export const FRESH_MCX_FLOW_MIN_DELTA = 0.08;
+export const FRESH_MCX_TRIGGER_DELTA = 0.08;
+export const FRESH_MCX_BREAK_DELTA = 0.12;
 /** An order block counts as "at the entry" within this many ATR (shadow tag only). */
 export const FRESH_OB_NEAR_ATR = 0.5;
 const RS_BULLISH_OI: ReadonlySet<string> = new Set(['LONG_BUILDUP', 'SHORT_COVERING']);
@@ -311,9 +328,14 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
     const today = b.filter(x => x.time >= c.sessionOpen), minute = m.filter(x => x.time >= c.sessionOpen);
     if (!today.length || !minute.length)
         return refuseAll('MISSING_SESSION_DATA');
-    if (today[0].time !== c.sessionOpen || today.some((x, i) => i > 0 && x.time - today[i - 1].time !== 300000)
-        || minute[0].time !== c.sessionOpen || minute.some((x, i) => i > 0 && x.time - minute[i - 1].time !== 60000))
-        return refuseAll('MISSING_BARS');
+    // Which series is broken and how (detail only; the refusal itself is unchanged): the session's first bar missing,
+    // or a gap inside the session, on the 5-minute or the 1-minute series.
+    const missing = today[0].time !== c.sessionOpen ? '5M_OPEN_BAR_MISSING'
+        : today.some((x, i) => i > 0 && x.time - today[i - 1].time !== 300000) ? '5M_GAP'
+            : minute[0].time !== c.sessionOpen ? '1M_OPEN_BAR_MISSING'
+                : minute.some((x, i) => i > 0 && x.time - minute[i - 1].time !== 60000) ? '1M_GAP' : null;
+    if (missing)
+        return refuseAll('MISSING_BARS', missing);
     const current = last(today), decisionAt = Math.max(current.time + 300000, current.availableAt);
     // The opening range belongs to the latest anchor that has started: the session open, or for MCX the evening open of
     // the US energy/metals session (1.7). ORB retest and the first opening pullback run in the two hours after it.
@@ -627,16 +649,16 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                                     if (!(d === 1 ? bear : bull)) {
                                         reach(6, 'RS_NOT_HOLDING_VWAP');
                                         const last6 = today.slice(-6);
-                                        if (last6.length === 6 && last6.filter(x => d * (x.close - vw(x)) < 0).length <= 1 && favorable(current.close, vwap)) {
+                                        if (last6.length === 6 && last6.filter(x => d * (x.close - vw(x)) < 0).length <= FRESH_VWAP_MISSES && favorable(current.close, vwap)) {
                                             reach(7, 'RS_NO_TRIGGER');
                                             const prior = today[today.length - 2];
                                             // A: a pullback in the last three bars touched VWAP or the 5-minute EMA20 (within 0.15 ATR, close not
                                             // more than 0.15 ATR through it), and this bar resumes: closes past the prior bar, in its outer 35%,
                                             // with relative volume >= 1.2.
                                             const touches = (x: FreshBar) => [vw(x), ema5.get(x.time)].some(L => L != null && finite(L) && d * ((d === 1 ? x.low : x.high) - L) <= FRESH_RS_TOUCH_ATR * a && d * (x.close - L) >= -FRESH_RS_TOUCH_ATR * a);
-                                            const window3 = today.slice(-4, -1), touchAt = window3.findIndex(touches);
+                                            const window3 = today.slice(-1 - FRESH_HOLD_WINDOW_BARS, -1), touchAt = window3.map(touches).lastIndexOf(true);
                                             let s: number | null = null, o: number | null = null;
-                                            if (prior && touchAt >= 0 && favorable(current.close, d === 1 ? prior.high : prior.low) && confirms(current, .4) && closeLocation(current, d) >= .65 && rvol(current) >= 1.2) {
+                                            if (prior && touchAt >= 0 && favorable(current.close, d === 1 ? prior.high : prior.low) && confirms(current, .4) && closeLocation(current, d) >= FRESH_HOLD_CLOSE_LOCATION && rvol(current) >= FRESH_HOLD_RVOL) {
                                                 const pullback = [...window3.slice(touchAt), current];
                                                 s = lo(pullback) - d * .1 * a; o = window3[touchAt].time;
                                             }
@@ -647,11 +669,19 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                                                     if (base.length < n) continue;
                                                     const hi = Math.max(...base.map(x => x.high)), low = Math.min(...base.map(x => x.low));
                                                     if (hi - low > FRESH_RS_BASE_MAX_ATR * a) continue;
-                                                    if (d * (current.close - (d === 1 ? hi : low)) > .05 * a && body(current) >= .5 && rvol(current) >= 1.5) {
+                                                    if (d * (current.close - (d === 1 ? hi : low)) > .05 * a && body(current) >= FRESH_BASE_BODY && rvol(current) >= FRESH_BASE_RVOL) {
                                                         s = (d === 1 ? low : hi) - d * .1 * a; o = base[0].time;
                                                         break;
                                                     }
                                                 }
+                                            // C (2.1): continuation - this bar closes beyond the last six bars' extreme with a real body and rvol >= 1.2.
+                                            if (s == null && prior) {
+                                                const before6 = today.slice(-1 - FRESH_CONTINUATION_BARS, -1);
+                                                const edge6 = d === 1 ? Math.max(...before6.map(x => x.high)) : Math.min(...before6.map(x => x.low));
+                                                if (before6.length === FRESH_CONTINUATION_BARS && d * (current.close - edge6) > .05 * a && confirms(current, .5) && rvol(current) >= FRESH_CONTINUATION_RVOL) {
+                                                    s = lo([prior, current]) - d * .1 * a; o = prior.time;
+                                                }
+                                            }
                                             if (s != null && o != null) {
                                                 reach(8, 'RS_RISK_TOO_WIDE');
                                                 if (d * (current.close - s) > 0 && d * (current.close - s) <= FRESH_RS_MAX_RISK_ATR * a) {
@@ -678,14 +708,17 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                 reach(0, ix === undefined ? 'IDX_NOT_AN_INDEX' : !fresh ? 'IDX_INTEL_STALE' : 'IDX_BEFORE_10_00');
                 if (fresh && c.now - c.sessionOpen >= FRESH_RS_START_MS) {
                     reach(1, 'IDX_BREADTH_UNAVAILABLE');
-                    if (ix!.breadth != null && finite(ix!.breadth)) {
+                    // 2.1: breadth missing (heavyweight data short, 95 refusals on 11 Nov) no longer ends it: the index's own
+                    // 15-minute trend must then be WITH the trade (stricter than the usual "not against").
+                    const breadthKnown = ix!.breadth != null && finite(ix!.breadth);
+                    if (breadthKnown || (d === 1 ? bull : bear)) {
                         reach(2, 'IDX_BREADTH_SPLIT');
-                        if (d === 1 ? ix!.breadth >= FRESH_IDX_BREADTH_BULL : ix!.breadth <= FRESH_IDX_BREADTH_BEAR) {
+                        if (!breadthKnown || (d === 1 ? ix!.breadth! >= FRESH_IDX_BREADTH_BULL : ix!.breadth! <= FRESH_IDX_BREADTH_BEAR)) {
                             reach(3, 'IDX_FUTURES_OI_AGAINST');
                             if (ix!.futuresOi !== (d === 1 ? 'SHORT_BUILDUP' : 'LONG_BUILDUP')) {
                                 reach(4, 'IDX_NOT_HOLDING_VWAP');
                                 const last6 = today.slice(-6);
-                                if (last6.length === 6 && last6.filter(x => d * (x.close - vw(x)) < 0).length <= 1 && favorable(current.close, vwap)) {
+                                if (last6.length === 6 && last6.filter(x => d * (x.close - vw(x)) < 0).length <= FRESH_VWAP_MISSES && favorable(current.close, vwap)) {
                                     reach(5, 'IDX_NO_TRIGGER');
                                     const nowOi = ix!.oiNow && finite(ix!.oiNow.at) && ix!.oiNow.at <= c.now && c.now - ix!.oiNow.at <= FRESH_IDX_OI_MAX_AGE_MS ? ix!.oiNow : null;
                                     const before = nowOi?.expiry && ix!.oiBefore?.expiry === nowOi.expiry && nowOi.at - ix!.oiBefore.at >= FRESH_IDX_OI_LOOKBACK_MS[0] && nowOi.at - ix!.oiBefore.at <= FRESH_IDX_OI_LOOKBACK_MS[1] ? ix!.oiBefore : null;
@@ -711,8 +744,8 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                                             }
                                         }
                                     // A: VWAP / EMA20 hold (as NEW_RS_STOCK_V1).
-                                    const window3 = today.slice(-4, -1), touchAt = window3.findIndex(touches);
-                                    if (s == null && prior && touchAt >= 0 && favorable(current.close, d === 1 ? prior.high : prior.low) && confirms(current, .4) && closeLocation(current, d) >= .65 && rvol(current) >= 1.2) {
+                                    const window3 = today.slice(-1 - FRESH_HOLD_WINDOW_BARS, -1), touchAt = window3.map(touches).lastIndexOf(true);
+                                    if (s == null && prior && touchAt >= 0 && favorable(current.close, d === 1 ? prior.high : prior.low) && confirms(current, .4) && closeLocation(current, d) >= FRESH_HOLD_CLOSE_LOCATION && rvol(current) >= FRESH_HOLD_RVOL) {
                                         s = lo([...window3.slice(touchAt), current]) - d * .1 * a; o = window3[touchAt].time; trigger = 'VWAP_HOLD';
                                     }
                                     // B: a 3-6 bar base no wider than 0.6 ATR, then a close out of it on rvol >= 1.5.
@@ -722,19 +755,28 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                                             if (base.length < n) continue;
                                             const hi = Math.max(...base.map(x => x.high)), low = Math.min(...base.map(x => x.low));
                                             if (hi - low > FRESH_RS_BASE_MAX_ATR * a) continue;
-                                            if (d * (current.close - (d === 1 ? hi : low)) > .05 * a && body(current) >= .5 && rvol(current) >= 1.5) {
+                                            if (d * (current.close - (d === 1 ? hi : low)) > .05 * a && body(current) >= FRESH_BASE_BODY && rvol(current) >= FRESH_BASE_RVOL) {
                                                 s = (d === 1 ? low : hi) - d * .1 * a; o = base[0].time; trigger = 'BASE_BREAK';
                                                 break;
                                             }
                                         }
+                                    // C (2.1): continuation - this bar closes beyond the last six bars' extreme with a real body and rvol >= 1.2.
+                                    if (s == null && prior) {
+                                        const before6 = today.slice(-1 - FRESH_CONTINUATION_BARS, -1);
+                                        const edge6 = d === 1 ? Math.max(...before6.map(x => x.high)) : Math.min(...before6.map(x => x.low));
+                                        if (before6.length === FRESH_CONTINUATION_BARS && d * (current.close - edge6) > .05 * a && confirms(current, .5) && rvol(current) >= FRESH_CONTINUATION_RVOL) {
+                                            s = lo([prior, current]) - d * .1 * a; o = prior.time; trigger = 'CONTINUATION';
+                                        }
+                                    }
                                     if (s != null && o != null) {
                                         reach(6, 'IDX_RISK_TOO_WIDE');
                                         const risk = d * (current.close - s);
                                         if (risk > 0 && risk <= maxRisk * a) {
                                             // Location: the next OI wall in the trade's direction (now) must be >= 1.5R away.
-                                            reach(7, nowOi ? 'IDX_LOCATION_NO_ROOM' : 'IDX_OI_UNAVAILABLE');
+                                            // 2.1: 1.0R of room; a missing chain sample skips the check (recorded) instead of refusing.
+                                            reach(7, 'IDX_LOCATION_NO_ROOM');
                                             const next = nowOi ? walls(nowOi, d === 1).filter(x => d * (x.strike - current.close) > 0).sort((x, y) => d * (x.strike - y.strike))[0] : undefined;
-                                            if (nowOi && (!next || d * (next.strike - current.close) >= FRESH_IDX_MIN_ROOM_R * risk)) {
+                                            if (!next || d * (next.strike - current.close) >= FRESH_IDX_MIN_ROOM_R * risk) {
                                                 // Order-flow veto (owner, 7 Nov): no entry when the decision bar's flow is clearly against the
                                                 // trade. Unavailable / neutral flow does not veto (SENSEX / BANKEX read NIFTY / BANKNIFTY's, proxy).
                                                 reach(8, 'IDX_FLOW_OPPOSED');
@@ -743,7 +785,7 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                                                     stop = s;
                                                     origin = o;
                                                     profile = 'TREND';
-                                                    indexTrigger = { trigger, breadth: ix!.breadth, futuresOi: ix!.futuresOi, nextWall: next?.strike ?? null, flow: flow.alignment };
+                                                    indexTrigger = { trigger, breadth: ix!.breadth, futuresOi: ix!.futuresOi, nextWall: nowOi ? next?.strike ?? null : 'OI_UNAVAILABLE', flow: flow.alignment };
                                                 }
                                             }
                                         }
@@ -776,13 +818,13 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                             if (!(d === 1 ? bear : bull)) {
                                 reach(4, 'MCX_NOT_HOLDING_VWAP');
                                 const last6 = today.slice(-6);
-                                if (last6.length === 6 && last6.filter(x => d * (x.close - vw(x)) < 0).length <= 1 && favorable(current.close, vwap)) {
+                                if (last6.length === 6 && last6.filter(x => d * (x.close - vw(x)) < 0).length <= FRESH_VWAP_MISSES && favorable(current.close, vwap)) {
                                     reach(5, 'MCX_NO_TRIGGER');
                                     const prior = today[today.length - 2];
                                     const touches = (x: FreshBar) => [vw(x), ema5.get(x.time)].some(L => L != null && finite(L) && d * ((d === 1 ? x.low : x.high) - L) <= FRESH_RS_TOUCH_ATR * a && d * (x.close - L) >= -FRESH_RS_TOUCH_ATR * a);
-                                    const window3 = today.slice(-4, -1), touchAt = window3.findIndex(touches);
+                                    const window3 = today.slice(-1 - FRESH_HOLD_WINDOW_BARS, -1), touchAt = window3.map(touches).lastIndexOf(true);
                                     let s: number | null = null, o: number | null = null, trigger = '';
-                                    if (prior && touchAt >= 0 && barDelta >= FRESH_MCX_TRIGGER_DELTA && favorable(current.close, d === 1 ? prior.high : prior.low) && confirms(current, .4) && closeLocation(current, d) >= .65 && rvol(current) >= 1.2) {
+                                    if (prior && touchAt >= 0 && barDelta >= FRESH_MCX_TRIGGER_DELTA && favorable(current.close, d === 1 ? prior.high : prior.low) && confirms(current, .4) && closeLocation(current, d) >= FRESH_HOLD_CLOSE_LOCATION && rvol(current) >= FRESH_HOLD_RVOL) {
                                         s = lo([...window3.slice(touchAt), current]) - d * .1 * a; o = window3[touchAt].time; trigger = 'FLOW_HOLD';
                                     }
                                     const fp = c.footprint15 && finite(c.footprint15.barTime) && c.footprint15.barTime + 900000 <= c.now ? c.footprint15 : null;
@@ -793,11 +835,19 @@ export function evaluateFreshStrategies(c: FreshContext): FreshEvaluation {
                                             if (base.length < n) continue;
                                             const hi = Math.max(...base.map(x => x.high)), low = Math.min(...base.map(x => x.low));
                                             if (hi - low > FRESH_RS_BASE_MAX_ATR * a) continue;
-                                            if (d * (current.close - (d === 1 ? hi : low)) > .05 * a && body(current) >= .5 && rvol(current) >= 1.5) {
+                                            if (d * (current.close - (d === 1 ? hi : low)) > .05 * a && body(current) >= FRESH_BASE_BODY && rvol(current) >= FRESH_BASE_RVOL) {
                                                 s = (d === 1 ? low : hi) - d * .1 * a; o = base[0].time; trigger = 'FLOW_BREAK';
                                                 break;
                                             }
                                         }
+                                    // C (2.1): continuation - this bar closes beyond the last six bars' extreme with a real body and rvol >= 1.2.
+                                    if (s == null && prior && barDelta >= FRESH_MCX_BREAK_DELTA && fpAgrees) {
+                                        const before6 = today.slice(-1 - FRESH_CONTINUATION_BARS, -1);
+                                        const edge6 = d === 1 ? Math.max(...before6.map(x => x.high)) : Math.min(...before6.map(x => x.low));
+                                        if (before6.length === FRESH_CONTINUATION_BARS && d * (current.close - edge6) > .05 * a && confirms(current, .5) && rvol(current) >= FRESH_CONTINUATION_RVOL) {
+                                            s = lo([prior, current]) - d * .1 * a; o = prior.time; trigger = 'FLOW_CONTINUATION';
+                                        }
+                                    }
                                     if (s != null && o != null) {
                                         reach(6, 'MCX_RISK_TOO_WIDE');
                                         if (d * (current.close - s) > 0 && d * (current.close - s) <= FRESH_RS_MAX_RISK_ATR * a) {
@@ -910,7 +960,7 @@ export function freshMcxFlowDiagnostic(c: FreshContext): FreshMcxFlowDiagnostic 
     const d = trend === 'BULL' ? 1 : trend === 'BEAR' ? -1 : Math.sign(setup ?? 0);
     const flowCheck = !c.orderFlow ? 'NO_FLOW_SOURCE' : !cur || recent.some(x => x == null) ? 'FLOW_BARS_MISSING' : !(buy + sell > 0) || (share ?? 0) < .5 ? 'LOW_CLASSIFIED_SHARE'
         : coverage == null || coverage < FLOW_MIN_SAMPLED_COVERAGE ? 'LOW_COVERAGE' : trades < 3 * 5 ? 'FEW_TRADES' : d === 0 ? 'FLOW_FLAT'
-        : d * setup! < FRESH_MCX_FLOW_MIN_DELTA ? 'SETUP_DELTA_BELOW_15PCT' : !(d * (bar ?? 0) > -FRESH_MCX_FLOW_MIN_DELTA) ? 'BAR_DELTA_OPPOSES' : 'PASS';
+        : d * setup! < FRESH_MCX_FLOW_MIN_DELTA ? 'SETUP_DELTA_BELOW_MIN' : !(d * (bar ?? 0) > -FRESH_MCX_FLOW_MIN_DELTA) ? 'BAR_DELTA_OPPOSES' : 'PASS';
     return {
         trend, lastClose: current?.close ?? null, sessionChangePct: current && today[0].open > 0 ? Math.round((current.close / today[0].open - 1) * 10000) / 100 : null,
         vwapDistanceAtr: current && finite(vwap) && a > 0 ? Math.round((current.close - vwap) / a * 100) / 100 : null,

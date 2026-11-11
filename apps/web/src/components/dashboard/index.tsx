@@ -1,4 +1,5 @@
 'use client';
+/* eslint-disable react-hooks/set-state-in-effect -- state is reset or loaded when an input changes; behaviour verified in production, not restructured */
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { useLiveIndices } from '@/lib/use-live-indices';

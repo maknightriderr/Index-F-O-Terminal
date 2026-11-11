@@ -23,6 +23,7 @@ import {FreshRuntime} from './runtime.js';
 import {flowFiveMinuteBars,footprintsFor,flowBarStart,FLOW_BAR_MS} from '../order-flow-store.js';
 import type {FreshContext} from '@fno/analytics';
 import {logFreshDecisionSummary} from './decision-summary.js';
+import {noteChainRefresh,noteScanStatus} from './health-counters.js';
 import {freshEventClearStocks,freshRankStocks,FRESH_MARKETS,freshMarketBlockers,freshBookSupportsLot,discoverFreshMarkets,freshDiscoveryWindow,freshReferenceOptions,freshExpiryDayOptions,freshGammaBookWindow,freshReferenceExchange,freshReferenceSpotId,freshEventMarket,freshMarketExchange,freshIndexKey,type FreshMarket} from './markets.js';
 import {freshAdapterState as state} from './adapter-state.js';
 import {observedFreshOi,freshParseScan,freshStockIntel,freshStocksInPlay,freshInPlayDirection,freshIndexIntel,FRESH_INDEX_HEAVYWEIGHTS,FRESH_SCAN_KEY,type FreshScan,type FreshFuturesSample} from './intel.js';
@@ -57,6 +58,9 @@ export const FRESH_MAX_ROTATING_BOOK_SLICES=8;
 export const FRESH_ROTATION_MIN_SLICES:Readonly<Record<string,number>>=Object.freeze({NSE_STOCK_OPTIONS:1,MCX_VERIFIED_FUTURES_OPTIONS:2});
 /** How long a reference with a fresh setup keeps its books ahead of the rotation. */
 export const FRESH_URGENT_BOOK_MS=5*60_000;
+/** Dhan signal -> paper: how long the reference and its option books are waited for, and the pause for first quotes. */
+export const FRESH_DHAN_REFERENCE_WAIT_MS=90_000;
+export const FRESH_DHAN_FIRST_QUOTES_MS=3_000;
 /** The leading stocks in play whose option books go ahead of the rotation (2 leaders + 2 laggards, alternating). */
 export const FRESH_IN_PLAY_BOOK_SLICES=4;
 /** Index future / chain OI samples are kept this long (the strategy reads 30 min of futures and ~15 min of chain OI). */
@@ -194,9 +198,21 @@ export class FreshPaperWorker {
     if(!ref)return {decision:'DHAN_NO_PAPER_REFERENCE',candidateId:null};
     // Its option books first in the next plans; a stock not subscribed takes a stock slot and is waited for (<= 30 s).
     this.urgentBooks.set(ref.id,Date.now()+FRESH_URGENT_BOOK_MS);
-    if(!this.feed.underlying(ref.id)&&ref.market==='NSE_STOCK_OPTIONS'){
-      this.dhanPriority.set(ref.id,Date.now()+5*60_000);
-      for(let k=0;k<30&&!this.stopped&&!this.feed.underlying(ref.id);k++)await new Promise(res=>setTimeout(res,1000));
+    // 11 Nov: six setup E signals on stock futures were all lost here. The stock was waited for 30 s, but the scan that
+    // subscribes it runs at most every 10 s and is at its slowest right after a bar close (4x REFERENCE_NOT_SUBSCRIBED);
+    // and when the stock was there, its option books were not yet (2x NO_ELIGIBLE_ENTRY: NO_FRESH_QUOTE / stale plan).
+    // Now: ask for an immediate rescan, wait (<= 90 s) until the reference ticks AND its option books are in the book
+    // plan, give the first quotes a few seconds, and only then build the candidate (priced at that moment, as before).
+    if(ref.market==='NSE_STOCK_OPTIONS')this.dhanPriority.set(ref.id,Date.now()+5*60_000);
+    const booked=()=>state.bookPlan?.slices?.some((x:{name:string;options:number})=>x.name===ref.name&&x.options>0)===true;
+    if(!this.feed.underlying(ref.id)||!booked()){
+      const until=Date.now()+FRESH_DHAN_REFERENCE_WAIT_MS;let ticked=!!this.feed.underlying(ref.id);
+      this.lastScan=0; // the next timer tick rescans at once
+      while(!this.stopped&&Date.now()<until&&!(this.feed.underlying(ref.id)&&booked())){
+        if(!ticked&&this.feed.underlying(ref.id)){ticked=true;this.lastScan=0;} // its price is known now: plan its books
+        await new Promise(res=>setTimeout(res,1000));
+      }
+      if(this.feed.underlying(ref.id)&&booked())await new Promise(res=>setTimeout(res,FRESH_DHAN_FIRST_QUOTES_MS));
     }
     const signal=this.feed.underlying(ref.id),futures=flowLastTrade(r.symbol),now=Date.now(),day=freshIstDay(now),session=getSessionWindow(freshReferenceExchange(ref),day);
     if(!signal)return {decision:'DHAN_REFERENCE_NOT_SUBSCRIBED',candidateId:null};
@@ -265,12 +281,14 @@ export class FreshPaperWorker {
         if(this.stopped)return;
         try{
           const chain=await buildOptionChain(this.provider,r.name,freshReferenceExchange(r)),at=chain.timestamp;
-          if(!Number.isFinite(at)||at>Date.now()||!chain.expiry)continue;
+          if(!Number.isFinite(at)||at>Date.now()||!chain.expiry){noteChainRefresh(r.name,'CHAIN_WITHOUT_EXPIRY_OR_VALID_TIME');continue;}
           const strikes=chain.strikes.map(x=>({strike:x.strike,callOi:observedFreshOi(x.call),putOi:observedFreshOi(x.put)})).filter(x=>Number.isFinite(x.strike)&&x.strike>0);
+          noteChainRefresh(r.name,strikes.length?null:'CHAIN_WITHOUT_STRIKES');
           if(strikes.length)this.oiChains.set(r.id,[...(this.oiChains.get(r.id)??[]).filter(x=>at-x.at<=FRESH_INDEX_SAMPLE_KEEP_MS),{at,expiry:chain.expiry,strikes}]);
           // Dhan engine v2 expiry-gamma module (shadow): its own day-long chain samples; never throws, never trades.
           if(strikes.length&&DHAN_ENGINE_SHADOW)void recordGammaChain(r.name,chain,at,Date.now(),null,this.histories.get(r.id));
         }catch(err){/* this index's OI stays as it was; the strategy refuses IDX_OI_UNAVAILABLE once it is stale */
+          noteChainRefresh(r.name,err instanceof Error?err.message:String(err));
           logger.info({event:'freshChainRefreshFailed',index:r.name,error:err instanceof Error?err.message:String(err)},'Fresh-start: option chain refresh failed for an index (OI stays as it was)');}
       }
     }finally{this.chainsBusy=false;}
@@ -322,7 +340,7 @@ export class FreshPaperWorker {
     for(const [k,v] of this.mcxDiag)if(now-v.at>15*60000)this.mcxDiag.delete(k);
     if(!this.mcxDiag.size)return;
     this.mcxDiagLoggedAt=now;
-    logger.info({event:'freshMcxFlowDiagnostic',thresholds:{setupDeltaPct:15,barDeltaOpposesPct:-15,classifiedSharePct:50,coveragePct:15,trades:15},contracts:Object.fromEntries([...this.mcxDiag].map(([k,v])=>[k,{...v,at:new Date(v.at).toISOString()}]))},'MCX flow diagnostic: the numbers behind NEW_MCX_FLOW_V1 flow checks (log only, decides nothing)');
+    logger.info({event:'freshMcxFlowDiagnostic',thresholds:{setupDeltaPct:8,barDeltaOpposesPct:-8,classifiedSharePct:50,coveragePct:15,trades:15},contracts:Object.fromEntries([...this.mcxDiag].map(([k,v])=>[k,{...v,at:new Date(v.at).toISOString()}]))},'MCX flow diagnostic: the numbers behind NEW_MCX_FLOW_V1 flow checks (log only, decides nothing)');
   }
   /** The armed state is decided once per scan (no transient disarm at its start: entries that arrive between the
    *  fresh worker's own steps — Dhan engine candidates, a pricing that finishes mid-scan — must not read a false
@@ -419,6 +437,6 @@ export class FreshPaperWorker {
         }else{await auditFreshEvaluation(h.context,evaluateFreshStrategies(h.context));state.lastDecision=blockers[0]??'BLOCKED_REQUIRED_CAPABILITY';}
       }
       state.discovery.historyCache=this.histories.size;state.status=state.entriesArmed?'FORWARD_PAPER_RUNNING':'PAPER_ARMED_DATA_BLOCKED';state.error=null;
-    }catch(error){if(this.stopped)return;state.entriesArmed=false;state.status='BLOCKED_ADAPTER';state.error=error instanceof Error&&/^BLOCKED_[A-Z_]+$/.test(error.message)?error.message:'ADAPTER_INPUT_OR_STORAGE_UNAVAILABLE';state.entryBlockers=[state.error];for(const m of state.marketReadiness){m.eligibleReferences=0;m.blockers=[...new Set([...m.blockers,state.error])];}}finally{this.scanning=false;if(!this.stopped){this.operationalReporter.report(state);const t=Date.now();if(t-this.summaryAt>=FRESH_DECISION_SUMMARY_MS){this.summaryAt=t;void logFreshDecisionSummary(t);this.logMemory();}this.logMcxDiagnostic(t);}}
+    }catch(error){if(this.stopped)return;state.entriesArmed=false;state.status='BLOCKED_ADAPTER';state.error=error instanceof Error&&/^BLOCKED_[A-Z_]+$/.test(error.message)?error.message:'ADAPTER_INPUT_OR_STORAGE_UNAVAILABLE';state.entryBlockers=[state.error];for(const m of state.marketReadiness){m.eligibleReferences=0;m.blockers=[...new Set([...m.blockers,state.error])];}}finally{this.scanning=false;if(!this.stopped){this.operationalReporter.report(state);const t=Date.now();noteScanStatus(state.status,t);if(t-this.summaryAt>=FRESH_DECISION_SUMMARY_MS){this.summaryAt=t;void logFreshDecisionSummary(t);this.logMemory();}this.logMcxDiagnostic(t);}}
   }
 }

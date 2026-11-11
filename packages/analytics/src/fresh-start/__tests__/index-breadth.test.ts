@@ -55,14 +55,14 @@ describe('2.0 NEW_INDEX_BREADTH_V1', () => {
     it('names the gate that stopped it', () => {
         const at = (x: Partial<FreshIndexIntel>) => { const c = context(pullbackDay); return { ...c, indexIntel: intel(c.now, x) }; };
         expect(refusal(at({ breadth: 0.5 }))?.detail).toBe('IDX_BREADTH_SPLIT');
-        expect(refusal(at({ breadth: null }))?.detail).toBe('IDX_BREADTH_UNAVAILABLE');
+        expect(find(at({ breadth: null }))).toBeDefined(); // 2.1: breadth missing -> the index's own 15-minute trend (here: up) must be with the trade
         expect(refusal(at({ futuresOi: 'SHORT_BUILDUP' }))?.detail).toBe('IDX_FUTURES_OI_AGAINST');
         expect(find(at({ futuresOi: null }))).toBeDefined(); // unknown futures OI is not "against"
-        expect(refusal(at({ oiNow: null, oiBefore: null }))?.detail).toBe('IDX_OI_UNAVAILABLE');
+        expect(find(at({ oiNow: null, oiBefore: null }))).toBeDefined(); // 2.1: no chain sample -> the room check is skipped, not refused
         const c = context(pullbackDay);
         // A call wall 0.5 points above the entry: less than 1.5R of room.
         expect(refusal({ ...c, indexIntel: intel(c.now, { oiNow: chain(c.now - 60000, [[92, 100, 1000], [103.1, 1000, 100]]) }) })?.detail).toBe('IDX_LOCATION_NO_ROOM');
-        expect(refusal({ ...c, indexIntel: intel(c.now, { oiNow: chain(c.now - 4 * 60000, [[110, 1000, 100]]) }) })?.detail).toBe('IDX_OI_UNAVAILABLE'); // > 3 min old
+        expect(find({ ...c, indexIntel: intel(c.now, { oiNow: chain(c.now - 4 * 60000, [[110, 1000, 100]]) }) })).toBeDefined(); // > 3 min old: treated as no sample
         expect(refusal({ ...c, indexIntel: intel(c.now, { at: c.now - 7 * 60000 }) })?.detail).toBe('IDX_INTEL_STALE');
         expect(refusal({ ...c, indexIntel: null })?.detail).toBe('IDX_INTEL_STALE');
         expect(refusal({ ...c, indexIntel: undefined })?.detail).toBe('IDX_NOT_AN_INDEX');

@@ -1,4 +1,5 @@
 'use client';
+import type { LooseJson } from '@/lib/loose-json';
 
 import { PageHeader } from '@/components/ui/card';
 
@@ -104,7 +105,7 @@ export function AlertsPage() {
 
       {!isLive && !loading && (
         <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2.5 text-amber-400 light:text-amber-700 text-xs font-medium">
-          ⚠️ Alerts feed unreachable — showing nothing right now. It'll pick back up on the next successful poll.
+          ⚠️ Alerts feed unreachable — showing nothing right now. It&apos;ll pick back up on the next successful poll.
         </div>
       )}
 
@@ -138,7 +139,7 @@ export function AlertsPage() {
             // Digest alerts (OI Spike / IV Spike / IV Crush) carry the full
             // per-symbol breakdown in data.symbols — the message text only
             // names the first few, this is what "show all" expands into.
-            const symbols = Array.isArray((a.data as any)?.symbols) ? ((a.data as any).symbols as Array<Record<string, unknown>>) : null;
+            const symbols = Array.isArray((a.data as LooseJson)?.symbols) ? ((a.data as LooseJson).symbols as Array<Record<string, unknown>>) : null;
             const isOpen = expanded.has(a.id);
 
             return (

@@ -50,7 +50,7 @@ export function CorporateActionsPage() {
 
   return (
     <div className="terminal-page mx-auto w-full max-w-[1600px] space-y-5 p-4 md:p-6">
-      <PageHeader title={"Corporate Actions"} subtitle={<>Upcoming dividends, bonuses, splits, rights issues, and buybacks across NSE — ex-date today or later, nearest first. Sourced from NSE's own corporate-filings data.</>} actions={<><div className="flex items-center gap-3">
+      <PageHeader title={"Corporate Actions"} subtitle={<>Upcoming dividends, bonuses, splits, rights issues, and buybacks across NSE — ex-date today or later, nearest first. Sourced from NSE&apos;s own corporate-filings data.</>} actions={<><div className="flex items-center gap-3">
           <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-xs text-gray-400 light:text-slate-600">
             <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />
             {isLive ? `${filtered.length} of ${actions.length}` : loading ? 'Loading…' : 'Unreachable'}
@@ -68,7 +68,7 @@ export function CorporateActionsPage() {
 
       {!isLive && !loading && (
         <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2.5 text-amber-400 light:text-amber-700 text-xs font-medium">
-          ⚠️ Corporate actions feed unreachable — showing nothing right now. It'll pick back up on the next successful poll.
+          ⚠️ Corporate actions feed unreachable — showing nothing right now. It&apos;ll pick back up on the next successful poll.
         </div>
       )}
 

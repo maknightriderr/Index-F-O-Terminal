@@ -21,6 +21,12 @@ export const ORDER_FLOW_MIGRATION = '038_order_blocks_order_flow_of1.sql';
 /** Dhan engine v2 (7 Nov): unreconciled volume, tick / step columns and recorded flow events. */
 export const ORDER_FLOW_EVENTS_MIGRATION = '052_order_flow_events.sql';
 export const FLOW_BAR_MS = 15 * 60_000;
+export const ORDER_FLOW_OPEN_BARS_MIGRATION = '055_order_flow_open_bars.sql';
+/** How often the open bar's events are checkpointed (also once at shutdown). */
+export const OPEN_BAR_CHECKPOINT_MS = 60_000;
+/** A checkpoint is restored only when the process started at most this long after it was saved (the feed's volume in
+ *  between is not observed; a longer gap keeps the bar an INCOMPLETE gap marker, as before). */
+export const OPEN_BAR_MAX_GAP_MS = 180_000;
 const KEEP_BARS = 400;
 /** Stock futures keep fewer closed footprints in memory (~4 sessions; all are persisted). */
 const KEEP_BARS_STOCK = 100;
@@ -48,6 +54,13 @@ interface SymbolFlow {
   startedAt?: number;
   /** Restart hydration ran for the current contract. */
   hydrated?: string | null;
+  /** 5-minute footprints (index and commodity futures only; in memory, shadow evidence): see closeFiveFootprints. */
+  fp5?: Map<number, FootprintBar>;
+  lastClosed5?: number | null;
+  /** Open-bar checkpoint: the bar and event count last saved (skips an unchanged contract). */
+  checkpoint?: { bar: number; events: number };
+  /** The restart bar whose checkpointed events were restored (undefined: not tried; null: tried, nothing restored). */
+  openRestored?: number | null;
 }
 
 const flows = new Map<string, SymbolFlow>();
@@ -73,6 +86,8 @@ export function registerFlowSymbol(symbol: string, args: { exchange: string; ins
       f.lastTrade = undefined;
       f.startedAt = args.startedAt;
       f.hydrated = null;
+      f.fp5 = undefined;
+      f.lastClosed5 = undefined;
     }
     f.kind = args.kind ?? f.kind;
     f.tickSize = args.tickSize ?? f.tickSize;
@@ -192,8 +207,62 @@ export function flowFiveMinuteBars(symbol: string, from: number, to: number): { 
 let closedBars = 0;
 export const flowClosedBarCount = () => closedBars;
 
+// ---------------- 5-minute footprints (11 Nov, shadow evidence for the 5-minute order-flow setup) ----------------
+// Index and commodity futures only (stock futures are left out to bound memory). Built from the same observed trades
+// as the 15-minute bar, with the same reconciliation rule; never persisted (after a restart they are rebuilt from the
+// recorded 15-minute events). The bar the process started in is skipped unless its checkpoint was restored.
+const KEEP_FIVE_FP = 240;
+let closedFive = 0;
+export const flowClosedFiveCount = () => closedFive;
+const fiveStart = (t: number) => Math.floor(t / FLOW_FIVE_MS) * FLOW_FIVE_MS;
+
+function fiveFootprint(f: SymbolFlow, bar: number, trades: readonly FlowTrade[], unreconciled: number, step: number): FootprintBar {
+  const fp = trades.length ? buildFootprint(trades as FlowTrade[], bar, FLOW_FIVE_MS, step, f.mode) : unavailableFootprint(bar, FLOW_FIVE_MS);
+  fp.sourceInstrument = f.instrument;
+  applyReconciliation(fp, unreconciled);
+  fp.tickSize = f.tickSize;
+  fp.priceStep = fp.deltaMode === 'UNAVAILABLE' ? null : step;
+  const s = trades.filter((t) => t.qty > 0).sort((a, b) => a.time - b.time);
+  if (s.length) {
+    fp.open = s[0].price;
+    fp.tradeSums = s.reduce((a, t) => ({ pv: a.pv + t.price * t.qty, v: a.v + t.qty, p2v: a.p2v + t.price * t.price * t.qty }), { pv: 0, v: 0, p2v: 0 });
+  }
+  return fp;
+}
+
+function trimFive(f: SymbolFlow): void {
+  if (f.fp5 && f.fp5.size > KEEP_FIVE_FP) for (const k of [...f.fp5.keys()].sort((a, b) => a - b).slice(0, f.fp5.size - KEEP_FIVE_FP)) f.fp5.delete(k);
+}
+
+function closeFiveFootprints(symbol: string, f: SymbolFlow, now: number): void {
+  if (f.kind !== 'INDEX' && f.kind !== 'COMMODITY') return;
+  const current = fiveStart(now);
+  if (f.lastClosed5 == null) f.lastClosed5 = fiveStart(f.startedAt ?? now);
+  const symbolStep = ORDER_FLOW_PRICE_STEP[symbol] ?? f.priceStep;
+  for (let bar = f.lastClosed5 + FLOW_FIVE_MS; bar < current; bar += FLOW_FIVE_MS) {
+    f.lastClosed5 = bar;
+    if (!isMarketOpen(f.exchange as Exchange, bar + 1)) continue;
+    const trades = f.trades.filter((t) => t.time >= bar && t.time < bar + FLOW_FIVE_MS);
+    const unrec = f.unreconciled.filter((u) => u.time >= bar && u.time < bar + FLOW_FIVE_MS).reduce((n, u) => n + u.qty, 0);
+    (f.fp5 ??= new Map()).set(bar, fiveFootprint(f, bar, trades, unrec, symbolStep ?? 5));
+    closedFive++;
+  }
+  trimFive(f);
+}
+
+/** The contract's closed 5-minute footprints (oldest first), or null when none are kept for it. */
+export function flowContractFiveBars(symbol: string): { exchange: string; instrument: string | null; kind: SymbolFlow['kind']; tickSize: number | null; footprints: FootprintBar[] } | null {
+  const f = flows.get(symbol);
+  if (!f || !f.fp5) return null;
+  const footprints = [...f.fp5.values()].filter((fp) => fp.sourceInstrument === f.instrument).sort((a, b) => a.barTime - b.barTime);
+  return { exchange: f.exchange, instrument: f.instrument, kind: f.kind, tickSize: f.tickSize, footprints };
+}
+
+/** The latest instant bars were closed up to (restoreOpenBar: a later bar closed -> the restart bar's live trades are gone). */
+let lastCloseAt = 0;
 export async function closeFlowBars(now: number, connected: boolean = feedConnected, unavailableReason: string | null = null): Promise<number> {
   let written = 0;
+  if (now > lastCloseAt) lastCloseAt = now;
   for (const [symbol, f] of flows) {
     const current = flowBarStart(now);
     for (let bar = (f.lastClosed ?? current - FLOW_BAR_MS) + FLOW_BAR_MS; bar < current; bar += FLOW_BAR_MS) {
@@ -219,6 +288,7 @@ export async function closeFlowBars(now: number, connected: boolean = feedConnec
       await persistFlowEvents(symbol, f, bar, unrec);
       written++;
     }
+    closeFiveFootprints(symbol, f, now); // before the open bar's trades are trimmed
     f.trades = f.trades.filter((t) => t.time >= current);
     f.unreconciled = f.unreconciled.filter((u) => u.time >= current);
     const keep = f.kind === 'STOCK' ? KEEP_BARS_STOCK : KEEP_BARS;
@@ -399,6 +469,15 @@ export async function hydrateFlowSymbol(symbol: string, now: number): Promise<nu
     if (!(step != null && step > 0)) continue;
     f.footprints.set(t, footprintFromRecorded(t, trades, unreconciled, step, f.mode, instrument, r.tick_size != null ? Number(r.tick_size) : f.tickSize));
     added++;
+    if (f.kind === 'INDEX' || f.kind === 'COMMODITY') {
+      // The same recorded events, cut into the bar's three 5-minute footprints (never overwrites a live one).
+      const raw = JSON.parse(gunzipSync(Buffer.from(r.events)).toString()) as Array<[number, number | null, number, number]>;
+      for (let b = t; b < t + FLOW_BAR_MS; b += FLOW_FIVE_MS) {
+        if (f.fp5?.has(b) || !isMarketOpen(f.exchange as Exchange, b + 1)) continue;
+        const un = raw.filter(([ms, price, , side]) => (side === 9 || price == null) && t + ms >= b && t + ms < b + FLOW_FIVE_MS).reduce((n, x) => n + x[2], 0);
+        (f.fp5 ??= new Map()).set(b, fiveFootprint(f, b, trades.filter((x) => x.time >= b && x.time < b + FLOW_FIVE_MS), un, step));
+      }
+    }
     if (day === today) {
       const v = sessionVwap(f, t);
       for (const tr of trades) { v.sums.pv += tr.price * tr.qty; v.sums.v += tr.qty; v.sums.p2v += tr.price * tr.price * tr.qty; recordFiveMinute(symbol, instrument, tr); }
@@ -407,9 +486,12 @@ export async function hydrateFlowSymbol(symbol: string, now: number): Promise<nu
     }
     await new Promise((res) => setImmediate(res));
   }
-  // The bar the process started in: inside today's session its earlier trades are lost -> an INCOMPLETE gap marker.
+  // The bar the process started in: inside today's session its earlier trades are lost -> an INCOMPLETE gap marker,
+  // unless the previous process checkpointed that open bar shortly before (F-08): then its events are restored and the
+  // bar closes normally with both halves.
   const open = getSessionWindow(f.exchange as Exchange, today)?.open;
-  if (open != null && istSession(restartBar) === today && restartBar >= open && isMarketOpen(f.exchange as Exchange, restartBar + 1) && !f.footprints.has(restartBar)) {
+  if (f.openRestored === undefined) await restoreOpenBar(symbol);
+  if (f.openRestored !== restartBar && open != null && istSession(restartBar) === today && restartBar >= open && isMarketOpen(f.exchange as Exchange, restartBar + 1) && !f.footprints.has(restartBar)) {
     const gap = unavailableFootprint(restartBar, FLOW_BAR_MS);
     gap.sourceInstrument = instrument;
     gap.incomplete = true;
@@ -418,7 +500,82 @@ export async function hydrateFlowSymbol(symbol: string, now: number): Promise<nu
   }
   const keepBars = f.kind === 'STOCK' ? KEEP_BARS_STOCK : KEEP_BARS;
   if (f.footprints.size > keepBars) for (const k of [...f.footprints.keys()].sort((a, b) => a - b).slice(0, f.footprints.size - keepBars)) f.footprints.delete(k);
+  trimFive(f);
   return added;
+}
+
+/**
+ * Restore the checkpointed events of the bar this process started in. Only when the bar has not been passed yet, the
+ * checkpoint is of this contract and this bar, and it was saved at most OPEN_BAR_MAX_GAP_MS before the start. The few
+ * seconds between the last checkpoint and the new feed connection stay unobserved (a deploy takes less than a minute
+ * once the old process has checkpointed at shutdown).
+ */
+export async function restoreOpenBar(symbol: string): Promise<boolean> {
+  const f = flows.get(symbol);
+  if (!f || f.openRestored !== undefined || f.startedAt == null || !schemaFileReady(ORDER_FLOW_OPEN_BARS_MIGRATION)) return false;
+  f.openRestored = null;
+  const started = f.startedAt, restartBar = flowBarStart(started);
+  // Once a later bar has been closed, the live trades of the restart bar are gone from memory: too late to rejoin them.
+  if (f.lastClosed !== restartBar || lastCloseAt >= restartBar + FLOW_BAR_MS) return false;
+  try {
+    const rows = await sql<Array<{ instrument: string | null; bar_time: Date; encoding: string; events: Buffer; saved_at: Date }>>`
+      SELECT instrument, bar_time, encoding, events, saved_at FROM order_flow_open_bars WHERE symbol = ${symbol} AND exchange = ${f.exchange}`;
+    const r = rows[0];
+    if (!r || flows.get(symbol) !== f || f.lastClosed !== restartBar || lastCloseAt >= restartBar + FLOW_BAR_MS || r.instrument !== f.instrument || r.encoding !== 'gzip-json-v1') return false;
+    const saved = new Date(r.saved_at).getTime();
+    if (new Date(r.bar_time).getTime() !== restartBar || !(saved <= started) || started - saved > OPEN_BAR_MAX_GAP_MS) return false;
+    const rowsIn = JSON.parse(gunzipSync(Buffer.from(r.events)).toString()) as Array<[number, number | null, number, number]>;
+    const trades: FlowTrade[] = [], unrec: Array<{ time: number; qty: number }> = [];
+    for (const [dt, price, qty, side] of rowsIn) {
+      const time = restartBar + dt;
+      if (!(qty > 0) || !(time >= restartBar) || !(time < started)) continue;
+      if (side === 9 || price == null) unrec.push({ time, qty });
+      else trades.push({ time, price, qty, side: side === 1 ? 'BUY' : side === -1 ? 'SELL' : null });
+    }
+    if (!trades.length && !unrec.length) return false;
+    if (f.priceStep == null && trades[0]) f.priceStep = flowPriceStep(trades[0].price, f.tickSize);
+    f.trades = [...trades, ...f.trades];
+    f.unreconciled = [...unrec, ...f.unreconciled];
+    const v = sessionVwap(f, restartBar);
+    for (const tr of trades) { v.sums.pv += tr.price * tr.qty; v.sums.v += tr.qty; v.sums.p2v += tr.price * tr.price * tr.qty; recordFiveMinute(symbol, f.instrument, tr); }
+    for (const u of unrec) { v.unreconciled += u.qty; addFiveUnreconciled(symbol, f.instrument, u.time, u.qty); }
+    f.openRestored = restartBar;
+    f.lastClosed5 = restartBar - FLOW_FIVE_MS;
+    f.lastClosed = restartBar - FLOW_BAR_MS; // the restart bar is whole again: closeFlowBars writes it like any other
+    return true;
+  } catch (err: any) {
+    logger.info({ symbol, error: err.message }, 'Order flow: open-bar checkpoint could not be restored (bar stays a gap)');
+    return false;
+  }
+}
+
+/**
+ * Save every contract's open-bar events (one row per contract, overwritten). Skips contracts with nothing new since
+ * the last save. Never throws. Returns the rows written.
+ */
+export async function checkpointOpenFlowBars(now: number): Promise<number> {
+  if (!schemaFileReady(ORDER_FLOW_OPEN_BARS_MIGRATION)) return 0;
+  const bar = flowBarStart(now);
+  let written = 0;
+  for (const [symbol, f] of flows) {
+    // A bar the process started in without a restored checkpoint is a gap: never saved as if it were whole.
+    if (!f.instrument || (f.lastClosed != null && f.lastClosed >= bar)) continue;
+    const trades = f.trades.filter((t) => t.time >= bar && t.time < bar + FLOW_BAR_MS), un = f.unreconciled.filter((u) => u.time >= bar && u.time < bar + FLOW_BAR_MS);
+    const n = trades.length + un.length;
+    if (!n || (f.checkpoint?.bar === bar && f.checkpoint.events === n)) continue;
+    try {
+      const events = gzipSync(Buffer.from(JSON.stringify(encodeFlowEvents(trades, un, bar))));
+      await sql`INSERT INTO order_flow_open_bars (symbol, exchange, instrument, bar_time, encoding, events, saved_at)
+        VALUES (${symbol}, ${f.exchange}, ${f.instrument}, ${new Date(bar)}, 'gzip-json-v1', ${events}, ${new Date(now)})
+        ON CONFLICT (symbol, exchange) DO UPDATE SET instrument = EXCLUDED.instrument, bar_time = EXCLUDED.bar_time, encoding = EXCLUDED.encoding, events = EXCLUDED.events, saved_at = EXCLUDED.saved_at`;
+      f.checkpoint = { bar, events: n };
+      written++;
+    } catch (err: any) {
+      logger.warn({ error: err.message, symbol }, 'Order flow: open-bar checkpoint failed');
+      return written; // the database is unhappy: stop this pass, try again next minute
+    }
+  }
+  return written;
 }
 
 function addFiveUnreconciled(symbol: string, instrument: string | null, time: number, qty: number): void {
@@ -432,18 +589,23 @@ function addFiveUnreconciled(symbol: string, instrument: string | null, time: nu
 
 /** Hydrate every registered symbol, one at a time (bounded work, yields between bars). */
 export const HYDRATION_SCHEMA_WAIT_MS = 5 * 60_000;
-export async function hydrateFlowSymbols(now: number, opts: { schemaWaitMs?: number; pollMs?: number } = {}): Promise<{ contracts: number; bars: number; failed: number; schemaReady: boolean }> {
+export async function hydrateFlowSymbols(now: number, opts: { schemaWaitMs?: number; pollMs?: number } = {}): Promise<{ contracts: number; bars: number; failed: number; schemaReady: boolean; openBars?: number }> {
   // The Dhan feed resolves its contracts before the boot-time schema check finishes (9 Nov: 5 s earlier, so the first
   // restart hydration read nothing). Wait for 052 to be confirmed; the recorded bars stay rebuildable until then.
   const deadline = Date.now() + (opts.schemaWaitMs ?? HYDRATION_SCHEMA_WAIT_MS);
   while (!schemaFileReady(ORDER_FLOW_EVENTS_MIGRATION) && Date.now() < deadline) await new Promise((res) => setTimeout(res, opts.pollMs ?? 1000));
   if (!schemaFileReady(ORDER_FLOW_EVENTS_MIGRATION)) return { contracts: 0, bars: 0, failed: 0, schemaReady: false };
-  let contracts = 0, bars = 0, failed = 0;
+  // 055 (open-bar checkpoints) is confirmed right after 052; give it a moment, then go on without it.
+  const openDeadline = Date.now() + 20_000;
+  while (!schemaFileReady(ORDER_FLOW_OPEN_BARS_MIGRATION) && Date.now() < Math.min(deadline, openDeadline)) await new Promise((res) => setTimeout(res, opts.pollMs ?? 1000));
+  let contracts = 0, bars = 0, failed = 0, openBars = 0;
+  // First, quickly, the checkpointed open bar of every contract (must happen before that bar closes).
+  for (const symbol of [...flows.keys()]) if (await restoreOpenBar(symbol)) openBars++;
   for (const symbol of [...flows.keys()]) {
     try { const n = await hydrateFlowSymbol(symbol, now); if (n > 0) (contracts++, (bars += n)); }
     catch (err: any) { failed++; logger.warn({ symbol, error: err.message }, 'Order flow: restart hydration failed for a contract'); }
   }
-  return { contracts, bars, failed, schemaReady: true };
+  return { contracts, bars, failed, schemaReady: true, openBars };
 }
 
 /** For diagnostics and tests. */
@@ -453,6 +615,8 @@ export function flowStoreStatus(): Array<{ symbol: string; instrument: string | 
 
 /** Tests only. */
 export function resetFlowStore(): void {
+  lastCloseAt = 0;
+  closedFive = 0;
   five.clear();
   flows.clear();
 }

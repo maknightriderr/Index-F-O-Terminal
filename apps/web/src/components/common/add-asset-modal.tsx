@@ -1,4 +1,5 @@
 'use client';
+import type { LooseJson } from '@/lib/loose-json';
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { api } from '@/lib/api';
@@ -15,9 +16,9 @@ export function AddAssetModal({ isOpen, onClose }: AddAssetModalProps) {
   const [assetType, setAssetType] = useState<'INDEX' | 'F&O STOCK'>('INDEX');
   const [exchange, setExchange] = useState<'NSE' | 'BSE' | 'MCX'>('NSE');
   const [searchQuery, setSearchQuery] = useState('');
-  const [results, setResults] = useState<any[]>([]);
+  const [results, setResults] = useState<LooseJson[]>([]);
   const [loading, setLoading] = useState(false);
-  const [selected, setSelected] = useState<any>(null);
+  const [selected, setSelected] = useState<LooseJson>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const { addItem, activeWatchlistId } = useWatchlistStore();
   const { openTab } = useAssetTabsStore();
@@ -56,7 +57,7 @@ export function AddAssetModal({ isOpen, onClose }: AddAssetModalProps) {
     }, 300);
   }, [exchange, assetType]);
 
-  const handleSelect = (item: any) => {
+  const handleSelect = (item: LooseJson) => {
     setSelected(item);
   };
 
@@ -167,7 +168,7 @@ export function AddAssetModal({ isOpen, onClose }: AddAssetModalProps) {
           )}
           {!loading && results.length === 0 && searchQuery.length > 0 && (
             <div className="text-xs text-gray-400 light:text-slate-600 py-4 text-center">
-              No instruments found for "{searchQuery}"
+              No instruments found for &quot;{searchQuery}&quot;
             </div>
           )}
           {!loading && results.length > 0 && (

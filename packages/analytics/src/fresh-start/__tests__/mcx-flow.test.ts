@@ -87,9 +87,9 @@ describe('MCX flow diagnostic (9 Nov, log only)', () => {
         expect(ok).toMatchObject({ trend: 'BULL', setupDeltaPct: 30, barDeltaPct: 30, flowCheck: 'PASS', trades: 60 });
         expect(ok.classifiedSharePct).toBeCloseTo(90.9, 1);
         expect(freshMcxFlowDiagnostic(mirror(context(pullbackDay)))).toMatchObject({ trend: 'BEAR', setupDeltaPct: -30, flowCheck: 'PASS' });
-        // A rising trend with only 55% buying: 10% < 15% -> the strategy's MCX_FLOW_NOT_ALIGNED.
-        const weak = context(pullbackDay); weak.orderFlow = { ...weak.orderFlow!, bars: flowFor(pullbackDay, () => 0.55) };
-        expect(freshMcxFlowDiagnostic(weak)).toMatchObject({ setupDeltaPct: 10, flowCheck: 'SETUP_DELTA_BELOW_15PCT' });
+        // A rising trend with only 52% buying: 4% < 8% (2.1) -> the strategy's MCX_FLOW_NOT_ALIGNED.
+        const weak = context(pullbackDay); weak.orderFlow = { ...weak.orderFlow!, bars: flowFor(pullbackDay, () => 0.52) };
+        expect(freshMcxFlowDiagnostic(weak)).toMatchObject({ setupDeltaPct: 4, flowCheck: 'SETUP_DELTA_BELOW_MIN' });
         expect(refusal(weak)?.detail).toBe('MCX_FLOW_NOT_ALIGNED');
         expect(freshMcxFlowDiagnostic({ ...context(pullbackDay), orderFlow: undefined }).flowCheck).toBe('NO_FLOW_SOURCE');
     });

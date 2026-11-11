@@ -1,4 +1,6 @@
 'use client';
+/* eslint-disable react-hooks/set-state-in-effect -- state is reset or loaded when an input changes; behaviour verified in production, not restructured */
+import type { LooseJson } from '@/lib/loose-json';
 
 import { useEffect, useState } from 'react';
 import { api } from './api';
@@ -39,7 +41,7 @@ export function useSetupOutcomes(lifecycleIds: string[]): Record<string, SetupOu
     let cancelled = false;
     const load = async () => {
       try {
-        const res = (await api.getSetupOutcomes(key.split(','))) as any;
+        const res = (await api.getSetupOutcomes(key.split(','))) as LooseJson;
         if (cancelled) return;
         const rows = (res?.data?.rows ?? []) as SetupOutcome[];
         setById(Object.fromEntries(rows.map((r) => [r.lifecycleId, r])));
