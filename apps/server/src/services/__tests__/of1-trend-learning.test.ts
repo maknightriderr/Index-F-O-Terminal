@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from 'vitest';
 vi.mock('../../lib/logger.js', () => ({ logger: { info() {}, warn() {}, error() {}, debug() {} } }));
 vi.mock('../paper-trades.js', () => ({ listPaperTrades: async () => ({ trades: [] }) }));
 vi.mock('../backtesting.js', () => ({ getTradeSetupHistory: async () => [] }));
-const { learnOf1, trendAlignment, regimeTrendSide, of1Learning, resetOf1Learning, OF1_COUNTER_TREND_MIN_TRADES } = await import('../of1-trend-learning.js');
+const { learnOf1, learnByFamily, learnedRefusal, trendAlignment, regimeTrendSide, of1Learning, resetOf1Learning, OF1_COUNTER_TREND_MIN_TRADES } = await import('../of1-trend-learning.js');
 
 const V = '2026-09-29.structure.1+demote-s1.1+reinstate-all.1+of1-paper.2';
 const t = (direction: string, regime: string, netR: number, logicVersion = V, family = 'OF1') => ({ family, direction, regime, netR, logicVersion });
@@ -46,5 +46,23 @@ describe('OF1 trend learning', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(of1Learning(failing, 1_000 + 16 * 60_000)?.blockCounterTrend).toBe(true);
     resetOf1Learning();
+  });
+  it('13 Nov: every legacy strategy learns from its own trades only, applied at the final check', () => {
+    const rows = [
+      ...Array.from({ length: 10 }, () => t('BULLISH', 'WEAK_BEAR_TREND', -1, V, 'INDICATOR')),
+      ...Array.from({ length: 10 }, () => t('BULLISH', 'WEAK_BEAR_TREND', 1, V, 'OB1')),
+      t('BEARISH', 'WEAK_BULL_TREND', -1.12),
+    ];
+    const by = learnByFamily(rows);
+    expect(Object.keys(by).sort()).toEqual(['INDICATOR', 'OB1', 'OF1']);
+    expect(by.INDICATOR.blockCounterTrend).toBe(true);
+    expect(by.OB1.blockCounterTrend).toBe(false); // its counter-trend trades pay
+    expect(by.OF1.blockCounterTrend).toBe(false); // one trade
+    expect(learnedRefusal('INDICATOR', 'BULLISH', 'STRONG_BEAR_TREND', by)).toMatchObject({ code: 'LEARNED_COUNTER_TREND' });
+    expect(learnedRefusal('INDICATOR', 'BEARISH', 'STRONG_BEAR_TREND', by)).toBeNull(); // with the trend
+    expect(learnedRefusal('INDICATOR', 'BULLISH', 'RANGE_BOUND', by)).toBeNull(); // no trend
+    expect(learnedRefusal('OB1', 'BULLISH', 'STRONG_BEAR_TREND', by)).toBeNull();
+    expect(learnedRefusal('A3', 'BULLISH', 'STRONG_BEAR_TREND', by)).toBeNull(); // no trades yet
+    expect(learnedRefusal('INDICATOR', 'BULLISH', 'STRONG_BEAR_TREND', null)).toBeNull(); // not read yet
   });
 });
