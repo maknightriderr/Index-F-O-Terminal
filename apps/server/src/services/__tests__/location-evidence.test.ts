@@ -102,7 +102,7 @@ describe('neither confidence nor location is a universal gate', () => {
   });
   it('trades carry both evidence suffixes; positional stamps are unchanged', () => {
     // 2026-10-30: STRUCTURE defaults off, so the live stamp's base is LOGIC_VERSION, not STRUCTURE_LOGIC_VERSION.
-    expect(liveLogicStamp().logicVersion).toBe(`${LOGIC_VERSION}+indicator-evidence.1+location-evidence.1+payoff-admission.1+parent-identity.1+demote-a4.1+demote-s1.1`);
+    expect(liveLogicStamp().logicVersion).toBe(`${STRUCTURE_LOGIC_VERSION}+indicator-evidence.1+location-evidence.1+payoff-admission.1+parent-identity.1+demote-a4.1+demote-s1.1+reinstate-all.1+ob1-paper.1+of1-paper.2`); // 12 Nov: every disabled strategy on again (S1 on: structure base; A4 / S1 reinstated; OB1 / OF1 paper)
     expect(liveLogicStamp().indicator).toEqual({ confidenceMode: 'EVIDENCE', locationMode: 'EVIDENCE' });
     expect(logicStamp().logicVersion).toBe(LOGIC_VERSION);
   });

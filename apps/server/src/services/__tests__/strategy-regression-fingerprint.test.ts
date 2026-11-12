@@ -119,6 +119,9 @@ function gatesFingerprint() {
 // router:*/gates regenerated 2026-10-30: RESEARCH_PAPER_TRADING off and S1 demoted to SHADOW (user
 // decision, every existing strategy paused while a new one is built) change liveTriggerStages()
 // itself, which both fingerprints include by design.
+// 12 Nov 2026 (owner: enable every disabled strategy): A4 and S1 reinstated, research families paper-traded and
+// S1 / indicator trading on again, so the router and gate fingerprints were re-frozen (the strategies' own events,
+// triggers, S1 variants, ranking and option builder are unchanged).
 const EXPECTED: Record<string, string> = {
   'triggers:ADANIGREEN': '62dee9119d01b245',
   'triggers:BANKNIFTY': '048a3a11f2a02c77',
@@ -132,14 +135,14 @@ const EXPECTED: Record<string, string> = {
   'structure:KALYANKJIL': 'fc215c1a0d770424',
   'structure:NIFTY': 'cb722a43a2d21f7e',
   'structure:POLICYBZR': '91273077537002bf',
-  'router:ADANIGREEN': '1e19d261121e28cd',
-  'router:BANKNIFTY': 'afa60b1dd96e4285',
-  'router:CRUDEOIL': 'e7d3261d061bbd2f',
-  'router:KALYANKJIL': '14d481fa8327898d',
-  'router:NIFTY': '086c970be11f7e3b',
-  'router:POLICYBZR': '6d44e7eed12e150d',
+  'router:ADANIGREEN': '57c23d839cc3f964',
+  'router:BANKNIFTY': 'ecd140465dcd3af3',
+  'router:CRUDEOIL': '6bca2aed25bc3766',
+  'router:KALYANKJIL': 'e9c4c7ee3de3854c',
+  'router:NIFTY': '39a28c8ef1ede73b',
+  'router:POLICYBZR': '1416abf83f3c8578',
   option: '8e947c8e9caa077b',
-  gates: '164b387b2db9107b',
+  gates: '315de3446f75a4da',
 };
 
 describe('strategy regression fingerprint: A2–F3, A4 stage, S1, router, slot ranking, option builder, gates', () => {

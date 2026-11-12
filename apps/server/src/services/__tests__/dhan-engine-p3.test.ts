@@ -79,7 +79,7 @@ describe('shadow recorder', () => {
     expect((await shadow.dhanShadowSignals('2026-11-09')).length).toBe(2);
     expect(analytics.evaluateDhanSetups).toHaveBeenCalledTimes(1);
   });
-  it('11 Nov: the 5-minute shadow records setup E under its own id, per 5-minute bar, and never reaches the paper path', async () => {
+  it('the 5-minute setup E is recorded under its own id per 5-minute bar, and (12 Nov) its SIGNALs go to the paper path', async () => {
     const paper = vi.fn(async () => ({ decision: 'FILLED', candidateId: 'c1' }));
     shadow.setDhanPaperHandler(paper);
     const e = (status: string, extra: object = {}) => sig(status, { setup: 'E', strategy: 'DHAN_E_ORDER_FLOW', score: null, noTrade: null, failed: status === 'NO_SETUP' ? 'E1_ABSORPTION' : null, ...extra });
@@ -93,11 +93,13 @@ describe('shadow recorder', () => {
     expect((analytics.evaluateDhanSetups as any).mock.calls.at(-1)[0]).toMatchObject({ barMs: F, bars: [{ time: OPEN, close: 100 }] });
     await store.closeFlowBars(OPEN + 2 * F + 1, true);
     expect(await shadow.evaluateDhanShadowFive(OPEN + 2 * F + 1, healthy)).toBe(1);
+    await vi.waitFor(async () => expect((await pg.query<any>("SELECT count(*)::int AS n FROM dhan_engine_signals WHERE paper_decision = 'FILLED'")).rows[0].n).toBe(2));
     const rows = (await pg.query<any>('SELECT strategy, side, status, paper_decision, bar_time FROM dhan_engine_signals ORDER BY bar_time')).rows;
     expect(rows.map((r) => [r.strategy, r.side, r.status, r.paper_decision, new Date(r.bar_time).getTime() - OPEN])).toEqual([
-      ['DHAN_E_ORDER_FLOW_5M', 'BULLISH', 'SIGNAL', null, 0], ['DHAN_E_ORDER_FLOW_5M', 'BULLISH', 'SIGNAL', null, F],
+      ['DHAN_E_ORDER_FLOW_5M', 'BULLISH', 'SIGNAL', 'FILLED', 0], ['DHAN_E_ORDER_FLOW_5M', 'BULLISH', 'SIGNAL', 'FILLED', F],
     ]);
-    expect(paper).not.toHaveBeenCalled();
+    expect(paper).toHaveBeenCalledTimes(2);
+    expect((paper.mock.calls[0] as any[])[0]).toMatchObject({ symbol: 'NIFTY', barTime: OPEN, decidedAt: OPEN + F, result: { strategy: 'DHAN_E_ORDER_FLOW_5M' } });
     expect(shadow.dhanShadowFiveStatus()).toEqual({ recorded: { SIGNAL: 2, NO_TRADE: 0 }, firstFailures: [{ k: 'E1_ABSORPTION', c: 2 }] });
     // Stock futures keep no 5-minute footprints (bounded memory).
     store.registerFlowSymbol('RELIANCE', { exchange: 'NSE', instrument: 'RELIANCE-Nov2026-FUT', source: 'DHAN', mode: 'INFERRED', startedAt: OPEN - Q, kind: 'STOCK', tickSize: 0.1 });

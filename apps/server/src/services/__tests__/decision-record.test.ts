@@ -182,7 +182,7 @@ describe('SignalDecisionSnapshot', () => {
     const v = build().versions;
     for (const k of ['gitCommit', 'analyticsVersion', 'signalEngineVersion', 'optionModelVersion', 'parentingVersion', 'arbitrationVersion', 'ruleVersion', 'strategyVersion', 'costModelVersion', 'snapshotSchemaVersion'])
       expect(v, k).toHaveProperty(k);
-    expect(v.signalEngineVersion).toMatch(/\+payoff-admission\.1\+parent-identity\.1\+demote-a4\.1\+demote-s1\.1$/);
+    expect(v.signalEngineVersion).toMatch(/\+payoff-admission\.1\+parent-identity\.1\+demote-a4\.1\+demote-s1\.1\+reinstate-all\.1\+ob1-paper\.1\+of1-paper\.2$/); // 12 Nov: OB1 / OF1 paper again
     expect(v.parentingVersion).toBe('PARENT-2.0');
   });
 

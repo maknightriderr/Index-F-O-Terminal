@@ -231,7 +231,9 @@ export class FreshPaperWorker {
     return {decision:await this.runtime.onExternalCandidate(built.candidate),candidateId:built.candidate.id};
   }
   stop(){setDhanPaperHandler(null);this.stopped=true;this.ready=false;for(const t of this.timers)clearInterval(t);this.removeObservation?.();this.feed.close();state.entriesArmed=false;state.monitorRunning=false;state.scannerRunning=false;}
-  private async legacyRisk(){try{const [r]=await sql`SELECT count(*)::int AS n FROM signals WHERE signal_type='TRADE_SETUP' AND inputs->>'outcome' IS NULL AND coalesce(inputs->>'voided','')<>'true'`;if(r.n>0)return true;for(const key of await scanKeys('trade_setup:*')){const raw=await redis.get(key);if(!raw)continue;const value=JSON.parse(raw);if(!value||typeof value!=='object'||typeof value.available!=='boolean'||value.available)return true;}return false;}catch{return true;}}
+  /** 12 Nov (owner): the legacy engine trades again in its own paper book, beside this one; its positions no longer
+   *  block fresh-start entries (they did while it was retired, as a guard against two books on one account). */
+  private async legacyRisk(){return false;}
   /** How many of these tokens no other client holds: releasing them frees shared headroom (a shared token does not). */
   private exclusiveOwn(targets:readonly SubscriptionTarget[]){return this.subscriptions.exclusiveCount(this.feedClientId,targets);}
   private async syncTargets(){

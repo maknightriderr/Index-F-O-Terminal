@@ -1,5 +1,5 @@
-// Fresh-start retirement: no env/default/recovery path may reactivate old entries.
-// Existing plans, exit monitoring and historical readers remain enabled.
-export const LEGACY_NEW_ENTRIES_ENABLED = false;
+// Retired 31 Oct for the fresh start; re-enabled 12 Nov (owner: "enable every disabled strategy"), paper only, running
+// beside the fresh-start engine in its own book (a legacy position no longer blocks fresh-start entries).
+export const LEGACY_NEW_ENTRIES_ENABLED = true;
 export function legacyEntriesAllowed(): boolean { return LEGACY_NEW_ENTRIES_ENABLED; }
-export const LEGACY_ENTRY_REASON = 'Legacy new entries retired for the approved fresh start; existing paper positions retain their original exit plans.';
+export const LEGACY_ENTRY_REASON = 'Legacy new entries are off; existing paper positions retain their original exit plans.';

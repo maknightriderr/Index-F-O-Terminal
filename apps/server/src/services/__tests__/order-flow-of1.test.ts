@@ -150,8 +150,8 @@ describe('OF1: paper trading switch and hypothesis', () => {
     expect(of1TradeVerdict({ ...base, target: null }, null, { session: null, riskOff: null }, 6.25).reasons.join()).toMatch(/NO_TARGET/);
     expect(of1TradeVerdict({ ...base, target: { kind: 'PDH', price: 104, role: 'RESISTANCE' } }, null, { session: 'closing guard', riskOff: null }, 6.25).reasons.join()).toMatch(/SESSION/);
   });
-  it('OF1 paper-trading is off since 2026-10-30 (OF1_TRADING=on resumes it); NSE and MCX symbols are supported, others refused', () => {
-    expect(flags.OF1_TRADING).toBe(false);
+  it('OF1 paper-trading is on again since 12 Nov (OF1_TRADING=off pauses it); NSE and MCX symbols are supported, others refused', () => {
+    expect(flags.OF1_TRADING).toBe(true);
     expect(flags.orderFlowLogicSuffix(true, true)).toBe('+ob1-paper.1+of1-paper.2');
     expect(flags.orderFlowLogicSuffix(false, false)).toBe('');
     expect(flags.parseOrderFlowSymbols('NIFTY,CRUDEOIL,banknifty,RELIANCE')).toEqual({ symbols: ['NIFTY', 'CRUDEOIL', 'BANKNIFTY'], rejected: ['RELIANCE'] });

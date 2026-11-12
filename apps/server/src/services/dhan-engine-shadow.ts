@@ -228,8 +228,8 @@ export async function evaluateDhanShadow(now: number, health: Health): Promise<n
 
 // ---------------- 5-minute order-flow shadow (11 Nov) ----------------
 // Setup E (pure order flow) evaluated on the 5-minute footprints of index and commodity futures, with exactly the
-// same rules and thresholds as the live 15-minute setup. SHADOW ONLY: rows are written to dhan_engine_signals under
-// DHAN_E_ORDER_FLOW_5M and never handed to the paper path. The point is evidence: does the 5-minute read find the
+// same rules and thresholds as the live 15-minute setup, recorded under DHAN_E_ORDER_FLOW_5M. 12 Nov (owner: enable
+// every disabled strategy): its SIGNALs are paper-traded too, like the 15-minute setups. The point is evidence: does the 5-minute read find the
 // moves earlier, and does the sampled feed give a 5-minute bar enough trades to be trusted (VALID_DATA says so).
 export const DHAN_E_5M_ID = 'DHAN_E_ORDER_FLOW_5M';
 const five = { busy: false, evaluated: new Map<string, number>(), failures: new Map<string, number>(), recorded: { SIGNAL: 0, NO_TRADE: 0 }, summaryAt: 0 };
@@ -245,6 +245,7 @@ export async function evaluateDhanShadowFive(now: number, health: Health): Promi
       const last = flowContractFiveBars(symbol)?.footprints.at(-1)?.barTime;
       if (last == null || five.evaluated.get(symbol) === last) continue;
       five.evaluated.set(symbol, last);
+      if (hasPaperReference && !hasPaperReference(symbol)) { five.failures.set('ALL:NO_PAPER_REFERENCE', (five.failures.get('ALL:NO_PAPER_REFERENCE') ?? 0) + 1); continue; }
       try {
         const ctx = await setupContextFor(symbol, now, health, false, true);
         if (!ctx || ctx.bars.at(-1)!.time !== last) continue;
@@ -255,8 +256,9 @@ export async function evaluateDhanShadowFive(now: number, health: Health): Promi
           const r: SetupResult = { ...raw, strategy: DHAN_E_5M_ID };
           if (r.status === 'NO_SETUP') { five.failures.set(String(r.failed), (five.failures.get(String(r.failed)) ?? 0) + 1); continue; }
           five.recorded[r.status]++;
-          if (r.status === 'SIGNAL') logger.info({ event: 'dhanShadowSignal5m', symbol, strategy: r.strategy, side: r.side, barTime: new Date(last).toISOString(), plan: r.plan, window: ev.sessionWindow }, 'Dhan engine 5-minute order-flow signal (SHADOW: recorded only, never traded)');
+          if (r.status === 'SIGNAL') logger.info({ event: 'dhanShadowSignal5m', symbol, strategy: r.strategy, side: r.side, barTime: new Date(last).toISOString(), plan: r.plan, window: ev.sessionWindow }, 'Dhan engine 5-minute order-flow signal (paper decision follows when paper is on)');
           await record(symbol, ctx, last, ev.sessionWindow, ev.regime?.regime ?? null, r).catch((err: any) => logger.warn({ symbol, strategy: r.strategy, error: err.message }, 'Dhan engine 5-minute shadow: signal write failed'));
+          if (r.status === 'SIGNAL' && paperHandler) void paper(paperHandler, { symbol, result: r, barTime: last, decidedAt: last + FLOW_FIVE_MS, atr: Number(r.evidence.atr) || 0, exchange: ctx.exchange, kind: ctx.kind });
         }
       } catch (err: any) {
         logger.warn({ symbol, error: err.message }, 'Dhan engine 5-minute shadow: evaluation failed');
