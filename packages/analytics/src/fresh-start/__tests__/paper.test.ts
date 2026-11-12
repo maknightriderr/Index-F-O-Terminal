@@ -58,6 +58,16 @@ describe('fresh-start executable paper admission', () => {
         expect(admitFreshPaper(busy)).toMatchObject({ ok: true, riskFlags: ['WOULD_BLOCK_MAX_OPEN'] });
         expect(admitFreshPaper(request())).toMatchObject({ ok: true, riskFlags: [] });
     });
+    it('2.1: the payoff is judged against the plan stop (worst IV), not the 25% emergency stop; floor 1.0 net', () => {
+        // Entry 101; the underlying stop leaves the premium at 92 (worst IV) -> plan risk ~10 a unit, far less than the
+        // emergency stop's 26. A target premium of 118 pays ~16 net: refused under the old 1.5x-of-25% rule, admitted now.
+        const r = request(); r.contract.invalidationPremiumScenarios = [93, 92]; r.contract.targetPremiumScenarios = [120, 118];
+        const a = admitFreshPaper(r);
+        expect(a.ok).toBe(true);
+        if (a.ok) { expect(a.riskRewardNet).toBeGreaterThanOrEqual(1); expect(a.initialRiskPerUnit).toBeGreaterThan(25); } // sizing keeps the worst case
+        r.contract.targetPremiumScenarios = [108, 106]; // ~4 net against ~10 of plan risk
+        expect(admitFreshPaper(r)).toEqual({ ok: false, code: 'NET_PAYOFF_TOO_LOW' });
+    });
     it('does not choose a farther target or bypass the worst IV scenario', () => { const r = request(); r.contract.targetPremiumScenarios = [200, 110]; expect(admitFreshPaper(r)).toEqual({ ok: false, code: 'NET_PAYOFF_TOO_LOW' }); });
     it('has the same positive premium geometry for bought puts', () => { const r = request(); r.candidate = { ...candidate, direction: 'BEARISH', stop: 105, target: 85 }; r.contract.delta = -.55; expect(admitFreshPaper(r).ok).toBe(true); });
 });

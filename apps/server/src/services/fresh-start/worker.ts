@@ -176,7 +176,10 @@ export class FreshPaperWorker {
       if(out.some(r=>r.id===id))continue;
       const ref=this.refs.get(id);if(!ref||ref.market!=='NSE_STOCK_OPTIONS')continue;
       let k=-1;for(let i=out.length-1;i>=0;i--){const r=out[i];if(r.market==='NSE_STOCK_OPTIONS'&&!this.inPlay.includes(r.id)&&!this.dhanPriority.has(r.id)){k=i;break;}}
-      if(k>=0)out[k]=ref;
+      // 12 Nov: every stock slot was held by a stock in play, so a DHAN_* signal's stock (MANAPPURAM) never got one and
+      // was refused DHAN_REFERENCE_NOT_SUBSCRIBED after the full wait. Then it is added as one extra reference (two
+      // tokens plus its books, well inside the token capacity) for its few priority minutes.
+      if(k>=0)out[k]=ref;else out.push(ref);
     }
     return out;
   }

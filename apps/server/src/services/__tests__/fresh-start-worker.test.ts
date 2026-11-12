@@ -98,6 +98,9 @@ describe('Dhan engine stock priority (8 Nov)',()=>{
   expect(withDhanPriority.call(self,selected,now).map((r:any)=>r.id)).toEqual(['NIFTY','A','X','C']); // C is in play: B gives way
   expect(withDhanPriority.call(self,selected,now+60_000).map((r:any)=>r.id)).toEqual(['NIFTY','A','B','C']); // expired
   expect(self.dhanPriority.size).toBe(0);
+  // 12 Nov: every stock slot held by a stock in play -> the signal's stock is added as an extra reference.
+  const full={dhanPriority:new Map([['X',now+60_000]]),refs:new Map([['X',ref('X')]]),inPlay:['A','B','C']};
+  expect(withDhanPriority.call(full,selected,now).map((r:any)=>r.id)).toEqual(['NIFTY','A','B','C','X']);
  });
 });
 describe('armed state without a transient disarm (second audit, 8 Nov)',()=>{

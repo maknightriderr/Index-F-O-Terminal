@@ -177,12 +177,20 @@ function assessFreshPaper(args: {
     if(!Number.isSafeInteger(quantity)||!Number.isFinite(units*entry))return refuse('INVALID_SIZING_UNITS');
     const riskFees=k.feePolicy?freshRoundTripFees(entry,entry,quantity,k.multiplier,k.feePolicy):explicit*units;
     const rewardFees=k.feePolicy?freshRoundTripFees(entry,targetExit,quantity,k.multiplier,k.feePolicy):explicit*units;
-    const initialRiskCurrency=baseRisk*units+riskFees,rr=((targetExit-entry)*units-rewardFees)/initialRiskCurrency;
+    const initialRiskCurrency=baseRisk*units+riskFees;
+    // 2.1 (owner, 12 Nov): the payoff is judged against what the PLAN loses - the premium at the underlying stop, in the
+    // worst IV scenario, plus fees - not against the 25% emergency stop, which is a backstop (it made every tight-stop
+    // setup look like a 25%-of-premium risk: three setups refused NET_PAYOFF_TOO_LOW on 12 Nov). The floor is 1.0 net,
+    // as the setups' own R:R floor. Sizing and the recorded initial risk still use the worst case (baseRisk) above.
+    const planRisk=pe?baseRisk:Math.max(q.tick,entry-Math.max(0,Math.min(...k.invalidationPremiumScenarios)-q.tick));
+    const rr=((targetExit-entry)*units-rewardFees)/(planRisk*units+riskFees);
     // A premium-defined exit has no target, so no modeled payoff gate (its rule exits on time); the model rr is kept.
-    if(!(initialRiskCurrency>0)||!Number.isFinite(rr)||(!pe&&rr<1.5))return refuse('NET_PAYOFF_TOO_LOW');
+    if(!(initialRiskCurrency>0)||!Number.isFinite(rr)||(!pe&&rr<FRESH_MIN_NET_RR))return refuse('NET_PAYOFF_TOO_LOW');
     if(initialRiskCurrency>liveBudget+1e-6)riskFlags.push('WOULD_BLOCK_OPEN_RISK');
     return {ok:true,entry,emergencyStop,quantity,lots,initialRiskPerUnit:initialRiskCurrency/units,initialRiskCurrency,premiumCurrency:entry*units,riskRewardNet:rr,explicitCostPerUnit:riskFees/units,riskFlags};
 }
+/** Minimum modeled net reward / plan risk of an option entry (2.1, owner 12 Nov; was 1.5 against the emergency stop). */
+export const FRESH_MIN_NET_RR = 1.0;
 export type FreshAdmissionInput=Parameters<typeof assessFreshPaper>[0];
 /** Indicative selection only. Never use this result as a fill authorization. */
 export function assessFreshPlan(args:FreshAdmissionInput){return assessFreshPaper(args,true);}
