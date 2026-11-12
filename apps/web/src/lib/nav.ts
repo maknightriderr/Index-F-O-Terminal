@@ -56,7 +56,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'workspace', label: 'Workspace', description: 'Command bar and linked panels: chart, option chain, quote, engine radar and the paper account on one screen.', icon: 'workspace' },
       { id: 'dashboard', label: 'Command Center', description: 'System health, the paper account, live positions, the setup radar, the journal and market context.', icon: 'dashboard' },
-      { id: 'market-overview', label: 'Market Overview', description: 'Watchlist, the main chart, regime and wider market information.', icon: 'market-overview' },
+      { id: 'market-overview', label: 'Market Overview', description: 'Watchlist, the main chart, best setups and legacy paper history.', icon: 'market-overview' },
       { id: 'option-chain', label: 'Option Chain', description: 'Bid/ask, delta, IV and OI by strike, with the contract the fresh-start rules would accept.', icon: 'option-chain' },
       { id: 'indices', label: 'Indices', description: 'NSE, BSE and MCX index levels.', icon: 'indices' },
       { id: 'fno-explorer', label: 'F&O Explorer', description: 'Market Radar breadth and top bullish/bearish candidates; F&O price, OI, IV and Greeks.', icon: 'fno-stocks' },
@@ -68,7 +68,21 @@ export const NAV_GROUPS: NavGroup[] = [
     title: 'Trade Desk',
     items: [
       { id: 'strategy-lab', label: 'Strategy Lab', description: 'Fresh-start results by strategy: R distribution, time of day, exit reasons and the promotion gate.', icon: 'strategy-lab' },
-      { id: 'paper-trades', label: 'Paper Trades', description: 'Fresh-start paper trades and their evidence: entries, fills, results after costs and readiness.', icon: 'paper-trades' },
+      { id: 'paper-trades', label: 'Paper Trades', description: 'Every simulated trade: open, closed and expired, with costs and status.', icon: 'paper-trades' },
+      { id: 'best-setups', label: 'Best Setups', description: 'Ranked candidates with their decision state.', icon: 'best-setups' },
+      { id: 'strategy-scanner', label: 'Option-Buying Leans', description: 'Stock-by-stock option-buying leans from direction, IV rank and theta (the Strategy Scanner).', icon: 'strategy-scanner' },
+      { id: 'market-scanner', label: 'Structure Scanner', description: 'Developing liquidity-sweep setups and the top-down market scan (the Market Scanner).', icon: 'market-scanner' },
+    ],
+  },
+  {
+    id: 'performance',
+    title: 'Performance',
+    items: [
+      { id: 'backtesting', label: 'Backtesting', description: 'Win rates and results of every paper trade, by strategy, source and symbol.', icon: 'backtesting' },
+      { id: 'loss-attribution', label: 'Loss Attribution', description: 'Why trades lose: twelve questions answered from the recorded trades.', icon: 'loss-attribution' },
+      { id: 'signal-diagnostics', label: 'Signal Diagnostics', description: 'Why candidates were accepted or rejected, shadow experiments, order blocks and order flow.', icon: 'signal-diagnostics' },
+      { id: 'measurement', label: 'Measurement', description: 'Sample reliability: cohorts, denominators, estimated costs and payoff grading.', icon: 'measurement' },
+      { id: 'evidence', label: 'Evidence', description: 'Which strategies, signals, gates and limits have shown an edge, with intervals.', icon: 'evidence' },
     ],
   },
   {
@@ -85,22 +99,6 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: 'system-learning', label: 'System Learning', description: 'Self-audit of failures and protections.', icon: 'system-learning' },
     ],
   },
-];
-
-/**
- * Pages of the RETIRED legacy engines (Old Indicator, S1, A2–F3, OB1, OF1, experiments): their setups, scanners and
- * paper-trade analytics. Legacy new entries are off (server config/legacy-entry-policy.ts), so these are not in the
- * sidebar or the page directory. The routes still resolve for an old bookmark and say the engines are retired.
- */
-export const RETIRED_PAGES: NavItem[] = [
-  { id: 'best-setups', label: 'Best Setups', description: 'Ranked candidates with their decision state.', icon: 'best-setups' },
-  { id: 'strategy-scanner', label: 'Option-Buying Leans', description: 'Stock-by-stock option-buying leans from direction, IV rank and theta (the Strategy Scanner).', icon: 'strategy-scanner' },
-  { id: 'market-scanner', label: 'Structure Scanner', description: 'Developing liquidity-sweep setups and the top-down market scan (the Market Scanner).', icon: 'market-scanner' },
-  { id: 'backtesting', label: 'Backtesting', description: 'Win rates and results of every paper trade, by strategy, source and symbol.', icon: 'backtesting' },
-  { id: 'loss-attribution', label: 'Loss Attribution', description: 'Why trades lose: twelve questions answered from the recorded trades.', icon: 'loss-attribution' },
-  { id: 'signal-diagnostics', label: 'Signal Diagnostics', description: 'Why candidates were accepted or rejected, shadow experiments, order blocks and order flow.', icon: 'signal-diagnostics' },
-  { id: 'measurement', label: 'Measurement', description: 'Sample reliability: cohorts, denominators, estimated costs and payoff grading.', icon: 'measurement' },
-  { id: 'evidence', label: 'Evidence', description: 'Which strategies, signals, gates and limits have shown an edge, with intervals.', icon: 'evidence' },
 ];
 
 /** Sub-pages of the Performance area (rendered as a tab strip at the top of each). */
@@ -124,7 +122,7 @@ const LEGACY: Record<string, { page: PageId; view?: ExplorerView }> = {
   'iv-greeks': { page: 'fno-explorer', view: 'iv' },
 };
 
-const ALL_PAGES = new Set<string>([...NAV_GROUPS.flatMap((g) => g.items.map((i) => i.id)), ...RETIRED_PAGES.map((i) => i.id), ...UNBUILT_PAGES]);
+const ALL_PAGES = new Set<string>([...NAV_GROUPS.flatMap((g) => g.items.map((i) => i.id)), ...UNBUILT_PAGES]);
 
 export interface ResolvedTab {
   /** The activeTab value the router renders: a page id or "asset:EXCHANGE:SYMBOL". */
@@ -142,5 +140,5 @@ export function resolveTab(id: string | null | undefined): ResolvedTab {
 
 export function pageMeta(id: string): NavItem | null {
   for (const g of NAV_GROUPS) for (const i of g.items) if (i.id === id) return i;
-  return RETIRED_PAGES.find((i) => i.id === id) ?? null;
+  return null;
 }

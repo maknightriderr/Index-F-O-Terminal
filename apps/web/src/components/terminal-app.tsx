@@ -12,17 +12,24 @@ import { CorporateActionsPage } from '@/components/corporate-actions';
 import { IndicesPage } from '@/components/indices';
 import { FnoExplorerPage } from '@/components/fno-explorer';
 import { PaperTradesPage } from '@/components/paper-trades';
+import { BestSetupsPage } from '@/components/best-setups';
+import { MeasurementPage } from '@/components/measurement';
+import { EvidencePage } from '@/components/evidence';
 import { SystemHealthPage } from '@/components/system-health';
 import { UnbuiltPage } from '@/components/common/unbuilt-page';
 import { AlertsPage } from '@/components/alerts';
+import { StrategyScannerPage } from '@/components/strategy-scanner';
+import { MarketScannerPage } from '@/components/market-scanner';
 import { InstitutionalFlowPage } from '@/components/institutional-flow';
+import { BacktestingPage } from '@/components/backtesting';
 import { SystemLearningPage } from '@/components/system-learning';
+import { LossAttributionPage } from '@/components/loss-attribution';
+import { SignalDiagnosticsPage } from '@/components/signal-diagnostics';
 import { AddAssetModal } from '@/components/common/add-asset-modal';
 import { useMarketStore, useUISettingsStore } from '@/stores';
 import { useMarketWebSocket } from '@/lib/ws';
 import { useUrlSync } from '@/lib/use-url-sync';
-import { resolveTab, RETIRED_PAGES, pageMeta } from '@/lib/nav';
-import { RetiredPage } from '@/components/common/retired-page';
+import { resolveTab } from '@/lib/nav';
 
 export function TerminalApp() {
   const { activeTab: storedTab } = useMarketStore();
@@ -35,8 +42,6 @@ export function TerminalApp() {
 
   const renderContent = () => {
     if (activeTab.startsWith('asset:')) return <AssetWorkspace />;
-    // Retired legacy engines: their setups, scanners and trade analytics are no longer shown anywhere.
-    if (RETIRED_PAGES.some((p) => p.id === activeTab)) return <RetiredPage title={pageMeta(activeTab)?.label ?? 'Retired page'} />;
 
     switch (activeTab) {
       case 'workspace':
@@ -57,6 +62,34 @@ export function TerminalApp() {
         return <CorporateActionsPage />;
       case 'paper-trades':
         return <PaperTradesPage />;
+      case 'best-setups':
+        return <BestSetupsPage />;
+      case 'strategy-scanner':
+        return <StrategyScannerPage />;
+      case 'market-scanner':
+        return <MarketScannerPage />;
+      case 'backtesting':
+        return (
+          <>
+            <BacktestingPage />
+          </>
+        );
+      case 'loss-attribution':
+        return (
+          <>
+            <LossAttributionPage />
+          </>
+        );
+      case 'signal-diagnostics':
+        return (
+          <>
+            <SignalDiagnosticsPage />
+          </>
+        );
+      case 'measurement':
+        return <MeasurementPage />;
+      case 'evidence':
+        return <EvidencePage />;
       case 'institutional-flow':
         return <InstitutionalFlowPage />;
       case 'alerts':

@@ -4,13 +4,8 @@ import { buildUrlSearch, parseUrlState, sameUrlState } from '../url-state';
 import { migrateUiSettings, resolveStoredTheme, concreteTheme, themeBootstrapScript } from '../theme';
 
 describe('navigation', () => {
-  it('has the four groups, with the retired legacy pages out of navigation but still resolvable', () => {
-    expect(NAV_GROUPS.map((g) => g.title)).toEqual(['Markets', 'Trade Desk', 'Market Context', 'System']);
-    const shown = NAV_GROUPS.flatMap((g) => g.items.map((i) => i.id));
-    for (const id of ['best-setups', 'strategy-scanner', 'market-scanner', 'backtesting', 'measurement']) {
-      expect(shown).not.toContain(id);
-      expect(resolveTab(id)).toEqual({ tab: id });
-    }
+  it('has the five required groups', () => {
+    expect(NAV_GROUPS.map((g) => g.title)).toEqual(['Markets', 'Trade Desk', 'Performance', 'Market Context', 'System']);
   });
   it('redirects the three retired pages into the explorer views', () => {
     expect(resolveTab('fno-stocks')).toEqual({ tab: 'fno-explorer', view: 'overview' });
