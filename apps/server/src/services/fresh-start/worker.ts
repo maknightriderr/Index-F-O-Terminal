@@ -61,6 +61,7 @@ export const FRESH_URGENT_BOOK_MS=5*60_000;
 /** Dhan signal -> paper: how long the reference and its option books are waited for, and the pause for first quotes. */
 export const FRESH_DHAN_REFERENCE_WAIT_MS=90_000;
 export const FRESH_DHAN_FIRST_QUOTES_MS=3_000;
+export const FRESH_DHAN_NEXT_TICK_MS=20_000;
 /** The leading stocks in play whose option books go ahead of the rotation (2 leaders + 2 laggards, alternating). */
 export const FRESH_IN_PLAY_BOOK_SLICES=4;
 /** Index future / chain OI samples are kept this long (the strategy reads 30 min of futures and ~15 min of chain OI). */
@@ -217,6 +218,10 @@ export class FreshPaperWorker {
       }
       if(this.feed.underlying(ref.id)&&booked())await new Promise(res=>setTimeout(res,FRESH_DHAN_FIRST_QUOTES_MS));
     }
+    // 12 Nov: SIEMENS was subscribed and booked within 12 s, but after the pause for first quotes its last tick was
+    // just over FRESH_REFERENCE_MAX_AGE_MS old (a stock between trades) and it was refused NOT_SUBSCRIBED. Wait for the
+    // next tick (<= 20 s) before giving up; the price used is still a tick at most 5 s old.
+    for(const until=Date.now()+FRESH_DHAN_NEXT_TICK_MS;!this.stopped&&!this.feed.underlying(ref.id)&&Date.now()<until;)await new Promise(res=>setTimeout(res,500));
     const signal=this.feed.underlying(ref.id),futures=flowLastTrade(r.symbol),now=Date.now(),day=freshIstDay(now),session=getSessionWindow(freshReferenceExchange(ref),day);
     if(!signal)return {decision:'DHAN_REFERENCE_NOT_SUBSCRIBED',candidateId:null};
     if(!futures)return {decision:'DHAN_PRICE_UNAVAILABLE',candidateId:null};
