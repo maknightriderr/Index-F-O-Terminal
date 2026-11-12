@@ -180,9 +180,9 @@ describe('order-flow shadow', () => {
   });
 });
 
-describe('2.0 shadow strategies', () => {
-  it('marks a shadow strategy in column headers only; its past trades keep the plain name', () => {
-    expect(strategyHeader('NEW_ORB_RETEST_V1')).toBe('ORB retest (shadow)');
+describe('2.2: no shadow strategies', () => {
+  it('the 1.x strategies are active again: no shadow mark in column headers', () => {
+    expect(strategyHeader('NEW_ORB_RETEST_V1')).toBe('ORB retest');
     expect(strategyName('NEW_ORB_RETEST_V1')).toBe('ORB retest');
     expect(strategyHeader('NEW_SOMETHING_ELSE_V1')).toBe('something else');
   });

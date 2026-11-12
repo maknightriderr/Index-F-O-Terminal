@@ -3,7 +3,7 @@ import { atr, ema } from '../indicators/index.js';
 import { freshOrderFlowEvidence, type FreshOrderFlowInput } from './order-flow-evidence.js';
 import { detectOrderBlocks } from '../market-structure/index.js';
 import { flowCoverage, FLOW_MIN_SAMPLED_COVERAGE } from '../order-flow/index.js';
-export const FRESH_PACK_VERSION = 'NEW-INTRADAY-2.1';
+export const FRESH_PACK_VERSION = 'NEW-INTRADAY-2.2';
 /** Minimum underlying reward / risk for a target, and the furthest target in 5-minute ATR before it is capped (1.5). */
 /**
  * 1.5 regime filter: the trend strategies (ORB, VWAP pullback, opening pullback) stand aside on a choppy day, where a
@@ -29,10 +29,11 @@ export const FRESH_ENTRY_WINDOW_MS = 20_000;
 export const FRESH_MAX_TARGET_ATR = 3;
 export const FRESH_STRATEGIES = ['NEW_ORB_RETEST_V1', 'NEW_VWAP_PULLBACK_V1', 'NEW_PREVIOUS_SESSION_SWEEP_V1', 'NEW_FIRST_OPENING_PULLBACK_V1', 'NEW_MOMENTUM_BREAKOUT_V1', 'NEW_TREND_FLAG_V1', 'NEW_EVENT_BREAKOUT_V1'] as const;
 /**
- * 2.0 (owner, 7 Nov): the 1.x strategies are evaluated and recorded but never sent to the adapter: their candidates
- * are stored as SHADOW_STRATEGY so their would-be setups stay comparable with the 2.0 strategies, at no trade slot.
+ * Strategies evaluated and recorded but never sent to the adapter (their candidates are stored as SHADOW_STRATEGY).
+ * 2.0 (7 Nov) put the seven 1.x strategies here; 2.2 (owner, 12 Nov: "enable every disabled strategy") makes them
+ * active paper strategies again, unchanged, beside the 2.0 ones. The mechanism stays for a later shadow strategy.
  */
-export const FRESH_SHADOW_STRATEGIES: ReadonlySet<string> = new Set<string>(FRESH_STRATEGIES);
+export const FRESH_SHADOW_STRATEGIES: ReadonlySet<string> = new Set<string>();
 /**
  * 1.8 trend-following pack (owner request, 5 Nov 2026: a 740-point CRUDEOIL fall that none of the four pullback /
  * reversal strategies could take). These three ride a move instead of waiting for a retest, so they exit on a
