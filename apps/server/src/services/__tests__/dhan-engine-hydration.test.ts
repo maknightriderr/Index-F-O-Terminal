@@ -99,6 +99,22 @@ describe('restart hydration', () => {
     await pg.query(`DELETE FROM order_flow_events WHERE bar_time = $1`, [new Date(BAR).toISOString()]);
     await pg.query(`DELETE FROM order_flow_bars WHERE bar_time = $1`, [new Date(BAR).toISOString()]);
   });
+  it('F-08: a checkpoint the old process saved AFTER the new one started (deploy overlap) is restored, up to the start only', async () => {
+    const BAR = OPEN + 5 * Q, reg = (startedAt: number) => store.registerFlowSymbol('NIFTY', { exchange: 'NSE', instrument: INSTR, source: 'DHAN', mode: 'INFERRED', startedAt, kind: 'INDEX', tickSize: 0.1 });
+    reg(OPEN - 25 * 60_000);
+    store.recordFlowTrade('NIFTY', { time: BAR + 60_000, price: 130, qty: 10, side: 'BUY' });
+    store.recordFlowTrade('NIFTY', { time: BAR + 200_000, price: 131, qty: 7, side: 'BUY' }); // after the new start: not taken
+    expect(await store.checkpointOpenFlowBars(BAR + 240_000)).toBe(1); // the old process saves at +4 min
+    store.resetFlowStore();
+    const started = BAR + 180_000; // the new process started at +3 min
+    reg(started);
+    store.recordFlowTrade('NIFTY', { time: BAR + 200_000, price: 131, qty: 7, side: 'BUY' }); // seen live by the new process
+    expect(await store.hydrateFlowSymbols(started + 1000)).toMatchObject({ openBars: 1 });
+    await store.closeFlowBars(BAR + Q + 1000, true);
+    expect(store.flowContractBars('NIFTY')!.footprints.find((f) => f.barTime === BAR)).toMatchObject({ volume: 17, open: 130, deltaMode: 'INFERRED' }); // 10 restored + 7 live, never double
+    await pg.query(`DELETE FROM order_flow_events WHERE bar_time = $1`, [new Date(BAR).toISOString()]);
+    await pg.query(`DELETE FROM order_flow_bars WHERE bar_time = $1`, [new Date(BAR).toISOString()]);
+  });
   it('F-08: a checkpoint older than the allowed gap is not restored (the bar stays an INCOMPLETE gap)', async () => {
     const BAR = OPEN + 4 * Q, started = BAR + 300_000 + store.OPEN_BAR_MAX_GAP_MS + 1000; // saved at BAR + 5 min above
     store.registerFlowSymbol('NIFTY', { exchange: 'NSE', instrument: INSTR, source: 'DHAN', mode: 'INFERRED', startedAt: started, kind: 'INDEX', tickSize: 0.1 });

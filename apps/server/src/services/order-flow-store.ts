@@ -523,7 +523,10 @@ export async function restoreOpenBar(symbol: string): Promise<boolean> {
     const r = rows[0];
     if (!r || flows.get(symbol) !== f || f.lastClosed !== restartBar || lastCloseAt >= restartBar + FLOW_BAR_MS || r.instrument !== f.instrument || r.encoding !== 'gzip-json-v1') return false;
     const saved = new Date(r.saved_at).getTime();
-    if (new Date(r.bar_time).getTime() !== restartBar || !(saved <= started) || started - saved > OPEN_BAR_MAX_GAP_MS) return false;
+    // 12 Nov: Railway keeps the old process running for ~30 s after the new one starts, and it keeps checkpointing, so
+    // most checkpoints were saved AFTER the start and were refused (47 of 236 restored). A later save is fine: only the
+    // events before the start are taken from it (below); the new process records the rest itself.
+    if (new Date(r.bar_time).getTime() !== restartBar || started - saved > OPEN_BAR_MAX_GAP_MS) return false;
     const rowsIn = JSON.parse(gunzipSync(Buffer.from(r.events)).toString()) as Array<[number, number | null, number, number]>;
     const trades: FlowTrade[] = [], unrec: Array<{ time: number; qty: number }> = [];
     for (const [dt, price, qty, side] of rowsIn) {
