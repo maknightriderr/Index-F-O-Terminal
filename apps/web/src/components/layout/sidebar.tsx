@@ -55,8 +55,11 @@ export function Sidebar() {
     { id: 'dashboard', label: 'Command', pages: ['dashboard'] },
     { id: 'option-chain', label: 'Chain', pages: ['option-chain'] },
     { id: 'indices', label: 'Markets', pages: ['market-overview', 'indices', 'fno-explorer', 'corporate-actions', 'institutional-flow'] },
+    { id: 'best-setups', label: 'Setups', pages: ['best-setups', 'market-scanner', 'strategy-scanner'] },
     { id: 'paper-trades', label: 'Paper trades', pages: ['paper-trades'] },
     { id: 'strategy-lab', label: 'Lab', pages: ['strategy-lab'] },
+    { id: 'measurement', label: 'Performance', pages: ['measurement', 'backtesting', 'loss-attribution', 'evidence'] },
+    { id: 'signal-diagnostics', label: 'Research', pages: ['signal-diagnostics'] },
     { id: 'system-health', label: 'Ops', pages: ['system-health', 'alerts', 'system-learning'] },
   ];
   const items = NAV_GROUPS.flatMap(g => g.items);
