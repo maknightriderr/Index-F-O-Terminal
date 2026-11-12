@@ -184,10 +184,10 @@ describe('the shared slot, generalised to families', () => {
 });
 
 describe('flags, stamp and schema', () => {
-  it('STRUCTURE defaults OFF since 2026-10-30 (S1 paused); CONSENSUS_SETUPS follows the failed out-of-sample bar (ON); both env-configurable', () => {
-    expect(STRUCTURE_DEFAULT).toBe(false);
+  it('STRUCTURE defaults ON again since 12 Nov (paused 30 Oct - 12 Nov); CONSENSUS_SETUPS ON; both env-configurable', () => {
+    expect(STRUCTURE_DEFAULT).toBe(true);
     expect(CONSENSUS_SETUPS_DEFAULT).toBe(true);
-    expect(readStructureFlag({})).toBe(false);
+    expect(readStructureFlag({})).toBe(true);
     expect(readStructureFlag({ STRUCTURE: 'on' })).toBe(true);
     expect(readConsensusSetupsFlag({ CONSENSUS_SETUPS: '0' })).toBe(false);
     expect(readStructureParams({})).toEqual(STRUCTURE_PARAM_DEFAULTS);
@@ -217,7 +217,7 @@ describe('flags, stamp and schema', () => {
     // The live stamp also carries the indicator engine's EVIDENCE mode (2026-10-01).
     // …and, since 2026-10-05, the R:R-display-only bump (RISK-2.0) and the parent-identity bump (PARENT-2.0).
     // 2026-10-30: STRUCTURE defaults off, so the live stamp's base is LOGIC_VERSION, not STRUCTURE_LOGIC_VERSION.
-    expect(liveLogicStamp().logicVersion).toBe(`${LOGIC_VERSION}+indicator-evidence.1+location-evidence.1+payoff-admission.1+parent-identity.1+demote-a4.1+demote-s1.1`);
+    expect(liveLogicStamp().logicVersion).toBe(`${STRUCTURE_LOGIC_VERSION}+indicator-evidence.1+location-evidence.1+payoff-admission.1+parent-identity.1+demote-a4.1+demote-s1.1+reinstate-all.1+ob1-paper.1+of1-paper.2`); // 12 Nov: every disabled strategy on again (S1 on: structure base; A4 / S1 reinstated; OB1 / OF1 paper)
   });
   it('CONSENSUS_OFF is classified as not eligible', () => {
     expect(classifyRefusal('CONSENSUS_OFF')).toBe('NOT_ELIGIBLE');

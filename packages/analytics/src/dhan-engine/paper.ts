@@ -21,7 +21,7 @@ import { roundDp } from './common.js';
 import { DHAN_SETUP_VERSION, type SetupResult } from './setups.js';
 import { DHAN_GAMMA_RULES, DHAN_GAMMA_VERSION, type GammaResult } from './expiry-gamma.js';
 
-export const DHAN_PAPER_STRATEGIES: readonly FreshExternalStrategy[] = ['DHAN_A_SWEEP_ABSORPTION', 'DHAN_B_IMBALANCE_BREAKOUT', 'DHAN_C_FAILED_AUCTION_CVD', 'DHAN_D_VWAP_PROFILE_REJECTION', 'DHAN_E_ORDER_FLOW', 'DHAN_E1_VALUE_REENTRY'];
+export const DHAN_PAPER_STRATEGIES: readonly FreshExternalStrategy[] = ['DHAN_A_SWEEP_ABSORPTION', 'DHAN_B_IMBALANCE_BREAKOUT', 'DHAN_C_FAILED_AUCTION_CVD', 'DHAN_D_VWAP_PROFILE_REJECTION', 'DHAN_E_ORDER_FLOW', 'DHAN_E1_VALUE_REENTRY', 'DHAN_E_ORDER_FLOW_5M'];
 /** The futures and reference prices used for the translation must be this fresh. */
 export const DHAN_PAPER_MAX_PRICE_AGE_MS = 60_000;
 /** A translation larger than this share of price means the two series are not the same underlying: refuse. */

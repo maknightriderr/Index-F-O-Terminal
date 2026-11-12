@@ -13,7 +13,8 @@ import type { MarketQuote, OHLCV } from '@fno/shared';
 const retirement = vi.hoisted(()=>({historical:true}));
 vi.mock('../../config/legacy-entry-policy.js',async(importOriginal)=>{
   const actual=await importOriginal<typeof import('../../config/legacy-entry-policy.js')>();
-  return {...actual,legacyEntriesAllowed:()=>retirement.historical?true:actual.legacyEntriesAllowed()};
+  // 12 Nov: legacy entries are on again; the retirement path stays tested by forcing it off here.
+  return {...actual,legacyEntriesAllowed:()=>retirement.historical};
 });
 
 // ---- the live boundaries: in-memory Redis and SQL, behind the real tape wrappers ----

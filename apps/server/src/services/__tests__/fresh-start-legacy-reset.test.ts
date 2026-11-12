@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 vi.mock('../../lib/db.js', () => ({ sql: () => { throw Error('TEST_UNEXPECTED_SQL'); } }));
 vi.mock('../../lib/redis.js', () => ({ redis: {}, scanKeys: async () => [] }));
 vi.mock('../../lib/logger.js', () => ({ logger: { info() { } } }));
+// The reconciliation runs only while legacy entries are retired (12 Nov: they are on again); test it in that state.
+vi.mock('../../config/legacy-entry-policy.js', () => ({ legacyEntriesAllowed: () => false }));
 import { reconcileRetiredLegacySlots, type LegacyResetIO } from '../fresh-start/legacy-reset.js';
 function fixture() {
     const cache = new Map([['trade_setup:NSE:NIFTY:INTRADAY', JSON.stringify({ available: true, signalId: 'deleted' })], ['trade_setup:NSE:TCS:POSITIONAL', JSON.stringify({ available: true, signalId: 'survives' })], ['trade_setup:NSE:INFY:POSITIONAL', JSON.stringify({ available: true })]]), quarantined = new Map();

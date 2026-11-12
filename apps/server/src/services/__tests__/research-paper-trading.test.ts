@@ -582,10 +582,10 @@ describe('12. no broker / live-order path', () => {
     for (const f of files) expect(readFileSync(f, 'utf8'), f).not.toMatch(/placeOrder|place_order|\/orders\b|modifyOrder|kite\.place/i);
     // Reads every server source file: ~2 s alone, past the 5 s default under a parallel run on a synced folder.
   }, 30_000);
-  it('2026-10-30: every strategy paused — S1 and A4 demoted, no family promoted or research-paper-traded', () => {
+  it('12 Nov: every strategy on again — A4 / S1 reinstated, research families paper-traded, nothing promoted to PAPER', () => {
     for (const [id, st] of Object.entries(liveTriggerStages())) {
-      if (id === 'S1' || id === 'A4') expect(st).toBe('SHADOW');
-      else expect(['SHADOW', 'RETIRED'], id).toContain(st);
+      if (id === 'S1') expect(st).toBe('ACTIVE');
+      else expect(['PAPER_RESEARCH', 'RETIRED'], id).toContain(st);
     }
   });
 });

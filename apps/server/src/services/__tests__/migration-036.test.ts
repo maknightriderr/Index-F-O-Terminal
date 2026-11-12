@@ -73,7 +73,7 @@ describe('hotfix: logic_version wide enough for the live stamp', () => {
   it('the live stamp fits, with room to spare', () => {
     const v = liveLogicStamp().logicVersion;
     expect(v.length).toBeGreaterThan(64);
-    expect(v.length).toBeLessThanOrEqual(150);
+    expect(v.length).toBeLessThanOrEqual(180); // column is 200; 12 Nov: OB1 / OF1 suffixes are back (151)
   });
   it('re-applying 036 is a no-op', async () => {
     expect(await apply(db, '036_widen_logic_version.sql')).toEqual([]);
