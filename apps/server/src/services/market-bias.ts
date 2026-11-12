@@ -118,6 +118,7 @@ import { orderBlockSignalAt } from '@fno/analytics';
 import { directionWithOrderBlockVote, recordOrderBlockShadow } from './order-block-shadow.js';
 import { recordOf1Shadow } from './of1-live.js';
 import { orderFlowPaperCandidates, orderFlowSourcesOn } from './order-flow-candidates.js';
+import { of1Learning, trendAlignment, loadOf1Outcomes } from './of1-trend-learning.js';
 import { delSlotIfSame, setSlotIfSame, slotIdentity } from '../lib/slot-cas.js';
 import { queuePendingOutcome } from './pending-outcomes.js';
 import { recordTradeCosts } from './trade-costs.js';
@@ -2181,6 +2182,13 @@ async function computeMarketBias(
       // The router's own slot filter (newest bar, paper stage, risk.wouldTrade — a target, a valid stop,
       // the session window, the cost cap), exactly as the trigger families' candidates get it.
       orderFlowPaper = paperCandidatesForSlot(orderFlowPaperCandidates({ underlying, exchange, bars: closedNow, chain, footprints, ob1: ofSources.ob1, of1: of1Here }), closedNow.length - 1);
+      // OF1 learning (owner, 12 Nov): counter-trend OF1 entries are refused once 10 have closed with a negative average.
+      const learned = of1Learning(loadOf1Outcomes);
+      if (learned?.blockCounterTrend) {
+        const kept = orderFlowPaper.filter((c) => !(c.candidate.triggerId === 'OF1' && trendAlignment(c.candidate.direction, regime) === 'COUNTER_TREND'));
+        if (kept.length !== orderFlowPaper.length) logger.info({ event: 'of1CounterTrendRefused', underlying, exchange, regime, refused: orderFlowPaper.length - kept.length, learned: learned.counterTrend }, 'OF1: counter-trend entry refused (learned from closed counter-trend trades)');
+        orderFlowPaper = kept;
+      }
     } catch (err: any) {
       logger.warn({ error: err.message, underlying, exchange }, 'OB1 / OF1 candidates failed — the other engines are unaffected');
     }
