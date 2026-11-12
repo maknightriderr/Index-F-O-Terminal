@@ -21,8 +21,8 @@ export const STRATEGY_NAMES: Record<string, string> = {
   NEW_INDEX_BREADTH_V1: 'Index breadth',
   NEW_MCX_FLOW_V1: 'MCX order flow',
 };
-/** 2.0: the 1.x strategies run in shadow — evaluated and recorded, never traded (packages/analytics FRESH_SHADOW_STRATEGIES). */
-export const SHADOW_STRATEGY_IDS: ReadonlySet<string> = new Set(['NEW_ORB_RETEST_V1', 'NEW_VWAP_PULLBACK_V1', 'NEW_PREVIOUS_SESSION_SWEEP_V1', 'NEW_FIRST_OPENING_PULLBACK_V1', 'NEW_MOMENTUM_BREAKOUT_V1', 'NEW_TREND_FLAG_V1', 'NEW_EVENT_BREAKOUT_V1']);
+/** Strategies that run in shadow (packages/analytics FRESH_SHADOW_STRATEGIES). 2.2 (12 Nov): none; the 1.x strategies trade again. */
+export const SHADOW_STRATEGY_IDS: ReadonlySet<string> = new Set<string>();
 export const STRATEGY_IDS = Object.keys(STRATEGY_NAMES);
 /** Dhan order-flow engine v2 (separate paper book): paper-traded, never evaluated by the fresh-start radar. */
 export const DHAN_STRATEGY_NAMES: Record<string, string> = {

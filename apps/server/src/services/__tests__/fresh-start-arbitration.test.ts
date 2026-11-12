@@ -15,12 +15,12 @@ describe('contract planning before first-ask arbitration',()=>{
  it('gives the earlier confirmation priority over a later candidate with higher modeled RR',async()=>{
   vi.useFakeTimers();const now=Date.parse('2026-10-30T06:00:00Z');vi.setSystemTime(now);const early={id:'early',at:now-100,expiresAt:now+1900,origin:now-300000,strategy:'NEW_TEST_A_V1'},late={...early,id:'late',at:now,strategy:'NEW_TEST_B_V1'};mocks.evaluate.mockReturnValue({candidates:[late,early],refusals:[]});const finish=vi.fn(async(_candidate:any)=>null),adapter={qualified:true,build:vi.fn(),prepare:async(c:any)=>({candidate:c,netRR:c.id==='late'?9:1.6,finish:()=>{finish(c);return Promise.resolve(null);}}),watch:async()=>{},audit:async()=>{},decision:async()=>{}};const runtime=new FreshRuntime({recover:async()=>[],observe:vi.fn()} as any,adapter as any,()=>true);await runtime.recover();await runtime.onClosedReference({now} as any);expect(finish).toHaveBeenCalledWith(early);expect(finish).toHaveBeenCalledOnce();
  });
- it('2.0: records shadow-strategy candidates as SHADOW_STRATEGY and never prices or enters them',async()=>{
+ it('2.2: the 1.x strategies are active again: priced through the adapter, never recorded as SHADOW_STRATEGY',async()=>{
   const now=Date.now(),shadow={id:'shadow',at:now,expiresAt:now+20000,origin:now-300000,strategy:'NEW_ORB_RETEST_V1'};mocks.evaluate.mockReturnValue({candidates:[shadow],refusals:[]});
-  const store={recover:vi.fn(async()=>[]),observe:vi.fn(),enter:vi.fn()},adapter={qualified:true,build:vi.fn(),prepare:vi.fn(),watch:vi.fn(async()=>{}),audit:vi.fn(async()=>{}),decision:vi.fn(async()=>{})};
+  const store={recover:vi.fn(async()=>[]),observe:vi.fn(),enter:vi.fn()},adapter={qualified:true,build:vi.fn(),prepare:vi.fn(async()=>null),watch:vi.fn(async()=>{}),audit:vi.fn(async()=>{}),decision:vi.fn(async()=>{})};
   const runtime=new FreshRuntime(store as any,adapter as any,()=>true);await runtime.recover();
   expect(await runtime.onClosedReference({now} as any)).toBe('NO_ELIGIBLE_ENTRY');
-  expect(adapter.decision).toHaveBeenCalledWith(shadow,'SHADOW_STRATEGY');expect(adapter.prepare).not.toHaveBeenCalled();expect(store.enter).not.toHaveBeenCalled();
+  expect(adapter.decision).not.toHaveBeenCalledWith(shadow,'SHADOW_STRATEGY');expect(adapter.prepare).toHaveBeenCalledWith(shadow);expect(store.enter).not.toHaveBeenCalled();
   expect(adapter.audit).toHaveBeenCalledWith({now},{candidates:[shadow],refusals:[]}); // the audit keeps the full evaluation
  });
 });
