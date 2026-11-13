@@ -28,6 +28,7 @@ import {freshEventClearStocks,freshRankStocks,FRESH_MARKETS,freshMarketBlockers,
 import {freshAdapterState as state} from './adapter-state.js';
 import {observedFreshOi,freshParseScan,freshStockIntel,freshStocksInPlay,freshInPlayDirection,freshIndexIntel,FRESH_INDEX_HEAVYWEIGHTS,FRESH_SCAN_KEY,type FreshScan,type FreshFuturesSample} from './intel.js';
 import {buildOptionChain} from '../option-chain.js';
+import {HumanTaRunner} from '../human-ta/runner.js';
 import type {FreshOiSample} from '@fno/analytics';
 import {FreshOperationalReporter} from './operational-evidence.js';
 import {registerFreshResearchProtocol,freshResearchReadiness} from './research-inventory.js';
@@ -168,6 +169,7 @@ export class FreshPaperWorker {
   private pollMonitor(){this.monitor.tick();const held=this.monitor.summary();state.heldPositions=held.open;state.oldestExitPendingAt=held.oldestExitPendingAt;state.marks=this.monitor.marks();if(!this.monitor.healthy){state.entriesArmed=false;if(!state.entryBlockers.includes('BLOCKED_EXIT_PERSISTENCE'))state.entryBlockers.push('BLOCKED_EXIT_PERSISTENCE');}}
   /** Stocks given priority by a DHAN_* signal (reference id -> until). */
   private dhanPriority=new Map<string,number>();
+  private readonly humanTa=new HumanTaRunner({chain:(name,exchange)=>buildOptionChain(this.provider,name,exchange as Exchange),enter:(c)=>this.runtime.onExternalCandidate(c)});
   /** Each prioritised stock replaces the last selected stock that is neither in play nor itself prioritised. */
   private withDhanPriority(selected:FreshReference[],now:number):FreshReference[]{
     for(const [id,until] of this.dhanPriority)if(until<=now)this.dhanPriority.delete(id);
@@ -431,6 +433,8 @@ export class FreshPaperWorker {
         if(!h.newClose){await auditFreshEvaluation(h.context,evaluateFreshStrategies(h.context));state.lastDecision='HISTORY_SEED_NO_RETROACTIVE_ENTRY';continue;}
         const currentExpected=session.open+(Math.floor((Date.now()-session.open)/300000)-1)*300000;
         if(h.lastSeen!==currentExpected){state.lastDecision='MISSING_CURRENT_CLOSED_BAR';continue;}
+        // Human TA (owner, 13 Nov): its own chart reading on every index / MCX reference; never awaited, never throws.
+        void this.humanTa.onBar({id:ref.id,name:ref.name,market:ref.market,exchange:freshReferenceExchange(ref)},h.context);
         state.barCallbacks++;let blockers=blockersFor(ref),urgent=false;
         // A setup on a reference whose books are not subscribed right now (stocks / MCX rotate): subscribe them at once
         // and let the candidate's entry window (FRESH_ENTRY_WINDOW_MS) wait for the first books, instead of losing it.

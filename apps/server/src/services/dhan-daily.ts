@@ -24,7 +24,7 @@ export const DHAN_DAILY_LOOKBACK_DAYS = 120;
 const INSTRUMENT: Record<ResolvedFlowContract['kind'], string> = { INDEX: 'FUTIDX', STOCK: 'FUTSTK', COMMODITY: 'FUTCOM' };
 const istDay = (t: number) => new Date(t + 19_800_000).toISOString().slice(0, 10);
 
-interface Entry { day: string; securityId: string; instrument: string; trend: DailyTrend; bars: number }
+interface Entry { day: string; securityId: string; instrument: string; trend: DailyTrend; bars: number; daily?: Array<{ time: number; open: number; high: number; low: number; close: number }> }
 const cache = new Map<string, Entry>();
 let running = false;
 
@@ -33,6 +33,12 @@ export function dhanDailyTrend(symbol: string, now: number, instrument?: string 
   const e = cache.get(symbol);
   if (!e || e.day !== istDay(now) || (instrument != null && e.instrument !== instrument)) return null;
   return { trend: e.trend, bars: e.bars };
+}
+
+/** The contract's last completed daily candles (oldest first, up to 60) as read today, or [] (Human TA reads its own trend). */
+export function dhanDailyBars(symbol: string, now: number): Array<{ time: number; open: number; high: number; low: number; close: number }> {
+  const e = cache.get(symbol);
+  return e && e.day === istDay(now) ? e.daily ?? [] : [];
 }
 
 /** One contract's completed daily candles (before today, IST), oldest first. Throws on an HTTP failure. */
@@ -70,7 +76,7 @@ export async function prefetchDhanDaily(resolved: Readonly<Record<string, Resolv
       try {
         const bars = await fetch(r, now);
         const trend = dailyTrend(bars);
-        cache.set(symbol, { day, securityId: r.securityId, instrument: r.tradingSymbol, trend, bars: bars.length });
+        cache.set(symbol, { day, securityId: r.securityId, instrument: r.tradingSymbol, trend, bars: bars.length, daily: bars.slice(-60) });
         counts[trend] = (counts[trend] ?? 0) + 1;
         read++;
       } catch (err: any) {

@@ -342,8 +342,8 @@ export const freshLastEntryGap = (c: Pick<FreshCandidate, 'lastEntryBeforeCutoff
  * Paper books (owner D4, 7 Nov: the Dhan engine is separate). DHAN_* strategies trade their own account per session —
  * own capital, cash, risk reservations, one-position-per-instrument and cohort — beside the fresh-start account.
  */
-export const freshAccountBook = (accountId: string): 'DHAN' | 'FRESH' => (accountId.includes(':DHAN:') ? 'DHAN' : 'FRESH');
-export const freshAccountId = (c: Pick<FreshCandidate, 'strategy' | 'version' | 'session'>): string => (c.strategy.startsWith('DHAN_') ? `${c.version}:DHAN:${c.session}` : `${c.version}:${c.session}`);
+export const freshAccountBook = (accountId: string): 'DHAN' | 'HTA' | 'FRESH' => (accountId.includes(':DHAN:') ? 'DHAN' : accountId.includes(':HTA:') ? 'HTA' : 'FRESH');
+export const freshAccountId = (c: Pick<FreshCandidate, 'strategy' | 'version' | 'session'>): string => (c.strategy.startsWith('DHAN_') ? `${c.version}:DHAN:${c.session}` : c.strategy.startsWith('HTA_') ? `${c.version}:HTA:${c.session}` : `${c.version}:${c.session}`);
 export function canonicalFreshParent(c: FreshCandidate, active: readonly {
     instrument: string;
     direction: string;
