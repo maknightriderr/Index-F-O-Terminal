@@ -65,6 +65,15 @@ export async function trimFlowEvents(db: Sql, now: number, days: number = flowEv
   return total;
 }
 
+/** The ten largest tables (with their indexes and TOAST) in MB, largest first; read only. */
+export async function largestTables(db: Sql, limit = 10): Promise<Array<{ table: string; mb: number; rows: number | null }>> {
+  const rows = await db<any[]>`SELECT n.nspname AS schema, c.relname AS table, pg_total_relation_size(c.oid) AS bytes, c.reltuples AS rows
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE c.relkind IN ('r', 'p', 'm') AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%'
+    ORDER BY pg_total_relation_size(c.oid) DESC LIMIT ${limit}`;
+  return rows.map((r) => ({ table: r.schema === 'public' ? r.table : `${r.schema}.${r.table}`, mb: Math.round(Number(r.bytes) / 1_048_576), rows: r.rows == null || Number(r.rows) < 0 ? null : Math.round(Number(r.rows)) }));
+}
+
 /** Database and table sizes in MB (logged so growth is visible without database access). */
 export async function freshStorageFigures(db: Sql): Promise<Record<string, number | null>> {
   const [r] = await db<any[]>`SELECT pg_database_size(current_database()) AS db, pg_total_relation_size('fresh_evaluations') AS evaluations, pg_total_relation_size('fresh_adapter_decisions') AS adapter, pg_total_relation_size('fresh_candidates') AS candidates, pg_total_relation_size(to_regclass('order_flow_events')) AS flow_events, pg_total_relation_size(to_regclass('order_flow_bars')) AS flow_bars`;
@@ -85,7 +94,7 @@ export function startFreshMaintenance(): void {
       const before = await freshStorageFigures(sql), t0 = Date.now(), trimmed = await trimFreshEvaluationInputs(sql, t0);
       // Dhan engine v2: recorded flow events past their retention (the footprints themselves are kept).
       const flowEventsDeleted = schemaFileReady(FLOW_EVENTS_MIGRATION) ? await trimFlowEvents(sql, t0) : null;
-      logger.info({ event: 'freshMaintenance', trimmed, retentionDays: FRESH_EVALUATION_INPUT_RETENTION_DAYS, flowEventsDeleted, flowEventRetentionDays: flowEventRetentionDays(), ms: Date.now() - t0, before, after: await freshStorageFigures(sql) }, 'Fresh-start nightly maintenance: old evaluation inputs trimmed, old order-flow events deleted (results, trades, decisions and footprints kept)');
+      logger.info({ event: 'freshMaintenance', largestTables: await largestTables(sql).catch(() => null), trimmed, retentionDays: FRESH_EVALUATION_INPUT_RETENTION_DAYS, flowEventsDeleted, flowEventRetentionDays: flowEventRetentionDays(), ms: Date.now() - t0, before, after: await freshStorageFigures(sql) }, 'Fresh-start nightly maintenance: old evaluation inputs trimmed, old order-flow events deleted (results, trades, decisions and footprints kept)');
       await redis.set(CLAIM_KEY(date), 'done', 'EX', 2 * 86_400);
     } catch (err) {
       await redis.del(CLAIM_KEY(date)).catch(() => undefined);

@@ -6,7 +6,7 @@ import { PGlite } from '@electric-sql/pglite';
 vi.mock('../../lib/db.js', () => ({ sql: {} }));
 vi.mock('../../lib/redis.js', () => ({ redis: {} }));
 vi.mock('../../lib/logger.js', () => ({ logger: { info() {}, warn() {}, error() {}, debug() {} } }));
-const { trimFreshEvaluationInputs, freshMaintenanceRunDate, FRESH_EVALUATION_INPUT_RETENTION_DAYS, FRESH_TRIM_BATCH } = await import('../fresh-start/maintenance.js');
+const { largestTables, trimFreshEvaluationInputs, freshMaintenanceRunDate, FRESH_EVALUATION_INPUT_RETENTION_DAYS, FRESH_TRIM_BATCH } = await import('../fresh-start/maintenance.js');
 
 let pg: PGlite;
 /** A postgres.js-style tagged template over PGlite. */
@@ -22,6 +22,13 @@ beforeAll(async () => {
 }, 30_000);
 
 describe('fresh-start nightly maintenance', () => {
+  it('lists the largest tables (read only), largest first, in MB', async () => {
+    const top = await largestTables(db, 3);
+    expect(top.length).toBeGreaterThan(0);
+    expect(top.length).toBeLessThanOrEqual(3);
+    expect(top.every((t) => typeof t.table === 'string' && t.mb >= 0)).toBe(true);
+    expect(top.map((t) => t.mb)).toEqual([...top.map((t) => t.mb)].sort((a, b) => b - a));
+  });
   it('runs only between 02:00 and 06:00 IST', () => {
     expect(freshMaintenanceRunDate(Date.parse('2026-11-05T20:30:00Z'))).toBe('2026-11-06'); // 02:00 IST
     expect(freshMaintenanceRunDate(Date.parse('2026-11-06T00:29:00Z'))).toBe('2026-11-06'); // 05:59 IST

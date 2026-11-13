@@ -1,6 +1,12 @@
 import { freshRoundTripFees, FRESH_PACK_VERSION, admitFreshPaper, freshAccountBook, freshLastEntryGap, advanceFreshPosition, canonicalFreshParent, freshQuoteCode, type FreshCandidate, type FreshContract, type FreshQuote, type FreshPaperPosition } from '@fno/analytics';
 import { sql } from '../../lib/db.js';
 import { freshEntriesEnabled } from '../../config/fresh-start.js';
+/**
+ * 13 Nov: the first fresh-start fill was stored as a JSON *string* inside the jsonb column (a JSON.stringify'd value
+ * bound to a jsonb parameter is encoded again by the driver), so every reader got a string, the monitor threw on
+ * every tick and the engine stayed BLOCKED_ADAPTER. Writes now bind text and cast (::text::jsonb); reads accept both.
+ */
+export function freshJsonValue<T>(v: T | string): T { return typeof v === 'string' ? JSON.parse(v) as T : v; }
 import { freshTelegramNotifier, type FreshTradeNotifier } from './notify.js';
 export interface FreshDb {
     unsafe(query: string, params?: any[]): Promise<any[]>;
@@ -117,15 +123,15 @@ export class FreshPaperStore {
             });
             const s4Used = c.strategy === 'NEW_FIRST_OPENING_PULLBACK_V1' && same.some(x => x.strategy === c.strategy);
             const code = s4Used ? 'FIRST_PULLBACK_ATTEMPT_USED' : admission.ok ? 'FILLED' : admission.code;
-            await tx.unsafe('INSERT INTO fresh_candidates(id,account_id,at,version,strategy,parent_id,decision,code,evidence) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb) ON CONFLICT DO NOTHING', [c.id, r.accountId, new Date(r.now), c.version, c.strategy, c.parentId, code === 'FILLED' ? 'FILLED' : 'REFUSED', code, JSON.stringify({ candidate: c, contract: r.contract, quote: r.quote, account, admission })]);
+            await tx.unsafe('INSERT INTO fresh_candidates(id,account_id,at,version,strategy,parent_id,decision,code,evidence) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::text::jsonb) ON CONFLICT DO NOTHING', [c.id, r.accountId, new Date(r.now), c.version, c.strategy, c.parentId, code === 'FILLED' ? 'FILLED' : 'REFUSED', code, JSON.stringify({ candidate: c, contract: r.contract, quote: r.quote, account, admission })]);
             if (!admission.ok || s4Used)
                 return { ok: false, code };
             const p: FreshPaperPosition = { id: c.id, ...(admission.riskFlags.length ? { riskFlags: admission.riskFlags } : {}), sessionCutoff:r.cutoff, contract: {...r.contract,explicitRoundTripCostPerUnit:admission.explicitCostPerUnit}, candidate: c, quantity: admission.quantity, entry: admission.entry, originalRiskCurrency: admission.initialRiskCurrency,
                 emergencyStop: admission.emergencyStop, currentStop: admission.emergencyStop, highBid: r.quote.bid, openedAt: r.now, lastEventAt: r.now,
                 state: 'OPEN', exitTriggeredAt: null, exitReason: null, exitPrice: null, netPnl: null, maxUnderlyingFavorable: 0 };
-            await tx.unsafe('INSERT INTO fresh_parent_moves(account_id,id,instrument,direction,session,origin,traded,evidence) VALUES($1,$2,$3,$4,$5,$6,true,$7::jsonb) ON CONFLICT(account_id,id) DO UPDATE SET traded=true', [r.accountId, c.parentId, c.instrument, c.direction, r.session, c.origin, JSON.stringify(c)]);
-            await tx.unsafe("INSERT INTO fresh_paper_positions(id,account_id,version,strategy,instrument,risk_group,parent_id,session,status,reserved_risk,reserved_premium,opened_at,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'OPEN',$9,$10,$11,$12::jsonb)", [c.id, r.accountId, c.version, c.strategy, c.instrument, r.riskGroup, c.parentId, r.session, admission.initialRiskCurrency, admission.premiumCurrency, new Date(r.now), JSON.stringify(p)]);
-            await tx.unsafe("INSERT INTO fresh_paper_events(id,position_id,revision,at,kind,evidence) VALUES($1,$2,0,$3,'ENTRY_FILL',$4::jsonb)", [`${c.id}:0`, c.id, new Date(r.now), JSON.stringify({ request: r, admission })]);
+            await tx.unsafe('INSERT INTO fresh_parent_moves(account_id,id,instrument,direction,session,origin,traded,evidence) VALUES($1,$2,$3,$4,$5,$6,true,$7::text::jsonb) ON CONFLICT(account_id,id) DO UPDATE SET traded=true', [r.accountId, c.parentId, c.instrument, c.direction, r.session, c.origin, JSON.stringify(c)]);
+            await tx.unsafe("INSERT INTO fresh_paper_positions(id,account_id,version,strategy,instrument,risk_group,parent_id,session,status,reserved_risk,reserved_premium,opened_at,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'OPEN',$9,$10,$11,$12::text::jsonb)", [c.id, r.accountId, c.version, c.strategy, c.instrument, r.riskGroup, c.parentId, r.session, admission.initialRiskCurrency, admission.premiumCurrency, new Date(r.now), JSON.stringify(p)]);
+            await tx.unsafe("INSERT INTO fresh_paper_events(id,position_id,revision,at,kind,evidence) VALUES($1,$2,0,$3,'ENTRY_FILL',$4::text::jsonb)", [`${c.id}:0`, c.id, new Date(r.now), JSON.stringify({ request: r, admission })]);
             if(!this.entriesEnabled())throw new FreshEntryTransactionRejected();
             const checkedAt=validateTime();
             if(open.some(row=>!validMark(row,checkedAt)))throw new FreshEntryTransactionRejected('ACCOUNT_PAUSED');
@@ -159,14 +165,15 @@ export class FreshPaperStore {
             if (!account)
                 return false;
             const [row]: Stored[] = await tx.unsafe("SELECT id,revision,state,risk_group FROM fresh_paper_positions WHERE account_id=$1 AND id=$2 AND status<>'CLOSED' FOR UPDATE", [accountId, id]);
+            if (row) row.state = freshJsonValue(row.state);
             if (!row)
                 return false;
             const n = advanceFreshPosition(row.state, e);
             if (n === row.state)
                 return false;
             const closed = n.state === 'CLOSED', rev = row.revision + 1;
-            await tx.unsafe('UPDATE fresh_paper_positions SET state=$1::jsonb,status=$2,revision=$3,closed_at=$4,net_pnl=$5 WHERE id=$6 AND revision=$7', [JSON.stringify(n), n.state, rev, closed ? new Date(e.at) : null, n.netPnl, id, row.revision]);
-            await tx.unsafe('INSERT INTO fresh_paper_events(id,position_id,revision,at,kind,evidence) VALUES($1,$2,$3,$4,$5,$6::jsonb)', [`${id}:${rev}`, id, rev, new Date(e.at), closed ? 'EXIT_FILL' : n.state === 'EXIT_PENDING' ? 'EXIT_PENDING' : 'OBSERVATION', JSON.stringify(e)]);
+            await tx.unsafe('UPDATE fresh_paper_positions SET state=$1::text::jsonb,status=$2,revision=$3,closed_at=$4,net_pnl=$5 WHERE id=$6 AND revision=$7', [JSON.stringify(n), n.state, rev, closed ? new Date(e.at) : null, n.netPnl, id, row.revision]);
+            await tx.unsafe('INSERT INTO fresh_paper_events(id,position_id,revision,at,kind,evidence) VALUES($1,$2,$3,$4,$5,$6::text::jsonb)', [`${id}:${rev}`, id, rev, new Date(e.at), closed ? 'EXIT_FILL' : n.state === 'EXIT_PENDING' ? 'EXIT_PENDING' : 'OBSERVATION', JSON.stringify(e)]);
             if (closed)
                 await tx.unsafe('UPDATE fresh_paper_accounts SET realized_net=realized_net+$1,consecutive_losses=CASE WHEN $1<0 THEN consecutive_losses+1 ELSE 0 END,paused=paused OR (CASE WHEN $1<0 THEN consecutive_losses+1 ELSE 0 END)>=3 OR realized_net+$1<=-capital*.01 WHERE id=$2', [n.netPnl, accountId]);
             if (closed)
@@ -179,6 +186,7 @@ export class FreshPaperStore {
     async recover(): Promise<Array<Stored & {
         account_id: string;
     }>> {
-        return this.db.unsafe("SELECT id,account_id,revision,state,risk_group FROM fresh_paper_positions WHERE status<>'CLOSED' ORDER BY opened_at");
+        const rows = await this.db.unsafe("SELECT id,account_id,revision,state,risk_group FROM fresh_paper_positions WHERE status<>'CLOSED' ORDER BY opened_at");
+        return rows.map((r: Stored & { account_id: string }) => ({ ...r, state: freshJsonValue(r.state) }));
     }
 }
