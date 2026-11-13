@@ -42,7 +42,7 @@ export async function freshResearchReadiness(){
 }
 export async function registerFreshResearchProtocol(db:FreshDb=sql as unknown as FreshDb,fixtureTime?:number){
  if(fixtureTime!==undefined&&!Number.isFinite(fixtureTime))throw Error('INVALID_PROTOCOL_CLOCK');
- await db.unsafe('INSERT INTO fresh_research_protocols(id,digest,body,registered_at) SELECT $1,$2,$3::jsonb,coalesce($5::timestamptz,clock_timestamp()) WHERE coalesce($5::timestamptz,clock_timestamp()) < $4::timestamptz ON CONFLICT DO NOTHING',[FRESH_RESEARCH_PROTOCOL.id,freshProtocolDigest(),JSON.stringify(FRESH_RESEARCH_PROTOCOL),FRESH_RESEARCH_PROTOCOL.captureStart,fixtureTime===undefined?null:new Date(fixtureTime).toISOString()]);
+ await db.unsafe('INSERT INTO fresh_research_protocols(id,digest,body,registered_at) SELECT $1,$2,$3::text::jsonb,coalesce($5::timestamptz,clock_timestamp()) WHERE coalesce($5::timestamptz,clock_timestamp()) < $4::timestamptz ON CONFLICT DO NOTHING',[FRESH_RESEARCH_PROTOCOL.id,freshProtocolDigest(),JSON.stringify(FRESH_RESEARCH_PROTOCOL),FRESH_RESEARCH_PROTOCOL.captureStart,fixtureTime===undefined?null:new Date(fixtureTime).toISOString()]);
  const [row]=await db.unsafe('SELECT digest FROM fresh_research_protocols WHERE id=$1',[FRESH_RESEARCH_PROTOCOL.id]);
  if(!row)throw Error('PROTOCOL_NOT_REGISTERED_IN_ADVANCE');
  if(row.digest!==freshProtocolDigest())throw Error('RESEARCH_PROTOCOL_DIGEST_MISMATCH');

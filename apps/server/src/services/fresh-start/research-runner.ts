@@ -52,7 +52,7 @@ export async function runFreshResearch(db:FreshDb,raw:unknown,now=Date.now()){
   const blockers=[...gate.blockers,'HOLDOUT_BLINDNESS_NOT_ENFORCED','DECLARED_DATASET_CAPABILITIES_NOT_INDEPENDENTLY_QUALIFIED',...(b.outcomesPreviouslyInspected?['HOLDOUT_PREVIOUSLY_INSPECTED']:[])];
   const result={protocolId:protocol.id,protocolDigest:freshProtocolDigest(),datasetDigest:digest,cohort:b.cohort,evidence:b.evidence,periods,inspectionRecorded:true,replayedStoredReport:false,gate:{...gate,blockers:[...new Set(blockers)],eligibleForHumanReview:false,promoted:false},
    note:'Declared dataset capabilities are not independently certified. Existing visible paper outcomes are not assumed untouched; an inspected cohort cannot authorize future parameter tuning or automatic promotion.'};
-  await db.unsafe("UPDATE fresh_research_runs SET status='COMPLETE',result=$1::jsonb WHERE protocol_id=$2 AND cohort=$3 AND status='RUNNING'",[JSON.stringify(result),protocol.id,cohort]);
+  await db.unsafe("UPDATE fresh_research_runs SET status='COMPLETE',result=$1::text::jsonb WHERE protocol_id=$2 AND cohort=$3 AND status='RUNNING'",[JSON.stringify(result),protocol.id,cohort]);
   return result;
- }catch(error){await db.unsafe("UPDATE fresh_research_runs SET status='FAILED',result=$1::jsonb WHERE protocol_id=$2 AND cohort=$3 AND status='RUNNING'",[JSON.stringify({error:'RESEARCH_REPORT_FAILED',inspectionRecorded:true}),protocol.id,cohort]);throw error;}
+ }catch(error){await db.unsafe("UPDATE fresh_research_runs SET status='FAILED',result=$1::text::jsonb WHERE protocol_id=$2 AND cohort=$3 AND status='RUNNING'",[JSON.stringify({error:'RESEARCH_REPORT_FAILED',inspectionRecorded:true}),protocol.id,cohort]);throw error;}
 }

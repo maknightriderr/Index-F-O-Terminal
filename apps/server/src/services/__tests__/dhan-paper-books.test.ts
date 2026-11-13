@@ -92,4 +92,19 @@ describe('expiry-gamma entry window at the store', () => {
     const late = { ...request('g2', 'DHAN_EXPIRY_GAMMA', { instrument: 'SENSEX-FUT', premiumExit: { ...pe, entryUntil: at + 200 }, expiresAt: at + 20_000 }, { expiryTradableSessions: 0, delta: 0.7 }), ...near };
     expect(await store.enter(late)).toMatchObject({ ok: false, code: 'ENTRY_EXPIRED_OR_EARLY' });
   });
+
+describe('13 Nov: jsonb state stored as a JSON string (first live fill)', () => {
+  it('recover() returns an object for a double-encoded row, and 056 repairs the stored value', async () => {
+    expect(await store.enter(request('f9', 'NEW_RS_STOCK_V1'))).toMatchObject({ ok: true });
+    expect((await pg.query<any>("SELECT jsonb_typeof(state) AS t FROM fresh_paper_positions WHERE id='f9'")).rows[0].t).toBe('object');
+    // What production stored: the same JSON, but as a jsonb string.
+    await pg.query("UPDATE fresh_paper_positions SET state = to_jsonb(state::text) WHERE id='f9'");
+    expect((await pg.query<any>("SELECT jsonb_typeof(state) AS t FROM fresh_paper_positions WHERE id='f9'")).rows[0].t).toBe('string');
+    const [row] = await store.recover();
+    expect(row.state.contract.id).toBe('opt-f9');
+    await pg.exec(readFileSync(new URL('../../../../../database/init/056_fix_double_encoded_jsonb.sql', import.meta.url), 'utf8'));
+    await pg.exec(readFileSync(new URL('../../../../../database/init/056_fix_double_encoded_jsonb.sql', import.meta.url), 'utf8')); // idempotent
+    expect((await pg.query<any>("SELECT jsonb_typeof(state) AS t, state#>>'{contract,id}' AS c FROM fresh_paper_positions WHERE id='f9'")).rows[0]).toEqual({ t: 'object', c: 'opt-f9' });
+  });
+});
 });
