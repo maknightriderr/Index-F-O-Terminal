@@ -65,4 +65,13 @@ describe('OF1 trend learning', () => {
     expect(learnedRefusal('A3', 'BULLISH', 'STRONG_BEAR_TREND', by)).toBeNull(); // no trades yet
     expect(learnedRefusal('INDICATOR', 'BULLISH', 'STRONG_BEAR_TREND', null)).toBeNull(); // not read yet
   });
+  it('13 Nov: entries in a quiet market are refused once 10 such trades closed with a negative average', () => {
+    const q = (netR: number, state = 'EXPIRED', family = 'A4') => ({ ...t('BULLISH', 'RANGE_BOUND', netR, V, family), state });
+    const by = learnByFamily([...Array.from({ length: 9 }, () => q(-0.5)), q(-0.4, 'LOSS'), ...Array.from({ length: 4 }, () => q(1, 'WIN', 'S1'))]);
+    expect(by.A4).toMatchObject({ quiet: { trades: 10, expired: 9 }, blockQuiet: true });
+    expect(by.S1.blockQuiet).toBe(false); // 4 trades
+    expect(learnedRefusal('A4', 'BULLISH', 'LOW_VOLATILITY', by)).toMatchObject({ code: 'LEARNED_QUIET_MARKET' });
+    expect(learnedRefusal('A4', 'BULLISH', 'STRONG_BULL_TREND', by)).toBeNull(); // trending: allowed
+    expect(learnByFamily([...Array.from({ length: 10 }, () => q(-0.5)), ...Array.from({ length: 4 }, () => q(2, 'WIN'))]).A4.blockQuiet).toBe(false); // average turned positive
+  });
 });

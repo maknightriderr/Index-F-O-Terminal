@@ -37,8 +37,15 @@ export function trendAlignment(direction: BiasDirection | string | null | undefi
   return direction === side ? 'WITH_TREND' : 'COUNTER_TREND';
 }
 
-export interface Of1Outcome { family: string | null; direction: string | null; regime: string | null; netR: number | null; logicVersion: string | null }
-export interface Of1Learning { counterTrend: { trades: number; avgNetR: number | null }; withTrend: { trades: number; avgNetR: number | null }; blockCounterTrend: boolean; at: number }
+export interface Of1Outcome { family: string | null; direction: string | null; regime: string | null; netR: number | null; logicVersion: string | null; /** WIN / LOSS / EXPIRED (recorded only). */ state?: string | null }
+/**
+ * 13 Nov (owner): the second lesson. On 13 Nov five of seven closed legacy trades ended EXPIRED (the time limit, not
+ * the stop) at a loss: the market did not move and the premium decayed. A strategy whose trades ENTERED in a quiet
+ * regime (QUIET_REGIMES) have closed OF1_COUNTER_TREND_MIN_TRADES times with a negative average net R no longer enters
+ * in a quiet regime. The regime at entry is the cause the rule acts on; how many of those trades expired is recorded.
+ */
+export const QUIET_REGIMES: ReadonlySet<string> = new Set(['RANGE_BOUND', 'LOW_VOLATILITY']);
+export interface Of1Learning { counterTrend: { trades: number; avgNetR: number | null }; withTrend: { trades: number; avgNetR: number | null }; blockCounterTrend: boolean; quiet?: { trades: number; avgNetR: number | null; expired: number }; blockQuiet?: boolean; at: number }
 
 /** Pure: the learned state from one strategy's closed trades (OF1 by default). */
 export function learnOf1(outcomes: readonly Of1Outcome[], at = Date.now(), family = 'OF1'): Of1Learning {
@@ -48,7 +55,9 @@ export function learnOf1(outcomes: readonly Of1Outcome[], at = Date.now(), famil
     return { trades: xs.length, avgNetR: xs.length ? Math.round((xs.reduce((s, x) => s + x, 0) / xs.length) * 10000) / 10000 : null };
   };
   const counterTrend = group('COUNTER_TREND'), withTrend = group('WITH_TREND');
-  return { counterTrend, withTrend, blockCounterTrend: counterTrend.trades >= OF1_COUNTER_TREND_MIN_TRADES && (counterTrend.avgNetR ?? 0) < 0, at };
+  const q = of1.filter((o) => o.regime != null && QUIET_REGIMES.has(o.regime));
+  const quiet = { trades: q.length, avgNetR: q.length ? Math.round((q.reduce((s, o) => s + o.netR!, 0) / q.length) * 10000) / 10000 : null, expired: q.filter((o) => o.state === 'EXPIRED').length };
+  return { counterTrend, withTrend, blockCounterTrend: counterTrend.trades >= OF1_COUNTER_TREND_MIN_TRADES && (counterTrend.avgNetR ?? 0) < 0, quiet, blockQuiet: quiet.trades >= OF1_COUNTER_TREND_MIN_TRADES && (quiet.avgNetR ?? 0) < 0, at };
 }
 
 /** Pure: the learned state of every strategy that has closed trades. */
@@ -68,9 +77,9 @@ export function familyLearning(load: () => Promise<Of1Outcome[]> = loadFamilyOut
         const before = all?.byFamily ?? {};
         const byFamily = learnByFamily(rows, now);
         all = { at: now, byFamily };
-        const blocked = Object.entries(byFamily).filter(([, l]) => l.blockCounterTrend).map(([f]) => f);
-        const changed = Object.entries(byFamily).filter(([f, l]) => (before[f]?.blockCounterTrend ?? false) !== l.blockCounterTrend).map(([f]) => f);
-        logger.info({ event: 'strategyLearning', blocked, changed, byFamily: Object.fromEntries(Object.entries(byFamily).map(([f, l]) => [f, { counter: l.counterTrend, with: l.withTrend, block: l.blockCounterTrend }])) }, 'Strategy learning: counter-trend vs with-trend outcomes per strategy (counter-trend refused once 10 closed with a negative average)');
+        const blocked = Object.entries(byFamily).flatMap(([f, l]) => [...(l.blockCounterTrend ? [`${f}:COUNTER_TREND`] : []), ...(l.blockQuiet ? [`${f}:QUIET_MARKET`] : [])]);
+        const changed = Object.entries(byFamily).filter(([f, l]) => (before[f]?.blockCounterTrend ?? false) !== l.blockCounterTrend || (before[f]?.blockQuiet ?? false) !== (l.blockQuiet ?? false)).map(([f]) => f);
+        logger.info({ event: 'strategyLearning', blocked, changed, byFamily: Object.fromEntries(Object.entries(byFamily).map(([f, l]) => [f, { counter: l.counterTrend, with: l.withTrend, block: l.blockCounterTrend, quiet: l.quiet, blockQuiet: l.blockQuiet }])) }, 'Strategy learning: counter-trend vs with-trend outcomes per strategy (counter-trend refused once 10 closed with a negative average)');
       })
       .catch((err: any) => logger.warn({ event: 'strategyLearning', error: err?.message }, 'Strategy learning: outcomes unavailable (the last state stays)'))
       .finally(() => { refreshingAll = null; });
@@ -81,6 +90,7 @@ export function familyLearning(load: () => Promise<Of1Outcome[]> = loadFamilyOut
 /** The final-check refusal for a candidate its strategy has learned not to take (counter-trend), else null. */
 export function learnedRefusal(source: string, direction: string, regime: MarketRegime | string | null | undefined, learned: Record<string, Of1Learning> | null): { code: string; reason: string } | null {
   const l = learned?.[source];
+  if (l?.blockQuiet && regime != null && QUIET_REGIMES.has(regime)) return { code: 'LEARNED_QUIET_MARKET', reason: `${source} has closed ${l.quiet!.trades} trades entered in a quiet market (${l.quiet!.expired} of them expired) at an average ${l.quiet!.avgNetR}R net; it no longer enters in a ${regime} regime.` };
   if (!l?.blockCounterTrend || trendAlignment(direction, regime) !== 'COUNTER_TREND') return null;
   return { code: 'LEARNED_COUNTER_TREND', reason: `${source} has closed ${l.counterTrend.trades} counter-trend trades at an average ${l.counterTrend.avgNetR}R net; it no longer trades against the ${regime} regime.` };
 }
@@ -114,7 +124,7 @@ export async function loadOf1Outcomes(): Promise<Of1Outcome[]> {
 export async function loadFamilyOutcomes(): Promise<Of1Outcome[]> {
   const [view, history] = await Promise.all([listPaperTrades(2000), getTradeSetupHistory(2000)]);
   const regime = new Map(history.map((r) => [r.id, r.regime ?? null]));
-  return view.trades.filter((t) => t.netR != null).map((t) => ({ family: t.family, direction: t.direction, regime: regime.get(t.id) ?? null, netR: t.netR, logicVersion: t.logicVersion ?? null }));
+  return view.trades.filter((t) => t.netR != null).map((t) => ({ family: t.family, direction: t.direction, regime: regime.get(t.id) ?? null, netR: t.netR, logicVersion: t.logicVersion ?? null, state: t.state ?? null }));
 }
 
 /** Tests only. */
