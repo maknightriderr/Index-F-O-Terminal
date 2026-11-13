@@ -2,7 +2,6 @@
 /* eslint-disable react-hooks/set-state-in-effect -- state is reset or loaded when an input changes; behaviour verified in production, not restructured */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { LegacyRetiredBanner } from '@/components/common/legacy-retired-banner';
 import { useLiveIndices } from '@/lib/use-live-indices';
 import { useAllIndices } from '@/lib/use-all-indices';
 import { useFnoScanner } from '@/lib/use-fno-scanner';
@@ -75,7 +74,6 @@ export function Dashboard() {
     <div className="trading-desk space-y-3">
       <h1 className="sr-only">Trading desk dashboard</h1>
       <StatusBar compact />
-      <LegacyRetiredBanner />
       <div className="desk-grid">
         <DeskWatchlist instrumentIdx={instrumentIdx} onInstrument={setInstrumentIdx} quotes={[...allIndices, ...indices]} now={feed.now} />
         <div className="desk-chart"><ChartSection compact instrumentIdx={instrumentIdx} onInstrument={setInstrumentIdx} quote={quote} state={state} orderFlowStatus={orderFlowStatus} /></div>

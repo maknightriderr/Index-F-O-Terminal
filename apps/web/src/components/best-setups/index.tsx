@@ -11,7 +11,6 @@ import { useNow } from '@/lib/use-health';
 import { classifyFreshness, FRESH_WITHIN_MS } from '@/lib/freshness';
 import { DEFAULT_SETUP_FILTERS, filterSetups, type SetupFilters } from '@/lib/setups';
 import { SetupsTable } from './setups-table';
-import { LegacyRetiredBanner } from '@/components/common/legacy-retired-banner';
 
 const STATUS_OPTIONS: ReadonlyArray<{ id: '' | DecisionState; label: string; title?: string }> = [
   { id: '', label: 'All' },
@@ -49,7 +48,6 @@ export function BestSetupsPage() {
           </>
         }
       />
-      <LegacyRetiredBanner />
       <DataState
         loading={s.loading}
         error={s.error}

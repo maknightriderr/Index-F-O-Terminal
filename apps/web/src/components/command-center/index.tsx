@@ -16,7 +16,6 @@ import { useFeedSummary } from '@/lib/use-feed-summary';
 import { useLiveIndices } from '@/lib/use-live-indices';
 import { useChain } from '@/lib/use-chain';
 import { useMarketStore } from '@/stores';
-import { LegacyRetiredBanner } from '@/components/common/legacy-retired-banner';
 import {
   accountView,
   equityCurve,
@@ -84,7 +83,6 @@ export function CommandCenter() {
         </aside>
       </div>
 
-      <LegacyRetiredBanner />
       <p className="cc-note flex flex-wrap justify-between gap-2 border-t border-[var(--border-primary)] pt-3">
         <span>{status?.version ?? 'NEW-INTRADAY'} · Paper fills: ask + 1 tick in, bid − 1 tick out, 250 ms latency, quotes ≤ 2 s old · no broker orders</span>
         <span>Status {fresh.fetchedAt ? `refreshed ${istTime(fresh.fetchedAt)} IST` : 'loading…'}</span>
