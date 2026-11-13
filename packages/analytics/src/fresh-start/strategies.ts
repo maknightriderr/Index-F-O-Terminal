@@ -226,7 +226,7 @@ export interface FreshContext {
     footprint15?: FreshFootprintRead | null;
 }
 /** Dhan engine v2 setups paper-traded through the same adapter / store (phase 4). Not evaluated by this module. */
-export const FRESH_EXTERNAL_STRATEGIES = ['DHAN_A_SWEEP_ABSORPTION', 'DHAN_B_IMBALANCE_BREAKOUT', 'DHAN_C_FAILED_AUCTION_CVD', 'DHAN_D_VWAP_PROFILE_REJECTION', 'DHAN_E_ORDER_FLOW', 'DHAN_E1_VALUE_REENTRY', 'DHAN_E_ORDER_FLOW_5M', 'DHAN_EXPIRY_GAMMA'] as const;
+export const FRESH_EXTERNAL_STRATEGIES = ['DHAN_A_SWEEP_ABSORPTION', 'DHAN_B_IMBALANCE_BREAKOUT', 'DHAN_C_FAILED_AUCTION_CVD', 'DHAN_D_VWAP_PROFILE_REJECTION', 'DHAN_E_ORDER_FLOW', 'DHAN_E1_VALUE_REENTRY', 'DHAN_E_ORDER_FLOW_5M', 'DHAN_EXPIRY_GAMMA', 'HTA_HUMAN_TA_V1'] as const;
 export type FreshExternalStrategy = typeof FRESH_EXTERNAL_STRATEGIES[number];
 /** Every strategy whose paper trades the performance report covers (fresh-start + Dhan engine, separate books). */
 export const FRESH_REPORTED_STRATEGIES = [...FRESH_ALL_STRATEGIES, ...FRESH_EXTERNAL_STRATEGIES] as const;
@@ -259,6 +259,8 @@ export interface FreshCandidate {
     exitProfile?: 'TARGET' | 'TREND' | 'STRUCTURE';
     trailAtr?: number;
     premiumExit?: FreshPremiumExit;
+    /** Strikes the setup itself chose (Human TA: by its own Greeks); the adapter prices only these, still under every admission rule. */
+    allowedStrikes?: readonly number[];
     /** How long before the session cutoff new entries stop (default one hour; the Dhan engine uses 45 minutes, its
      *  master prompt Part 17 secondary window ending 14:45 on NSE / BSE). Never under 10 minutes. */
     lastEntryBeforeCutoffMs?: number;
