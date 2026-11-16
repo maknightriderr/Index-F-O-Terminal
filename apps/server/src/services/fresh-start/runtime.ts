@@ -5,6 +5,7 @@ import { evaluateFreshStrategies, FRESH_SHADOW_STRATEGIES, type FreshContext, ty
 import { freshEntriesEnabled } from '../../config/fresh-start.js';
 import { FreshPaperStore, type FreshEntryRequest } from './store.js';
 import { FreshWorkQueue } from './queue.js';
+import type { FreshLearning } from './learning.js';
 /** Shared-feed adapter must supply verified calendars, event coverage, model/costs and exact-contract books.
  * No legacy midpoint/spot-volume fallback is accepted. Production qualification is deliberately absent. */
 export interface FreshPreparedCandidate {candidate:FreshCandidate;netRR:number;finish():Promise<FreshEntryRequest|null>;}
@@ -22,7 +23,21 @@ export class FreshRuntime {
     // evaluation must start within 2 s of its context.
     private evaluations = new FreshWorkQueue(100, 8);
     private recovered = false;
-    constructor(private store = new FreshPaperStore(), private adapter: FreshQualifiedAdapter | null = null, private enabled: () => boolean = freshEntriesEnabled) { }
+    constructor(private store = new FreshPaperStore(), private adapter: FreshQualifiedAdapter | null = null, private enabled: () => boolean = freshEntriesEnabled, private learner: Pick<FreshLearning, 'screen' | 'screenContract'> | null = null) { }
+    /** Learning (owner, 16 Nov): a candidate that would repeat a learned mistake is recorded and dropped. */
+    private async screened(candidates: readonly FreshCandidate[], adapter: FreshQualifiedAdapter): Promise<FreshCandidate[]> {
+        if (!this.learner) return [...candidates];
+        const kept: FreshCandidate[] = [];
+        for (const c of candidates) { const s = this.learner.screen(c); if (s.refusal) { await adapter.decision?.(s.candidate, s.refusal.code); continue; } kept.push(s.candidate); }
+        return kept;
+    }
+    /** The expiry-day lesson, once the contract is known; returns the refusal code or null. */
+    private async contractRefused(request: FreshEntryRequest, adapter: FreshQualifiedAdapter): Promise<string | null> {
+        const r = this.learner?.screenContract(request.candidate, request.contract) ?? null;
+        if (!r) return null;
+        await adapter.decision?.(request.candidate, r.code);
+        return r.code;
+    }
     async recover() {
         // Always recover held risk before even considering whether entries are enabled.
         const positions = await this.store.recover();
@@ -44,13 +59,14 @@ export class FreshRuntime {
             // Shadow strategies (2.0): recorded as a decision, never priced or entered.
             for (const c of evaluated.candidates.filter(c => FRESH_SHADOW_STRATEGIES.has(c.strategy)))
                 await adapter.decision?.(c, 'SHADOW_STRATEGY');
-            const evaluation = { ...evaluated, candidates: evaluated.candidates.filter(c => !FRESH_SHADOW_STRATEGIES.has(c.strategy)) };
+            const evaluation = { ...evaluated, candidates: await this.screened(evaluated.candidates.filter(c => !FRESH_SHADOW_STRATEGIES.has(c.strategy)), adapter) };
             if(adapter.prepare){
                 const plans=await Promise.all(evaluation.candidates.map(c=>this.builds.add(c.expiresAt,()=>adapter.prepare!(c))));
                 const eligible=plans.filter((p):p is FreshPreparedCandidate=>p!==null).sort((a,b)=>a.candidate.at-b.candidate.at||b.netRR-a.netRR||a.candidate.origin-b.candidate.origin||a.candidate.strategy.localeCompare(b.candidate.strategy));
                 const selected=eligible[0];if(!selected)return 'NO_ELIGIBLE_ENTRY';
                 for(const other of eligible.slice(1))await adapter.decision?.(other.candidate,'ANOTHER_CANDIDATE_SELECTED');
                 const request=await selected.finish();if(!request)return 'NO_ELIGIBLE_ENTRY';
+                const learned=await this.contractRefused(request,adapter);if(learned)return learned;
                 const result=await this.store.enter({...request,now:Date.now()});
                 if(result.ok){await adapter.watch(await this.store.recover(),this.store.observe.bind(this.store));return 'FILLED';}
                 await adapter.decision?.(selected.candidate,result.code);return result.code;
@@ -66,6 +82,7 @@ export class FreshRuntime {
             };
             const requests = built.filter((x): x is FreshEntryRequest => x !== null).sort((a, b) => a.candidate.at - b.candidate.at || rank(b) - rank(a) || a.candidate.origin - b.candidate.origin || a.candidate.strategy.localeCompare(b.candidate.strategy));
             for (const r of requests) {
+                if (await this.contractRefused(r, adapter)) continue;
                 // Processing time cannot reuse a formerly fresh quote after queue/network delay.
                 const result = await this.store.enter({ ...r, now: Date.now() });
                 if (result.ok){
@@ -90,13 +107,18 @@ export class FreshRuntime {
         // It may start while the candidate's own window lasts (bar closes are when the fresh evaluations queue is busiest).
         const startBy = Math.max(Date.now() + 2000, Math.min(c.expiresAt - 5000, Date.now() + 15000));
         return this.evaluations.add(startBy, async () => {
-            const plan = await this.builds.add(c.expiresAt, () => adapter.prepare!(c));
+            const s = this.learner?.screen(c) ?? { candidate: c, refusal: null };
+            if (s.refusal) { await adapter.decision?.(s.candidate, s.refusal.code); return s.refusal.code; }
+            const screened = s.candidate;
+            const plan = await this.builds.add(c.expiresAt, () => adapter.prepare!(screened));
             if (!plan) return 'NO_ELIGIBLE_ENTRY';
             const request = await plan.finish();
             if (!request) return 'NO_ELIGIBLE_ENTRY';
+            const learned = await this.contractRefused(request, adapter);
+            if (learned) return learned;
             const result = await this.store.enter({ ...request, now: Date.now() });
             if (result.ok) { await adapter.watch(await this.store.recover(), this.store.observe.bind(this.store)); return 'FILLED'; }
-            await adapter.decision?.(c, result.code);
+            await adapter.decision?.(screened, result.code);
             return result.code;
         });
     }

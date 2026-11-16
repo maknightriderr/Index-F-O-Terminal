@@ -118,7 +118,7 @@ import { orderBlockSignalAt } from '@fno/analytics';
 import { directionWithOrderBlockVote, recordOrderBlockShadow } from './order-block-shadow.js';
 import { recordOf1Shadow } from './of1-live.js';
 import { orderFlowPaperCandidates, orderFlowSourcesOn } from './order-flow-candidates.js';
-import { familyLearning, learnedRefusal } from './of1-trend-learning.js';
+import { familyLearning, learnedRefusal, legacyLessonRefusal, legacyLessons } from './of1-trend-learning.js';
 import { delSlotIfSame, setSlotIfSame, slotIdentity } from '../lib/slot-cas.js';
 import { queuePendingOutcome } from './pending-outcomes.js';
 import { recordTradeCosts } from './trade-costs.js';
@@ -3627,7 +3627,8 @@ async function resolveStickyTradeSetup(
     // Best first: a candidate that fails this is recorded and the next-best is tried.
     // Learning (owner, 12-13 Nov): a strategy that has lost on average over 10 closed counter-trend trades no longer
     // trades against the regime; the next-best candidate is tried instead.
-    preMint: async (entry) => learnedRefusal(entry.slot.source, entry.slot.direction, regime, familyLearning()) ?? preMintCheck(entry.setup, entry.chain ?? chain, decisionNow()),
+    // 16 Nov: plus late session / expiry day / after a losing streak (the shared lesson rules).
+    preMint: async (entry) => learnedRefusal(entry.slot.source, entry.slot.direction, regime, familyLearning()) ?? legacyLessonRefusal(entry.slot.source, entry.slot.direction, decisionNow(), exchange, (entry.chain ?? chain)?.expiry ?? null, legacyLessons()) ?? preMintCheck(entry.setup, entry.chain ?? chain, decisionNow()),
     // The traded setup's watch ends here (TRADED) — under the same id it was watched with.
     onSelected: async (slot) => {
       await endWatchRow(setupWatchKey(exchange, underlying, mode, today), { exchange, underlying }, slot.candidateId, 'FILLED', decisionNow());

@@ -27,6 +27,9 @@ import {
   type ReviewDecision,
 } from '../services/learning-engine.js';
 import { runSystemAudit, AUDIT_SCOPE } from '../services/system-learning-audit.js';
+import { freshLessonsSnapshot } from '../services/fresh-start/learning.js';
+import { legacyLessonsSnapshot } from '../services/of1-trend-learning.js';
+import { LESSON_RULES, LESSONS_VERSION } from '@fno/analytics';
 import {
   CATEGORY_GROUPS,
   categoryGroup,
@@ -53,6 +56,12 @@ export function createLearningRoutes(): Router {
    * The daily headline, plus the two questions the report exists to answer:
    * why did the system fail, and are we learning.
    */
+  /** 16 Nov: what each strategy has learned from its own closed paper trades (both engines). Read-only, in-memory. */
+  router.get('/lessons', (_req: Request, res: Response) => {
+    const fresh = freshLessonsSnapshot(), legacy = legacyLessonsSnapshot();
+    res.json({ success: true, data: { version: LESSONS_VERSION, rules: LESSON_RULES, newEngine: fresh ? { at: fresh.learned.at, blocks: fresh.blocks, byStrategy: fresh.learned.byStrategy } : null, legacyEngine: legacy ? { at: legacy.at, byStrategy: legacy.learned.byStrategy } : null }, meta: { readOnly: true, timestamp: Date.now() } });
+  });
+
   router.get('/summary', async (req: Request, res: Response) => {
     try {
       const date = typeof req.query.date === 'string' ? req.query.date : istToday();
