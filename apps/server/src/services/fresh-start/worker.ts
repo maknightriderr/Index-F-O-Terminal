@@ -31,6 +31,7 @@ import {buildOptionChain} from '../option-chain.js';
 import {HumanTaRunner} from '../human-ta/runner.js';
 import {PremiumPressureRunner} from '../premium-pressure/runner.js';
 import {FreshLearning} from './learning.js';
+import {familyLearning,legacyLessons} from '../of1-trend-learning.js';
 import type {FreshOiSample} from '@fno/analytics';
 import {FreshOperationalReporter} from './operational-evidence.js';
 import {registerFreshResearchProtocol,freshResearchReadiness} from './research-inventory.js';
@@ -154,7 +155,10 @@ export class FreshPaperWorker {
     // Dhan engine v2 phase 4: DHAN_* setup signals are priced and entered through this worker's adapter and store.
     if(DHAN_ENGINE_PAPER)setDhanPaperHandler(r=>this.dhanPaper(r),symbol=>!this.refs.size||[...this.refs.values()].some(x=>x.name===symbol));
     // Registered synchronously so the service supervisor owns every timer, including during recovery.
-    this.timers=[setInterval(()=>{if(this.ready)this.pollMonitor();},250),setInterval(()=>void this.scan(),1000)];
+    // Lessons are read at start and kept fresh (each read is rate-limited inside: 2 / 5 / 15 minutes), so the day's first
+    // candidate is already screened (the read is otherwise lazy, on the first candidate).
+    const readLessons=()=>{void this.learning.refresh();legacyLessons();familyLearning();};readLessons();
+    this.timers=[setInterval(()=>{if(this.ready)this.pollMonitor();},250),setInterval(()=>{readLessons();void this.scan();},1000)];
     return this.bootstrap();
   }
   private async bootstrap(){
