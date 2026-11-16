@@ -190,6 +190,11 @@ class ApiClient {
     return this.requestEnvelope<MarketScanResult>('/api/market-scanner/refresh', { method: 'POST', body: {}, headers: { 'X-Explicit-Action': 'run-market-scan' } });
   }
 
+  /** Latest expiry premium-pressure reads (GXP), read-only and simulated. */
+  async getPremiumPressure<T>() {
+    return this.get<T>('/api/premium-pressure');
+  }
+
   async getFreshStartStatus() {
     return this.get<import('@fno/shared').FreshStartStatus>('/api/fresh-start/status');
   }

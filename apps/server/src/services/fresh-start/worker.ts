@@ -29,6 +29,7 @@ import {freshAdapterState as state} from './adapter-state.js';
 import {observedFreshOi,freshParseScan,freshStockIntel,freshStocksInPlay,freshInPlayDirection,freshIndexIntel,FRESH_INDEX_HEAVYWEIGHTS,FRESH_SCAN_KEY,type FreshScan,type FreshFuturesSample} from './intel.js';
 import {buildOptionChain} from '../option-chain.js';
 import {HumanTaRunner} from '../human-ta/runner.js';
+import {PremiumPressureRunner} from '../premium-pressure/runner.js';
 import type {FreshOiSample} from '@fno/analytics';
 import {FreshOperationalReporter} from './operational-evidence.js';
 import {registerFreshResearchProtocol,freshResearchReadiness} from './research-inventory.js';
@@ -169,6 +170,7 @@ export class FreshPaperWorker {
   private pollMonitor(){this.monitor.tick();const held=this.monitor.summary();state.heldPositions=held.open;state.oldestExitPendingAt=held.oldestExitPendingAt;state.marks=this.monitor.marks();if(!this.monitor.healthy){state.entriesArmed=false;if(!state.entryBlockers.includes('BLOCKED_EXIT_PERSISTENCE'))state.entryBlockers.push('BLOCKED_EXIT_PERSISTENCE');}}
   /** Stocks given priority by a DHAN_* signal (reference id -> until). */
   private dhanPriority=new Map<string,number>();
+  private readonly premiumPressure=new PremiumPressureRunner({enter:(c)=>this.runtime.onExternalCandidate(c)});
   private readonly humanTa=new HumanTaRunner({chain:(name,exchange)=>buildOptionChain(this.provider,name,exchange as Exchange),enter:(c)=>this.runtime.onExternalCandidate(c)});
   /** Each prioritised stock replaces the last selected stock that is neither in play nor itself prioritised. */
   private withDhanPriority(selected:FreshReference[],now:number):FreshReference[]{
@@ -299,6 +301,9 @@ export class FreshPaperWorker {
           if(strikes.length)this.oiChains.set(r.id,[...(this.oiChains.get(r.id)??[]).filter(x=>at-x.at<=FRESH_INDEX_SAMPLE_KEEP_MS),{at,expiry:chain.expiry,strikes}]);
           // Dhan engine v2 expiry-gamma module (shadow): its own day-long chain samples; never throws, never trades.
           if(strikes.length&&DHAN_ENGINE_SHADOW)void recordGammaChain(r.name,chain,at,Date.now(),null,this.histories.get(r.id));
+          // Expiry premium pressure (GXP, 16 Nov): the same chain, no extra provider call; never throws, paper only.
+          if(strikes.length){const now=Date.now(),day=freshIstDay(now),session=getSessionWindow(freshReferenceExchange(r),day),px=this.feed.underlying(r.id);
+            if(session&&now>=session.open&&now<session.close)void this.premiumPressure.onChain({id:r.id,name:r.name,market:r.market,exchange:freshReferenceExchange(r)},chain,{now,session:day,sessionOpen:session.open,sessionClose:session.close,sourceEpoch:this.feed.sourceEpoch,price:px?.price??null,priceAt:px?.at??null,bars5:this.histories.get(r.id)?.five??[]});}
         }catch(err){/* this index's OI stays as it was; the strategy refuses IDX_OI_UNAVAILABLE once it is stale */
           noteChainRefresh(r.name,err instanceof Error?err.message:String(err));
           logger.info({event:'freshChainRefreshFailed',index:r.name,error:err instanceof Error?err.message:String(err)},'Fresh-start: option chain refresh failed for an index (OI stays as it was)');}
