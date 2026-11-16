@@ -3,7 +3,7 @@ import React from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, within } from '@testing-library/react';
 
-const api = vi.hoisted(() => ({ getFreshStartStatus: vi.fn(), getHealth: vi.fn(), getIndexQuotes: vi.fn(), getOptionChain: vi.fn() }));
+const api = vi.hoisted(() => ({ getFreshStartStatus: vi.fn(), getHealth: vi.fn(), getIndexQuotes: vi.fn(), getOptionChain: vi.fn(), getPremiumPressure: vi.fn() }));
 vi.mock('@/lib/api', () => ({ api }));
 
 import { CommandCenter } from '../index';
@@ -32,6 +32,7 @@ beforeEach(() => {
   api.getHealth.mockResolvedValue({ status: 'HEALTHY', services: { redis: { status: 'HEALTHY', latencyMs: 3 }, database: { status: 'HEALTHY', latencyMs: 4 } }, ops: { incidents: [] }, calendarHorizons: [{ id: 'FEE_SCHEDULE', until: '2027-01-01' }] });
   api.getIndexQuotes.mockResolvedValue([]);
   api.getOptionChain.mockRejectedValue(new Error('offline'));
+  api.getPremiumPressure.mockRejectedValue(new Error('offline'));
 });
 afterEach(cleanup);
 

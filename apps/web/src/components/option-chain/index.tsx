@@ -15,6 +15,7 @@ import { useFreshStart } from '@/lib/use-fresh-start';
 import { useNow } from '@/lib/use-health';
 import { inr, pickContract } from '@/lib/command-center';
 import { Empty, Kpi, Panel, Pill } from '@/components/command-center/panel';
+import { PremiumPressurePanel } from './premium-pressure';
 
 const UNDERLYINGS: Array<{ symbol: string; exchange: string }> = [
   { symbol: 'NIFTY', exchange: 'NSE' },
@@ -81,6 +82,8 @@ export function OptionChainPage() {
         <Kpi label="Expected move" value={chain ? `±${chain.expectedMove.points.toFixed(0)}` : '—'} sub={chain ? `${chain.expectedMove.lowerBound.toFixed(0)} – ${chain.expectedMove.upperBound.toFixed(0)}` : undefined} />
         <Kpi label="Chain age" value={ageS != null ? `${ageS.toFixed(1)} s` : '—'} sub="Server snapshot" valueClass={ageS != null && ageS > 15 ? 'cc-down' : ''} />
       </section>
+
+      <PremiumPressurePanel symbol={u.symbol} />
 
       <div className="cc-main">
         <div className="cc-col-wide">

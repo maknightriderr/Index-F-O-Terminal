@@ -44,6 +44,7 @@ import { createStructureRoutes } from './api/structure.js';
 import { startFreshPaperRecovery } from './services/fresh-start/runtime.js';
 import { legacyEntriesAllowed } from './config/legacy-entry-policy.js';
 import { createFreshStartRoutes } from './api/fresh-start.js';
+import { createPremiumPressureRoutes } from './api/premium-pressure.js';
 import { createPaperTradesRoutes } from './api/paper-trades.js';
 import { orderFlowFeedStatus } from './services/dhan-feed.js';
 import { checkpointOpenFlowBars } from './services/order-flow-store.js';
@@ -160,6 +161,7 @@ app.use('/api/structure', createStructureRoutes());
 app.use('/api/diagnostics', createDiagnosticsRoutes());
 app.use('/api/paper-trades', createPaperTradesRoutes());
 app.use('/api/fresh-start', createFreshStartRoutes());
+app.use('/api/premium-pressure', createPremiumPressureRoutes());
 
 // --- Health Check ---
 
