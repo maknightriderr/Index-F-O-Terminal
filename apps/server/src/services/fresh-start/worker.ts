@@ -30,6 +30,7 @@ import {observedFreshOi,freshParseScan,freshStockIntel,freshStocksInPlay,freshIn
 import {buildOptionChain} from '../option-chain.js';
 import {HumanTaRunner} from '../human-ta/runner.js';
 import {PremiumPressureRunner} from '../premium-pressure/runner.js';
+import {FreshLearning} from './learning.js';
 import type {FreshOiSample} from '@fno/analytics';
 import {FreshOperationalReporter} from './operational-evidence.js';
 import {registerFreshResearchProtocol,freshResearchReadiness} from './research-inventory.js';
@@ -143,7 +144,9 @@ export class FreshPaperWorker {
   constructor(private provider:MarketDataProvider,private subscriptions:SubscriptionManager){
     this.feed=new FreshSharedFeed(subscriptions,Date.now,this.feedClientId);this.monitor=new FreshPositionMonitor(this.feed,this.store);
     const adapter=new FreshProductionAdapter(this.feed,this.events,this.store,{references:()=>this.refs,master:()=>this.master,capital:FRESH_CONFIG.capital??0,legacyRisk:()=>this.legacyRisk(),audit:auditFreshEvaluation,refusal:auditFreshAdapter,ivRank:(name,expiry,ivPct)=>ivRankFor(name,expiry,ivPct),watch:async rows=>{this.positions=rows;this.monitor.watch(rows);await this.syncTargets();}});
-    this.runtime=new FreshRuntime(this.store,adapter,()=>FRESH_CONFIG.activationApproved&&state.entriesArmed);
+    // Learning (owner, 16 Nov): every strategy's own closed trades; the reference's 5-minute bars give trend / quiet.
+    this.learning=new FreshLearning({bars:(id)=>this.histories.get(id)?.five,exchange:(id)=>{const r=this.refs.get(id);return r?freshReferenceExchange(r):null;}});
+    this.runtime=new FreshRuntime(this.store,adapter,()=>FRESH_CONFIG.activationApproved&&state.entriesArmed,this.learning);
   }
   start(){
     state.entriesArmed=false;state.recovered=false;state.monitorRunning=false;state.scannerRunning=false;state.status='RECOVERING_POSITIONS';state.entryBlockers=['BLOCKED_POSITION_RECOVERY'];
@@ -170,6 +173,7 @@ export class FreshPaperWorker {
   private pollMonitor(){this.monitor.tick();const held=this.monitor.summary();state.heldPositions=held.open;state.oldestExitPendingAt=held.oldestExitPendingAt;state.marks=this.monitor.marks();if(!this.monitor.healthy){state.entriesArmed=false;if(!state.entryBlockers.includes('BLOCKED_EXIT_PERSISTENCE'))state.entryBlockers.push('BLOCKED_EXIT_PERSISTENCE');}}
   /** Stocks given priority by a DHAN_* signal (reference id -> until). */
   private dhanPriority=new Map<string,number>();
+  private learning!:FreshLearning;
   private readonly premiumPressure=new PremiumPressureRunner({enter:(c)=>this.runtime.onExternalCandidate(c)});
   private readonly humanTa=new HumanTaRunner({chain:(name,exchange)=>buildOptionChain(this.provider,name,exchange as Exchange),enter:(c)=>this.runtime.onExternalCandidate(c)});
   /** Each prioritised stock replaces the last selected stock that is neither in play nor itself prioritised. */

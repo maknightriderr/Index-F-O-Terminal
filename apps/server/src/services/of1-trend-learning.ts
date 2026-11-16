@@ -12,7 +12,8 @@
 // judged on its own closed trades only; applied at the slot's final check, so a refused candidate yields to the next.
 // ============================================================
 
-import type { BiasDirection, MarketRegime } from '@fno/shared';
+import { getSessionWindow, type BiasDirection, type Exchange, type MarketRegime } from '@fno/shared';
+import { learnLessons, learnedBlocks, lessonLossStreak, lessonRefusal, type LearnedLessons, type LessonOutcome } from '@fno/analytics';
 import { logger } from '../lib/logger.js';
 import { listPaperTrades } from './paper-trades.js';
 import { getTradeSetupHistory } from './backtesting.js';
@@ -127,5 +128,65 @@ export async function loadFamilyOutcomes(): Promise<Of1Outcome[]> {
   return view.trades.filter((t) => t.netR != null).map((t) => ({ family: t.family, direction: t.direction, regime: regime.get(t.id) ?? null, netR: t.netR, logicVersion: t.logicVersion ?? null, state: t.state ?? null }));
 }
 
+// ============================================================
+// More lessons (owner, 16 Nov): late session, expiry day, after a losing streak — the shared lesson rules
+// (packages/analytics/src/learning/lessons.ts), on the same closed legacy trades since the re-enable mark. Counter-trend
+// and quiet-market stay the rules above (regime-based); these three add what those cannot see.
+// ============================================================
+export const LEGACY_LESSONS_REFRESH_MS = 5 * 60_000;
+export interface LegacyClosed { family: string; direction: string | null; session: string; mintedAt: number; closedAt: number | null; netR: number | null; exchange: string | null; expiry: string | null; logicVersion: string | null }
+const IST_MS = 19_800_000;
+const istDay = (t: number) => new Date(t + IST_MS).toISOString().slice(0, 10);
+const asExchange = (x: string | null): Exchange | null => (x === 'NSE' || x === 'BSE' || x === 'MCX' ? x : null);
+export function legacyMinutesToClose(exchange: string | null, at: number): number | null {
+  const ex = asExchange(exchange); if (!ex) return null;
+  const s = getSessionWindow(ex, istDay(at));
+  return s && at <= s.close ? Math.round((s.close - at) / 60_000) : null;
+}
+const isExpiryDay = (expiry: string | null, at: number) => (expiry ? String(expiry).slice(0, 10) === istDay(at) : null);
+
+/** Closed legacy trades -> lesson outcomes (only trades since the re-enable mark). Pure. */
+export function legacyLessonOutcomes(rows: readonly LegacyClosed[]): LessonOutcome[] {
+  const counted = rows.filter((r) => (r.logicVersion ?? '').includes(OF1_LEARNING_VERSION_MARK));
+  const history = counted.map((r) => ({ strategy: r.family, direction: r.direction, session: r.session, closedAt: r.closedAt, netR: r.netR }));
+  return counted.filter((r) => r.netR != null && Number.isFinite(r.netR) && r.direction != null).map((r) => ({
+    strategy: r.family, at: r.mintedAt, netR: r.netR!,
+    features: { trend: null, quiet: null, minutesToClose: legacyMinutesToClose(r.exchange, r.mintedAt), expiryDay: isExpiryDay(r.expiry, r.mintedAt), priorLossStreak: lessonLossStreak(history, r.family, r.direction!, r.session, r.mintedAt) },
+  }));
+}
+
+export async function loadLegacyClosed(): Promise<LegacyClosed[]> {
+  const view = await listPaperTrades(2000);
+  return view.trades.filter((t) => t.netR != null && t.family).map((t) => ({ family: t.family!, direction: t.direction ?? null, session: istDay(t.mintedAt), mintedAt: t.mintedAt, closedAt: t.exitAt ?? null, netR: t.netR, exchange: t.exchange ?? null, expiry: t.expiry ?? null, logicVersion: t.logicVersion ?? null }));
+}
+
+let lessons: { learned: LearnedLessons; closed: LegacyClosed[]; at: number } | null = null;
+let refreshingLessons: Promise<void> | null = null;
+/** The newest legacy lessons (null until the first read); refreshed in the background. */
+export function legacyLessons(load: () => Promise<LegacyClosed[]> = loadLegacyClosed, now = Date.now()): { learned: LearnedLessons; closed: LegacyClosed[] } | null {
+  if ((!lessons || now - lessons.at >= LEGACY_LESSONS_REFRESH_MS) && !refreshingLessons) {
+    refreshingLessons = load()
+      .then((rows) => {
+        const before = new Set(learnedBlocks(lessons?.learned ?? null));
+        const learned = learnLessons(legacyLessonOutcomes(rows), now), blocks = learnedBlocks(learned);
+        lessons = { learned, closed: rows, at: now };
+        const changed = blocks.filter((b) => !before.has(b)).concat([...before].filter((b) => !blocks.includes(b)));
+        logger.info({ event: 'strategyLessons', blocks, changed, closed: rows.length }, 'Strategy lessons: late session / expiry day / losing streak per legacy strategy');
+      })
+      .catch((err: any) => logger.warn({ event: 'strategyLessons', error: err?.message }, 'Strategy lessons: outcomes unavailable (the last state stays)'))
+      .finally(() => { refreshingLessons = null; });
+  }
+  return lessons;
+}
+export const legacyLessonsSnapshot = () => lessons;
+
+/** The late-session / expiry-day / losing-streak lesson this legacy entry would repeat, or null. */
+export function legacyLessonRefusal(source: string, direction: string, at: number, exchange: string | null, expiry: string | null, state: { learned: LearnedLessons; closed: readonly LegacyClosed[] } | null): { code: string; reason: string } | null {
+  if (!state) return null;
+  const history = state.closed.filter((r) => (r.logicVersion ?? '').includes(OF1_LEARNING_VERSION_MARK)).map((r) => ({ strategy: r.family, direction: r.direction, session: r.session, closedAt: r.closedAt, netR: r.netR }));
+  const r = lessonRefusal(source, { trend: null, quiet: null, minutesToClose: legacyMinutesToClose(exchange, at), expiryDay: isExpiryDay(expiry, at), priorLossStreak: lessonLossStreak(history, source, direction, istDay(at), at) }, state.learned, ['LATE_SESSION', 'EXPIRY_DAY', 'AFTER_LOSING_STREAK']);
+  return r ? { code: r.code, reason: r.reason } : null;
+}
+
 /** Tests only. */
-export function resetOf1Learning(s: Of1Learning | null = null): void { state = s; refreshing = null; all = null; refreshingAll = null; }
+export function resetOf1Learning(s: Of1Learning | null = null): void { state = s; refreshing = null; all = null; refreshingAll = null; lessons = null; refreshingLessons = null; }
