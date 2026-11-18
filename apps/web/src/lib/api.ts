@@ -190,6 +190,17 @@ class ApiClient {
     return this.requestEnvelope<MarketScanResult>('/api/market-scanner/refresh', { method: 'POST', body: {}, headers: { 'X-Explicit-Action': 'run-market-scan' } });
   }
 
+  /** Read-only API key (18 Nov): status, create (shown once), revoke. Owner session only. */
+  async getReadonlyKeyStatus() {
+    return this.get<{ active: boolean; createdAt: number | null; lastUsedAt: number | null }>('/api/session/readonly-key');
+  }
+  async createReadonlyKey() {
+    return this.post<{ key: string; createdAt: number }>('/api/session/readonly-key', {});
+  }
+  async revokeReadonlyKey() {
+    return this.post<{ revoked: number }>('/api/session/readonly-key/revoke', {});
+  }
+
   /** Latest expiry premium-pressure reads (GXP), read-only and simulated. */
   async getPremiumPressure<T>() {
     return this.get<T>('/api/premium-pressure');

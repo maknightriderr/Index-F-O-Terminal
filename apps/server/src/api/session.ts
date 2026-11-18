@@ -11,6 +11,7 @@ import { Router, type Request, type Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { authMode, issueSession, passwordMatches, type ApiAuthConfig } from '../lib/api-auth.js';
 import { logger } from '../lib/logger.js';
+import { createReadonlyKey, readonlyKeyStatus, revokeReadonlyKeys } from '../lib/readonly-key.js';
 
 /** Ten wrong passwords per 15 minutes per address; a correct one does not count. */
 const signInLimiter = rateLimit({
@@ -47,6 +48,35 @@ export function createSessionRoutes(cfg: ApiAuthConfig): Router {
     }
     const session = issueSession(cfg);
     res.json({ success: true, data: { mode, token: session.token, expiresAt: session.expiresAt } });
+  });
+
+  // ---- Read-only API key (18 Nov). The gate already demands a session here; a read-only key never reaches these. ----
+  const ownerOnly = (res: Response) => {
+    if (res.locals.authenticated === true && res.locals.readOnly !== true) return true;
+    res.status(401).json({ success: false, error: { code: 'AUTH_REQUIRED', message: 'Sign in to manage the read-only key.' } });
+    return false;
+  };
+  router.get('/readonly-key', async (_req: Request, res: Response) => {
+    if (!ownerOnly(res)) return;
+    try { res.json({ success: true, data: await readonlyKeyStatus() }); }
+    catch (e: any) { logger.error({ error: e.message }, 'Read-only key status failed'); res.status(503).json({ success: false, error: { code: 'READONLY_KEY_UNAVAILABLE', message: 'The read-only key store is unavailable.' } }); }
+  });
+  /** Creates a new key (revoking the old one) and returns it once. */
+  router.post('/readonly-key', async (req: Request, res: Response) => {
+    if (!ownerOnly(res)) return;
+    try {
+      const created = await createReadonlyKey();
+      logger.info({ event: 'readonlyKeyCreated', ip: req.ip }, 'Read-only API key created (previous one revoked)');
+      res.json({ success: true, data: created });
+    } catch (e: any) { logger.error({ error: e.message }, 'Read-only key create failed'); res.status(503).json({ success: false, error: { code: 'READONLY_KEY_UNAVAILABLE', message: 'The key could not be created.' } }); }
+  });
+  router.post('/readonly-key/revoke', async (req: Request, res: Response) => {
+    if (!ownerOnly(res)) return;
+    try {
+      const revoked = await revokeReadonlyKeys();
+      logger.info({ event: 'readonlyKeyRevoked', revoked, ip: req.ip }, 'Read-only API key revoked');
+      res.json({ success: true, data: { revoked } });
+    } catch (e: any) { logger.error({ error: e.message }, 'Read-only key revoke failed'); res.status(503).json({ success: false, error: { code: 'READONLY_KEY_UNAVAILABLE', message: 'The key could not be revoked.' } }); }
   });
 
   return router;
