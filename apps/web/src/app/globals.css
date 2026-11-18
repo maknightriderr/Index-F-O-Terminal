@@ -1597,3 +1597,16 @@ html, body {
 @media (max-width: 1279px) { .terminal-rail-badge { position: absolute; top: 6px; right: 8px; } }
 @media (min-width: 1280px) { .terminal-rail-link { display: flex; justify-content: space-between; gap: 8px; } .terminal-rail-link small { font: 11px var(--font-mono); } }
 .td-desk-link { border: 1px solid var(--border-secondary); border-radius: 10px; text-align: left; padding: 10px 14px; }
+
+/* ---- Paper workspace (redesign phase 3) ---- */
+.pp-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.pp-kpis > div { padding: 12px 14px; border-right: 1px solid var(--border-primary); border-bottom: 1px solid var(--border-primary); min-width: 0; }
+.pp-strat { font: 600 13px var(--font-mono); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-toolbar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border-primary); }
+.pp-chips { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.pp-table td { vertical-align: top; }
+.pp-expand td { background: var(--surface-card-alt); padding: 10px 14px; }
+.pp-detail { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 16px; margin: 0; }
+.pp-detail dt { font: 500 10px var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); }
+.pp-detail dd { margin: 2px 0 0; font-size: 12.5px; }
+@media (max-width: 640px) { .pp-kpis { grid-template-columns: 1fr 1fr; } .pp-toolbar { padding: 8px 10px; } }
