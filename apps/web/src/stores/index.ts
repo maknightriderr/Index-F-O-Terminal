@@ -44,7 +44,7 @@ export const useMarketStore = create<MarketDataState>()(
       selectedSymbol: null,
       selectedExchange: 'NSE',
       selectedExpiry: null,
-      activeTab: 'workspace',
+      activeTab: 'dashboard',
 
       updateQuote: (token, quote) =>
         set((state) => ({ quotes: { ...state.quotes, [token]: quote } })),

@@ -201,6 +201,11 @@ class ApiClient {
     return this.post<{ revoked: number }>('/api/session/readonly-key/revoke', {});
   }
 
+  /** What each strategy has learned from its own closed paper trades (both engines). Read-only. */
+  async getLessons<T>() {
+    return this.get<T>('/api/learning/lessons');
+  }
+
   /** Latest expiry premium-pressure reads (GXP), read-only and simulated. */
   async getPremiumPressure<T>() {
     return this.get<T>('/api/premium-pressure');

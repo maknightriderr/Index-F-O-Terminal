@@ -4,6 +4,7 @@ import React, { useEffect } from 'react';
 import { AppShell } from '@/components/layout/app-shell';
 import { Dashboard } from '@/components/dashboard';
 import { CommandCenter } from '@/components/command-center';
+import { TodayPage } from '@/components/today';
 import { WorkspacePage } from '@/components/workspace';
 import { OptionChainPage } from '@/components/option-chain';
 import { StrategyLabPage } from '@/components/strategy-lab';
@@ -50,7 +51,7 @@ export function TerminalApp() {
       case 'workspace':
         return <WorkspacePage />;
       case 'dashboard':
-        return <CommandCenter />;
+        return <TodayPage />;
       case 'market-overview':
         return <Dashboard />;
       case 'option-chain':
