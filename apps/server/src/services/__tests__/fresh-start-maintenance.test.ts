@@ -51,3 +51,29 @@ describe('fresh-start nightly maintenance', () => {
     expect(FRESH_TRIM_BATCH).toBeGreaterThan(0);
   });
 });
+
+describe('weekly cleanup (owner, 18 Nov)', () => {
+  it('runs on IST Mondays only', async () => {
+    const { isIstMonday } = await import('../fresh-start/maintenance.js');
+    expect(isIstMonday(Date.parse('2026-11-22T20:30:00Z'))).toBe(true); // Mon 23 Nov 02:00 IST
+    expect(isIstMonday(Date.parse('2026-11-23T00:29:00Z'))).toBe(true); // Mon 05:59 IST
+    expect(isIstMonday(Date.parse('2026-11-23T20:30:00Z'))).toBe(false); // Tue 02:00 IST
+    expect(isIstMonday(Date.parse('2026-11-22T18:00:00Z'))).toBe(false); // Sun 23:30 IST
+  });
+  it('deletes gate diagnostics past the retention only, vacuums, logs before / after, and survives a missing table', async () => {
+    const { weeklyCleanup, GATE_DIAGNOSTICS_RETENTION_DAYS, WEEKLY_VACUUM_TABLES } = await import('../fresh-start/maintenance.js');
+    await pg.exec('CREATE TABLE IF NOT EXISTS gate_diagnostics (id serial PRIMARY KEY, gate text, evaluated_at timestamptz NOT NULL)');
+    const day = 86_400_000, t = Date.parse('2026-11-23T21:00:00Z');
+    for (const age of [GATE_DIAGNOSTICS_RETENTION_DAYS + 10, GATE_DIAGNOSTICS_RETENTION_DAYS + 1, GATE_DIAGNOSTICS_RETENTION_DAYS - 1, 1]) await pg.query('INSERT INTO gate_diagnostics (gate, evaluated_at) VALUES ($1, $2)', ['G', new Date(t - age * day).toISOString()]);
+    const withUnsafe = Object.assign(db, { unsafe: (q: string) => pg.exec(q) });
+    const out = await weeklyCleanup(withUnsafe, t);
+    expect(out.gateDiagnosticsDeleted).toBe(2);
+    expect((await pg.query('SELECT count(*)::int AS n FROM gate_diagnostics')).rows[0]).toEqual({ n: 2 });
+    expect(out.vacuumed).toEqual(expect.arrayContaining(['fresh_evaluations', 'gate_diagnostics']));
+    // Tables this test database does not have fail on their own; the rest still ran.
+    expect((out.vacuumFailed as string[]).length).toBe(WEEKLY_VACUUM_TABLES.length - (out.vacuumed as string[]).length);
+    expect(out.largestTablesBefore).not.toBeNull();
+    expect(out).toHaveProperty('after');
+    expect(out.largestTablesAfter).not.toBeNull();
+  });
+});

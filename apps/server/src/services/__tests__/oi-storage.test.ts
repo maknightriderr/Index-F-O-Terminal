@@ -30,13 +30,13 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../.
 const read = (f: string) => readFileSync(path.join(ROOT, f), 'utf8');
 
 describe('retention setting and cutoff', () => {
-  it('OI_RETENTION_DAYS: default 60, 0 = keep raw forever, junk = default', () => {
-    expect(A.parseRetentionDays(undefined)).toBe(60);
-    expect(A.parseRetentionDays('')).toBe(60);
+  it('OI_RETENTION_DAYS: default 30, 0 = keep raw forever, junk = default', () => {
+    expect(A.parseRetentionDays(undefined)).toBe(30);
+    expect(A.parseRetentionDays('')).toBe(30);
     expect(A.parseRetentionDays('90')).toBe(90);
     expect(A.parseRetentionDays('0')).toBe(0);
-    expect(A.parseRetentionDays('-3')).toBe(60);
-    expect(A.parseRetentionDays('ninety')).toBe(60);
+    expect(A.parseRetentionDays('-3')).toBe(30);
+    expect(A.parseRetentionDays('ninety')).toBe(30);
   });
   it('the cutoff is an IST midnight N days back; 0 days turns archiving off', () => {
     const now = Date.parse('2026-12-20T05:00:00Z'); // 10:30 IST, 20 Dec

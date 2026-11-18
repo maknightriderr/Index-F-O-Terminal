@@ -13,7 +13,8 @@ import { logger } from '../../lib/logger.js';
 import { redis } from '../../lib/redis.js';
 import { schemaFileReady } from '../ensure-capture-schema.js';
 
-export const FRESH_EVALUATION_INPUT_RETENTION_DAYS = 10;
+/** 18 Nov (owner: Postgres volume high again): 10 -> 5 days. The evaluation results stay; only the stored inputs go. */
+export const FRESH_EVALUATION_INPUT_RETENTION_DAYS = 5;
 /** Rows per UPDATE, and the most batches in one night (a bounded, interruptible job). */
 export const FRESH_TRIM_BATCH = 2000;
 export const FRESH_TRIM_MAX_BATCHES = 100;
@@ -81,6 +82,46 @@ export async function freshStorageFigures(db: Sql): Promise<Record<string, numbe
   return { databaseMb: mb(r.db), evaluationsMb: mb(r.evaluations), adapterDecisionsMb: mb(r.adapter), candidatesMb: mb(r.candidates), flowEventsMb: mb(r.flow_events), flowBarsMb: mb(r.flow_bars) };
 }
 
+// ============================================================
+// WEEKLY CLEANUP (owner, 18 Nov): every Monday in the night window, after the nightly trim
+// ============================================================
+// Deletes only what nothing current reads, logs the largest tables before and after, then VACUUM ANALYZE so the freed
+// space is reused (the volume stops growing). Never VACUUM FULL: it needs free space the size of the table and could
+// fill the volume. Kept: trades, decisions, decision snapshots (the learning audits read 90 days), footprints.
+//   gate_diagnostics      per-gate rows older than GATE_DIAGNOSTICS_RETENTION_DAYS (loss attribution reads recent windows)
+//   oi_snapshots          archived losslessly to oi_snapshots_archive after OI_RETENTION_DAYS (oi-archive.ts, every 6 h)
+// ============================================================
+export const GATE_DIAGNOSTICS_RETENTION_DAYS = 45;
+export const WEEKLY_VACUUM_TABLES: readonly string[] = ['oi_snapshots', 'fresh_evaluations', 'gate_diagnostics', 'decision_snapshots', 'order_flow_events'];
+
+/** Pure: true when the IST date of `now` is a Monday. */
+export function isIstMonday(now: number): boolean { return new Date(now + 5.5 * 3600_000).getUTCDay() === 1; }
+
+export async function trimGateDiagnostics(db: Sql, now: number, days = GATE_DIAGNOSTICS_RETENTION_DAYS): Promise<number> {
+  const cutoff = new Date(now - days * 86_400_000);
+  let total = 0;
+  for (let i = 0; i < FRESH_TRIM_MAX_BATCHES; i++) {
+    const rows = await db<{ evaluated_at: Date }[]>`DELETE FROM gate_diagnostics WHERE ctid IN (SELECT ctid FROM gate_diagnostics WHERE evaluated_at < ${cutoff} LIMIT ${FLOW_EVENT_DELETE_BATCH}) RETURNING evaluated_at`;
+    total += rows.length;
+    if (rows.length < FLOW_EVENT_DELETE_BATCH) break;
+  }
+  return total;
+}
+
+/** The Monday cleanup. Each step is independent: one failing does not stop the rest. Returns what it did. */
+export async function weeklyCleanup(db: Sql, now: number): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = { largestTablesBefore: await largestTables(db).catch(() => null), before: await freshStorageFigures(db).catch(() => null) };
+  out.gateDiagnosticsDeleted = await trimGateDiagnostics(db, now).catch((e: any) => `failed: ${e?.message}`);
+  const vacuumed: string[] = [], vacuumFailed: string[] = [];
+  for (const t of WEEKLY_VACUUM_TABLES) {
+    try { await db.unsafe(`VACUUM (ANALYZE) ${t}`); vacuumed.push(t); } catch (e: any) { vacuumFailed.push(`${t}: ${e?.message}`); }
+  }
+  out.vacuumed = vacuumed; out.vacuumFailed = vacuumFailed;
+  out.largestTablesAfter = await largestTables(db).catch(() => null);
+  out.after = await freshStorageFigures(db).catch(() => null);
+  return out;
+}
+
 let started = false;
 export function startFreshMaintenance(): void {
   if (started) return;
@@ -95,6 +136,10 @@ export function startFreshMaintenance(): void {
       // Dhan engine v2: recorded flow events past their retention (the footprints themselves are kept).
       const flowEventsDeleted = schemaFileReady(FLOW_EVENTS_MIGRATION) ? await trimFlowEvents(sql, t0) : null;
       logger.info({ event: 'freshMaintenance', largestTables: await largestTables(sql).catch(() => null), trimmed, retentionDays: FRESH_EVALUATION_INPUT_RETENTION_DAYS, flowEventsDeleted, flowEventRetentionDays: flowEventRetentionDays(), ms: Date.now() - t0, before, after: await freshStorageFigures(sql) }, 'Fresh-start nightly maintenance: old evaluation inputs trimmed, old order-flow events deleted (results, trades, decisions and footprints kept)');
+      if (isIstMonday(t0)) {
+        const w0 = Date.now(), weekly = await weeklyCleanup(sql, w0);
+        logger.info({ event: 'weeklyCleanup', ...weekly, gateDiagnosticsRetentionDays: GATE_DIAGNOSTICS_RETENTION_DAYS, ms: Date.now() - w0 }, 'Weekly cleanup (Monday): old gate diagnostics deleted, large tables vacuumed (trades, decisions and footprints kept)');
+      }
       await redis.set(CLAIM_KEY(date), 'done', 'EX', 2 * 86_400);
     } catch (err) {
       await redis.del(CLAIM_KEY(date)).catch(() => undefined);
