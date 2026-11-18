@@ -4,8 +4,15 @@ import { buildUrlSearch, parseUrlState, sameUrlState } from '../url-state';
 import { migrateUiSettings, resolveStoredTheme, concreteTheme, themeBootstrapScript } from '../theme';
 
 describe('navigation', () => {
-  it('has the five required groups', () => {
-    expect(NAV_GROUPS.map((g) => g.title)).toEqual(['Markets', 'Trade Desk', 'Performance', 'Market Context', 'System']);
+  it('has the seven workspaces of the trading loop, every page once, a unique code and key each (redesign phase 1)', () => {
+    expect(NAV_GROUPS.map((g) => g.title)).toEqual(['Today', 'Trade', 'Opportunities', 'Markets', 'Paper', 'Research', 'System']);
+    const ids = NAV_GROUPS.flatMap((g) => g.items.map((i) => i.id));
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.sort()).toEqual(['alerts', 'backtesting', 'best-setups', 'corporate-actions', 'dashboard', 'evidence', 'fno-explorer', 'indices', 'institutional-flow', 'loss-attribution', 'market-overview', 'market-scanner', 'measurement', 'option-chain', 'paper-trades', 'signal-diagnostics', 'strategy-lab', 'strategy-scanner', 'system-health', 'system-learning', 'workspace']);
+    const codes = NAV_GROUPS.flatMap((g) => g.items.map((i) => i.code));
+    expect(new Set(codes).size).toBe(codes.length);
+    expect(new Set(NAV_GROUPS.map((g) => g.key)).size).toBe(NAV_GROUPS.length);
+    for (const g of NAV_GROUPS) expect(g.items.map((i) => i.id)).toContain(g.primary);
   });
   it('redirects the three retired pages into the explorer views', () => {
     expect(resolveTab('fno-stocks')).toEqual({ tab: 'fno-explorer', view: 'overview' });

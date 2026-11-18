@@ -47,7 +47,8 @@ export const horizonName = (id: string) =>
   HORIZON_NAMES[id] ?? id.split('_').map((w) => (['MCX', 'NSE', 'BSE'].includes(w) ? w : w.charAt(0) + w.slice(1).toLowerCase())).join(' ');
 export const daysUntil = (until: string, now: number) => Math.ceil((Date.parse(`${until}T00:00:00+05:30`) - now) / 86_400_000);
 
-export function CommandCenter() {
+/** `embedded`: inside the Today screen, which shows its own data &amp; system panel (the health strip is left out). */
+export function CommandCenter({ embedded = false }: { embedded?: boolean } = {}) {
   const fresh = useFreshStart();
   const health = useHealth();
   const feed = useFeedSummary();
@@ -60,13 +61,13 @@ export function CommandCenter() {
   const selectedRaw = status?.positions.find((p) => (p.state as { id?: string } | null)?.id === selected) ?? null;
 
   return (
-    <div className="cc-page">
+    <div className={embedded ? 'cc-page cc-embedded' : 'cc-page'}>
       {fresh.error && (
         <p role="alert" className="cc-panel px-4 py-2 text-sm" style={{ color: 'var(--status-warn)' }}>
           Fresh-start status could not be refreshed ({fresh.error}). {status ? `Showing the last reading from ${istTime(fresh.fetchedAt)} IST.` : 'Entry state cannot be verified.'}
         </p>
       )}
-      <HealthStrip status={status} health={health.data} quotes={feed.quotes} now={now} />
+      {!embedded && <HealthStrip status={status} health={health.data} quotes={feed.quotes} now={now} />}
       <AccountStrip account={account} loading={fresh.loading && !status} />
 
       <div className="cc-main">

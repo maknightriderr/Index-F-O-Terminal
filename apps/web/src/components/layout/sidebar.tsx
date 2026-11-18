@@ -1,9 +1,9 @@
 'use client';
 
 import React from 'react';
-import { useMarketStore } from '@/stores';
+import { useAssetTabsStore, useMarketStore, useNavHistoryStore } from '@/stores';
 import { AddAssetButton } from '@/components/common/add-asset-button';
-import { NAV_GROUPS, resolveTab } from '@/lib/nav';
+import { NAV_GROUPS, groupOf, resolveTab, tabLabel } from '@/lib/nav';
 import { useTerminalNavigation } from './terminal-navigation';
 
 // ============================================================
@@ -49,29 +49,26 @@ export function Sidebar() {
   const storedTab = useMarketStore(s => s.activeTab);
   const activeTab = resolveTab(storedTab).tab;
   const setActiveTab = useMarketStore(s => s.setActiveTab);
+  const openAsset = useAssetTabsStore(s => s.openTab);
+  const { recent, favourites } = useNavHistoryStore();
   const openDirectory = useTerminalNavigation();
-  const primary = [
-    { id: 'workspace', label: 'Workspace', pages: ['workspace'] },
-    { id: 'dashboard', label: 'Command', pages: ['dashboard'] },
-    { id: 'option-chain', label: 'Chain', pages: ['option-chain'] },
-    { id: 'indices', label: 'Markets', pages: ['market-overview', 'indices', 'fno-explorer', 'corporate-actions', 'institutional-flow'] },
-    { id: 'best-setups', label: 'Setups', pages: ['best-setups', 'market-scanner', 'strategy-scanner'] },
-    { id: 'paper-trades', label: 'Paper trades', pages: ['paper-trades'] },
-    { id: 'strategy-lab', label: 'Lab', pages: ['strategy-lab'] },
-    { id: 'measurement', label: 'Performance', pages: ['measurement', 'backtesting', 'loss-attribution', 'evidence'] },
-    { id: 'signal-diagnostics', label: 'Research', pages: ['signal-diagnostics'] },
-    { id: 'system-health', label: 'Ops', pages: ['system-health', 'alerts', 'system-learning'] },
-  ];
-  const items = NAV_GROUPS.flatMap(g => g.items);
+  const current = groupOf(activeTab);
+  const go = (tab: string) => {
+    const m = /^asset:(NSE|BSE|MCX):(.+)$/.exec(tab);
+    if (m) openAsset(m[2], m[1] as 'NSE' | 'BSE' | 'MCX');
+    else setActiveTab(tab);
+  };
+  const shortcut = (tab: string) => <li key={tab}><button type="button" onClick={() => go(tab)} aria-current={tab === activeTab ? 'page' : undefined} className="terminal-rail-link" title={`Open ${tabLabel(tab)}`}>{tabLabel(tab)}</button></li>;
   return <aside aria-label="Primary" className="desk-rail terminal-rail">
-    <button type="button" aria-label="Go to the workspace" onClick={() => setActiveTab('workspace')} className="terminal-brand"><span>F&O</span></button>
-    <nav aria-label="Pages" className="terminal-rail-pages">
-      {primary.map(link => {
-        const item = items.find(i => i.id === link.id)!;
-        const selected = link.pages.includes(activeTab);
-        return <button key={link.id} type="button" aria-current={selected ? (activeTab === link.id ? 'page' : 'true') : undefined} aria-label={item.label} title={`${link.label}: ${item.description}`} onClick={() => setActiveTab(link.id)} className="terminal-rail-item"><Icon d={ICONS[item.icon] ?? ICONS.dashboard} /><span>{link.label}</span></button>;
+    <button type="button" aria-label="Go to Today" onClick={() => setActiveTab('dashboard')} className="terminal-brand"><span>F&O</span><strong className="terminal-brand-name">F&O Terminal<small>Paper desk</small></strong></button>
+    <nav aria-label="Workspaces" className="terminal-rail-pages">
+      {NAV_GROUPS.map(group => {
+        const selected = current?.id === group.id;
+        return <button key={group.id} type="button" aria-current={selected ? (activeTab === group.primary ? 'page' : 'true') : undefined} aria-label={group.title} title={`${group.title} · G then ${group.key.toUpperCase()}`} onClick={() => setActiveTab(group.primary)} className="terminal-rail-item"><Icon d={ICONS[group.icon] ?? ICONS.dashboard} /><span>{group.short}</span><kbd className="terminal-rail-key" aria-hidden="true">G {group.key.toUpperCase()}</kbd></button>;
       })}
-      <button type="button" onClick={openDirectory} aria-label="All pages" title="All pages · Ctrl / ⌘ K" className="terminal-rail-item"><Icon d="M4 4h5v5H4z M15 4h5v5h-5z M4 15h5v5H4z M15 15h5v5h-5z" /><span>All pages</span></button>
+      <button type="button" onClick={openDirectory} aria-label="All pages" title="All pages, instruments and actions · Ctrl / ⌘ K" className="terminal-rail-item"><Icon d="M4 4h5v5H4z M15 4h5v5h-5z M4 15h5v5H4z M15 15h5v5h-5z" /><span>All pages</span><kbd className="terminal-rail-key" aria-hidden="true">⌘ K</kbd></button>
+      {favourites.length > 0 && <section aria-label="Favourites" className="terminal-rail-list"><h2>Favourites</h2><ul>{favourites.map(shortcut)}</ul></section>}
+      {recent.filter(t => t !== activeTab).length > 0 && <section aria-label="Recent" className="terminal-rail-list"><h2>Recent</h2><ul>{recent.filter(t => t !== activeTab).slice(0, 4).map(shortcut)}</ul></section>}
     </nav>
     <div className="terminal-rail-footer"><AddAssetButton compact /></div>
   </aside>;

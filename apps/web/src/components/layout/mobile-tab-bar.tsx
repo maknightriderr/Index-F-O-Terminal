@@ -2,15 +2,20 @@
 
 import React from 'react';
 import { useMarketStore } from '@/stores';
-import { resolveTab } from '@/lib/nav';
+import { NAV_GROUPS, resolveTab } from '@/lib/nav';
 import { useTerminalNavigation } from './terminal-navigation';
 
-const TABS: Array<{ id: string; label: string; d: string; pages: string[] }> = [
-  { id: 'workspace', label: 'Desk', d: 'M3 4h18v16H3z M3 9h18 M10 9v11', pages: ['workspace', 'dashboard'] },
-  { id: 'option-chain', label: 'Chain', d: 'M4 6h16 M4 12h16 M4 18h16 M12 3v18', pages: ['option-chain'] },
-  { id: 'paper-trades', label: 'Trades', d: 'M4 19l5-6 4 3 7-9', pages: ['paper-trades', 'strategy-lab'] },
-  { id: 'system-health', label: 'Ops', d: 'M22 12h-4l-3 9L9 3l-3 9H2', pages: ['system-health', 'alerts', 'system-learning'] },
-];
+const PATHS: Record<string, string> = {
+  today: 'M3 3h7v9H3z M14 3h7v5h-7z M14 12h7v9h-7z M3 16h7v5H3z',
+  trade: 'M3 4h18v16H3z M3 9h18 M10 9v11',
+  opportunities: 'M13 2L3 14h9l-1 8 10-12h-9l1-8',
+  paper: 'M4 19l5-6 4 3 7-9',
+};
+/** The four workspaces a phone needs most, from the one registry (lib/nav.ts); "More" opens everything else. */
+const TABS = ['today', 'trade', 'opportunities', 'paper'].map((id) => {
+  const g = NAV_GROUPS.find((x) => x.id === id)!;
+  return { id: g.primary, label: g.short, d: PATHS[id], pages: g.items.map((i) => i.id as string) };
+});
 
 /** Phones only (CSS): a thumb-reach tab bar in place of the side rail. "More" opens the full page directory. */
 export function MobileTabBar() {
