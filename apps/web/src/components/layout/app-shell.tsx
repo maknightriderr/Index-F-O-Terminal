@@ -10,7 +10,7 @@ import { TickerTape } from './ticker-tape';
 import { MobileTabBar } from './mobile-tab-bar';
 import { ThemeEffect } from '@/components/theme-effect';
 import { AssistantLauncher } from '@/components/assistant/assistant-launcher';
-import { useMarketStore } from '@/stores';
+import { useMarketStore, useUISettingsStore } from '@/stores';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -48,6 +48,7 @@ export function ShellSkeleton() {
 export function AppShell({ children }: AppShellProps) {
   const [mounted, setMounted] = useState(false);
   const activeTab = useMarketStore(s => s.activeTab);
+  const showTicker = useUISettingsStore(s => s.showTicker);
 
   useEffect(() => setMounted(true), []);
   // The persisted UI settings are read on the client, so the real layout waits for mount — but it shows the skeleton, not a blank screen.
@@ -64,7 +65,7 @@ export function AppShell({ children }: AppShellProps) {
       <Sidebar />
 
       <div className="relative z-[1] flex min-w-0 flex-1 flex-col">
-        <TickerTape />
+        {showTicker && <TickerTape />}
         <TopBar />
         <WorkspaceTabs />
         <AssetTabBar />

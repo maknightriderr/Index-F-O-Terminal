@@ -30,12 +30,25 @@ export function usePulse(status: FreshStartStatus | null, now: number): { rows: 
   const [bars, setBars] = useState<Record<string, Bar[]>>({});
   const [loading, setLoading] = useState(true);
 
-  // Futures tokens of the MCX references the new engine is watching (no separate instrument lookup).
+  // MCX futures tokens: the references the new engine is watching while MCX trades; outside the session (the list is
+  // empty then) the spot-reference contract of GET /api/futures (read-only), fetched once per symbol.
+  const [futTokens, setFutTokens] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let live = true;
+    void Promise.all(PULSE_INSTRUMENTS.filter((i) => i.exchange === 'MCX').map(async (i) => {
+      try {
+        const f = await api.getFutures(i.symbol, 'MCX');
+        const c = f?.contracts?.find((x) => x.isSpotReference) ?? f?.contracts?.[0];
+        return c?.token ? ([i.symbol, String(c.token)] as const) : null;
+      } catch { return null; }
+    })).then((got) => { if (live) setFutTokens(Object.fromEntries(got.filter((x): x is readonly [string, string] => x != null))); });
+    return () => { live = false; };
+  }, []);
   const mcxTokens = useMemo(() => {
-    const out: Record<string, string> = {};
+    const out: Record<string, string> = { ...futTokens };
     for (const r of status?.feedQualification?.referenceBlockers ?? []) if (r.id.startsWith('MCX_FO:')) out[r.name] = r.id.slice(7);
     return out;
-  }, [status]);
+  }, [status, futTokens]);
   const indexTokens = useMemo(() => Object.fromEntries(indices.map((q) => [q.symbol, q.token])), [indices]);
 
   useEffect(() => {

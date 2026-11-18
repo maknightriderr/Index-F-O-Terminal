@@ -5,6 +5,9 @@ import { useAssetTabsStore, useMarketStore, useNavHistoryStore } from '@/stores'
 import { AddAssetButton } from '@/components/common/add-asset-button';
 import { NAV_GROUPS, groupOf, resolveTab, tabLabel } from '@/lib/nav';
 import { useTerminalNavigation } from './terminal-navigation';
+import { useLegacyOpenCount } from '@/lib/use-paper-open';
+import { useFreshStart } from '@/lib/use-fresh-start';
+import { useLiveIndices } from '@/lib/use-live-indices';
 
 // ============================================================
 // SIDEBAR ICONS — Inline SVG (Lucide-style, 18×18 stroked); no icon dependency.
@@ -53,18 +56,24 @@ export function Sidebar() {
   const { recent, favourites } = useNavHistoryStore();
   const openDirectory = useTerminalNavigation();
   const current = groupOf(activeTab);
+  // Rail badge: open paper positions of both engines (no figure when either read is missing).
+  const legacyOpen = useLegacyOpenCount();
+  const freshOpen = useFreshStart().data?.positions?.filter((p) => p.status !== 'CLOSED').length ?? null;
+  const openCount = legacyOpen != null && freshOpen != null ? legacyOpen + freshOpen : null;
+  const { indices } = useLiveIndices();
+  const changeOf = (tab: string) => { const m = /^asset:(NSE|BSE|MCX):(.+)$/.exec(tab); const q = m ? indices.find((x) => x.symbol === m[2]) : null; return q && Number.isFinite(q.changePercent) ? q.changePercent : null; };
   const go = (tab: string) => {
     const m = /^asset:(NSE|BSE|MCX):(.+)$/.exec(tab);
     if (m) openAsset(m[2], m[1] as 'NSE' | 'BSE' | 'MCX');
     else setActiveTab(tab);
   };
-  const shortcut = (tab: string) => <li key={tab}><button type="button" onClick={() => go(tab)} aria-current={tab === activeTab ? 'page' : undefined} className="terminal-rail-link" title={`Open ${tabLabel(tab)}`}>{tabLabel(tab)}</button></li>;
+  const shortcut = (tab: string) => { const ch = changeOf(tab); return <li key={tab}><button type="button" onClick={() => go(tab)} aria-current={tab === activeTab ? 'page' : undefined} className="terminal-rail-link" title={`Open ${tabLabel(tab)}`}><span>{tabLabel(tab)}</span>{ch != null && <small className={ch > 0 ? 'cc-up' : ch < 0 ? 'cc-down' : ''}>{`${ch > 0 ? '+' : ch < 0 ? '−' : ''}${Math.abs(ch).toFixed(2)}%`}</small>}</button></li>; };
   return <aside aria-label="Primary" className="desk-rail terminal-rail">
     <button type="button" aria-label="Go to Today" onClick={() => setActiveTab('dashboard')} className="terminal-brand"><span>F&O</span><strong className="terminal-brand-name">F&O Terminal<small>Paper desk</small></strong></button>
     <nav aria-label="Workspaces" className="terminal-rail-pages">
       {NAV_GROUPS.map(group => {
         const selected = current?.id === group.id;
-        return <button key={group.id} type="button" aria-current={selected ? (activeTab === group.primary ? 'page' : 'true') : undefined} aria-label={group.title} title={`${group.title} · G then ${group.key.toUpperCase()}`} onClick={() => setActiveTab(group.primary)} className="terminal-rail-item"><Icon d={ICONS[group.icon] ?? ICONS.dashboard} /><span>{group.short}</span><kbd className="terminal-rail-key" aria-hidden="true">G {group.key.toUpperCase()}</kbd></button>;
+        return <button key={group.id} type="button" aria-current={selected ? (activeTab === group.primary ? 'page' : 'true') : undefined} aria-label={group.title} title={`${group.title} · G then ${group.key.toUpperCase()}`} onClick={() => setActiveTab(group.primary)} className="terminal-rail-item"><Icon d={ICONS[group.icon] ?? ICONS.dashboard} /><span>{group.short}</span>{group.id === 'paper' && openCount ? <b className="terminal-rail-badge" aria-label={`${openCount} open paper positions`}>{openCount}</b> : <kbd className="terminal-rail-key" aria-hidden="true">G {group.key.toUpperCase()}</kbd>}</button>;
       })}
       <button type="button" onClick={openDirectory} aria-label="All pages" title="All pages, instruments and actions · Ctrl / ⌘ K" className="terminal-rail-item"><Icon d="M4 4h5v5H4z M15 4h5v5h-5z M4 15h5v5H4z M15 15h5v5h-5z" /><span>All pages</span><kbd className="terminal-rail-key" aria-hidden="true">⌘ K</kbd></button>
       {favourites.length > 0 && <section aria-label="Favourites" className="terminal-rail-list"><h2>Favourites</h2><ul>{favourites.map(shortcut)}</ul></section>}

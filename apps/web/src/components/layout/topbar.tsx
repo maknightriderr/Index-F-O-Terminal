@@ -1,15 +1,13 @@
 'use client';
 
 import React from 'react';
-import { useMarketStore, useUISettingsStore } from '@/stores';
-import type { ThemeName } from '@/stores';
-import { useTerminalNavigation } from './terminal-navigation';
+import { useMarketStore } from '@/stores';
 import { pageMeta } from '@/lib/nav';
 import { useFeedSummary } from '@/lib/use-feed-summary';
 import { SessionCluster } from './session-cluster';
 import { AlertBell } from './alert-bell';
 import { CommandBar } from './command-bar';
-import { SignOutButton } from '@/components/auth/sign-out-button';
+import { SettingsMenu } from './settings-menu';
 
 // ============================================================
 // TOP BAR — workspace title, paper mode, freshness, alerts, theme and clock
@@ -22,7 +20,6 @@ import { SignOutButton } from '@/components/auth/sign-out-button';
 export function TopBar() {
   const { activeTab, setActiveTab } = useMarketStore();
   const feed = useFeedSummary();
-  const openDirectory = useTerminalNavigation();
   const title = pageMeta(activeTab)?.label ?? 'Instrument';
 
   const clock = new Date(feed.now).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -38,10 +35,8 @@ export function TopBar() {
 
       <div className="hidden sm:block"><SessionCluster feed={feed} onOpen={() => setActiveTab('system-health')} /></div>
 
-      <button type="button" onClick={openDirectory} aria-label="Find a page" className="terminal-search-trigger"><span aria-hidden="true">⌕</span><span className="hidden xl:inline">Find a page</span><kbd className="hidden xl:inline">⌘ K</kbd></button>
       <AlertBell />
-      <ThemeSwitcher />
-      <SignOutButton />
+      <SettingsMenu />
 
       <div className="shrink-0 text-right font-mono text-sm tabular-nums text-[var(--text-secondary)]" aria-label={`Current time ${clock} IST`}>
         <span className="sm:hidden">{clock.slice(0, 5)}</span>
@@ -52,52 +47,3 @@ export function TopBar() {
   );
 }
 
-// --- Theme Switcher ---
-
-const THEME_OPTIONS: Array<{ value: ThemeName; icon: string; label: string }> = [
-  { value: 'dark', icon: '◐', label: 'Dark' },
-  { value: 'light', icon: '☼', label: 'Light' },
-  { value: 'system', icon: '▣', label: 'System' },
-];
-
-const NEXT_THEME: Record<ThemeName, ThemeName> = { dark: 'light', light: 'system', system: 'dark' };
-
-function ThemeSwitcher() {
-  const { theme, setTheme } = useUISettingsStore();
-  const current = THEME_OPTIONS.find((o) => o.value === theme) ?? THEME_OPTIONS[0];
-  return (
-    <>
-      {/* Phones: one button that cycles the theme, so the top bar does not overflow. */}
-      <button
-        type="button"
-        onClick={() => setTheme(NEXT_THEME[theme])}
-        aria-label={`Theme: ${current.label}. Switch to ${THEME_OPTIONS.find((o) => o.value === NEXT_THEME[theme])!.label}.`}
-        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--border-secondary)] bg-[var(--surface-card-alt)] text-sm sm:hidden"
-      >
-        <span aria-hidden="true">{current.icon}</span>
-      </button>
-      <ThemeRadios theme={theme} setTheme={setTheme} />
-    </>
-  );
-}
-
-function ThemeRadios({ theme, setTheme }: { theme: ThemeName; setTheme: (t: ThemeName) => void }) {
-  return (
-    <div role="radiogroup" aria-label="Theme" className="hidden items-center gap-0.5 rounded-full border border-[var(--border-secondary)] bg-[var(--surface-card-alt)] p-0.5 sm:flex">
-      {THEME_OPTIONS.map((opt) => (
-        <button
-          key={opt.value}
-          type="button"
-          role="radio"
-          aria-checked={theme === opt.value}
-          aria-label={`${opt.label} theme`}
-          onClick={() => setTheme(opt.value)}
-          title={`${opt.label} theme`}
-          className={`flex h-7 w-7 items-center justify-center rounded-full text-sm transition-colors ${theme === opt.value ? 'bg-[var(--accent-indigo)]/25 ring-1 ring-[var(--accent-indigo)]' : 'hover:bg-[var(--surface-card-alt)]'}`}
-        >
-          <span aria-hidden="true">{opt.icon}</span>
-        </button>
-      ))}
-    </div>
-  );
-}
