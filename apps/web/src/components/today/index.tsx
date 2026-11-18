@@ -20,7 +20,6 @@ import { api } from '@/lib/api';
 import { positionViews, strategyName } from '@/lib/command-center';
 import { alertTime, bookToday, displayDay, freshFeed, istAt, istDayOf, legacyFeed, marketRead, rCurve, scorecard, sortFeed, watchFeed, type Bar, type FeedItem, type FeedState, type PulseRow } from '@/lib/today';
 import { useAssetTabsStore, useMarketStore } from '@/stores';
-import { CommandCenter } from '@/components/command-center';
 
 const fmtN = (v: number | null | undefined, d = 2) => (v == null || !Number.isFinite(v) ? '—' : v.toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d }));
 const sgnPct = (v: number | null) => (v == null ? '—' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(2)}%`);
@@ -231,10 +230,7 @@ export function TodayPage() {
         </section>
       </div>
 
-      <details className="td-desk" open>
-        <summary>Paper desk detail · positions, setup radar, journal, equity and calendars</summary>
-        <CommandCenter embedded />
-      </details>
+      <button type="button" className="td-more td-desk-link" onClick={() => setActiveTab('desk')}>Paper desk: positions, setup radar, journal, equity and calendars →</button>
     </div>
   );
 }

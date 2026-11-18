@@ -13,6 +13,7 @@
 export type PageId =
   | 'workspace'
   | 'dashboard'
+  | 'desk'
   | 'market-overview'
   | 'option-chain'
   | 'strategy-lab'
@@ -72,7 +73,8 @@ export const NAV_GROUPS: NavGroup[] = [
     key: 't',
     icon: 'dashboard',
     items: [
-      { id: 'dashboard', label: 'Command Center', code: 'CC', description: 'What is happening now: system health, the paper account, live positions, the setup radar, the journal and market context.', icon: 'dashboard' },
+      { id: 'dashboard', label: 'Command Center', code: 'CC', description: 'What is happening now: market read and pulse, the paper account of both engines, every signal of the day, the scorecard and data health.', icon: 'dashboard' },
+      { id: 'desk', label: 'Paper desk', code: 'DESK', description: 'The new engine desk: health strip, account and drawdown, live positions, the setup radar, the journal, equity and expiring calendars.', icon: 'paper-trades' },
     ],
   },
   {

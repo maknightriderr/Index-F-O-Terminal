@@ -8,7 +8,7 @@ describe('navigation', () => {
     expect(NAV_GROUPS.map((g) => g.title)).toEqual(['Today', 'Trade', 'Opportunities', 'Markets', 'Paper', 'Research', 'System']);
     const ids = NAV_GROUPS.flatMap((g) => g.items.map((i) => i.id));
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids.sort()).toEqual(['alerts', 'backtesting', 'best-setups', 'corporate-actions', 'dashboard', 'evidence', 'fno-explorer', 'indices', 'institutional-flow', 'loss-attribution', 'market-overview', 'market-scanner', 'measurement', 'option-chain', 'paper-trades', 'signal-diagnostics', 'strategy-lab', 'strategy-scanner', 'system-health', 'system-learning', 'workspace']);
+    expect(ids.sort()).toEqual(['alerts', 'backtesting', 'best-setups', 'corporate-actions', 'dashboard', 'desk', 'evidence', 'fno-explorer', 'indices', 'institutional-flow', 'loss-attribution', 'market-overview', 'market-scanner', 'measurement', 'option-chain', 'paper-trades', 'signal-diagnostics', 'strategy-lab', 'strategy-scanner', 'system-health', 'system-learning', 'workspace']);
     const codes = NAV_GROUPS.flatMap((g) => g.items.map((i) => i.code));
     expect(new Set(codes).size).toBe(codes.length);
     expect(new Set(NAV_GROUPS.map((g) => g.key)).size).toBe(NAV_GROUPS.length);

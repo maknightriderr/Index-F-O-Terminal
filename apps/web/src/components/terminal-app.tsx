@@ -52,6 +52,8 @@ export function TerminalApp() {
         return <WorkspacePage />;
       case 'dashboard':
         return <TodayPage />;
+      case 'desk':
+        return <CommandCenter />;
       case 'market-overview':
         return <Dashboard />;
       case 'option-chain':

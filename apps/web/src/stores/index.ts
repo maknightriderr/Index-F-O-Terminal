@@ -282,6 +282,9 @@ interface UISettingsState {
   bottomPanelHeight: number;
   theme: ThemeName;
   addAssetModalOpen: boolean;
+  /** The index ticker row above the header (off by default since the redesign: the Today pulse carries the quotes). */
+  showTicker: boolean;
+  toggleTicker: () => void;
   /** Timestamp of the last time the user opened the alert bell — the bell's unread count is alerts newer than this, not a rolling time window. */
   lastAlertsSeenAt: number;
 
@@ -304,6 +307,8 @@ export const useUISettingsStore = create<UISettingsState>()(
       bottomPanelHeight: 350,
       theme: 'dark',
       addAssetModalOpen: false,
+      showTicker: false,
+      toggleTicker: () => set((s) => ({ showTicker: !s.showTicker })),
       lastAlertsSeenAt: 0,
 
       toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
@@ -327,6 +332,7 @@ export const useUISettingsStore = create<UISettingsState>()(
         bottomPanelOpen: state.bottomPanelOpen,
         bottomPanelHeight: state.bottomPanelHeight,
         theme: state.theme,
+        showTicker: state.showTicker,
         lastAlertsSeenAt: state.lastAlertsSeenAt,
       }),
     }
