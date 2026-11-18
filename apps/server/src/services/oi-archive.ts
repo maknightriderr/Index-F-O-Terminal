@@ -5,11 +5,11 @@
 // 4.4 GB volume that filled once already (17 Sep). The only pruning deleted
 // raw rows after 400 days, so the volume would fill in about three months.
 //
-// Raw rows older than OI_RETENTION_DAYS (default 60; 0 = keep raw forever) are
+// Raw rows older than OI_RETENTION_DAYS (default 30 since 18 Nov; 0 = keep raw forever) are
 // packed, one IST day of one symbol at a time, into oi_snapshots_archive as
 // gzip'd JSON (lossless: every column of every row; unpackArchive restores
 // them), and only once that row is stored are the raw rows deleted. Research
-// keeps all of it; the table keeps 60 days. Nothing in the decision path reads
+// keeps all of it; the table keeps 30 days. Nothing in the decision path reads
 // rows that old (the intraday positioning window reads today's).
 // ============================================================
 
@@ -20,12 +20,13 @@ import { logger } from '../lib/logger.js';
 import { schemaFileReady } from './ensure-capture-schema.js';
 
 export const OI_STORAGE_MIGRATION = '043_oi_storage.sql';
-const DEFAULT_RETENTION_DAYS = 60;
+// 18 Nov (owner: Postgres volume high again): 60 -> 30. The archive is lossless, so nothing is lost.
+const DEFAULT_RETENTION_DAYS = 30;
 /** (day, symbol) groups packed per pass (every 6 h): steady state needs about 7 a day. */
 const MAX_GROUPS_PER_PASS = 30;
 const IST_OFFSET_MS = 5.5 * 3600_000;
 
-/** OI_RETENTION_DAYS: a whole number of days >= 0 (0 = keep raw forever); anything else is the default 60. */
+/** OI_RETENTION_DAYS: a whole number of days >= 0 (0 = keep raw forever); anything else is the default 30. */
 export function parseRetentionDays(raw: string | undefined): number {
   if (raw == null || raw.trim() === '') return DEFAULT_RETENTION_DAYS;
   const n = Number(raw);

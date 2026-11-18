@@ -43,7 +43,7 @@ export function createPremiumPressureRoutes(): Router {
     if (backtestBusy) return res.status(429).json({ success: false, error: { code: 'GXP_BACKTEST_BUSY', message: 'A backtest is already running.' } });
     backtestBusy = true;
     try {
-      const days = Math.min(60, Math.max(1, parseInt(String(req.query.days ?? '30'), 10) || 30));
+      const days = Math.min(30, Math.max(1, parseInt(String(req.query.days ?? '30'), 10) || 30));
       const asked = String(req.query.symbols ?? '').toUpperCase().split(',').map((s) => s.trim()).filter((s) => /^[A-Z0-9&-]{2,20}$/.test(s)).slice(0, 8);
       res.json({ success: true, data: await runGxpBacktest(asked.length ? asked : BACKTEST_SYMBOLS, days), meta: { readOnly: true, simulated: true, timestamp: Date.now() } });
     } catch (e: any) {

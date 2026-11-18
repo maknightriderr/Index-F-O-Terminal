@@ -10,6 +10,7 @@ import {SessionEvidence} from './session-evidence';
 import {ResearchReadiness} from './research-readiness';
 import {EventResearchPolicy} from './event-research-policy';
 import { PublicCalendarSources } from './public-calendar-sources';
+import { FreshTrades } from './fresh-trades';
 const names: Record<string, string> = { NEW_ORB_RETEST_V1: 'Opening range retest', NEW_VWAP_PULLBACK_V1: 'VWAP pullback', NEW_PREVIOUS_SESSION_SWEEP_V1: 'Previous-session sweep', NEW_FIRST_OPENING_PULLBACK_V1: 'First opening pullback', DHAN_A_SWEEP_ABSORPTION: 'Dhan A: sweep + absorption', DHAN_B_IMBALANCE_BREAKOUT: 'Dhan B: imbalance breakout', DHAN_C_FAILED_AUCTION_CVD: 'Dhan C: failed auction + CVD', DHAN_D_VWAP_PROFILE_REJECTION: 'Dhan D: VWAP / profile rejection', DHAN_E_ORDER_FLOW: 'Dhan E: pure order flow', DHAN_E1_VALUE_REENTRY: 'Dhan E1: previous-day value re-entry', DHAN_E_ORDER_FLOW_5M: 'Dhan E (5-min): pure order flow', HTA_HUMAN_TA_V1: 'Human TA: chart reader', GXP_PREMIUM_PRESSURE_V1: 'GEX: premium pressure', DHAN_EXPIRY_GAMMA: 'Dhan expiry gamma' };
 const marketNames:Record<string,string>={NSE_INDEX_OPTIONS:'NSE index options',NSE_STOCK_OPTIONS:'NSE F&O stock options',BSE_VERIFIED_OPTIONS:'BSE index options',MCX_VERIFIED_FUTURES_OPTIONS:'MCX commodity options'};
 const money = (v: number | null) => v == null ? '—' : new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(v);
@@ -40,6 +41,7 @@ export function FreshStartPanel() {
         <span className="rounded border border-[var(--border)] px-3 py-2">{data.version} · Unvalidated</span>
       </div>
       <p className="mt-3 text-sm text-[var(--text-secondary)]">Implementation approved. {data.activationApproved?'Paper activation approved; entries depend on current data and exit-monitor health.':'Paper activation is pending.'} Capital: {money(data.capital)}. A high win rate is an objective to test, with no performance guarantee.</p>
+      <FreshTrades positions={data.positions ?? []} names={names}/>
       <EventResearchPolicy data={data} names={names}/>
       <LedgerIntegrity report={data.integrity}/>
       <SessionEvidence report={data.sessionEvidence}/>

@@ -99,3 +99,14 @@ export function DecisionBadge({ state }: { state: DecisionState }) {
   }[state];
   return <StatusBadge tone={m.tone} label={m.label} title={m.title} />;
 }
+
+/** PROFIT / LOSS / EXPIRED / FLAT / OPEN with the reason it ended under it (owner, 18 Nov). */
+export function ResultBadge({ result, reason }: { result: 'OPEN' | 'PROFIT' | 'LOSS' | 'FLAT' | 'EXPIRED'; reason?: string | null }) {
+  const tone = result === 'PROFIT' ? 'ok' : result === 'LOSS' ? 'bad' : result === 'EXPIRED' ? 'warn' : result === 'OPEN' ? 'info' : 'off';
+  return (
+    <span className="inline-flex flex-col gap-0.5">
+      <StatusBadge tone={tone} label={result} title={result === 'EXPIRED' ? 'Closed without reaching the stop or the target.' : undefined} />
+      {reason && <span className="max-w-[220px] whitespace-normal text-xs leading-snug text-[var(--text-secondary)]">{reason}</span>}
+    </span>
+  );
+}
