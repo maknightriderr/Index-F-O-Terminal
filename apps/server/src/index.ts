@@ -28,6 +28,7 @@ import { createAuthRoutes } from './api/auth.js';
 import { createSessionRoutes } from './api/session.js';
 import { createOfitTokenShareRoutes, ofitShareSecretFrom, OFIT_SHARE_PATH } from './api/ofit-token-share.js';
 import { apiAuthConfigFrom, authMode, requireSession } from './lib/api-auth.js';
+import { startReadonlyKeyRefresh } from './lib/readonly-key.js';
 import { createInstrumentRoutes } from './api/instruments.js';
 import { createMarketDataRoutes } from './api/market.js';
 import { createOptionChainRoutes } from './api/option-chain.js';
@@ -393,6 +394,8 @@ const schemaReady = ensureCaptureSchema().catch((err: any) => {
 void schemaReady.then(() => {
   schemaChecked = true;
 });
+// Read-only API keys (18 Nov): their hashes, once the table exists, and every minute after.
+void schemaReady.then(() => startReadonlyKeyRefresh((msg, extra) => logger.warn(extra ?? {}, msg)));
 const recoveryReady = schemaReady
   .then(() => Promise.race([rehydrateFromPostgres(), new Promise((r) => setTimeout(r, 20_000).unref())]))
   .catch((err: any) => logger.error({ error: err.message }, 'State recovery failed — Redis left as it was'));

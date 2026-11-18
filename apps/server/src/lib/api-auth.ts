@@ -19,6 +19,7 @@
 
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import jwt from 'jsonwebtoken';
+import { isActiveReadonlyKey, readonlyKeyVerdict, touchReadonlyKey } from './readonly-key.js';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 
 export const SESSION_TYP = 'terminal-session';
@@ -95,25 +96,34 @@ export function routeKey(method: string, path: string): string {
   return `${method.toUpperCase()} ${p}`;
 }
 
-export type GateVerdict = { ok: true; authenticated: boolean } | { ok: false; status: 401 | 503; code: 'AUTH_REQUIRED' | 'AUTH_NOT_CONFIGURED'; message: string };
+export type GateVerdict = { ok: true; authenticated: boolean; readOnly?: boolean } | { ok: false; status: 401 | 403 | 503; code: 'AUTH_REQUIRED' | 'AUTH_NOT_CONFIGURED' | 'READ_ONLY_KEY'; message: string };
 
 /** The whole decision for one request. `authenticated` tells a public route whether the caller has a valid session. */
-export function gateRequest(args: { method: string; path: string; authorization: string | undefined; cfg: ApiAuthConfig; now?: number }): GateVerdict {
+export function gateRequest(args: { method: string; path: string; authorization: string | undefined; cfg: ApiAuthConfig; now?: number; readonlyKey?: (token: string) => boolean }): GateVerdict {
   const { mode, reason } = authMode(args.cfg);
   if (mode === 'OPEN_DEV') return { ok: true, authenticated: true };
   const authenticated = mode === 'ENFORCED' && verifySession(bearerToken(args.authorization), args.cfg, args.now);
   if (args.method.toUpperCase() === 'OPTIONS' || PUBLIC_ROUTES.has(routeKey(args.method, args.path))) return { ok: true, authenticated };
   if (mode === 'MISCONFIGURED') return { ok: false, status: 503, code: 'AUTH_NOT_CONFIGURED', message: `The terminal is locked: ${reason} Set it on the server and redeploy.` };
   if (authenticated) return { ok: true, authenticated };
+  // 18 Nov: a read-only API key (lib/readonly-key.ts) opens GET / HEAD only, never a write, /api/session or /api/auth.
+  const token = bearerToken(args.authorization);
+  if (mode === 'ENFORCED' && token && args.readonlyKey?.(token)) {
+    const v = readonlyKeyVerdict(args.method, args.path);
+    if (v === 'ALLOW') return { ok: true, authenticated: true, readOnly: true };
+    return { ok: false, status: 403, code: 'READ_ONLY_KEY', message: v === 'DENY_PATH' ? 'A read-only key cannot open this route.' : 'A read-only key cannot change anything.' };
+  }
   return { ok: false, status: 401, code: 'AUTH_REQUIRED', message: 'Sign in to use the terminal.' };
 }
 
 /** Express glue: mount with app.use('/api', requireSession(cfg)) BEFORE every /api router. */
 export function requireSession(cfg: ApiAuthConfig): RequestHandler {
   return (req: Request, res: Response, next: NextFunction) => {
-    const verdict = gateRequest({ method: req.method, path: `${req.baseUrl}${req.path}`, authorization: req.headers.authorization, cfg });
+    const verdict = gateRequest({ method: req.method, path: `${req.baseUrl}${req.path}`, authorization: req.headers.authorization, cfg, readonlyKey: isActiveReadonlyKey });
     if (verdict.ok) {
       res.locals.authenticated = verdict.authenticated;
+      res.locals.readOnly = verdict.readOnly === true;
+      if (verdict.readOnly) touchReadonlyKey(bearerToken(req.headers.authorization)!);
       next();
       return;
     }

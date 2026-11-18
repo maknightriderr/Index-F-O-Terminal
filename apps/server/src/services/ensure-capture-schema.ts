@@ -144,6 +144,7 @@ export const FILES = [
   '054_dhan_engine_paper.sql',
   '055_order_flow_open_bars.sql',
   '056_fix_double_encoded_jsonb.sql',
+  '057_api_readonly_keys.sql',
 ];
 
 /** 007 is retention and compression policies, which need the timescaledb extension. */

@@ -13,6 +13,7 @@ import type { FeedRow, HealthRow } from '@/lib/health-model';
 import { Horizons } from '@/components/command-center';
 import { Pill } from '@/components/command-center/panel';
 import { useNow } from '@/lib/use-health';
+import { ReadonlyKeySection } from './readonly-key';
 
 // ============================================================
 // SYSTEM HEALTH — what is actually known, and how we know it
@@ -119,6 +120,8 @@ export function SystemHealthPage() {
           </div>
         </Section>
       )}
+
+      <ReadonlyKeySection />
 
       <Section title="Planned services" subtitle="Not built yet. These are not failures." collapsible defaultOpen={false}>
         <DataTable columns={serviceColumns.slice(0, 3)} rows={m.planned} rowKey={(r) => r.id} ariaLabel="Planned services" pageSize={20} />
