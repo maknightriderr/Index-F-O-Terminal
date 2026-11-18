@@ -12,10 +12,10 @@ import React, { useMemo } from 'react';
 import { isMarketOpen } from '@fno/shared';
 import type { Exchange, PaperTradeView } from '@fno/shared';
 import { DataTable, type Column } from '@/components/ui/data-table';
-import { FreshnessBadge, StatusBadge, TradeStateBadge } from '@/components/ui/status-badge';
+import { FreshnessBadge, ResultBadge, StatusBadge, TradeStateBadge } from '@/components/ui/status-badge';
 import { classifyFreshness, FRESH_WITHIN_MS } from '@/lib/freshness';
 import { formatAge, formatHold, formatIstDateTime, formatNumber, formatR, formatRupees, formatSignedPercent, MISSING } from '@/lib/format';
-import { contractLabel } from '@/lib/paper-trade-view';
+import { contractLabel, tradeOutcome } from '@/lib/paper-trade-view';
 import { ExplainButton } from '@/components/assistant/assistant-launcher';
 
 const rColor = (v: number | null) => (v == null ? '' : v > 0 ? 'text-[var(--status-ok)]' : v < 0 ? 'text-[var(--status-bad)]' : '');
@@ -60,7 +60,9 @@ function LiveCell({ t, now, apiReachable }: { t: PaperTradeView; now: number; ap
 
 export function TradeDetail({ t, now }: { t: PaperTradeView; now: number }) {
   const rows: Array<[string, React.ReactNode]> = [
+    ['Date', tradeOutcome(t).date],
     ['Opened', formatIstDateTime(t.mintedAt, now)],
+    ['Result', t.state === 'OPEN' ? 'Open' : `${tradeOutcome(t).result}${tradeOutcome(t).reason ? ` — ${tradeOutcome(t).reason}` : ''}`],
     ['Strategy', `${t.strategyLabel}${t.logicVersion ? ` · ${t.logicVersion}` : ''}`],
     ['Planned stop (at the mint)', formatNumber(t.initialStop)],
     ['Current stop', t.state === 'OPEN' ? formatNumber(t.currentStop) : MISSING],
@@ -111,19 +113,19 @@ export function TradesTable({ trades, now, apiReachable, pageSize = 25, maxHeigh
           <div className="min-w-[150px]">
             <div className="font-medium text-[var(--text-primary)]">{contractLabel(t)}</div>
             <div className="text-xs text-[var(--text-secondary)]">
-              {t.strategyLabel} · {t.direction === 'BULLISH' ? '▲ bullish' : t.direction === 'BEARISH' ? '▼ bearish' : 'neutral'}
+              {tradeOutcome(t).date} · {t.strategyLabel} · {t.direction === 'BULLISH' ? '▲ bullish' : t.direction === 'BEARISH' ? '▼ bearish' : 'neutral'}
             </div>
           </div>
         ),
       },
       {
         id: 'state',
-        header: 'Status',
-        label: 'Status',
-        sortValue: (t) => t.state,
+        header: 'Result',
+        label: 'Result',
+        sortValue: (t) => tradeOutcome(t).result,
         cell: (t) => (
           <div title={t.excludedReason ?? undefined}>
-            <TradeStateBadge state={t.state} status={t.status} />
+            {!['VOIDED', 'TRACKING_LOST', 'OPEN_UNTRACKED', 'OFF_SESSION'].includes(t.status) ? <ResultBadge result={tradeOutcome(t).result} reason={tradeOutcome(t).reason} /> : <TradeStateBadge state={t.state} status={t.status} />}
             {t.state !== 'OPEN' && !t.includedInPerformance && t.status === 'CLOSED' && <div className="mt-0.5 text-xs text-[var(--text-secondary)]">not in performance</div>}
           </div>
         ),
@@ -148,7 +150,7 @@ export function TradesTable({ trades, now, apiReachable, pageSize = 25, maxHeigh
         cell: (t) => (
           <span>
             {formatNumber(t.exitPrice)}
-            {t.closeReason && <div className="text-xs text-[var(--text-secondary)]">{t.closeReason.replace(/_/g, ' ').toLowerCase()}</div>}
+            {t.exitAt != null && <div className="text-xs text-[var(--text-secondary)]">{formatIstDateTime(t.exitAt, now)}</div>}
           </span>
         ),
       },

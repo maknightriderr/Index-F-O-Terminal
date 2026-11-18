@@ -14,6 +14,7 @@
 // recorded they say so (`source: 'NONE'` + the reason) instead of computing.
 // ============================================================
 
+import { istDateLabel, paperReasonText, paperResult } from '@fno/shared';
 import type { BiasSnapshot, Exchange, FiiDiiActivity, FnoScannerRow, MarketScanResult, ReadOnlyMeta, ReadSource, TradingMode } from '@fno/shared';
 import { redis } from '../lib/redis.js';
 import { sql } from '../lib/db.js';
@@ -84,6 +85,47 @@ interface CachedBiasResult {
   score?: { score?: number };
 }
 
+interface HeldSetup { available?: boolean; generatedAt?: number; signalId?: string; [k: string]: unknown }
+const istDayOf = (t: number) => new Date(t).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+/**
+ * Pure (18 Nov, owner: an expired ITC trade still showed as live). A remembered result's paper trade that has ended —
+ * its recorded outcome, or an INTRADAY trade from an earlier session — is shown as ended, with its date, result and
+ * reason, never as a live position. `outcome` is the trade's recorded outcome row, when there is one.
+ */
+export function endedTradeSetup(setup: HeldSetup | undefined, mode: TradingMode, now: number, outcome: { outcome: string | null; closeReason: string | null; exitTime: number | null; netR: number | null } | null): HeldSetup | undefined {
+  if (!setup?.available) return setup;
+  const opened = typeof setup.generatedAt === 'number' ? setup.generatedAt : null;
+  const priorSession = mode === 'INTRADAY' && opened != null && istDayOf(opened) !== istDayOf(now);
+  if (!outcome?.outcome && !priorSession) return setup;
+  const result = outcome?.outcome ? paperResult({ open: false, state: outcome.outcome, closeReason: outcome.closeReason, netR: outcome.netR }) : 'EXPIRED';
+  const why = paperReasonText(outcome?.closeReason ?? (priorSession ? 'SESSION_ENDED' : null));
+  const when = opened != null ? istDateLabel(opened) : 'an earlier session';
+  return {
+    available: false,
+    reason: `The paper trade from ${when} has ended: ${result}${why ? ` — ${why}` : ''}${outcome?.netR != null ? ` (${outcome.netR > 0 ? '+' : ''}${Math.round(outcome.netR * 100) / 100}R net)` : ''}. It is listed under Paper trades.`,
+    endedTrade: { openedAt: opened, result, closeReason: outcome?.closeReason ?? (priorSession ? 'SESSION_ENDED' : null), exitTime: outcome?.exitTime ?? null, signalId: setup.signalId ?? null },
+  };
+}
+
+/** The remembered result with an ended paper trade marked ended (one indexed SELECT when the setup has a row). */
+async function withEndedTrade(result: CachedBiasResult, mode: TradingMode, now: number): Promise<CachedBiasResult> {
+  const r = result as CachedBiasResult & { tradeSetup?: HeldSetup };
+  if (!r.tradeSetup?.available) return result;
+  let outcome: { outcome: string | null; closeReason: string | null; exitTime: number | null; netR: number | null } | null = null;
+  if (r.tradeSetup.signalId) {
+    try {
+      const [row] = await sql<{ outcome: string | null; close_reason: string | null; exit_time: string | null; net_r: string | null }[]>`
+        SELECT inputs->>'outcome' AS outcome, inputs->>'closeReason' AS close_reason, inputs->>'exitTime' AS exit_time, inputs->>'netR' AS net_r FROM signals WHERE id = ${r.tradeSetup.signalId}`;
+      if (row) outcome = { outcome: row.outcome, closeReason: row.close_reason, exitTime: row.exit_time != null && Number.isFinite(Number(row.exit_time)) ? Number(row.exit_time) : null, netR: row.net_r != null && Number.isFinite(Number(row.net_r)) ? Number(row.net_r) : null };
+    } catch (err: any) {
+      logger.warn({ error: err.message }, 'Read-only view: trade outcome lookup failed (the date check still applies)');
+    }
+  }
+  const ended = endedTradeSetup(r.tradeSetup, mode, now, outcome);
+  return ended === r.tradeSetup ? result : ({ ...r, tradeSetup: ended } as CachedBiasResult);
+}
+
 /** Pure: the snapshot of the engine's cached result. */
 export function snapshotFromCachedResult(symbol: string, exchange: Exchange, mode: TradingMode, result: CachedBiasResult): BiasSnapshot {
   const b = result.bias ?? {};
@@ -113,12 +155,12 @@ export function snapshotFromCachedResult(symbol: string, exchange: Exchange, mod
 export async function readBiasSnapshot(symbol: string, exchange: Exchange, mode: TradingMode, now = Date.now()): Promise<{ data: BiasSnapshot | null; meta: ReadOnlyMeta }> {
   const cached = await getJson<CachedBiasResult>(biasResultKey(exchange, symbol, mode));
   if (cached?.bias) {
-    const snap = snapshotFromCachedResult(symbol, exchange, mode, cached);
+    const snap = snapshotFromCachedResult(symbol, exchange, mode, await withEndedTrade(cached, mode, now));
     return { data: snap, meta: readMeta('CACHE', snap.assessedAt, now) };
   }
   const last = await getJson<CachedBiasResult>(biasLastKey(exchange, symbol, mode));
   if (last?.bias) {
-    const snap = snapshotFromCachedResult(symbol, exchange, mode, last);
+    const snap = snapshotFromCachedResult(symbol, exchange, mode, await withEndedTrade(last, mode, now));
     return { data: snap, meta: readMeta('LAST_KNOWN', snap.assessedAt, now) };
   }
   try {

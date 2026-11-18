@@ -1020,7 +1020,7 @@ function TradeSetupCard({ setup, structure, explainTarget }: { setup: TradeSetup
   }
 
   const lockedNote = setup.generatedAt && (
-    <> Locked at {new Date(setup.generatedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit' })}, holds until target/stop is hit.</>
+    <> Locked on {new Date(setup.generatedAt).toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' })} at {new Date(setup.generatedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit' })}, holds until target/stop is hit.</>
   );
 
   const liveMark = setup.currentValue != null && (

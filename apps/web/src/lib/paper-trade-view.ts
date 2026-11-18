@@ -6,7 +6,13 @@
 // records for display; it never recomputes a trade, a stop, a target or an outcome.
 // ============================================================
 
-import type { PaperTradeView } from '@fno/shared';
+import { istDateLabel, paperReasonText, paperResult, type PaperResult, type PaperTradeView } from '@fno/shared';
+
+/** The trade's date (IST), its result and the reason it ended, in words (owner, 18 Nov). */
+export function tradeOutcome(t: PaperTradeView): { date: string; result: PaperResult; reason: string | null } {
+  const open = t.state === 'OPEN';
+  return { date: istDateLabel(t.mintedAt), result: paperResult({ open, state: t.state, closeReason: t.closeReason, netR: t.netR }), reason: open ? null : paperReasonText(t.closeReason) };
+}
 
 export type StateFilter = 'ALL' | 'OPEN' | 'CLOSED' | 'EXPIRED' | 'WIN' | 'LOSS';
 export type PeriodFilter = 'ALL' | 'HISTORICAL' | 'RELIABLE';
