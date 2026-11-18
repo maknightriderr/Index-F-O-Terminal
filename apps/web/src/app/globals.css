@@ -1457,3 +1457,52 @@ html, body {
 .ws-preset[aria-pressed="true"] { background: var(--desk-accent); border-color: var(--desk-accent); color: var(--desk-accent-ink); font-weight: 600; }
 .ws-preset[aria-pressed="true"] span { color: var(--desk-accent-ink); }
 .ws-feed { margin-left: auto; font-size: 11px; color: var(--text-muted); }
+
+/* ============================================================
+   UX REDESIGN PHASE 1 (18 Nov): workspace rail, session cluster, palette
+   ============================================================ */
+.terminal-brand-name { display: none; }
+.terminal-rail-key { display: none; }
+.terminal-rail-list { display: none; }
+/* Wide screens: a labelled rail (icon + name + G-key), favourites and recent under the workspaces. */
+@media (min-width: 1280px) {
+  .terminal-rail { width: 196px; }
+  .terminal-brand { height: 52px; display: flex; align-items: center; justify-content: flex-start; gap: 10px; padding: 0 14px; }
+  .terminal-brand span { width: 30px; height: 30px; border-radius: 8px; font-size: 11px; }
+  .terminal-brand-name { display: flex; flex-direction: column; font-size: 13px; font-weight: 600; letter-spacing: .02em; line-height: 1.15; text-align: left; color: var(--text-primary); }
+  .terminal-brand-name small { font: 600 10px var(--font-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--desk-accent); }
+  .terminal-rail-pages { padding: 10px 8px; }
+  .terminal-rail-item { flex-direction: row; justify-content: flex-start; min-height: 38px; gap: 11px; margin-bottom: 2px; padding: 8px 10px; font-size: 13px; border-radius: 7px; }
+  .terminal-rail-item[aria-current] { box-shadow: inset 2px 0 0 var(--desk-accent); }
+  .terminal-rail-key { display: inline; margin-left: auto; font: 500 10px var(--font-mono); color: var(--text-muted); border: 0; background: none; }
+  .terminal-rail-list { display: block; margin-top: 14px; }
+  .terminal-rail-list h2 { font: 600 10px var(--font-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--text-muted); padding: 6px 10px; }
+  .terminal-rail-list ul { list-style: none; margin: 0; padding: 0; }
+  .terminal-rail-link { display: block; width: 100%; text-align: left; padding: 5px 10px; border-radius: 6px; font-size: 12.5px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .terminal-rail-link:hover { background: var(--surface-card-alt); color: var(--text-primary); }
+  .terminal-rail-link[aria-current] { color: var(--desk-accent); }
+}
+/* Header: NSE · BSE · MCX each with its own state and session progress. */
+.terminal-sessions { display: flex; gap: 14px; padding: 4px 6px; border-radius: 7px; }
+.terminal-sessions:hover { background: var(--surface-card-alt); }
+.terminal-session { display: grid; gap: 3px; min-width: 92px; }
+.terminal-session-row { display: flex; align-items: center; gap: 6px; font: 600 11px var(--font-mono); color: var(--text-primary); }
+.terminal-session-row small { margin-left: auto; font-weight: 400; font-size: 10.5px; color: var(--text-muted); }
+.terminal-session-row i { width: 7px; height: 7px; border-radius: 50%; background: var(--status-off); }
+.terminal-session-bar { height: 3px; border-radius: 2px; background: var(--border-secondary); overflow: hidden; }
+.terminal-session-bar b { display: block; height: 100%; background: var(--status-off); }
+.terminal-session[data-state="open"] i, .terminal-session[data-state="open"] .terminal-session-bar b { background: var(--status-ok); }
+.terminal-session[data-state="stale"] i, .terminal-session[data-state="stale"] .terminal-session-bar b { background: var(--status-warn); }
+.terminal-session[data-state="stale"] small { color: var(--status-warn); }
+@media (max-width: 1023px) { .terminal-session-row small, .terminal-session-bar { display: none; } .terminal-session { min-width: 0; } .terminal-sessions { gap: 10px; } }
+/* Palette rows: a favourite star beside each destination; the page's command code on the right. */
+.terminal-directory-row { display: flex; align-items: center; gap: 4px; }
+.terminal-directory-row .terminal-directory-item { flex: 1; min-width: 0; }
+.terminal-directory-star { width: 32px; min-height: 32px; flex-shrink: 0; border-radius: 6px; color: var(--text-muted); font-size: 15px; }
+.terminal-directory-star:hover, .terminal-directory-star[aria-pressed="true"] { color: var(--desk-accent); background: var(--surface-card-alt); }
+.terminal-directory-code { font: 600 11px var(--font-mono); letter-spacing: .06em; }
+.terminal-directory-key { margin-left: 6px; font: 500 10px var(--font-mono); color: var(--text-muted); letter-spacing: 0; }
+/* Less chrome: the in-workspace tab strip is a slim row. */
+.terminal-workspace-tabs { min-height: 40px; padding-top: 4px; padding-bottom: 4px; }
+.terminal-workspace-tabs button { min-height: 30px; }
+.terminal-asset-tabs { height: 40px; }

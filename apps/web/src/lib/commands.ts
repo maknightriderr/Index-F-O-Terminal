@@ -10,7 +10,7 @@
 //   TRADES / HEALTH  → that page
 // ============================================================
 
-import type { PageId } from './nav';
+import { NAV_GROUPS, type PageId } from './nav';
 
 export type WorkspaceExchange = 'NSE' | 'BSE' | 'MCX';
 export type WorkspaceFocus = 'chart' | 'chain' | 'quote' | 'radar' | 'trades';
@@ -28,22 +28,13 @@ export const SYMBOL_FUNCTIONS: Readonly<Record<string, { focus: WorkspaceFocus; 
   RADAR: { focus: 'radar', label: 'Engine radar' },
 });
 
-/** Codes that open a page. */
-export const PAGE_CODES: Readonly<Record<string, { tab: PageId; label: string }>> = Object.freeze({
-  WS: { tab: 'workspace', label: 'Workspace' },
-  CC: { tab: 'dashboard', label: 'Command Center' },
-  MKT: { tab: 'market-overview', label: 'Market Overview' },
-  CHAIN: { tab: 'option-chain', label: 'Option Chain page' },
-  IDX: { tab: 'indices', label: 'Indices' },
-  FNO: { tab: 'fno-explorer', label: 'F&O Explorer' },
-  CA: { tab: 'corporate-actions', label: 'Corporate Actions' },
-  LAB: { tab: 'strategy-lab', label: 'Strategy Lab' },
-  TRADES: { tab: 'paper-trades', label: 'Paper Trades' },
-  FLOW: { tab: 'institutional-flow', label: 'Institutional Flow' },
-  HEALTH: { tab: 'system-health', label: 'Ops & Health' },
-  ALRT: { tab: 'alerts', label: 'Alerts' },
-  LEARN: { tab: 'system-learning', label: 'System Learning' },
-});
+/** Codes that open a page: generated from the one navigation registry (lib/nav.ts), so every page has one. */
+export const PAGE_CODES: Readonly<Record<string, { tab: PageId; label: string }>> = Object.freeze(
+  Object.fromEntries(NAV_GROUPS.flatMap((g) => g.items.map((i) => [i.code, { tab: i.id, label: i.label }])))
+);
+
+/** Underlyings the palette recognises by name alone (any other symbol needs a function word, e.g. RELIANCE OC). */
+export const KNOWN_UNDERLYINGS: ReadonlySet<string> = new Set(['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTYNXT50', 'SENSEX', 'BANKEX', 'CRUDEOIL', 'CRUDEOILM', 'GOLD', 'GOLDM', 'SILVER', 'SILVERM', 'NATURALGAS', 'NATGASMINI']);
 
 const BSE_INDICES = new Set(['SENSEX', 'BANKEX']);
 const MCX_PRODUCTS = new Set(['CRUDEOIL', 'CRUDEOILM', 'GOLD', 'GOLDM', 'SILVER', 'SILVERM', 'NATURALGAS', 'NATGASMINI']);

@@ -378,3 +378,31 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     { name: 'fno-workspace', partialize: (s) => ({ symbol: s.symbol, exchange: s.exchange, layout: s.layout }) }
   )
 );
+
+// --- Navigation history (UX redesign phase 1, 18 Nov) ---
+// Recent pages / instruments and the owner's favourites, shown in the rail and at the top of Ctrl+K. Per browser
+// only (localStorage through zustand persist): a convenience, never data the terminal depends on.
+
+export const RECENT_LIMIT = 6;
+export const FAVOURITE_LIMIT = 8;
+
+interface NavHistoryState {
+  /** Tab ids (page ids or asset:EX:SYM), newest first. */
+  recent: string[];
+  favourites: string[];
+  visit: (tab: string) => void;
+  toggleFavourite: (tab: string) => void;
+}
+
+export const useNavHistoryStore = create<NavHistoryState>()(
+  persist(
+    (set) => ({
+      recent: [],
+      favourites: [],
+      visit: (tab) => set((s) => (s.recent[0] === tab ? s : { recent: [tab, ...s.recent.filter((t) => t !== tab)].slice(0, RECENT_LIMIT) })),
+      toggleFavourite: (tab) =>
+        set((s) => ({ favourites: s.favourites.includes(tab) ? s.favourites.filter((t) => t !== tab) : [...s.favourites, tab].slice(-FAVOURITE_LIMIT) })),
+    }),
+    { name: 'fno-nav-history' }
+  )
+);

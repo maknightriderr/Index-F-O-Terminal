@@ -6,8 +6,7 @@ import type { ThemeName } from '@/stores';
 import { useTerminalNavigation } from './terminal-navigation';
 import { pageMeta } from '@/lib/nav';
 import { useFeedSummary } from '@/lib/use-feed-summary';
-import { formatIstDateTime } from '@/lib/format';
-import { FreshnessBadge } from '@/components/ui/status-badge';
+import { SessionCluster } from './session-cluster';
 import { AlertBell } from './alert-bell';
 import { CommandBar } from './command-bar';
 import { SignOutButton } from '@/components/auth/sign-out-button';
@@ -24,29 +23,20 @@ export function TopBar() {
   const { activeTab, setActiveTab } = useMarketStore();
   const feed = useFeedSummary();
   const openDirectory = useTerminalNavigation();
-  const title = activeTab === 'dashboard' ? 'Command Center' : pageMeta(activeTab)?.label ?? 'Asset workspace';
+  const title = pageMeta(activeTab)?.label ?? 'Instrument';
 
   const clock = new Date(feed.now).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
   return (
-    <header className="relative z-10 flex h-14 shrink-0 items-center gap-2 border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 md:gap-4 md:px-4">
+    <header className="relative z-10 flex h-12 shrink-0 items-center gap-2 border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 md:gap-4 md:px-4">
       <div className="min-w-0 shrink-0 max-w-[40vw] lg:max-w-none">
-        <p className="truncate text-base font-semibold tracking-tight md:text-xl">{title}</p>
-        <p className="hidden text-[11px] uppercase tracking-[.1em] text-[var(--text-muted)] lg:block">F&amp;O Terminal · Paper research desk</p>
+        <p className="truncate text-base font-semibold tracking-tight md:text-lg">{title}</p>
       </div>
       <span className="rounded border border-[var(--desk-accent)]/40 bg-[var(--desk-accent)]/10 px-2 py-1 text-xs font-semibold tracking-wider text-[var(--desk-accent)]">PAPER</span>
 
       <div className="flex min-w-0 flex-1 justify-center"><CommandBar /></div>
 
-      <button
-        type="button"
-        onClick={() => setActiveTab('system-health')}
-        title={`${feed.quotes.detail} Open System Health.`}
-        aria-label={`Data status: ${feed.quotes.label}. ${feed.quotes.detail} Open System Health.`}
-        className="hidden items-center gap-2 rounded-md px-1 py-1 hover:bg-[var(--surface-card-alt)] sm:flex"
-      >
-        <FreshnessBadge state={feed.quotes.state} label={feed.quotes.state === 'MARKET_CLOSED' ? `NSE CLOSED · last ${formatIstDateTime(feed.quotesObservedAt, feed.now)}` : feed.quotes.label} />
-      </button>
+      <div className="hidden sm:block"><SessionCluster feed={feed} onOpen={() => setActiveTab('system-health')} /></div>
 
       <button type="button" onClick={openDirectory} aria-label="Find a page" className="terminal-search-trigger"><span aria-hidden="true">⌕</span><span className="hidden xl:inline">Find a page</span><kbd className="hidden xl:inline">⌘ K</kbd></button>
       <AlertBell />

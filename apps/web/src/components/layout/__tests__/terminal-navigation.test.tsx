@@ -3,13 +3,14 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { TerminalNavigation, WorkspaceTabs, useTerminalNavigation } from '../terminal-navigation';
 import { AssetTabBar } from '../asset-tab-bar';
-import { useAssetTabsStore, useMarketStore } from '@/stores';
+import { useAssetTabsStore, useMarketStore, useNavHistoryStore, useWorkspaceStore } from '@/stores';
 import { NAV_GROUPS } from '@/lib/nav';
 
 function Trigger() { const open = useTerminalNavigation(); return <button onClick={open}>Open directory</button>; }
 beforeEach(() => {
   useMarketStore.setState({ activeTab: 'dashboard', selectedSymbol: null });
   useAssetTabsStore.setState({ tabs: [] });
+  useNavHistoryStore.setState({ recent: [], favourites: [] });
   HTMLDialogElement.prototype.showModal = function() { this.setAttribute('open',''); };
   HTMLDialogElement.prototype.close = function() { this.removeAttribute('open'); };
 });
@@ -38,12 +39,35 @@ describe('terminal-wide navigation', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
   it('keeps related pages and the current selection accessible outside the dashboard', () => {
+    useMarketStore.setState({activeTab:'best-setups'});
+    const {unmount}=render(<WorkspaceTabs />);
+    const nav=screen.getByRole('navigation',{name:'Opportunities workspace pages'});
+    expect(within(nav).getByRole('button',{name:'Best Setups'})).toHaveAttribute('aria-current','page');
+    fireEvent.click(within(nav).getByRole('button',{name:'Structure Scanner'}));
+    expect(useMarketStore.getState().activeTab).toBe('market-scanner');
+    unmount();
+    // A one-page workspace (Paper) shows no tab strip: there is nothing to switch to.
     useMarketStore.setState({activeTab:'paper-trades'});
     render(<WorkspaceTabs />);
-    const nav=screen.getByRole('navigation',{name:'Trade Desk workspace pages'});
-    expect(within(nav).getByRole('button',{name:'Paper Trades'})).toHaveAttribute('aria-current','page');
-    fireEvent.click(within(nav).getByRole('button',{name:'Best Setups'}));
-    expect(useMarketStore.getState().activeTab).toBe('best-setups');
+    expect(screen.queryByRole('navigation')).toBeNull();
+  });
+  it('opens a typed underlying, offers favourites, and jumps to a workspace with G then a key', () => {
+    render(<TerminalNavigation><Trigger /></TerminalNavigation>);
+    fireEvent.keyDown(document,{key:'k',ctrlKey:true});
+    fireEvent.change(screen.getByRole('searchbox'),{target:{value:'banknifty oc'}});
+    fireEvent.click(screen.getByText('Open BANKNIFTY in the Workspace'));
+    expect(useMarketStore.getState().activeTab).toBe('workspace');
+    expect(useWorkspaceStore.getState()).toMatchObject({symbol:'BANKNIFTY',focus:'chain'});
+    fireEvent.keyDown(document,{key:'k',ctrlKey:true});
+    fireEvent.click(screen.getByRole('button',{name:'Add Loss Attribution to favourites'}));
+    expect(useNavHistoryStore.getState().favourites).toContain('loss-attribution');
+    fireEvent.keyDown(document,{key:'Escape'});
+    fireEvent.keyDown(document.body,{key:'g'});
+    fireEvent.keyDown(document.body,{key:'p'});
+    expect(useMarketStore.getState().activeTab).toBe('paper-trades');
+    fireEvent.keyDown(document.body,{key:'g'});
+    fireEvent.keyDown(document.body,{key:'r'});
+    expect(useMarketStore.getState().activeTab).toBe('strategy-lab');
   });
   it('exposes separate keyboard-reachable open and close asset controls', () => {
     useAssetTabsStore.getState().openTab('NIFTY','NSE');

@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import { AppShell } from '@/components/layout/app-shell';
 import { Dashboard } from '@/components/dashboard';
 import { CommandCenter } from '@/components/command-center';
@@ -26,7 +26,7 @@ import { SystemLearningPage } from '@/components/system-learning';
 import { LossAttributionPage } from '@/components/loss-attribution';
 import { SignalDiagnosticsPage } from '@/components/signal-diagnostics';
 import { AddAssetModal } from '@/components/common/add-asset-modal';
-import { useMarketStore, useUISettingsStore } from '@/stores';
+import { useMarketStore, useNavHistoryStore, useUISettingsStore } from '@/stores';
 import { useMarketWebSocket } from '@/lib/ws';
 import { useUrlSync } from '@/lib/use-url-sync';
 import { resolveTab } from '@/lib/nav';
@@ -39,6 +39,9 @@ export function TerminalApp() {
 
   // An old persisted tab id (fno-stocks, oi-intelligence, iv-greeks) renders as the page that replaced it.
   const activeTab = resolveTab(storedTab).tab;
+  const visit = useNavHistoryStore((s) => s.visit);
+  // Recent pages / instruments for the rail and Ctrl+K (per browser).
+  useEffect(() => { visit(activeTab); }, [activeTab, visit]);
 
   const renderContent = () => {
     if (activeTab.startsWith('asset:')) return <AssetWorkspace />;
