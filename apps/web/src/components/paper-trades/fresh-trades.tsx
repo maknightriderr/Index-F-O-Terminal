@@ -11,10 +11,12 @@ import React from 'react';
 import { istDateLabel, paperReasonText, paperResult } from '@fno/shared';
 import { ResultBadge } from '@/components/ui/status-badge';
 import { formatIstTime } from '@/lib/format';
+import { strategyName } from '@/lib/command-center';
 
 interface FreshState { candidate?: { direction?: string }; contract?: { id?: string }; entry?: number; exitPrice?: number; exitReason?: string; netPnl?: number; originalRiskCurrency?: number; openedAt?: number }
 interface Row { strategy: string; status: string; state: unknown }
 
+const px = (v: number | null) => (v == null || !Number.isFinite(v) ? '—' : v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 const money = (v: number | null) => (v == null ? '—' : new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0, signDisplay: 'exceptZero' }).format(v));
 
 export function freshTradeRows(positions: readonly Row[], names: Record<string, string>) {
@@ -23,7 +25,7 @@ export function freshTradeRows(positions: readonly Row[], names: Record<string, 
     const open = p.status !== 'CLOSED', net = typeof st.netPnl === 'number' ? st.netPnl : null, risk = st.originalRiskCurrency ?? 0;
     const netR = net != null && risk > 0 ? Math.round((net / risk) * 100) / 100 : null;
     return {
-      openedAt: st.openedAt ?? null, strategy: names[p.strategy] ?? p.strategy, contract: st.contract?.id ?? '—', direction: st.candidate?.direction ?? null,
+      openedAt: st.openedAt ?? null, strategy: names[p.strategy] ?? strategyName(p.strategy), contract: st.contract?.id ?? '—', direction: st.candidate?.direction ?? null,
       entry: st.entry ?? null, exit: st.exitPrice ?? null, net: open ? null : net, netR: open ? null : netR,
       result: paperResult({ open, netR, netPnl: net }), reason: open ? null : paperReasonText(st.exitReason),
     };
@@ -44,7 +46,7 @@ export function FreshTrades({ positions, names }: { positions: readonly Row[]; n
               <td className="whitespace-nowrap py-2 pr-3">{r.openedAt ? <>{istDateLabel(r.openedAt)}<div className="text-xs text-[var(--text-secondary)]">{formatIstTime(r.openedAt, false)}</div></> : '—'}</td>
               <td className="py-2 pr-3">{r.strategy}{r.direction && <div className="text-xs text-[var(--text-secondary)]">{r.direction === 'BULLISH' ? '▲ bullish' : '▼ bearish'}</div>}</td>
               <td className="py-2 pr-3 font-mono text-xs">{r.contract}</td>
-              <td className="whitespace-nowrap py-2 pr-3 tabular-nums">{r.entry ?? '—'} → {r.exit ?? '—'}</td>
+              <td className="whitespace-nowrap py-2 pr-3 tabular-nums">{px(r.entry)} → {px(r.exit)}</td>
               <td className={`whitespace-nowrap py-2 pr-3 tabular-nums ${r.net == null ? '' : r.net > 0 ? 'text-[var(--status-ok)]' : r.net < 0 ? 'text-[var(--status-bad)]' : ''}`}>{money(r.net)}</td>
               <td className="py-2 pr-3 tabular-nums">{r.netR == null ? '—' : `${r.netR > 0 ? '+' : ''}${r.netR}R`}</td>
               <td className="py-2 pr-3"><ResultBadge result={r.result} reason={r.reason} /></td>
