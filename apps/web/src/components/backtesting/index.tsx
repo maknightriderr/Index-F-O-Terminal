@@ -122,13 +122,16 @@ export function BacktestingPage() {
             onChange={(e) => setLogicVersion(e.target.value)}
             aria-label="Filter by logic version"
             title="Which rule set the setups were minted under. Pre-review = before the validation-review fixes were stamped."
-            className="bg-gray-800/60 light:bg-slate-200/60 border border-gray-700 light:border-slate-300 rounded-lg px-2 py-1 text-xs font-bold uppercase tracking-wide text-gray-300 light:text-slate-700"
+            className="w-auto max-w-[22rem] bg-gray-800/60 light:bg-slate-200/60 border border-gray-700 light:border-slate-300 rounded-lg px-2 py-1 text-xs font-bold uppercase tracking-wide text-gray-300 light:text-slate-700"
           >
-            {logicOptions.map((v) => (
-              <option key={v} value={v}>
-                {logicLabel(v)}
-              </option>
-            ))}
+            {logicOptions.map((v) => {
+              const label = logicLabel(v);
+              return (
+                <option key={v} value={v} title={label}>
+                  {label.length > 44 ? `${label.slice(0, 44)}…` : label}
+                </option>
+              );
+            })}
           </select>
           <span role="status" aria-live="polite" className="flex items-center gap-1.5 text-xs text-gray-400 light:text-slate-600">
             <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600 light:bg-slate-300'}`} />

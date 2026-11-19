@@ -1645,3 +1645,23 @@ html, body {
 .tr-eng-name { font: 600 11px var(--font-mono); letter-spacing: .03em; color: var(--text-primary); } .tr-eng-name small { font-weight: 400; color: var(--text-muted); }
 @media (max-width: 1180px) { .tr-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "chart" "chain" "quote" "dock"; } .tr-tabs-hint { display: none; } }
 @media (max-width: 640px) { .tr-strip > div { padding: 5px 8px; flex: 1 1 30%; border-bottom: 1px solid var(--border-primary); } .tr-sym { flex-basis: 100% !important; } .tr-cv { font-size: 11.5px; white-space: normal; } .tr-sym-px { font-size: 19px; } }
+
+/* ---- Research / Markets (redesign phase 5) ---- */
+/* Compact page header: the top bar already names the page and the workspace tabs show where you are, so the
+   breadcrumb goes and the title / description take a third of the height they did. */
+.terminal-page-header { padding-bottom: 12px; margin-bottom: 16px; }
+.terminal-page-header .terminal-page-eyebrow { display: none; }
+.terminal-page-header h1 { font-size: 20px; margin-top: 0; letter-spacing: -.02em; }
+.terminal-page-header p:not(.terminal-page-eyebrow) { margin-top: 4px; line-height: 1.5; font-size: 12.5px; color: var(--text-muted); }
+.terminal-page-header > div:first-child > div:last-child:not(:first-child) { margin-top: 0; }
+.terminal-page-header > div:first-child + div { margin-top: 10px; }
+@media (max-width: 640px) { .terminal-page-header h1 { font-size: 19px; } }
+
+/* White theme: the older pages colour figures with Tailwind's bright 300/400 shades, chosen for a dark background
+   (yellow-400 or emerald-400 on white is hard to read). In the page area in the light theme they map to the audited
+   theme tokens, so every older page reads at AA contrast without touching its markup. Backgrounds are left alone. */
+[data-theme="light"] #main-content :is(.text-emerald-300, .text-emerald-400, .text-emerald-500, .text-green-300, .text-green-400, .text-green-500, .text-teal-400) { color: var(--positive); }
+[data-theme="light"] #main-content :is(.text-red-300, .text-red-400, .text-red-500, .text-rose-300, .text-rose-400, .text-rose-500) { color: var(--negative); }
+[data-theme="light"] #main-content :is(.text-amber-300, .text-amber-400, .text-amber-500, .text-yellow-300, .text-yellow-400, .text-yellow-500, .text-orange-300, .text-orange-400, .text-orange-500) { color: var(--status-warn); }
+[data-theme="light"] #main-content :is(.text-cyan-300, .text-cyan-400, .text-sky-300, .text-sky-400, .text-blue-300, .text-blue-400, .text-indigo-300, .text-indigo-400) { color: var(--status-info); }
+[data-theme="light"] #main-content :is(.text-purple-300, .text-purple-400, .text-violet-300, .text-violet-400, .text-fuchsia-400, .text-pink-400) { color: var(--accent-purple); }
