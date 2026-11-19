@@ -368,7 +368,14 @@ interface WorkspaceState {
   focusSeq: number;
   open: (symbol: string, exchange: WorkspaceExchange, focus?: WorkspaceFocus) => void;
   setLayout: (layout: WorkspaceLayout, symbol: string, exchange: WorkspaceExchange) => void;
+  /** Symbol tabs on the Trade screen (redesign phase 4): every symbol opened, oldest first, at most SYMBOL_TAB_LIMIT. */
+  tabs: Array<{ symbol: string; exchange: WorkspaceExchange }>;
+  closeTab: (symbol: string, exchange: WorkspaceExchange) => void;
 }
+
+export const SYMBOL_TAB_LIMIT = 8;
+const withTab = (tabs: WorkspaceState['tabs'], symbol: string, exchange: WorkspaceExchange) =>
+  tabs.some((t) => t.symbol === symbol && t.exchange === exchange) ? tabs : [...tabs, { symbol, exchange }].slice(-SYMBOL_TAB_LIMIT);
 
 export const useWorkspaceStore = create<WorkspaceState>()(
   persist(
@@ -378,10 +385,19 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       layout: 'morning',
       focus: 'chart',
       focusSeq: 0,
-      open: (symbol, exchange, focus = 'chart') => set((s) => ({ symbol, exchange, focus, focusSeq: s.focusSeq + 1 })),
-      setLayout: (layout, symbol, exchange) => set((s) => ({ layout, symbol, exchange, focusSeq: s.focusSeq + 1 })),
+      tabs: [{ symbol: 'NIFTY', exchange: 'NSE' }, { symbol: 'BANKNIFTY', exchange: 'NSE' }, { symbol: 'CRUDEOIL', exchange: 'MCX' }],
+      open: (symbol, exchange, focus = 'chart') => set((s) => ({ symbol, exchange, focus, focusSeq: s.focusSeq + 1, tabs: withTab(s.tabs, symbol, exchange) })),
+      setLayout: (layout, symbol, exchange) => set((s) => ({ layout, symbol, exchange, focusSeq: s.focusSeq + 1, tabs: withTab(s.tabs, symbol, exchange) })),
+      closeTab: (symbol, exchange) => set((s) => {
+        const i = s.tabs.findIndex((t) => t.symbol === symbol && t.exchange === exchange);
+        if (i < 0 || s.tabs.length <= 1) return s;
+        const tabs = s.tabs.filter((_, j) => j !== i);
+        if (s.symbol !== symbol || s.exchange !== exchange) return { tabs };
+        const next = tabs[Math.min(i, tabs.length - 1)];
+        return { tabs, symbol: next.symbol, exchange: next.exchange, focus: 'chart' as const, focusSeq: s.focusSeq + 1 };
+      }),
     }),
-    { name: 'fno-workspace', partialize: (s) => ({ symbol: s.symbol, exchange: s.exchange, layout: s.layout }) }
+    { name: 'fno-workspace', partialize: (s) => ({ symbol: s.symbol, exchange: s.exchange, layout: s.layout, tabs: s.tabs }) }
   )
 );
 

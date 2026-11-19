@@ -11,7 +11,9 @@
 // ============================================================
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type { Exchange, OptionChain, OptionChainLeg } from '@fno/shared';
+import type { BiasSnapshot, Exchange, OptionChain, OptionChainLeg } from '@fno/shared';
+import { api } from '@/lib/api';
+import { formatIstDateTime } from '@/lib/format';
 import { InstrumentChart } from '@/components/dashboard/instrument-chart';
 import { useChain } from '@/lib/use-chain';
 import { useFreshStart } from '@/lib/use-fresh-start';
@@ -20,7 +22,7 @@ import { useAlerts } from '@/lib/use-alerts';
 import { useFeedSummary } from '@/lib/use-feed-summary';
 import { useMarketStore, useWorkspaceStore } from '@/stores';
 import { exchangeFor, WORKSPACE_PRESETS, type WorkspaceFocus } from '@/lib/commands';
-import { accountView, inr, istTime, pickContract, positionViews, radarReason, setupRadar, signedInr, signedR, STRATEGY_IDS, strategyHeader, type RadarCell } from '@/lib/command-center';
+import { accountView, inr, istTime, pickContract, positionViews, radarReason, setupRadar, signedInr, signedR, STRATEGY_IDS, strategyHeader, type RadarCell, type RadarRow } from '@/lib/command-center';
 import { Empty, Pill, type Tone } from '@/components/command-center/panel';
 import { DHAN_RADAR_SETUPS, dhanCellText, useDhanRadar } from '@/lib/dhan-radar';
 
@@ -41,26 +43,55 @@ function WsPanel({ id, code, title, meta, focused, children, className = '' }: {
   );
 }
 
+type DockTab = 'engine' | 'positions' | 'alerts' | 'radar';
+const INDEX_NAMES = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTYNXT50', 'SENSEX', 'BANKEX'];
+
+/** The engine's last bias assessment for one symbol (read-only snapshot; never runs the engine). Every minute. */
+function useBias(symbol: string, exchange: string): BiasSnapshot | null {
+  const [state, setState] = useState<{ key: string; data: BiasSnapshot | null } | null>(null);
+  const key = `${exchange}:${symbol}`;
+  useEffect(() => {
+    let live = true;
+    const load = async () => {
+      try { const { data } = await api.getBiasSnapshot(symbol, exchange, 'INTRADAY'); if (live) setState({ key, data: data ?? null }); } catch { if (live) setState({ key, data: null }); }
+    };
+    void load();
+    const t = setInterval(load, 60_000);
+    return () => { live = false; clearInterval(t); };
+  }, [symbol, exchange, key]);
+  return state?.key === key ? state.data : null;
+}
+
 export function WorkspacePage() {
-  const { symbol, exchange, layout, focus, focusSeq, open, setLayout } = useWorkspaceStore();
+  const { symbol, exchange, layout, focus, focusSeq, open, setLayout, tabs, closeTab } = useWorkspaceStore();
   const now = useNow(1000);
   const fresh = useFreshStart();
   const status = fresh.data;
   const { chain, error: chainError } = useChain(symbol, exchange);
+  const bias = useBias(symbol, exchange);
   const positions = useMemo(() => positionViews(status), [status]);
+  const openPositions = useMemo(() => positions.filter((p) => p.status !== 'CLOSED'), [positions]);
   const account = useMemo(() => accountView(status, positions, now), [status, positions, now]);
   const radar = useMemo(() => setupRadar(status, positions, now), [status, positions, now]);
+  const names = useMemo(() => referenceNames(status), [status]);
+  const myRow = useMemo(() => radar.find((r) => (names.get(r.instrument)?.name ?? r.instrument) === symbol) ?? null, [radar, names, symbol]);
+  const [dock, setDock] = useState<DockTab>('engine');
   // The picked contract belongs to one underlying: switching symbol drops it without an effect.
   const [picked, setPicked] = useState<{ key: string; token: string } | null>(null);
   const pickedToken = picked?.key === `${exchange}:${symbol}` ? picked.token : null;
   const setPickedToken = (token: string) => setPicked({ key: `${exchange}:${symbol}`, token });
 
-  // A command's focus scrolls its panel into view (and the CSS ring marks it for a moment).
+  // A command's focus scrolls its panel into view (and the CSS ring marks it for a moment). RADAR and TRADES live in
+  // the dock now: the command opens the matching dock tab.
   const lastSeq = useRef(focusSeq);
   useEffect(() => {
     if (focusSeq === lastSeq.current) return;
     lastSeq.current = focusSeq;
-    document.getElementById(`ws-${focus}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    if (focus === 'radar' || focus === 'trades') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- a command (an external event) chooses the dock tab
+      setDock(focus === 'radar' ? 'radar' : 'positions');
+      document.getElementById('ws-dock')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } else document.getElementById(`ws-${focus}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [focus, focusSeq]);
 
   // Alt+1…4: layout presets.
@@ -78,7 +109,7 @@ export function WorkspacePage() {
 
   // The picker's "quote ≤ 2 s old" rule is judged at the chain's own snapshot time (as the Option Chain page does).
   // Judged against the ticking clock, the pick existed for ~2 s after each 15 s poll and then vanished: QT flickered.
-  const pick = useMemo(() => (chain ? pickContract(chain, 'CE', status?.capital ?? null, chain.timestamp, { stockOptions: exchange === 'NSE' && !['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTYNXT50'].includes(symbol) }) : null), [chain, status?.capital, exchange, symbol]);
+  const pick = useMemo(() => (chain ? pickContract(chain, 'CE', status?.capital ?? null, chain.timestamp, { stockOptions: exchange === 'NSE' && !INDEX_NAMES.includes(symbol) }) : null), [chain, status?.capital, exchange, symbol]);
   // QT shows: the contract clicked in OC, else the engine pick, else the ATM call — never an empty panel while a chain exists.
   const quoteLeg = useMemo(() => {
     const clicked = findLeg(chain, pickedToken);
@@ -88,17 +119,44 @@ export function WorkspacePage() {
     return atm?.call ? { strike: atm.strike, side: 'CE' as const, leg: atm.call, source: 'ATM' as const } : null;
   }, [chain, pickedToken, pick]);
 
+  const shownTabs = tabs.some((t) => t.symbol === symbol && t.exchange === exchange) ? tabs : [...tabs, { symbol, exchange }];
+  const mine = openPositions.filter((p) => p.contract.startsWith(`${symbol} `));
+  const dockTabs: Array<{ id: DockTab; label: string }> = [
+    { id: 'engine', label: `Engine on ${symbol}` },
+    { id: 'positions', label: `Open positions (${openPositions.length})` },
+    { id: 'alerts', label: 'Alerts' },
+    { id: 'radar', label: `All instruments (${radar.length})` },
+  ];
+
   return (
-    <div className="ws-page" data-layout={layout}>
+    <div className="ws-page tr-page" data-layout={layout}>
       {fresh.error && <p role="alert" className="ws-banner">Engine status could not be refreshed ({fresh.error}).</p>}
-      <div className="ws-grid">
-        <WsPanel id="chart" code="CH" focused={focus === 'chart'} className="ws-area-chart" title={<>{symbol} <small>{exchange}</small></>} meta={chain ? <span className="cc-num">Spot {fmt(chain.spotPrice)} {chain.underlyingChangePercent != null && <span className={chain.underlyingChangePercent >= 0 ? 'cc-up' : 'cc-down'}>{chain.underlyingChangePercent >= 0 ? '▲' : '▼'} {Math.abs(chain.underlyingChangePercent).toFixed(2)}%</span>}</span> : null}>
-          <div className="ws-chart">
-            <InstrumentChart key={`${exchange}:${symbol}`} symbol={symbol} exchange={exchange as Exchange} hasSpot={exchange !== 'MCX'} />
+
+      <div className="tr-tabs" role="tablist" aria-label="Open symbols">
+        {shownTabs.map((t) => {
+          const active = t.symbol === symbol && t.exchange === exchange;
+          return (
+            <div key={`${t.exchange}:${t.symbol}`} className="tr-tab" data-active={active || undefined}>
+              <button type="button" role="tab" aria-selected={active} onClick={() => open(t.symbol, t.exchange, 'chart')}>
+                {t.symbol} <small>{t.exchange}</small>
+              </button>
+              {shownTabs.length > 1 && <button type="button" className="tr-tab-x" aria-label={`Close ${t.symbol}`} onClick={() => closeTab(t.symbol, t.exchange)}>×</button>}
+            </div>
+          );
+        })}
+        <span className="tr-tabs-hint">Type a symbol in the command bar (/) to open another</span>
+      </div>
+
+      <InstrumentStrip symbol={symbol} exchange={exchange} chain={chain} bias={bias} mine={mine.length} />
+
+      <div className="tr-grid">
+        <WsPanel id="chart" code="CH" focused={focus === 'chart'} className="tr-area-chart" title={<>{symbol} <small>{exchange}{exchange === 'MCX' ? ' · futures' : ''}</small></>}>
+          <div className="ws-chart tr-chart">
+            <InstrumentChart key={`${exchange}:${symbol}`} symbol={symbol} exchange={exchange as Exchange} hasSpot={exchange !== 'MCX'} heightClass="h-[340px] md:h-[440px] xl:h-[600px]" />
           </div>
         </WsPanel>
 
-        <WsPanel id="chain" code="OC" focused={focus === 'chain'} className="ws-area-chain" title={<>{symbol} · {chain?.expiry ?? '—'}{chain ? ` · ${chain.dte} DTE` : ''}</>} meta={chain ? <span className="cc-num">PCR {fmt(chain.pcr)} · max pain {fmt(chain.maxPain, 0)}</span> : null}>
+        <WsPanel id="chain" code="OC" focused={focus === 'chain'} className="tr-area-chain" title={<>Option chain · {chain?.expiry ?? '—'}{chain ? ` · ${chain.dte} DTE` : ''}</>} meta={chain ? <span className="cc-num">lot {chain.lotSize ?? '—'}</span> : null}>
           <MiniChain chain={chain} error={chainError} pickedToken={quoteLeg?.leg.token ?? null} engineToken={pick?.selected?.leg.token ?? null} onPick={setPickedToken} />
           <div className="ws-foot">
             {pick?.selected ? (
@@ -114,26 +172,97 @@ export function WorkspacePage() {
           </div>
         </WsPanel>
 
-        <WsPanel id="quote" code="QT" focused={focus === 'quote'} className="ws-area-quote" title={quoteLeg ? <>Best bid/ask · {symbol} {quoteLeg.strike} {quoteLeg.side} <small>{quoteLeg.source === 'ENGINE' ? 'engine pick' : quoteLeg.source === 'ATM' ? 'ATM call' : 'your pick'}</small></> : 'Best bid/ask'} meta={quoteLeg ? <span className="cc-num">{Math.max(0, (now - (quoteLeg.leg.exchangeTimestamp ?? quoteLeg.leg.timestamp)) / 1000).toFixed(0)} s old</span> : null}>
+        <WsPanel id="quote" code="QT" focused={focus === 'quote'} className="tr-area-quote" title={quoteLeg ? <>{symbol} {quoteLeg.strike} {quoteLeg.side} <small>{quoteLeg.source === 'ENGINE' ? 'engine pick' : quoteLeg.source === 'ATM' ? 'ATM call' : 'your pick'} · click any bid/ask in OC</small></> : 'Best bid/ask'} meta={quoteLeg ? <span className="cc-num">{Math.max(0, (now - (quoteLeg.leg.exchangeTimestamp ?? quoteLeg.leg.timestamp)) / 1000).toFixed(0)} s old</span> : null}>
           <QuoteView q={quoteLeg?.leg ?? null} lot={chain?.lotSize ?? null} />
         </WsPanel>
 
-        <WsPanel id="radar" code="RADAR" focused={focus === 'radar'} className="ws-area-radar" title="Engine decision per instrument · today" meta={status ? `${radar.length} instrument${radar.length === 1 ? '' : 's'}` : null}>
-          <Radar rows={radar} names={referenceNames(status)} onOpen={(name) => open(name, exchangeFor(name), 'chart')} loading={fresh.loading && !status} />
-        </WsPanel>
-
-        <WsPanel id="trades" code="TRADES" focused={focus === 'trades'} className="ws-area-trades" title="Paper account" meta={status ? <Pill tone={status.liveOrdersAllowed ? 'bad' : 'info'}>PAPER ONLY</Pill> : null}>
-          <div className="ws-kpis cc-num">
-            <Kpi label="Capital" value={account.capital != null ? `₹${lakh(account.capital)} L` : '—'} />
-            <Kpi label="Today net" value={signedInr(account.todayNet)} tone={account.todayNet > 0 ? 'up' : account.todayNet < 0 ? 'down' : undefined} />
-            <Kpi label="Open risk" value={`${inr(account.openRisk)}`} sub={account.riskPerTrade != null ? `per trade ${inr(account.riskPerTrade)}` : undefined} />
-            <Kpi label="Today trades" value={`${account.todayTrades}`} sub={`${account.todayWins}W · ${account.todayLosses}L`} />
+        <section id="ws-dock" aria-label="Engine, positions and alerts" className="ws-panel tr-area-dock" data-focused={focus === 'radar' || focus === 'trades' || undefined}>
+          <div className="tr-dock-head" role="tablist" aria-label="Dock">
+            {dockTabs.map((t) => <button key={t.id} type="button" role="tab" aria-selected={dock === t.id} className="tr-dock-tab" onClick={() => setDock(t.id)}>{t.label}</button>)}
+            <span className="ws-meta">{status ? <Pill tone={status.liveOrdersAllowed ? 'bad' : 'info'}>PAPER ONLY</Pill> : null}</span>
           </div>
-          <OpenPositions positions={positions.filter((p) => p.status !== 'CLOSED')} />
-          <AlertsList />
-        </WsPanel>
+          <div className="tr-dock-body">
+            {dock === 'engine' && <EngineOn symbol={symbol} row={myRow} age={myRow ? names.get(myRow.instrument)?.age ?? null : null} loading={fresh.loading && !status} />}
+            {dock === 'positions' && (
+              <>
+                <div className="ws-kpis cc-num">
+                  <Kpi label="Capital" value={account.capital != null ? `₹${lakh(account.capital)} L` : '—'} />
+                  <Kpi label="Today net" value={signedInr(account.todayNet)} tone={account.todayNet > 0 ? 'up' : account.todayNet < 0 ? 'down' : undefined} />
+                  <Kpi label="Open risk" value={`${inr(account.openRisk)}`} sub={account.riskPerTrade != null ? `per trade ${inr(account.riskPerTrade)}` : undefined} />
+                  <Kpi label="Today trades" value={`${account.todayTrades}`} sub={`${account.todayWins}W · ${account.todayLosses}L`} />
+                </div>
+                <OpenPositions positions={openPositions} />
+              </>
+            )}
+            {dock === 'alerts' && <AlertsList />}
+            {dock === 'radar' && <Radar rows={radar} names={names} onOpen={(name) => open(name, exchangeFor(name), 'chart')} loading={fresh.loading && !status} />}
+          </div>
+        </section>
       </div>
       <PresetBar active={layout} onPick={(p) => setLayout(p.id, p.symbol, p.exchange)} />
+    </div>
+  );
+}
+
+function InstrumentStrip({ symbol, exchange, chain, bias, mine }: { symbol: string; exchange: string; chain: OptionChain | null; bias: BiasSnapshot | null; mine: number }) {
+  const chg = chain?.underlyingChangePercent ?? null;
+  const atm = chain?.strikes.find((s) => s.strike === chain.atmStrike);
+  const atmIv = atm?.call?.iv ?? atm?.put?.iv ?? null;
+  const dir = bias?.direction ?? null;
+  const dirTone = dir === 'BULLISH' ? 'td-up' : dir === 'BEARISH' ? 'td-dn' : 'td-mut';
+  const cells: Array<[string, React.ReactNode]> = [
+    ['Expiry', chain ? `${chain.expiry} · ${chain.dte} DTE` : '—'],
+    ['PCR', fmt(chain?.pcr)],
+    ['Max pain', fmt(chain?.maxPain, 0)],
+    ['ATM IV', atmIv != null ? `${fmt(atmIv, 1)}%` : '—'],
+    ['Engine bias', dir ? <span className={dirTone}>{dir === 'BULLISH' ? '▲' : dir === 'BEARISH' ? '▼' : '•'} {dir.toLowerCase()}{bias?.confidence != null ? ` · conf ${Math.round(bias.confidence)}` : ''}</span> : '—'],
+    ['Regime', bias?.regime ? <span title={bias.assessedAt ? `assessed ${formatIstDateTime(Date.parse(String(bias.assessedAt)))}` : undefined}>{String(bias.regime).replaceAll('_', ' ').toLowerCase()}</span> : '—'],
+    ['Paper open', mine ? `${mine} on ${symbol}` : 'none'],
+  ];
+  return (
+    <section className="tr-strip" aria-label={`${symbol} summary`}>
+      <div className="tr-sym">
+        <div className="tr-sym-name">{symbol} <small>{exchange}{exchange === 'MCX' ? ' · futures' : ''}</small></div>
+        <div className="tr-sym-px cc-num">
+          {fmt(chain?.spotPrice)}
+          {chg != null && <span className={chg >= 0 ? 'td-up' : 'td-dn'}> {chg >= 0 ? '▲' : '▼'} {Math.abs(chg).toFixed(2)}%</span>}
+        </div>
+      </div>
+      {cells.map(([k, v]) => <div key={k} className="tr-cell"><div className="td-kl">{k}</div><div className="tr-cv cc-num">{v}</div></div>)}
+    </section>
+  );
+}
+
+/** The engine's decision for each strategy on the open symbol today (the radar row, one card per strategy). */
+function EngineOn({ symbol, row, age, loading }: { symbol: string; row: RadarRow | null; age: number | null; loading: boolean }) {
+  const dhan = useDhanRadar();
+  if (loading) return <Empty>Loading the engine status…</Empty>;
+  const d = dhan[symbol];
+  if (!row && !d) return <Empty>The engine has not evaluated {symbol} today. It watches the instruments in the &ldquo;All instruments&rdquo; tab.</Empty>;
+  return (
+    <div>
+      <p className="tr-note">{row?.at ? `Last evaluated ${istTime(row.at)}` : 'Not evaluated by the rule engine today'}{age != null ? ` · signal age ${Math.round(age / 1000)} s` : ''}. Read-only: these are the engine&apos;s own decisions; nothing is placed from here.</p>
+      <div className="tr-engine">
+        {row && STRATEGY_IDS.map((s) => {
+          const c = row.cells[s];
+          const quiet = c.state === 'NOT_EVALUATED' || c.state === 'NO_SETUP';
+          return (
+            <div key={s} className="tr-eng" data-quiet={quiet || undefined} title={cellTitle(c)}>
+              <div className="tr-eng-name">{strategyHeader(s)}</div>
+              {quiet ? <span className="ws-dim">{cellText(c)}</span> : <Pill tone={CELL_TONE[c.state]}>{cellText(c)}</Pill>}
+            </div>
+          );
+        })}
+        {d && DHAN_RADAR_SETUPS.map((x) => {
+          const t = dhanCellText(d.setups[x.key]);
+          return (
+            <div key={x.key} className="tr-eng" data-quiet={!t.tone || undefined}>
+              <div className="tr-eng-name">{x.header} <small>order flow</small></div>
+              {t.tone ? <Pill tone={t.tone}>{t.text}</Pill> : <span className="ws-dim">{t.text}</span>}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -150,7 +279,7 @@ function findLeg(chain: OptionChain | null, token: string | null): { strike: num
 function MiniChain({ chain, error, pickedToken, engineToken, onPick }: { chain: OptionChain | null; error: string | null; pickedToken: string | null; engineToken: string | null; onPick: (token: string) => void }) {
   if (!chain) return error ? <Empty>The chain could not be loaded ({error}).</Empty> : <Empty>Loading the chain…</Empty>;
   const i = chain.strikes.findIndex((s) => s.strike === chain.atmStrike);
-  const rows = chain.strikes.slice(Math.max(0, i - 4), Math.max(0, i - 4) + 9);
+  const rows = chain.strikes.slice(Math.max(0, i - 6), Math.max(0, i - 6) + 13);
   const cell = (leg: OptionChainLeg | null) => {
     if (!leg) return <td colSpan={1}>—</td>;
     return (
@@ -289,7 +418,7 @@ function OpenPositions({ positions }: { positions: ReturnType<typeof positionVie
   if (!positions.length) return <p className="ws-sub cc-note">No open paper position.</p>;
   return (
     <ul className="ws-positions">
-      {positions.slice(0, 4).map((p) => {
+      {positions.slice(0, 8).map((p) => {
         const live = p.markBid != null && p.units > 0 && p.riskCurrency > 0 ? ((p.markBid - p.entry) * p.units) / p.riskCurrency : null;
         return (
           <li key={p.id}>
@@ -305,7 +434,7 @@ function OpenPositions({ positions }: { positions: ReturnType<typeof positionVie
 }
 
 function AlertsList() {
-  const { alerts } = useAlerts(4);
+  const { alerts } = useAlerts(8);
   return (
     <div className="ws-alerts">
       <div className="cc-label">Alerts</div>
@@ -313,7 +442,7 @@ function AlertsList() {
         <p className="cc-note">No alerts yet.</p>
       ) : (
         <ul>
-          {alerts.slice(0, 4).map((a) => (
+          {alerts.slice(0, 8).map((a) => (
             <li key={a.id}>
               <span className="cc-num ws-dim">{istTime(a.triggeredAt ?? a.createdAt)}</span> <span>{a.message}</span>
             </li>
