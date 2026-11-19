@@ -1610,3 +1610,38 @@ html, body {
 .pp-detail dt { font: 500 10px var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); }
 .pp-detail dd { margin: 2px 0 0; font-size: 12.5px; }
 @media (max-width: 640px) { .pp-kpis { grid-template-columns: 1fr 1fr; } .pp-toolbar { padding: 8px 10px; } }
+
+/* ---- Trade screen (redesign phase 4): symbol tabs · instrument strip · chart | chain+quote · dock ---- */
+.tr-tabs { display: flex; align-items: stretch; gap: 2px; border-bottom: 1px solid var(--border-primary); overflow-x: auto; scrollbar-width: thin; }
+.tr-tab { display: flex; align-items: center; border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0; margin-bottom: -1px; flex: none; }
+.tr-tab > button:first-child { padding: 7px 4px 7px 12px; font: 600 12.5px var(--font-mono); color: var(--text-secondary); background: transparent; border: 0; cursor: pointer; }
+.tr-tab > button:first-child small { font-weight: 400; font-size: 10px; color: var(--text-muted); }
+.tr-tab:hover > button:first-child { color: var(--text-primary); }
+.tr-tab[data-active] { background: var(--surface-card); border-color: var(--border-secondary); box-shadow: inset 0 2px 0 var(--desk-accent); }
+.tr-tab[data-active] > button:first-child { color: var(--text-primary); }
+.tr-tab-x { width: 22px; height: 22px; margin-right: 6px; border: 0; border-radius: 4px; background: transparent; color: var(--text-muted); font-size: 14px; line-height: 1; cursor: pointer; }
+.tr-tab-x:hover { background: var(--surface-card-alt); color: var(--text-primary); }
+.tr-tabs-hint { margin-left: auto; align-self: center; padding: 0 8px; font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.tr-strip { display: flex; flex-wrap: wrap; align-items: stretch; background: var(--surface-card); border: 1px solid var(--border-secondary); border-radius: 6px; }
+.tr-strip > div { padding: 8px 14px; border-right: 1px solid var(--border-primary); min-width: 0; }
+.tr-strip > div:last-child { border-right: 0; }
+.tr-sym { min-width: 210px; }
+.tr-sym-name { font: 600 15px var(--font-mono); color: var(--text-primary); } .tr-sym-name small { font: 400 10.5px var(--font-mono); color: var(--text-muted); }
+.tr-sym-px { font: 600 22px var(--font-mono); letter-spacing: -.01em; color: var(--text-primary); } .tr-sym-px span { font-size: 13px; }
+.tr-cell { display: flex; flex-direction: column; justify-content: center; gap: 3px; }
+.tr-cv { font-size: 13px; color: var(--text-primary); white-space: nowrap; }
+.tr-grid { display: grid; gap: 6px; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); grid-template-areas: "chart chain" "chart quote" "dock dock"; }
+.tr-area-chart { grid-area: chart; } .tr-area-chain { grid-area: chain; } .tr-area-quote { grid-area: quote; } .tr-area-dock { grid-area: dock; }
+.tr-chart { min-height: 0; }
+.tr-dock-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 4px 8px 0; border-bottom: 1px solid var(--border-primary); }
+.tr-dock-tab { padding: 8px 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-secondary); font-size: 12.5px; cursor: pointer; margin-bottom: -1px; }
+.tr-dock-tab:hover { color: var(--text-primary); }
+.tr-dock-tab[aria-selected="true"] { color: var(--text-primary); font-weight: 600; border-bottom-color: var(--desk-accent); }
+.tr-dock-body { padding: 8px 10px; max-height: 460px; overflow: auto; }
+.tr-note { margin: 0 0 8px; font-size: 11.5px; color: var(--text-muted); }
+.tr-engine { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px; }
+.tr-eng { padding: 8px 10px; border: 1px solid var(--border-primary); border-radius: 6px; display: flex; flex-direction: column; gap: 5px; align-items: flex-start; font-size: 11.5px; }
+.tr-eng[data-quiet] { opacity: .7; }
+.tr-eng-name { font: 600 11px var(--font-mono); letter-spacing: .03em; color: var(--text-primary); } .tr-eng-name small { font-weight: 400; color: var(--text-muted); }
+@media (max-width: 1180px) { .tr-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "chart" "chain" "quote" "dock"; } .tr-tabs-hint { display: none; } }
+@media (max-width: 640px) { .tr-strip > div { padding: 5px 8px; flex: 1 1 30%; border-bottom: 1px solid var(--border-primary); } .tr-sym { flex-basis: 100% !important; } .tr-cv { font-size: 11.5px; white-space: normal; } .tr-sym-px { font-size: 19px; } }

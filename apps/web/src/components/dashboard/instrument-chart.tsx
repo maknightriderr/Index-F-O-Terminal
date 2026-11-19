@@ -77,6 +77,7 @@ export function InstrumentChart({
   supportLevels = [],
   resistanceLevels = [],
   overlayLines,
+  heightClass = 'h-[300px] md:h-[360px]',
 }: {
   symbol: string;
   exchange: Exchange;
@@ -85,6 +86,8 @@ export function InstrumentChart({
   resistanceLevels?: OiLevel[];
   /** The overlays to draw (already filtered to the groups switched on). When given, the legacy support / resistance props are ignored. */
   overlayLines?: ChartOverlayLine[];
+  /** Height of the plot area (Tailwind classes). Default 300 px, 360 px from md. */
+  heightClass?: string;
 }) {
   const theme = useUISettingsStore((s) => s.theme);
   const [systemTheme, setSystemTheme] = useState<'dark' | 'light'>(() => resolveTheme('system'));
@@ -519,7 +522,7 @@ export function InstrumentChart({
         {([{ label: `Order blocks (${matchingZones.filter(z => z.kind === 'OB' && z.active).length})`, on: showOb, toggle: () => setShowOb(!showOb) }, { label: `FVG (${matchingZones.filter(z => z.kind === 'FVG' && z.active).length})`, on: showFvg, toggle: () => setShowFvg(!showFvg) }, { label: 'Ended zones', on: showZoneHistory, toggle: () => setShowZoneHistory(!showZoneHistory) }]).map(control => <button key={control.label} type="button" aria-pressed={control.on} onClick={control.toggle} className={`min-h-8 rounded border px-2 ${control.on ? 'border-[var(--desk-accent)]/50 bg-[var(--desk-accent)]/10 text-[var(--desk-accent)]' : 'border-[var(--border-secondary)] text-[var(--text-secondary)]'}`}>{control.label}</button>)}
       </div>
       <p className="mb-2 text-xs text-[var(--text-secondary)]">{hasVolume ? 'Volume · recorded candles (refreshes with history)' : 'Volume unavailable for this instrument / range'}</p>
-      <div ref={containerRef} className="relative h-[300px] w-full md:h-[360px]">
+      <div ref={containerRef} className={`relative w-full ${heightClass}`}>
         {(loading || !hasData) && (
           <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-400 light:text-slate-600 pointer-events-none">
             {loading ? 'Loading chart…' : 'No chart data for this range'}
