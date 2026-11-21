@@ -69,6 +69,23 @@ describe('OPTION_PAYOFF and STRIKE_SELECTION', () => {
     expect(fv.premiumPath(chains, 'CE', 100, '2026-08-13', 1, 3)).toEqual([{ at: 2, premium: 14 }, { at: 3, premium: 12 }]);
   });
 
+  it('a slimmed chain keeps every mark (bid/ask mid, LTP fallback, expiry) and drops the rest', () => {
+    const full = {
+      expiry: '2026-08-13',
+      strikes: [
+        { strike: 100, call: { bid: 9, ask: 11, ltp: 10.5, delta: 0.5, iv: 14, oi: 1e5, token: 'x' }, put: { bid: 0, ask: 0, ltp: 7, delta: -0.5, oi: 2e5, token: 'y' } },
+        { strike: 110, call: null, put: { bid: 3, ask: 2, ltp: 2.5, gamma: 0.01 } },
+      ],
+    } as any;
+    const slim = fv.slimChain(full)!;
+    for (const [side, k] of [['CE', 100], ['PE', 100], ['CE', 110], ['PE', 110], ['CE', 120]] as const) {
+      expect(fv.markOf(slim, side, k, '2026-08-13')).toEqual(fv.markOf(full, side, k, '2026-08-13'));
+    }
+    expect(fv.markOf(slim, 'CE', 100, '2026-08-20')).toBeNull();
+    expect(slim.strikes[0]).toEqual({ strike: 100, call: { bid: 9, ask: 11, ltp: 10.5 }, put: { bid: 0, ask: 0, ltp: 7 } });
+    expect(fv.slimChain(null)).toBeNull();
+  });
+
   it('projected vs actual: the target reached, and the share of the projection the contract offered', () => {
     const g = fv.gradeOptionPayoff({ entry: 100, target: 140, stop: 85, projectedPayoff: { netGain: 40, deltaGain: 45, gammaGain: 3, thetaDecay: 8, holdHours: 2 }, outcome: 'LOSS', exitPrice: 85, path: [{ at: 1, premium: 120 }, { at: 2, premium: 85 }] });
     expect(g.predicted).toMatchObject({ projectedGainPct: 0.4 });
