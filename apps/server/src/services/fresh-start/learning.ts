@@ -13,7 +13,8 @@ import { getSessionWindow, type Exchange } from '@fno/shared';
 import { sql } from '../../lib/db.js';
 import { logger } from '../../lib/logger.js';
 
-export const FRESH_LEARNING_REFRESH_MS = 2 * 60_000;
+// Lessons come only from closed paper trades, so every ten minutes is enough (it was two; owner, 21 Nov: less churn).
+export const FRESH_LEARNING_REFRESH_MS = 10 * 60_000;
 
 export interface FreshClosed { strategy: string; direction: string | null; session: string; openedAt: number; closedAt: number | null; netR: number | null; exchange: Exchange | null; stamped: Partial<LessonFeatures> | null; expiryDay: boolean | null }
 export interface FreshLearningDeps {
