@@ -298,22 +298,43 @@ async function store(kind: string, subjectId: string, row: { snapshotId: string 
   `);
 }
 
-/** The recorded chains of one symbol between two instants (from its decision snapshots). */
+type SlimLeg = { bid: number; ask: number; ltp: number } | null;
+const slimLeg = (leg: { bid?: unknown; ask?: unknown; ltp?: unknown } | null | undefined): SlimLeg =>
+  leg ? { bid: leg.bid as number, ask: leg.ask as number, ltp: leg.ltp as number } : null;
+
+/**
+ * Only what markOf reads: the expiry and, per strike, each leg's bid / ask / LTP. A full recorded chain also carries
+ * Greeks, OI, tokens and timestamps for every strike; a positional window holds hundreds of chains, and keeping them
+ * whole was the evening memory spike (RSS to ~3.8 GB while the heap stayed under 1 GB, 20 Nov). Marks are unchanged.
+ */
+export function slimChain(chain: Pick<OptionChain, 'expiry' | 'strikes'> | null): TimedChain['chain'] {
+  if (!chain) return null;
+  return {
+    expiry: chain.expiry,
+    strikes: (chain.strikes ?? []).map((s) => ({ strike: s.strike, call: slimLeg(s.call), put: slimLeg(s.put) })) as unknown as OptionChain['strikes'],
+  };
+}
+
+/** The recorded chains of one symbol between two instants (from its decision snapshots), each slimmed as it is read. */
 async function chainsBetween(symbol: string, exchange: string, mode: string, from: Date, to: Date): Promise<TimedChain[]> {
   const rows = await sql<{ polled_at: Date; gz: string | null }[]>`
     SELECT polled_at, inputs->>'optionChainGz' AS gz FROM signal_decision_snapshots
     WHERE symbol = ${symbol} AND exchange = ${exchange} AND mode = ${mode} AND polled_at > ${from} AND polled_at <= ${to}
     ORDER BY polled_at
   `;
-  return rows.map((r) => {
-    let chain: OptionChain | null = null;
+  const out: TimedChain[] = new Array(rows.length);
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    let chain: TimedChain['chain'] = null;
     try {
-      chain = r.gz ? (JSON.parse(gunzipSync(Buffer.from(r.gz, 'base64')).toString('utf8')) as OptionChain) : null;
+      chain = r.gz ? slimChain(JSON.parse(gunzipSync(Buffer.from(r.gz, 'base64')).toString('utf8')) as OptionChain) : null;
     } catch {
       chain = null;
     }
-    return { at: new Date(r.polled_at).getTime(), chain };
-  });
+    out[i] = { at: new Date(r.polled_at).getTime(), chain };
+    r.gz = null; // drop the compressed text as soon as it is decoded
+  }
+  return out;
 }
 
 /** Closed paper trades with an option plan: OPTION_PAYOFF and STRIKE_SELECTION. */
