@@ -66,6 +66,34 @@ export interface OrderFlowPaperArgs {
   of1: boolean;
 }
 
+// ============================================================
+// OF1 PAPER RULES 1.3 (owner, 27 Nov): fix the logic directly in paper, no shadow
+// ============================================================
+// 12-26 Nov, 16 OF1 paper trades: 1 target, net -6.95R. 8 ended SWEEP_RECLAIMED within 14-60 min: the stop sat only
+// 0.1 ATR beyond the decision bar's extreme and the reclaim exit 0.1 ATR inside it, so ordinary noise closed them.
+// Counter-trend entries averaged -0.73R (8) vs -0.17R with the trend (3). The 2,266 graded OF1 shadow candidates
+// averaged +0.04R on the underlying before costs. Three changes, OF1 only (OB1 and every other family unchanged):
+//   TREND   bullish only above a rising 15m EMA20 (bearish mirrors): no buying support in a falling market
+//   STOP    the stop reference moves STOP_EXTRA_ATR further beyond the extreme (the reclaim exit moves with it)
+//   REWARD  T1 at least MIN_R_TO_T1 of the wider risk, else no trade
+// ============================================================
+export const OF1_PAPER_RULES = Object.freeze({ version: 'OF1-PAPER-1.3', emaPeriod: 20, slopeBars: 3, stopExtraAtr: 0.25, minRToT1: 1.2 });
+
+/** Pure: the 15m EMA of closes at every bar up to i (seeded with the first close). */
+function emaAt(bars: readonly MomentumBar[], i: number, period: number): number[] {
+  const k = 2 / (period + 1), out: number[] = [];
+  for (let j = 0; j <= i; j++) out.push(j === 0 ? bars[0].close : bars[j].close * k + out[j - 1] * (1 - k));
+  return out;
+}
+
+/** Pure: OF1 1.3 trend alignment at bar i — bullish needs close above a rising EMA20, bearish below a falling one. */
+export function of1TrendAligned(bars: readonly MomentumBar[], i: number, direction: 'BULLISH' | 'BEARISH'): boolean {
+  const R = OF1_PAPER_RULES;
+  if (i < R.emaPeriod + R.slopeBars) return false;
+  const e = emaAt(bars, i, R.emaPeriod), now = e[i], before = e[i - R.slopeBars], close = bars[i].close;
+  return direction === 'BULLISH' ? close > now && now > before : close < now && now < before;
+}
+
 /** Pure: the OB1 / OF1 candidates of the newest closed bar, routed like the families'. */
 export function orderFlowPaperCandidates(a: OrderFlowPaperArgs): RoutedCandidate[] {
   if ((!a.ob1 && !a.of1) || a.bars.length < 20) return [];
@@ -104,10 +132,17 @@ export function orderFlowPaperCandidates(a: OrderFlowPaperArgs): RoutedCandidate
   if (a.of1 && a.footprints.size > 0) {
     for (const o of evaluateOf1(bars, i, a.footprints, undefined, true)) {
       const bar = bars[i];
-      const stopRef = o.direction === 'BULLISH' ? Math.min(bar.low, o.location.price) : Math.max(bar.high, o.location.price);
+      // OF1 1.3: with the 15m trend only.
+      if (!of1TrendAligned(bars, i, o.direction)) continue;
+      const atr = ctx.atrAt(i);
+      if (atr == null) continue;
+      const extra = OF1_PAPER_RULES.stopExtraAtr * atr;
+      const stopRef = o.direction === 'BULLISH' ? Math.min(bar.low, o.location.price) - extra : Math.max(bar.high, o.location.price) + extra;
       const hit = { direction: o.direction, anchor: event(`OF1:${o.location.kind}:${o.direction}:${bar.time}`, i, o.location.price, bar.time, o.direction), events: [], stopRef };
       const c = buildCandidate(ctx, log, def('OF1', 'ORDER_FLOW'), hit as any, i);
-      if (c) out.push({ ...route(c, 'PAPER_RESEARCH', `OF1:${a.exchange}:${a.underlying}:${series.sessionDates[s]}:${o.direction}:${o.location.kind}:${Math.round(o.location.price * 100) / 100}`), entryEvidence: { version: ENTRY_CONFIRMATION_VERSION, source: 'OF1', sourceVersion: o.version, direction: o.direction, decisionTime: bar.time, found: [...o.evidence], alignment: 'ALIGNED', flowBasis: o.flowBasis } });
+      // OF1 1.3: T1 must pay at least MIN_R_TO_T1 of the wider risk.
+      if (!c || c.rToT1 == null || c.rToT1 < OF1_PAPER_RULES.minRToT1) continue;
+      out.push({ ...route(c, 'PAPER_RESEARCH', `OF1:${a.exchange}:${a.underlying}:${series.sessionDates[s]}:${o.direction}:${o.location.kind}:${Math.round(o.location.price * 100) / 100}`), entryEvidence: { version: ENTRY_CONFIRMATION_VERSION, source: 'OF1', sourceVersion: o.version, direction: o.direction, decisionTime: bar.time, found: [...o.evidence], alignment: 'ALIGNED', flowBasis: o.flowBasis } });
     }
   }
   return out;
