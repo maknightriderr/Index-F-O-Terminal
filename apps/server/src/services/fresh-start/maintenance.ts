@@ -94,6 +94,28 @@ export async function freshStorageFigures(db: Sql): Promise<Record<string, numbe
 export const GATE_DIAGNOSTICS_RETENTION_DAYS = 45;
 export const WEEKLY_VACUUM_TABLES: readonly string[] = ['oi_snapshots', 'fresh_evaluations', 'gate_diagnostics', 'decision_snapshots', 'order_flow_events'];
 
+// ============================================================
+// STORAGE GUARD (owner, 26 Nov): no delete or VACUUM on a nearly full volume
+// ============================================================
+// 23 Nov: the 5 GB volume held ~4.9 GB; the Monday delete of 192k gate-diagnostic rows wrote WAL into the last free space
+// and Postgres shut down ("No space left on device") until the volume was resized. Deletes and VACUUM need free disk
+// first (WAL, visibility maps), so above STORAGE_GUARD_FRACTION of the volume they are skipped and logged instead.
+// Postgres cannot see the volume's size: it comes from POSTGRES_VOLUME_MB (default 10 GB, the size since 23 Nov).
+// The database size excludes WAL and system files, so STORAGE_OVERHEAD_MB is added (22 Nov: 4.18 GB database, 5.0 GB disk).
+// ============================================================
+export const STORAGE_GUARD_FRACTION = 0.85;
+export const STORAGE_OVERHEAD_MB = 1024;
+export function volumeCapacityMb(env: NodeJS.ProcessEnv = process.env): number {
+  const v = Number(env.POSTGRES_VOLUME_MB);
+  return Number.isFinite(v) && v > 0 ? v : 10_240;
+}
+/** Pure: whether deletes / VACUUM may run, with the estimated fill of the volume. Unknown size → allowed (as before). */
+export function storageGuard(databaseMb: number | null | undefined, capacityMb: number): { allowed: boolean; usedMb: number | null; fillPct: number | null } {
+  if (databaseMb == null || !Number.isFinite(databaseMb) || !(capacityMb > 0)) return { allowed: true, usedMb: null, fillPct: null };
+  const usedMb = databaseMb + STORAGE_OVERHEAD_MB, fill = usedMb / capacityMb;
+  return { allowed: fill < STORAGE_GUARD_FRACTION, usedMb, fillPct: Math.round(fill * 1000) / 10 };
+}
+
 /** Pure: true when the IST date of `now` is a Monday. */
 export function isIstMonday(now: number): boolean { return new Date(now + 5.5 * 3600_000).getUTCDay() === 1; }
 
@@ -132,7 +154,14 @@ export function startFreshMaintenance(): void {
     // Claimed before the work so a restart in the window never runs it twice; released on failure for a retry.
     if (!(await redis.set(CLAIM_KEY(date), 'running', 'EX', 2 * 86_400, 'NX'))) return;
     try {
-      const before = await freshStorageFigures(sql), t0 = Date.now(), trimmed = await trimFreshEvaluationInputs(sql, t0);
+      const before = await freshStorageFigures(sql), t0 = Date.now();
+      const guard = storageGuard(before.databaseMb, volumeCapacityMb());
+      if (!guard.allowed) {
+        logger.warn({ event: 'storageGuard', databaseMb: before.databaseMb, estimatedUsedMb: guard.usedMb, volumeMb: volumeCapacityMb(), fillPct: guard.fillPct, thresholdPct: STORAGE_GUARD_FRACTION * 100, largestTables: await largestTables(sql).catch(() => null) }, 'Storage guard: the volume is nearly full, so tonight\'s deletes and VACUUM were skipped (they need free disk). Grow the volume or archive data first.');
+        await redis.set(CLAIM_KEY(date), 'skipped-storage-guard', 'EX', 2 * 86_400);
+        return;
+      }
+      const trimmed = await trimFreshEvaluationInputs(sql, t0);
       // Dhan engine v2: recorded flow events past their retention (the footprints themselves are kept).
       const flowEventsDeleted = schemaFileReady(FLOW_EVENTS_MIGRATION) ? await trimFlowEvents(sql, t0) : null;
       logger.info({ event: 'freshMaintenance', largestTables: await largestTables(sql).catch(() => null), trimmed, retentionDays: FRESH_EVALUATION_INPUT_RETENTION_DAYS, flowEventsDeleted, flowEventRetentionDays: flowEventRetentionDays(), ms: Date.now() - t0, before, after: await freshStorageFigures(sql) }, 'Fresh-start nightly maintenance: old evaluation inputs trimmed, old order-flow events deleted (results, trades, decisions and footprints kept)');

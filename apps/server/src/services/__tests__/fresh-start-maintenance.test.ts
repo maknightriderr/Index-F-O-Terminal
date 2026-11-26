@@ -6,7 +6,7 @@ import { PGlite } from '@electric-sql/pglite';
 vi.mock('../../lib/db.js', () => ({ sql: {} }));
 vi.mock('../../lib/redis.js', () => ({ redis: {} }));
 vi.mock('../../lib/logger.js', () => ({ logger: { info() {}, warn() {}, error() {}, debug() {} } }));
-const { largestTables, trimFreshEvaluationInputs, freshMaintenanceRunDate, FRESH_EVALUATION_INPUT_RETENTION_DAYS, FRESH_TRIM_BATCH } = await import('../fresh-start/maintenance.js');
+const { largestTables, trimFreshEvaluationInputs, freshMaintenanceRunDate, FRESH_EVALUATION_INPUT_RETENTION_DAYS, FRESH_TRIM_BATCH, storageGuard, volumeCapacityMb } = await import('../fresh-start/maintenance.js');
 
 let pg: PGlite;
 /** A postgres.js-style tagged template over PGlite. */
@@ -28,6 +28,17 @@ describe('fresh-start nightly maintenance', () => {
     expect(top.length).toBeLessThanOrEqual(3);
     expect(top.every((t) => typeof t.table === 'string' && t.mb >= 0)).toBe(true);
     expect(top.map((t) => t.mb)).toEqual([...top.map((t) => t.mb)].sort((a, b) => b - a));
+  });
+  it('storage guard: no delete or VACUUM once the volume is about 85% full (database + 1 GB overhead)', () => {
+    // 22 Nov on the 5 GB volume: 4,176 MB database -> ~102% -> skipped (it filled the disk that night).
+    expect(storageGuard(4176, 5120)).toMatchObject({ allowed: false, usedMb: 5200, fillPct: 101.6 });
+    expect(storageGuard(4176, 10_240)).toMatchObject({ allowed: true, fillPct: 50.8 });
+    expect(storageGuard(7700, 10_240).allowed).toBe(false); // 85.2%
+    expect(storageGuard(7600, 10_240).allowed).toBe(true); // 84.2%
+    expect(storageGuard(null, 10_240)).toEqual({ allowed: true, usedMb: null, fillPct: null });
+    expect(volumeCapacityMb({})).toBe(10_240);
+    expect(volumeCapacityMb({ POSTGRES_VOLUME_MB: '20480' })).toBe(20_480);
+    expect(volumeCapacityMb({ POSTGRES_VOLUME_MB: 'x' })).toBe(10_240);
   });
   it('runs only between 02:00 and 06:00 IST', () => {
     expect(freshMaintenanceRunDate(Date.parse('2026-11-05T20:30:00Z'))).toBe('2026-11-06'); // 02:00 IST
