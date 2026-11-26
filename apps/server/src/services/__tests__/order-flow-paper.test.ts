@@ -18,7 +18,7 @@ vi.mock('../../lib/redis.js', () => ({ redis: { get: async () => null, set: asyn
 vi.mock('../../lib/logger.js', () => ({ logger: { info() {}, warn() {}, error() {}, debug() {} } }));
 
 const A = await import('@fno/analytics');
-const { orderFlowPaperCandidates } = await import('../order-flow-candidates.js');
+const { orderFlowPaperCandidates, of1TrendAligned, OF1_PAPER_RULES } = await import('../order-flow-candidates.js');
 const { validateCandidateRisk } = await import('../trigger-router.js');
 const { sourceOfSetup } = await import('../backtesting.js');
 const flags = await import('../../config/order-flow-flags.js');
@@ -93,15 +93,26 @@ describe('OF1: each OF1 candidate as an ordinary trigger candidate', () => {
   const fp = A.buildFootprint([95, 96, 97, 98, 99, 100].flatMap((p, k) => [{ time: t + 10 + k, price: p, qty: 300, side: 'BUY' as const }, { time: t + 20 + k, price: p, qty: 50, side: 'SELL' as const }]), t, M15, 1, 'INFERRED');
   fp.sourceInstrument = 'TEST_FUT';
   const fps = A.alignFootprintsToReference(bars, new Map([[t, fp]]), bars, { instrument: 'TEST_FUT', expiry: '2026-10-27' }, 'SPOT', t + M15);
-  it('routed with the stop beyond the bar / level and its own parent', () => {
+  it('OF1 1.3: a valid OF1 read in a flat, non-trending market is no longer routed (trend filter)', () => {
+    // The 1.2 test case: a PDL reclaim with strong inferred buying, in a sideways market (no rising 15m EMA20).
+    expect(A.evaluateOf1(bars, bars.length - 1, fps, undefined, true)).toHaveLength(1);
+    expect(of1TrendAligned(bars, bars.length - 1, 'BULLISH')).toBe(false);
     const out = orderFlowPaperCandidates({ underlying: 'NIFTY', exchange: 'NSE', bars, chain: null, footprints: fps, ob1: false, of1: true });
-    const of1 = out.filter((r) => r.candidate.triggerId === 'OF1');
-    expect(of1).toHaveLength(1);
-    expect(of1[0].stage).toBe('PAPER_RESEARCH');
-    expect(of1[0].candidate).toMatchObject({ direction: 'BULLISH', entry: 100.5, anchorPrice: 95 });
-    expect(of1[0].candidate.stop).toBeLessThan(94.5);
-    expect(of1[0].entryEvidence).toMatchObject({ source: 'OF1', sourceVersion: 'OF1-1.2', direction: 'BULLISH', decisionTime: t, alignment: 'ALIGNED', found: A.evaluateOf1(bars, bars.length - 1, fps, undefined, true)[0].evidence });
-    expect(of1[0].parentId).toBe('OF1:NSE:NIFTY:2026-10-07:BULLISH:PDL:95');
+    expect(out.filter((r) => r.candidate.triggerId === 'OF1')).toEqual([]);
+  });
+  it('OF1 1.3 trend: bullish above a rising EMA20, bearish below a falling one, nothing on too few bars', () => {
+    const series = (step: number, n = 30) => Array.from({ length: n }, (_, k) => { const c = 100 + step * k; return { time: D1 + k * M15, open: c, high: c + 1, low: c - 1, close: c, volume: 0 }; });
+    const up = series(0.5), down = series(-0.5), flat = series(0);
+    expect(of1TrendAligned(up, up.length - 1, 'BULLISH')).toBe(true);
+    expect(of1TrendAligned(up, up.length - 1, 'BEARISH')).toBe(false);
+    expect(of1TrendAligned(down, down.length - 1, 'BEARISH')).toBe(true);
+    expect(of1TrendAligned(down, down.length - 1, 'BULLISH')).toBe(false);
+    expect(of1TrendAligned(flat, flat.length - 1, 'BULLISH')).toBe(false);
+    const short = series(0.5, OF1_PAPER_RULES.emaPeriod + OF1_PAPER_RULES.slopeBars);
+    expect(of1TrendAligned(short, short.length - 1, 'BULLISH')).toBe(false);
+  });
+  it('OF1 1.3 rules are the approved ones (stop 0.25 ATR wider, T1 at least 1.2R)', () => {
+    expect(OF1_PAPER_RULES).toMatchObject({ version: 'OF1-PAPER-1.3', emaPeriod: 20, slopeBars: 3, stopExtraAtr: 0.25, minRToT1: 1.2 });
   });
   it('no order-flow data → no OF1 candidate', () => {
     expect(orderFlowPaperCandidates({ underlying: 'NIFTY', exchange: 'NSE', bars, chain: null, footprints: new Map(), ob1: false, of1: true })).toEqual([]);

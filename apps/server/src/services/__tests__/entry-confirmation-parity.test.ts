@@ -9,13 +9,15 @@ vi.mock('../../lib/logger.js', () => ({ logger: { info() {}, warn() {}, error() 
 const { orderFlowPaperCandidates } = await import('../order-flow-candidates.js');
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/regression-bars.json', import.meta.url), 'utf8')).series;
 const goldenPath = new URL('./fixtures/entry-confirmation-baseline.json', import.meta.url);
-const baseSha = 'b1282311809c5f1234e0fa35820bb77031b559a3';
+// Baseline since OF1-PAPER-1.3 (27 Nov, owner): OF1 trend filter, wider stop, min 1.2R to T1. OB1 output was checked
+// identical to b128231 on every case before regenerating; only OF1 candidates changed (fewer, wider stops).
+const baseSha = 'OF1-PAPER-1.3';
 
 it('production candidate, geometry, parent, stage, risk and cost outputs match the deployed baseline', async () => {
-  // Optional regeneration is ONLY from the old file extracted from baseSha (documented in the experiment report).
+  // The golden records the deployed candidate outputs; any change to them must be deliberate (see baseSha).
+  // ENTRY_GENERATE_BASELINE=1: regenerate from the current code, only for a deliberate, approved rule change.
   const generate = process.env.ENTRY_GENERATE_BASELINE === '1';
-  const baselineFile = '../order-flow-candidates.baseline.ts';
-  const evaluate: typeof orderFlowPaperCandidates = generate ? (await import(baselineFile)).orderFlowPaperCandidates : orderFlowPaperCandidates;
+  const evaluate: typeof orderFlowPaperCandidates = orderFlowPaperCandidates;
   const cases: Array<{ symbol: string; prefix: number; flow: string; candidates: number; hash: string }> = [];
   for (const symbol of ['NIFTY', 'BANKNIFTY', 'CRUDEOIL']) {
     const bars = (fixture[symbol] as number[][]).map(([time, open, high, low, close, volume]) => ({ time, open, high, low, close, volume }));
