@@ -10,7 +10,7 @@ import type {MarketDataProvider} from '../../providers/interface.js';
 import type {SubscriptionManager,SubscriptionTarget} from '../../lib/subscription-manager.js';
 import {sql} from '../../lib/db.js';
 import {redis,scanKeys} from '../../lib/redis.js';
-import {schemaFileReady} from '../ensure-capture-schema.js';
+import {ensureCaptureSchema,schemaFileReady} from '../ensure-capture-schema.js';
 import {FRESH_CONFIG,freshEntriesEnabled} from '../../config/fresh-start.js';
 import {FreshSharedFeed,FRESH_FEED_MAX_TARGETS} from './feed.js';
 import {createFreshEventSource} from './event-source.js';
@@ -132,6 +132,11 @@ export function freshOrderFlowFor(name:string,from:number,to:number):FreshContex
   return undefined;
 }
 export const FRESH_HISTORY_RETRY_MS = 60_000;
+/** Recovery retry after a failed start (database down at boot, 23 Nov): 1 min, doubling, at most 10 min apart. */
+export const FRESH_BOOTSTRAP_RETRY_MS = 60_000;
+export const FRESH_BOOTSTRAP_RETRY_MAX_MS = 10 * 60_000;
+export const freshBootstrapRetryDelay=(attempt:number)=>Math.min(FRESH_BOOTSTRAP_RETRY_MAX_MS,FRESH_BOOTSTRAP_RETRY_MS*2**Math.max(0,attempt));
+const FRESH_SCHEMA_FILES=['047_fresh_start_paper.sql','048_fresh_start_adapter.sql','049_fresh_start_calendars.sql'] as const;
 export const FRESH_MCX_DIAGNOSTIC_LOG_MS = 5 * 60_000;
 export class FreshPaperWorker {
   /** First summary ~immediately after start, then every 15 minutes. */
@@ -159,10 +164,34 @@ export class FreshPaperWorker {
     // candidate is already screened (the read is otherwise lazy, on the first candidate).
     const readLessons=()=>{void this.learning.refresh();legacyLessons();familyLearning();};readLessons();
     this.timers=[setInterval(()=>{if(this.ready)this.pollMonitor();},250),setInterval(()=>{readLessons();void this.scan();},1000)];
-    return this.bootstrap();
+    return this.bootstrapWithRetry();
+  }
+  /**
+   * 23-26 Nov: the backend restarted while Postgres was down; the boot-time schema check failed once, bootstrap threw
+   * BLOCKED_FRESH_SCHEMA, and the supervisor's restart only re-created the timers, so the engine sat in
+   * RECOVERING_POSITIONS for four days after the database was back. Now a failed start is still reported (the first
+   * rejection reaches the supervisor and health), and the worker itself retries: the schema check again when it had
+   * failed, then recovery, until both succeed or the worker is stopped. Nothing is entered before recovery completes.
+   */
+  private bootstrapAttempt=0;private bootstrapRetry:ReturnType<typeof setTimeout>|null=null;
+  private bootstrapWithRetry():Promise<void>{
+    return this.bootstrap().then(()=>{this.bootstrapAttempt=0;},(error:any)=>{
+      if(this.stopped)throw error;
+      const delay=freshBootstrapRetryDelay(this.bootstrapAttempt++);
+      logger.warn({event:'freshBootstrapRetry',error:error?.message??String(error),attempt:this.bootstrapAttempt,retryInMs:delay},'Fresh-start recovery failed (database or schema unavailable); retrying on its own');
+      this.bootstrapRetry=setTimeout(()=>{
+        this.bootstrapRetry=null;if(this.stopped)return;
+        void (async()=>{
+          if(FRESH_SCHEMA_FILES.some(f=>!schemaFileReady(f)))await ensureCaptureSchema().catch(()=>undefined);
+          if(!this.stopped)await this.bootstrapWithRetry().catch(()=>undefined);
+        })();
+      },delay);
+      (this.bootstrapRetry as any)?.unref?.();
+      throw error;
+    });
   }
   private async bootstrap(){
-    if(!schemaFileReady('047_fresh_start_paper.sql')||!schemaFileReady('048_fresh_start_adapter.sql')||!schemaFileReady('049_fresh_start_calendars.sql'))throw Error('BLOCKED_FRESH_SCHEMA');
+    if(FRESH_SCHEMA_FILES.some(f=>!schemaFileReady(f)))throw Error('BLOCKED_FRESH_SCHEMA');
     try{await this.runtime.recover();}catch(error){state.entriesArmed=false;state.status='BLOCKED_RECOVERY';state.entryBlockers=['BLOCKED_POSITION_RECOVERY'];this.operationalReporter.report(state);throw error;}if(this.stopped)return;
     this.ready=true;state.recovered=true;state.monitorRunning=true;state.scannerRunning=true;state.status='DISCOVERY_STARTING';
     // One public-calendar preflight after recovery; never await it or infer entry permission.
@@ -242,7 +271,7 @@ export class FreshPaperWorker {
     if(!built.ok)return {decision:built.code,candidateId:null};
     return {decision:await this.runtime.onExternalCandidate(built.candidate),candidateId:built.candidate.id};
   }
-  stop(){setDhanPaperHandler(null);this.stopped=true;this.ready=false;for(const t of this.timers)clearInterval(t);this.removeObservation?.();this.feed.close();state.entriesArmed=false;state.monitorRunning=false;state.scannerRunning=false;}
+  stop(){setDhanPaperHandler(null);this.stopped=true;if(this.bootstrapRetry){clearTimeout(this.bootstrapRetry);this.bootstrapRetry=null;}this.ready=false;for(const t of this.timers)clearInterval(t);this.removeObservation?.();this.feed.close();state.entriesArmed=false;state.monitorRunning=false;state.scannerRunning=false;}
   /** 12 Nov (owner): the legacy engine trades again in its own paper book, beside this one; its positions no longer
    *  block fresh-start entries (they did while it was retired, as a guard against two books on one account). */
   private async legacyRisk(){return false;}
